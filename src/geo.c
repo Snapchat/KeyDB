@@ -51,7 +51,7 @@ int zslValueLteMax(double value, zrangespec *spec);
 
 /* Create a new array of geoPoints. */
 geoArray *geoArrayCreate(void) {
-    geoArray *ga = zmalloc(sizeof(*ga));
+    geoArray *ga = zmalloc(sizeof(*ga), MALLOC_SHARED);
     /* It gets allocated on first geoArrayAppend() call. */
     ga->array = NULL;
     ga->buckets = 0;
@@ -413,7 +413,7 @@ void geoaddCommand(client *c) {
 
     int elements = (c->argc - 2) / 3;
     int argc = 2+elements*2; /* ZADD key score ele ... */
-    robj **argv = zcalloc(argc*sizeof(robj*));
+    robj **argv = zcalloc(argc*sizeof(robj*), MALLOC_LOCAL);
     argv[0] = createRawStringObject("zadd",4);
     argv[1] = c->argv[1]; /* key */
     incrRefCount(argv[1]);

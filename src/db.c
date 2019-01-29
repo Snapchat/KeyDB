@@ -1200,7 +1200,7 @@ int *getKeysUsingCommandTable(struct redisCommand *cmd,robj **argv, int argc, in
 
     last = cmd->lastkey;
     if (last < 0) last = argc+last;
-    keys = zmalloc(sizeof(int)*((last - cmd->firstkey)+1));
+    keys = zmalloc(sizeof(int)*((last - cmd->firstkey)+1), MALLOC_SHARED);
     for (j = cmd->firstkey; j <= last; j += cmd->keystep) {
         if (j >= argc) {
             /* Modules commands, and standard commands with a not fixed number
@@ -1267,7 +1267,7 @@ int *zunionInterGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *nu
     /* Keys in z{union,inter}store come from two places:
      * argv[1] = storage key,
      * argv[3...n] = keys to intersect */
-    keys = zmalloc(sizeof(int)*(num+1));
+    keys = zmalloc(sizeof(int)*(num+1), MALLOC_SHARED);
 
     /* Add all key positions for argv[3...n] to keys[] */
     for (i = 0; i < num; i++) keys[i] = 3+i;
@@ -1293,7 +1293,7 @@ int *evalGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys) 
         return NULL;
     }
 
-    keys = zmalloc(sizeof(int)*num);
+    keys = zmalloc(sizeof(int)*num, MALLOC_SHARED);
     *numkeys = num;
 
     /* Add all key positions for argv[3...n] to keys[] */
@@ -1314,7 +1314,7 @@ int *sortGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys) 
     UNUSED(cmd);
 
     num = 0;
-    keys = zmalloc(sizeof(int)*2); /* Alloc 2 places for the worst case. */
+    keys = zmalloc(sizeof(int)*2, MALLOC_SHARED); /* Alloc 2 places for the worst case. */
 
     keys[num++] = 1; /* <sort-key> is always present. */
 
@@ -1372,7 +1372,7 @@ int *migrateGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkey
         }
     }
 
-    keys = zmalloc(sizeof(int)*num);
+    keys = zmalloc(sizeof(int)*num, MALLOC_SHARED);
     for (i = 0; i < num; i++) keys[i] = first+i;
     *numkeys = num;
     return keys;
@@ -1405,7 +1405,7 @@ int *georadiusGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numk
      * argv[1] = key,
      * argv[5...n] = stored key if present
      */
-    keys = zmalloc(sizeof(int) * num);
+    keys = zmalloc(sizeof(int) * num, MALLOC_SHARED);
 
     /* Add all key positions to keys[] */
     keys[0] = 1;
@@ -1454,7 +1454,7 @@ int *xreadGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys)
     num /= 2; /* We have half the keys as there are arguments because
                  there are also the IDs, one per key. */
 
-    keys = zmalloc(sizeof(int) * num);
+    keys = zmalloc(sizeof(int) * num, MALLOC_SHARED);
     for (i = streams_pos+1; i < argc-num; i++) keys[i-streams_pos-1] = i;
     *numkeys = num;
     return keys;
@@ -1471,7 +1471,7 @@ void slotToKeyUpdateKey(robj *key, int add) {
     size_t keylen = sdslen(key->ptr);
 
     server.cluster->slots_keys_count[hashslot] += add ? 1 : -1;
-    if (keylen+2 > 64) indexed = zmalloc(keylen+2);
+    if (keylen+2 > 64) indexed = zmalloc(keylen+2, MALLOC_SHARED);
     indexed[0] = (hashslot >> 8) & 0xff;
     indexed[1] = hashslot & 0xff;
     memcpy(indexed+2,key->ptr,keylen);

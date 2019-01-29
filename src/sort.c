@@ -36,7 +36,7 @@
 zskiplistNode* zslGetElementByRank(zskiplist *zsl, unsigned long rank);
 
 redisSortOperation *createSortOperation(int type, robj *pattern) {
-    redisSortOperation *so = zmalloc(sizeof(*so));
+    redisSortOperation *so = zmalloc(sizeof(*so), MALLOC_LOCAL);
     so->type = type;
     so->pattern = pattern;
     return so;
@@ -340,7 +340,7 @@ void sortCommand(client *c) {
     }
 
     /* Load the sorting vector with all the objects to sort */
-    vector = zmalloc(sizeof(redisSortObject)*vectorlen);
+    vector = zmalloc(sizeof(redisSortObject)*vectorlen, MALLOC_LOCAL);
     j = 0;
 
     if (sortval->type == OBJ_LIST && dontsort) {

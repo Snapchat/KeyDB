@@ -63,7 +63,7 @@ void queueMultiCommand(client *c) {
     mc = c->mstate.commands+c->mstate.count;
     mc->cmd = c->cmd;
     mc->argc = c->argc;
-    mc->argv = zmalloc(sizeof(robj*)*c->argc);
+    mc->argv = zmalloc(sizeof(robj*)*c->argc, MALLOC_LOCAL);
     memcpy(mc->argv,c->argv,sizeof(robj*)*c->argc);
     for (j = 0; j < c->argc; j++)
         incrRefCount(mc->argv[j]);
@@ -253,7 +253,7 @@ void watchForKey(client *c, robj *key) {
     }
     listAddNodeTail(clients,c);
     /* Add the new key to the list of keys watched by this client */
-    wk = zmalloc(sizeof(*wk));
+    wk = zmalloc(sizeof(*wk), MALLOC_SHARED);
     wk->key = key;
     wk->db = c->db;
     incrRefCount(key);

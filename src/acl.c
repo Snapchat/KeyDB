@@ -146,7 +146,7 @@ void ACLListFreeSds(void *item) {
  * If the user with such name already exists NULL is returned. */
 user *ACLCreateUser(const char *name, size_t namelen) {
     if (raxFind(Users,(unsigned char*)name,namelen) != raxNotFound) return NULL;
-    user *u = zmalloc(sizeof(*u));
+    user *u = zmalloc(sizeof(*u), MALLOC_LOCAL);
     u->name = sdsnewlen(name,namelen);
     u->flags = 0;
     u->allowed_subcommands = NULL;
@@ -267,7 +267,7 @@ void ACLAddAllowedSubcommand(user *u, unsigned long id, const char *sub) {
      * this user, we have to allocate the subcommands array. */
     if (u->allowed_subcommands == NULL) {
         u->allowed_subcommands = zcalloc(USER_COMMAND_BITS_COUNT *
-                                 sizeof(sds*));
+                                 sizeof(sds*), MALLOC_LOCAL);
     }
 
     /* We also need to enlarge the allocation pointing to the

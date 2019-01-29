@@ -322,7 +322,7 @@ unsigned long hashTypeLength(const robj *o) {
 }
 
 hashTypeIterator *hashTypeInitIterator(robj *subject) {
-    hashTypeIterator *hi = zmalloc(sizeof(hashTypeIterator));
+    hashTypeIterator *hi = zmalloc(sizeof(hashTypeIterator), MALLOC_LOCAL);
     hi->subject = subject;
     hi->encoding = subject->encoding;
 

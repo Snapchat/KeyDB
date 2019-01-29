@@ -45,6 +45,7 @@
 #include "hiredis.h"
 #include "adlist.h"
 #include "zmalloc.h"
+#include "storage.h"
 
 #define UNUSED(V) ((void) V)
 #define RANDPTR_INITIAL_SIZE 8
@@ -315,7 +316,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  * Even when cloning another client, prefix commands are applied if needed.*/
 static client createClient(char *cmd, size_t len, client from) {
     int j;
-    client c = zmalloc(sizeof(struct _client));
+    client c = zmalloc(sizeof(struct _client), MALLOC_LOCAL);
 
     if (config.hostsocket == NULL) {
         c->context = redisConnectNonBlock(config.hostip,config.hostport);
@@ -379,7 +380,7 @@ static client createClient(char *cmd, size_t len, client from) {
         if (from) {
             c->randlen = from->randlen;
             c->randfree = 0;
-            c->randptr = zmalloc(sizeof(char*)*c->randlen);
+            c->randptr = zmalloc(sizeof(char*)*c->randlen, MALLOC_LOCAL);
             /* copy the offsets. */
             for (j = 0; j < (int)c->randlen; j++) {
                 c->randptr[j] = c->obuf + (from->randptr[j]-from->obuf);
@@ -391,7 +392,7 @@ static client createClient(char *cmd, size_t len, client from) {
 
             c->randlen = 0;
             c->randfree = RANDPTR_INITIAL_SIZE;
-            c->randptr = zmalloc(sizeof(char*)*c->randfree);
+            c->randptr = zmalloc(sizeof(char*)*c->randfree, MALLOC_LOCAL);
             while ((p = strstr(p,"__rand_int__")) != NULL) {
                 if (c->randfree == 0) {
                     c->randptr = zrealloc(c->randptr,sizeof(char*)*c->randlen*2);
@@ -652,6 +653,8 @@ int main(int argc, const char **argv) {
 
     client c;
 
+    storage_init();
+
     srandom(time(NULL));
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
@@ -684,7 +687,7 @@ int main(int argc, const char **argv) {
     argc -= i;
     argv += i;
 
-    config.latency = zmalloc(sizeof(long long)*config.requests);
+    config.latency = zmalloc(sizeof(long long)*config.requests, MALLOC_LOCAL);
 
     if (config.keepalive == 0) {
         printf("WARNING: keepalive disabled, you probably need 'echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse' for Linux and 'sudo sysctl -w net.inet.tcp.msl=1000' for Mac OS X in order to use a lot of clients/requests\n");
@@ -716,7 +719,7 @@ int main(int argc, const char **argv) {
     }
 
     /* Run default benchmark suite. */
-    data = zmalloc(config.datasize+1);
+    data = zmalloc(config.datasize+1, MALLOC_LOCAL);
     do {
         memset(data,'x',config.datasize);
         data[config.datasize] = '\0';

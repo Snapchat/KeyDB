@@ -33,6 +33,7 @@
 #include "bio.h"
 #include "latency.h"
 #include "atomicvar.h"
+#include "storage.h"
 
 #include <time.h>
 #include <signal.h>
@@ -2729,7 +2730,7 @@ void initServer(void) {
             strerror(errno));
         exit(1);
     }
-    server.db = zmalloc(sizeof(redisDb)*server.dbnum);
+    server.db = zmalloc(sizeof(redisDb)*server.dbnum, MALLOC_LOCAL);
 
     /* Open the TCP listening socket for the user commands. */
     if (server.port != 0 &&
@@ -3066,7 +3067,7 @@ void alsoPropagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
 
     if (server.loading) return; /* No propagation during loading. */
 
-    argvcopy = zmalloc(sizeof(robj*)*argc);
+    argvcopy = zmalloc(sizeof(robj*)*argc, MALLOC_LOCAL);
     for (j = 0; j < argc; j++) {
         argvcopy[j] = argv[j];
         incrRefCount(argv[j]);
@@ -4481,7 +4482,7 @@ void usage(void) {
 
 void redisAsciiArt(void) {
 #include "asciilogo.h"
-    char *buf = zmalloc(1024*16);
+    char *buf = zmalloc(1024*16, MALLOC_LOCAL);
     char *mode;
 
     if (server.cluster_enabled) mode = "cluster";
@@ -4739,6 +4740,8 @@ int main(int argc, char **argv) {
     struct timeval tv;
     int j;
 
+    storage_init();
+
 #ifdef REDIS_TEST
     if (argc == 3 && !strcasecmp(argv[1], "test")) {
         if (!strcasecmp(argv[2], "ziplist")) {
@@ -4789,7 +4792,7 @@ int main(int argc, char **argv) {
     /* Store the executable path and arguments in a safe place in order
      * to be able to restart the server later. */
     server.executable = getAbsolutePath(argv[0]);
-    server.exec_argv = zmalloc(sizeof(char*)*(argc+1));
+    server.exec_argv = zmalloc(sizeof(char*)*(argc+1), MALLOC_LOCAL);
     server.exec_argv[argc] = NULL;
     for (j = 0; j < argc; j++) server.exec_argv[j] = zstrdup(argv[j]);
 

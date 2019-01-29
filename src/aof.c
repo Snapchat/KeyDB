@@ -143,7 +143,7 @@ void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
         if (len) { /* First block to allocate, or need another block. */
             int numblocks;
 
-            block = zmalloc(sizeof(*block));
+            block = zmalloc(sizeof(*block), MALLOC_LOCAL);
             block->free = AOF_RW_BUF_BLOCK_SIZE;
             block->used = 0;
             listAddNodeTail(server.aof_rewrite_buf_blocks,block);
@@ -627,7 +627,7 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
 /* In Redis commands are always executed in the context of a client, so in
  * order to load the append only file we need to create a fake client. */
 struct client *createFakeClient(void) {
-    struct client *c = zmalloc(sizeof(*c));
+    struct client *c = zmalloc(sizeof(*c), MALLOC_LOCAL);
 
     selectDb(c,0);
     c->fd = -1;
@@ -752,7 +752,7 @@ int loadAppendOnlyFile(char *filename) {
         argc = atoi(buf+1);
         if (argc < 1) goto fmterr;
 
-        argv = zmalloc(sizeof(robj*)*argc);
+        argv = zmalloc(sizeof(robj*)*argc, MALLOC_LOCAL);
         fakeClient->argc = argc;
         fakeClient->argv = argv;
 

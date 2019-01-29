@@ -119,7 +119,7 @@ int setTypeIsMember(robj *subject, sds value) {
 }
 
 setTypeIterator *setTypeInitIterator(robj *subject) {
-    setTypeIterator *si = zmalloc(sizeof(setTypeIterator));
+    setTypeIterator *si = zmalloc(sizeof(setTypeIterator), MALLOC_LOCAL);
     si->subject = subject;
     si->encoding = subject->encoding;
     if (si->encoding == OBJ_ENCODING_HT) {
@@ -791,7 +791,7 @@ int qsortCompareSetsByRevCardinality(const void *s1, const void *s2) {
 
 void sinterGenericCommand(client *c, robj **setkeys,
                           unsigned long setnum, robj *dstkey) {
-    robj **sets = zmalloc(sizeof(robj*)*setnum);
+    robj **sets = zmalloc(sizeof(robj*)*setnum, MALLOC_SHARED);
     setTypeIterator *si;
     robj *dstset = NULL;
     sds elesds;
@@ -930,7 +930,7 @@ void sinterstoreCommand(client *c) {
 
 void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum,
                               robj *dstkey, int op) {
-    robj **sets = zmalloc(sizeof(robj*)*setnum);
+    robj **sets = zmalloc(sizeof(robj*)*setnum, MALLOC_SHARED);
     setTypeIterator *si;
     robj *dstset = NULL;
     sds ele;

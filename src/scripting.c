@@ -1866,7 +1866,7 @@ sds *ldbReplParseCommand(int *argcp) {
     if (*argcp <= 0 || *argcp > 1024) goto protoerr;
 
     /* Parse each argument. */
-    argv = zmalloc(sizeof(sds)*(*argcp));
+    argv = zmalloc(sizeof(sds)*(*argcp), MALLOC_LOCAL);
     argc = 0;
     while(argc < *argcp) {
         if (*p != '$') goto protoerr;

@@ -159,8 +159,8 @@ void queueLoadModule(sds path, sds *argv, int argc) {
     int i;
     struct moduleLoadQueueEntry *loadmod;
 
-    loadmod = zmalloc(sizeof(struct moduleLoadQueueEntry));
-    loadmod->argv = zmalloc(sizeof(robj*)*argc);
+    loadmod = zmalloc(sizeof(struct moduleLoadQueueEntry), MALLOC_LOCAL);
+    loadmod->argv = zmalloc(sizeof(robj*)*argc, MALLOC_LOCAL);
     loadmod->path = sdsnew(path);
     loadmod->argc = argc;
     for (i = 0; i < argc; i++) {
@@ -1672,7 +1672,7 @@ void rewriteConfigMarkAsProcessed(struct rewriteConfigState *state, const char *
  * If the old file does not exist at all, an empty state is returned. */
 struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
     FILE *fp = fopen(path,"r");
-    struct rewriteConfigState *state = zmalloc(sizeof(*state));
+    struct rewriteConfigState *state = zmalloc(sizeof(*state), MALLOC_LOCAL);
     char buf[CONFIG_MAX_LINE+1];
     int linenum = -1;
 

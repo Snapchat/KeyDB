@@ -42,7 +42,7 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
     aeApiState *state = zmalloc(sizeof(aeApiState));
 
     if (!state) return -1;
-    state->events = zmalloc(sizeof(struct kevent)*eventLoop->setsize);
+    state->events = zmalloc(sizeof(struct kevent)*eventLoop->setsize, MALLOC_LOCAL);
     if (!state->events) {
         zfree(state);
         return -1;

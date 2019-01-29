@@ -55,6 +55,7 @@
 #include "help.h"
 #include "anet.h"
 #include "ae.h"
+#include "storage.h"
 
 #define UNUSED(V) ((void) V)
 
@@ -477,11 +478,11 @@ static void cliInitHelp(void) {
     helpEntry tmp;
 
     helpEntriesLen = len = commandslen+groupslen;
-    helpEntries = zmalloc(sizeof(helpEntry)*len);
+    helpEntries = zmalloc(sizeof(helpEntry)*len, MALLOC_LOCAL);
 
     for (i = 0; i < groupslen; i++) {
         tmp.argc = 1;
-        tmp.argv = zmalloc(sizeof(sds));
+        tmp.argv = zmalloc(sizeof(sds), MALLOC_LOCAL);
         tmp.argv[0] = sdscatprintf(sdsempty(),"@%s",commandGroups[i]);
         tmp.full = tmp.argv[0];
         tmp.type = CLI_HELP_GROUP;
@@ -532,13 +533,13 @@ static void cliIntegrateHelp(void) {
         helpEntry *new = helpEntries+(helpEntriesLen-1);
 
         new->argc = 1;
-        new->argv = zmalloc(sizeof(sds));
+        new->argv = zmalloc(sizeof(sds), MALLOC_LOCAL);
         new->argv[0] = sdsnew(cmdname);
         new->full = new->argv[0];
         new->type = CLI_HELP_COMMAND;
         sdstoupper(new->argv[0]);
 
-        struct commandHelp *ch = zmalloc(sizeof(*ch));
+        struct commandHelp *ch = zmalloc(sizeof(*ch), MALLOC_LOCAL);
         ch->name = new->argv[0];
         ch->params = sdsempty();
         int args = llabs(entry->element[1]->integer);
@@ -1171,7 +1172,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
     }
 
     /* Setup argument length */
-    argvlen = zmalloc(argc*sizeof(size_t));
+    argvlen = zmalloc(argc*sizeof(size_t), MALLOC_LOCAL);
     for (j = 0; j < argc; j++)
         argvlen[j] = sdslen(argv[j]);
 
@@ -1590,7 +1591,7 @@ static int confirmWithYes(char *msg) {
 /* Turn the plain C strings into Sds strings */
 static char **convertToSds(int count, char** args) {
   int j;
-  char **sds = zmalloc(sizeof(char*)*count);
+  char **sds = zmalloc(sizeof(char*)*count, MALLOC_LOCAL);
 
   for(j = 0; j < count; j++)
     sds[j] = sdsnew(args[j]);
@@ -1872,7 +1873,7 @@ static int evalMode(int argc, char **argv) {
         }
 
         /* Create our argument vector */
-        argv2 = zmalloc(sizeof(sds)*(argc+3));
+        argv2 = zmalloc(sizeof(sds)*(argc+3), MALLOC_LOCAL);
         argv2[0] = sdsnew("EVAL");
         argv2[1] = script;
         for (j = 0; j < argc; j++) {
@@ -2193,7 +2194,7 @@ static void freeClusterManager(void) {
 }
 
 static clusterManagerNode *clusterManagerNewNode(char *ip, int port) {
-    clusterManagerNode *node = zmalloc(sizeof(*node));
+    clusterManagerNode *node = zmalloc(sizeof(*node), MALLOC_LOCAL);
     node->context = NULL;
     node->name = NULL;
     node->ip = ip;
@@ -2228,7 +2229,7 @@ static int clusterManagerCheckRedisReply(clusterManagerNode *n,
     if (!r || (is_err = (r->type == REDIS_REPLY_ERROR))) {
         if (is_err) {
             if (err != NULL) {
-                *err = zmalloc((r->len + 1) * sizeof(char));
+                *err = zmalloc((r->len + 1) * sizeof(char), MALLOC_LOCAL);
                 strcpy(*err, r->str);
             } else CLUSTER_MANAGER_PRINT_REPLY_ERROR(n, r->str);
         }
@@ -2374,7 +2375,7 @@ static redisReply *clusterManagerGetNodeRedisInfo(clusterManagerNode *node,
     if (info == NULL) return NULL;
     if (info->type == REDIS_REPLY_ERROR) {
         if (err != NULL) {
-            *err = zmalloc((info->len + 1) * sizeof(char));
+            *err = zmalloc((info->len + 1) * sizeof(char), MALLOC_LOCAL);
             strcpy(*err, info->str);
         }
         freeReplyObject(info);
@@ -2451,7 +2452,7 @@ static int clusterManagerGetAntiAffinityScore(clusterManagerNodeArray *ipnodes,
     int node_len = cluster_manager.nodes->len;
     clusterManagerNode **offending_p = NULL;
     if (offending != NULL) {
-        *offending = zcalloc(node_len * sizeof(clusterManagerNode*));
+        *offending = zcalloc(node_len * sizeof(clusterManagerNode*), MALLOC_LOCAL);
         offending_p = *offending;
     }
     /* For each set of nodes in the same host, split by
@@ -2541,7 +2542,7 @@ static void clusterManagerOptimizeAntiAffinity(clusterManagerNodeArray *ipnodes,
         clusterManagerNode *first = offenders[rand_idx],
                            *second = NULL;
         clusterManagerNode **other_replicas = zcalloc((node_len - 1) *
-                                                      sizeof(*other_replicas));
+                                                      sizeof(*other_replicas), MALLOC_LOCAL);
         int other_replicas_count = 0;
         listIter li;
         listNode *ln;
@@ -2769,8 +2770,8 @@ static int clusterManagerAddSlots(clusterManagerNode *node, char**err)
     int success = 1;
     /* First two args are used for the command itself. */
     int argc = node->slots_count + 2;
-    sds *argv = zmalloc(argc * sizeof(*argv));
-    size_t *argvlen = zmalloc(argc * sizeof(*argvlen));
+    sds *argv = zmalloc(argc * sizeof(*argv), MALLOC_LOCAL);
+    size_t *argvlen = zmalloc(argc * sizeof(*argvlen), MALLOC_LOCAL);
     argv[0] = "CLUSTER";
     argv[1] = "ADDSLOTS";
     argvlen[0] = 7;
@@ -2869,7 +2870,7 @@ static int clusterManagerSetSlot(clusterManagerNode *node1,
     if (reply->type == REDIS_REPLY_ERROR) {
         success = 0;
         if (err != NULL) {
-            *err = zmalloc((reply->len + 1) * sizeof(char));
+            *err = zmalloc((reply->len + 1) * sizeof(char), MALLOC_LOCAL);
             strcpy(*err, reply->str);
         } else CLUSTER_MANAGER_PRINT_REPLY_ERROR(node1, reply->str);
         goto cleanup;
@@ -2983,8 +2984,8 @@ static int clusterManagerCompareKeysValues(clusterManagerNode *n1,
 {
     size_t i, argc = keys_reply->elements + 2;
     static const char *hash_zero = "0000000000000000000000000000000000000000";
-    char **argv = zcalloc(argc * sizeof(char *));
-    size_t  *argv_len = zcalloc(argc * sizeof(size_t));
+    char **argv = zcalloc(argc * sizeof(char *), MALLOC_LOCAL);
+    size_t  *argv_len = zcalloc(argc * sizeof(size_t), MALLOC_LOCAL);
     argv[0] = "DEBUG";
     argv_len[0] = 5;
     argv[1] = "DIGEST-VALUE";
@@ -3051,8 +3052,8 @@ static redisReply *clusterManagerMigrateKeysInReply(clusterManagerNode *source,
     if (config.auth) c += 2;
     size_t argc = c + reply->elements;
     size_t i, offset = 6; // Keys Offset
-    argv = zcalloc(argc * sizeof(char *));
-    argv_len = zcalloc(argc * sizeof(size_t));
+    argv = zcalloc(argc * sizeof(char *), MALLOC_LOCAL);
+    argv_len = zcalloc(argc * sizeof(size_t), MALLOC_LOCAL);
     char portstr[255];
     char timeoutstr[255];
     snprintf(portstr, 10, "%d", target->port);
@@ -3130,7 +3131,7 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
         if (reply->type == REDIS_REPLY_ERROR) {
             success = 0;
             if (err != NULL) {
-                *err = zmalloc((reply->len + 1) * sizeof(char));
+                *err = zmalloc((reply->len + 1) * sizeof(char), MALLOC_LOCAL);
                 strcpy(*err, reply->str);
                 CLUSTER_MANAGER_PRINT_REPLY_ERROR(source, *err);
             }
@@ -3142,7 +3143,7 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
             freeReplyObject(reply);
             break;
         }
-        if (verbose) dots = zmalloc((count+1) * sizeof(char));
+        if (verbose) dots = zmalloc((count+1) * sizeof(char), MALLOC_LOCAL);
         /* Calling MIGRATE command. */
         migrate_reply = clusterManagerMigrateKeysInReply(source, target,
                                                          reply, 0, timeout,
@@ -3242,7 +3243,7 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
             if (!success) {
                 if (migrate_reply != NULL) {
                     if (err) {
-                        *err = zmalloc((migrate_reply->len + 1) * sizeof(char));
+                        *err = zmalloc((migrate_reply->len + 1) * sizeof(char), MALLOC_LOCAL);
                         strcpy(*err, migrate_reply->str);
                     }
                     printf("\n");
@@ -3318,7 +3319,7 @@ static int clusterManagerMoveSlot(clusterManagerNode *source,
             if (r->type == REDIS_REPLY_ERROR) {
                 success = 0;
                 if (err != NULL) {
-                    *err = zmalloc((r->len + 1) * sizeof(char));
+                    *err = zmalloc((r->len + 1) * sizeof(char), MALLOC_LOCAL);
                     strcpy(*err, r->str);
                     CLUSTER_MANAGER_PRINT_REPLY_ERROR(n, *err);
                 }
@@ -3347,7 +3348,7 @@ static int clusterManagerFlushNodeConfig(clusterManagerNode *node, char **err) {
                                         node->replicate);
         if (reply == NULL || (is_err = (reply->type == REDIS_REPLY_ERROR))) {
             if (is_err && err != NULL) {
-                *err = zmalloc((reply->len + 1) * sizeof(char));
+                *err = zmalloc((reply->len + 1) * sizeof(char), MALLOC_LOCAL);
                 strcpy(*err, reply->str);
             }
             success = 0;
@@ -3715,7 +3716,7 @@ static sds clusterManagerGetConfigSignature(clusterManagerNode *node) {
                 zrealloc(node_configs, (node_count * sizeof(char *)));
             /* Make room for '|' separators. */
             tot_size += (sizeof(char) * (c - 1));
-            char *cfg = zmalloc((sizeof(char) * tot_size) + 1);
+            char *cfg = zmalloc((sizeof(char) * tot_size) + 1, MALLOC_LOCAL);
             memcpy(cfg, nodename, name_len);
             char *sp = cfg + name_len;
             *(sp++) = ':';
@@ -4641,7 +4642,7 @@ static clusterManagerNode *clusterNodeForResharding(char *id,
 static list *clusterManagerComputeReshardTable(list *sources, int numslots) {
     list *moved = listCreate();
     int src_count = listLength(sources), i = 0, tot_slots = 0, j;
-    clusterManagerNode **sorted = zmalloc(src_count * sizeof(*sorted));
+    clusterManagerNode **sorted = zmalloc(src_count * sizeof(*sorted), MALLOC_LOCAL);
     listIter li;
     listNode *ln;
     listRewind(sources, &li);
@@ -4662,7 +4663,7 @@ static list *clusterManagerComputeReshardTable(list *sources, int numslots) {
             int slot = node->slots[j];
             if (!slot) continue;
             if (count >= max || (int)listLength(moved) >= numslots) break;
-            clusterManagerReshardTableItem *item = zmalloc(sizeof(*item));
+            clusterManagerReshardTableItem *item = zmalloc(sizeof(*item), MALLOC_LOCAL);
             item->source = node;
             item->slot = j;
             listAddNodeTail(moved, item);
@@ -4720,7 +4721,7 @@ static void clusterManagerLog(int level, const char* fmt, ...) {
 static void clusterManagerNodeArrayInit(clusterManagerNodeArray *array,
                                         int alloc_len)
 {
-    array->nodes = zcalloc(alloc_len * sizeof(clusterManagerNode*));
+    array->nodes = zcalloc(alloc_len * sizeof(clusterManagerNode*), MALLOC_LOCAL);
     array->alloc = array->nodes;
     array->len = alloc_len;
     array->count = 0;
@@ -4861,9 +4862,9 @@ static int clusterManagerCommandCreate(int argc, char **argv) {
     clusterManagerLogInfo(">>> Performing hash slots allocation "
                           "on %d nodes...\n", node_len);
     int interleaved_len = 0, ip_count = 0;
-    clusterManagerNode **interleaved = zcalloc(node_len*sizeof(**interleaved));
-    char **ips = zcalloc(node_len * sizeof(char*));
-    clusterManagerNodeArray *ip_nodes = zcalloc(node_len * sizeof(*ip_nodes));
+    clusterManagerNode **interleaved = zcalloc(node_len*sizeof(**interleaved), MALLOC_LOCAL);
+    char **ips = zcalloc(node_len * sizeof(char*), MALLOC_LOCAL);
+    clusterManagerNodeArray *ip_nodes = zcalloc(node_len * sizeof(*ip_nodes), MALLOC_LOCAL);
     listIter li;
     listNode *ln;
     listRewind(cluster_manager.nodes, &li);
@@ -5500,7 +5501,7 @@ static int clusterManagerCommandRebalance(int argc, char **argv) {
         nodes_involved++;
         listAddNodeTail(involved, n);
     }
-    weightedNodes = zmalloc(nodes_involved * sizeof(clusterManagerNode *));
+    weightedNodes = zmalloc(nodes_involved * sizeof(clusterManagerNode *), MALLOC_LOCAL);
     if (weightedNodes == NULL) goto cleanup;
     /* Check cluster, only proceed if it looks sane. */
     clusterManagerCheckCluster(1);
@@ -5845,7 +5846,7 @@ static int clusterManagerCommandCall(int argc, char **argv) {
     if (!clusterManagerLoadInfoFromNode(refnode, 0)) return 0;
     argc--;
     argv++;
-    size_t *argvlen = zmalloc(argc*sizeof(size_t));
+    size_t *argvlen = zmalloc(argc*sizeof(size_t), MALLOC_LOCAL);
     clusterManagerLogInfo(">>> Calling");
     for (i = 0; i < argc; i++) {
         argvlen[i] = strlen(argv[i]);
@@ -6841,7 +6842,7 @@ static char *getInfoField(char *info, char *field) {
     n1 = strchr(p,'\r');
     n2 = strchr(p,',');
     if (n2 && n2 < n1) n1 = n2;
-    result = zmalloc(sizeof(char)*(n1-p)+1);
+    result = zmalloc(sizeof(char)*(n1-p)+1, MALLOC_LOCAL);
     memcpy(result,p,(n1-p));
     result[n1-p] = '\0';
     return result;
@@ -7175,6 +7176,7 @@ static void intrinsicLatencyMode(void) {
 int main(int argc, char **argv) {
     int firstarg;
 
+    storage_init();
     config.hostip = sdsnew("127.0.0.1");
     config.hostport = 6379;
     config.hostsocket = NULL;

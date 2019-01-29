@@ -621,9 +621,9 @@ void bitopCommand(client *c) {
 
     /* Lookup keys, and store pointers to the string objects into an array. */
     numkeys = c->argc - 3;
-    src = zmalloc(sizeof(unsigned char*) * numkeys);
-    len = zmalloc(sizeof(long) * numkeys);
-    objects = zmalloc(sizeof(robj*) * numkeys);
+    src = zmalloc(sizeof(unsigned char*) * numkeys, MALLOC_LOCAL);
+    len = zmalloc(sizeof(long) * numkeys, MALLOC_LOCAL);
+    objects = zmalloc(sizeof(robj*) * numkeys, MALLOC_LOCAL);
     for (j = 0; j < numkeys; j++) {
         o = lookupKeyRead(c->db,c->argv[j+3]);
         /* Handle non-existing keys as empty strings. */

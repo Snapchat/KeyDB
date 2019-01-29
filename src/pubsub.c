@@ -209,7 +209,7 @@ int pubsubSubscribePattern(client *c, robj *pattern) {
         pubsubPattern *pat;
         listAddNodeTail(c->pubsub_patterns,pattern);
         incrRefCount(pattern);
-        pat = zmalloc(sizeof(*pat));
+        pat = zmalloc(sizeof(*pat), MALLOC_LOCAL);
         pat->pattern = getDecodedObject(pattern);
         pat->client = c;
         listAddNodeTail(server.pubsub_patterns,pat);

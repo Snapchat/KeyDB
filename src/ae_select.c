@@ -40,7 +40,7 @@ typedef struct aeApiState {
 } aeApiState;
 
 static int aeApiCreate(aeEventLoop *eventLoop) {
-    aeApiState *state = zmalloc(sizeof(aeApiState));
+    aeApiState *state = zmalloc(sizeof(aeApiState), MALLOC_LOCAL);
 
     if (!state) return -1;
     FD_ZERO(&state->rfds);

@@ -50,7 +50,7 @@ size_t streamReplyWithRangeFromConsumerPEL(client *c, stream *s, streamID *start
 
 /* Create a new stream data structure. */
 stream *streamNew(void) {
-    stream *s = zmalloc(sizeof(*s));
+    stream *s = zmalloc(sizeof(*s), MALLOC_SHARED);
     s->rax = raxNew();
     s->length = 0;
     s->last_id.ms = 0;
@@ -1402,8 +1402,8 @@ void xreadCommand(client *c) {
 
     /* Parse the IDs and resolve the group name. */
     if (streams_count > STREAMID_STATIC_VECTOR_LEN)
-        ids = zmalloc(sizeof(streamID)*streams_count);
-    if (groupname) groups = zmalloc(sizeof(streamCG*)*streams_count);
+        ids = zmalloc(sizeof(streamID)*streams_count, MALLOC_SHARED);
+    if (groupname) groups = zmalloc(sizeof(streamCG*)*streams_count, MALLOC_SHARED);
 
     for (int i = streams_arg + streams_count; i < c->argc; i++) {
         /* Specifying "$" as last-known-id means that the client wants to be
@@ -1595,7 +1595,7 @@ cleanup: /* Cleanup. */
  * time to the current time. The NACK consumer will be set to the one
  * specified as argument of the function. */
 streamNACK *streamCreateNACK(streamConsumer *consumer) {
-    streamNACK *nack = zmalloc(sizeof(*nack));
+    streamNACK *nack = zmalloc(sizeof(*nack), MALLOC_SHARED);
     nack->delivery_time = mstime();
     nack->delivery_count = 1;
     nack->consumer = consumer;
@@ -1628,7 +1628,7 @@ streamCG *streamCreateCG(stream *s, char *name, size_t namelen, streamID *id) {
     if (raxFind(s->cgroups,(unsigned char*)name,namelen) != raxNotFound)
         return NULL;
 
-    streamCG *cg = zmalloc(sizeof(*cg));
+    streamCG *cg = zmalloc(sizeof(*cg), MALLOC_SHARED);
     cg->pel = raxNew();
     cg->consumers = raxNew();
     cg->last_id = *id;
@@ -1661,7 +1661,7 @@ streamConsumer *streamLookupConsumer(streamCG *cg, sds name, int create) {
                                sdslen(name));
     if (consumer == raxNotFound) {
         if (!create) return NULL;
-        consumer = zmalloc(sizeof(*consumer));
+        consumer = zmalloc(sizeof(*consumer), MALLOC_SHARED);
         consumer->name = sdsdup(name);
         consumer->pel = raxNew();
         raxInsert(cg->consumers,(unsigned char*)name,sdslen(name),

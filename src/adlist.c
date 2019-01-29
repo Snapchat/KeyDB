@@ -42,7 +42,7 @@ list *listCreate(void)
 {
     struct list *list;
 
-    if ((list = zmalloc(sizeof(*list))) == NULL)
+    if ((list = zmalloc(sizeof(*list), MALLOC_SHARED)) == NULL)
         return NULL;
     list->head = list->tail = NULL;
     list->len = 0;
@@ -89,7 +89,7 @@ list *listAddNodeHead(list *list, void *value)
 {
     listNode *node;
 
-    if ((node = zmalloc(sizeof(*node))) == NULL)
+    if ((node = zmalloc(sizeof(*node), MALLOC_SHARED)) == NULL)
         return NULL;
     node->value = value;
     if (list->len == 0) {
@@ -115,7 +115,7 @@ list *listAddNodeTail(list *list, void *value)
 {
     listNode *node;
 
-    if ((node = zmalloc(sizeof(*node))) == NULL)
+    if ((node = zmalloc(sizeof(*node), MALLOC_SHARED)) == NULL)
         return NULL;
     node->value = value;
     if (list->len == 0) {
@@ -134,7 +134,7 @@ list *listAddNodeTail(list *list, void *value)
 list *listInsertNode(list *list, listNode *old_node, void *value, int after) {
     listNode *node;
 
-    if ((node = zmalloc(sizeof(*node))) == NULL)
+    if ((node = zmalloc(sizeof(*node), MALLOC_SHARED)) == NULL)
         return NULL;
     node->value = value;
     if (after) {
@@ -187,7 +187,7 @@ listIter *listGetIterator(list *list, int direction)
 {
     listIter *iter;
 
-    if ((iter = zmalloc(sizeof(*iter))) == NULL) return NULL;
+    if ((iter = zmalloc(sizeof(*iter), MALLOC_SHARED)) == NULL) return NULL;
     if (direction == AL_START_HEAD)
         iter->next = list->head;
     else

@@ -341,7 +341,7 @@ static int redisAeAttach(aeEventLoop *loop, redisAsyncContext *ac) {
         return C_ERR;
 
     /* Create container for context and r/w events */
-    e = (redisAeEvents*)zmalloc(sizeof(*e));
+    e = (redisAeEvents*)zmalloc(sizeof(*e), MALLOC_LOCAL);
     e->context = ac;
     e->loop = loop;
     e->fd = c->fd;
@@ -549,7 +549,7 @@ sentinelAddr *createSentinelAddr(char *hostname, int port) {
         errno = ENOENT;
         return NULL;
     }
-    sa = zmalloc(sizeof(*sa));
+    sa = zmalloc(sizeof(*sa), MALLOC_LOCAL);
     sa->ip = sdsnew(ip);
     sa->port = port;
     return sa;
@@ -559,7 +559,7 @@ sentinelAddr *createSentinelAddr(char *hostname, int port) {
 sentinelAddr *dupSentinelAddr(sentinelAddr *src) {
     sentinelAddr *sa;
 
-    sa = zmalloc(sizeof(*sa));
+    sa = zmalloc(sizeof(*sa), MALLOC_LOCAL);
     sa->ip = sdsnew(src->ip);
     sa->port = src->port;
     return sa;
@@ -703,10 +703,10 @@ void sentinelScheduleScriptExecution(char *path, ...) {
     va_end(ap);
     argv[0] = sdsnew(path);
 
-    sj = zmalloc(sizeof(*sj));
+    sj = zmalloc(sizeof(*sj), MALLOC_LOCAL);
     sj->flags = SENTINEL_SCRIPT_NONE;
     sj->retry_num = 0;
-    sj->argv = zmalloc(sizeof(char*)*(argc+1));
+    sj->argv = zmalloc(sizeof(char*)*(argc+1), MALLOC_LOCAL);
     sj->start_time = 0;
     sj->pid = 0;
     memcpy(sj->argv,argv,sizeof(char*)*(argc+1));
@@ -950,7 +950,7 @@ void sentinelCallClientReconfScript(sentinelRedisInstance *master, int role, cha
 
 /* Create a not yet connected link object. */
 instanceLink *createInstanceLink(void) {
-    instanceLink *link = zmalloc(sizeof(*link));
+    instanceLink *link = zmalloc(sizeof(*link), MALLOC_LOCAL);
 
     link->refcount = 1;
     link->disconnected = 1;
@@ -1200,7 +1200,7 @@ sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *
     }
 
     /* Create the instance object. */
-    ri = zmalloc(sizeof(*ri));
+    ri = zmalloc(sizeof(*ri), MALLOC_LOCAL);
     /* Note that all the instances are started in the disconnected state,
      * the event loop will take care of connecting them. */
     ri->flags = flags;
@@ -4091,7 +4091,7 @@ int compareSlavesForPromotion(const void *a, const void *b) {
 
 sentinelRedisInstance *sentinelSelectSlave(sentinelRedisInstance *master) {
     sentinelRedisInstance **instance =
-        zmalloc(sizeof(instance[0])*dictSize(master->slaves));
+        zmalloc(sizeof(instance[0])*dictSize(master->slaves), MALLOC_LOCAL);
     sentinelRedisInstance *selected = NULL;
     int instances = 0;
     dictIterator *di;

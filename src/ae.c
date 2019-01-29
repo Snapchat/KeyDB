@@ -64,9 +64,9 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
     int i;
 
-    if ((eventLoop = zmalloc(sizeof(*eventLoop))) == NULL) goto err;
-    eventLoop->events = zmalloc(sizeof(aeFileEvent)*setsize);
-    eventLoop->fired = zmalloc(sizeof(aeFiredEvent)*setsize);
+    if ((eventLoop = zmalloc(sizeof(*eventLoop), MALLOC_LOCAL)) == NULL) goto err;
+    eventLoop->events = zmalloc(sizeof(aeFileEvent)*setsize, MALLOC_LOCAL);
+    eventLoop->fired = zmalloc(sizeof(aeFiredEvent)*setsize, MALLOC_LOCAL);
     if (eventLoop->events == NULL || eventLoop->fired == NULL) goto err;
     eventLoop->setsize = setsize;
     eventLoop->lastTime = time(NULL);
@@ -212,7 +212,7 @@ long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds,
     long long id = eventLoop->timeEventNextId++;
     aeTimeEvent *te;
 
-    te = zmalloc(sizeof(*te));
+    te = zmalloc(sizeof(*te), MALLOC_LOCAL);
     if (te == NULL) return AE_ERR;
     te->id = id;
     aeAddMillisecondsToNow(milliseconds,&te->when_sec,&te->when_ms);

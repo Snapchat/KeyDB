@@ -119,7 +119,7 @@ int clusterLoadConfig(char *filename) {
      *
      * To simplify we allocate 1024+CLUSTER_SLOTS*128 bytes per line. */
     maxline = 1024+CLUSTER_SLOTS*128;
-    line = zmalloc(maxline);
+    line = zmalloc(maxline, MALLOC_LOCAL);
     while(fgets(line,maxline,fp) != NULL) {
         int argc;
         sds *argv;
@@ -429,7 +429,7 @@ void clusterUpdateMyselfFlags(void) {
 void clusterInit(void) {
     int saveconf = 0;
 
-    server.cluster = zmalloc(sizeof(clusterState));
+    server.cluster = zmalloc(sizeof(clusterState), MALLOC_LOCAL);
     server.cluster->myself = NULL;
     server.cluster->currentEpoch = 0;
     server.cluster->state = CLUSTER_FAIL;
@@ -587,7 +587,7 @@ void clusterReset(int hard) {
  * -------------------------------------------------------------------------- */
 
 clusterLink *createClusterLink(clusterNode *node) {
-    clusterLink *link = zmalloc(sizeof(*link));
+    clusterLink *link = zmalloc(sizeof(*link), MALLOC_LOCAL);
     link->ctime = mstime();
     link->sndbuf = sdsempty();
     link->rcvbuf = sdsempty();
@@ -692,7 +692,7 @@ unsigned int keyHashSlot(char *key, int keylen) {
  * The node is created and returned to the user, but it is not automatically
  * added to the nodes hash table. */
 clusterNode *createClusterNode(char *nodename, int flags) {
-    clusterNode *node = zmalloc(sizeof(*node));
+    clusterNode *node = zmalloc(sizeof(*node), MALLOC_LOCAL);
 
     if (nodename)
         memcpy(node->name, nodename, CLUSTER_NAMELEN);
@@ -749,7 +749,7 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     }
 
     /* Otherwise create a new report. */
-    fr = zmalloc(sizeof(*fr));
+    fr = zmalloc(sizeof(*fr), MALLOC_LOCAL);
     fr->node = sender;
     fr->time = mstime();
     listAddNodeTail(l,fr);
@@ -2401,7 +2401,7 @@ void clusterSendPing(clusterLink *link, int type) {
     /* Note: clusterBuildMessageHdr() expects the buffer to be always at least
      * sizeof(clusterMsg) or more. */
     if (totlen < (int)sizeof(clusterMsg)) totlen = sizeof(clusterMsg);
-    buf = zcalloc(totlen);
+    buf = zcalloc(totlen, MALLOC_LOCAL);
     hdr = (clusterMsg*) buf;
 
     /* Populate the header. */
@@ -2538,7 +2538,7 @@ void clusterSendPublish(clusterLink *link, robj *channel, robj *message) {
     if (totlen < sizeof(buf)) {
         payload = buf;
     } else {
-        payload = zmalloc(totlen);
+        payload = zmalloc(totlen, MALLOC_LOCAL);
         memcpy(payload,hdr,sizeof(*hdr));
         hdr = (clusterMsg*) payload;
     }
@@ -2607,7 +2607,7 @@ void clusterSendModule(clusterLink *link, uint64_t module_id, uint8_t type,
     if (totlen < sizeof(buf)) {
         heapbuf = buf;
     } else {
-        heapbuf = zmalloc(totlen);
+        heapbuf = zmalloc(totlen, MALLOC_LOCAL);
         memcpy(heapbuf,hdr,sizeof(*hdr));
         hdr = (clusterMsg*) heapbuf;
     }
@@ -4277,7 +4277,7 @@ NULL
         /* CLUSTER ADDSLOTS <slot> [slot] ... */
         /* CLUSTER DELSLOTS <slot> [slot] ... */
         int j, slot;
-        unsigned char *slots = zmalloc(CLUSTER_SLOTS);
+        unsigned char *slots = zmalloc(CLUSTER_SLOTS, MALLOC_LOCAL);
         int del = !strcasecmp(c->argv[1]->ptr,"delslots");
 
         memset(slots,0,CLUSTER_SLOTS);
@@ -4546,7 +4546,7 @@ NULL
         unsigned int keys_in_slot = countKeysInSlot(slot);
         if (maxkeys > keys_in_slot) maxkeys = keys_in_slot;
 
-        keys = zmalloc(sizeof(robj*)*maxkeys);
+        keys = zmalloc(sizeof(robj*)*maxkeys, MALLOC_LOCAL);
         numkeys = getKeysInSlot(slot, keys, maxkeys);
         addReplyArrayLen(c,numkeys);
         for (j = 0; j < numkeys; j++) {
@@ -5008,7 +5008,7 @@ migrateCachedSocket* migrateGetSocket(client *c, robj *host, robj *port, long ti
     }
 
     /* Add to the cache and return it to the caller. */
-    cs = zmalloc(sizeof(*cs));
+    cs = zmalloc(sizeof(*cs), MALLOC_LOCAL);
     cs->fd = fd;
     cs->last_dbid = -1;
     cs->last_use_time = server.unixtime;
@@ -5256,7 +5256,7 @@ try_again:
      * to propagate the MIGRATE as a DEL command (if no COPY option was given).
      * We allocate num_keys+1 because the additional argument is for "DEL"
      * command name itself. */
-    if (!copy) newargv = zmalloc(sizeof(robj*)*(num_keys+1));
+    if (!copy) newargv = zmalloc(sizeof(robj*)*(num_keys+1), MALLOC_LOCAL);
 
     for (j = 0; j < num_keys; j++) {
         if (syncReadLine(cs->fd, buf2, sizeof(buf2), timeout) <= 0) {

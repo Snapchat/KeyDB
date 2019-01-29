@@ -74,7 +74,7 @@ typedef struct aeApiState {
 
 static int aeApiCreate(aeEventLoop *eventLoop) {
     int i;
-    aeApiState *state = zmalloc(sizeof(aeApiState));
+    aeApiState *state = zmalloc(sizeof(aeApiState), MALLOC_LOCAL);
     if (!state) return -1;
 
     state->portfd = port_create();

@@ -35,7 +35,12 @@
 #define __xstr(s) __str(s)
 #define __str(s) #s
 
-#if defined(USE_TCMALLOC)
+#if 1
+    #define ZMALLOC_LIB ("custom")
+    #include "storage.h"
+    #undef USE_JEMALLOC
+    #define USE_MALLOC_CLASS 1
+#elif defined(USE_TCMALLOC)
 #define ZMALLOC_LIB ("tcmalloc-" __xstr(TC_VERSION_MAJOR) "." __xstr(TC_VERSION_MINOR))
 #include <google/tcmalloc.h>
 #if (TC_VERSION_MAJOR == 1 && TC_VERSION_MINOR >= 6) || (TC_VERSION_MAJOR > 1)
@@ -77,8 +82,8 @@
 #define HAVE_DEFRAG
 #endif
 
-void *zmalloc(size_t size);
-void *zcalloc(size_t size);
+void *zmalloc(size_t size, enum MALLOC_CLASS class);
+void *zcalloc(size_t size, enum MALLOC_CLASS class);
 void *zrealloc(void *ptr, size_t size);
 void zfree(void *ptr);
 char *zstrdup(const char *s);

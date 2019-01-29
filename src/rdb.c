@@ -32,6 +32,7 @@
 #include "zipmap.h"
 #include "endianconv.h"
 #include "stream.h"
+#include "storage.h"
 
 #include <math.h>
 #include <sys/types.h>
@@ -284,7 +285,7 @@ void *rdbLoadIntegerObject(rio *rdb, int enctype, int flags, size_t *lenptr) {
         char buf[LONG_STR_SIZE], *p;
         int len = ll2string(buf,sizeof(buf),val);
         if (lenptr) *lenptr = len;
-        p = plain ? zmalloc(len) : sdsnewlen(SDS_NOINIT,len);
+        p = plain ? zmalloc(len, MALLOC_SHARED) : sdsnewlen(SDS_NOINIT,len);
         memcpy(p,buf,len);
         return p;
     } else if (encode) {
@@ -345,7 +346,7 @@ ssize_t rdbSaveLzfStringObject(rio *rdb, unsigned char *s, size_t len) {
     /* We require at least four bytes compression for this to be worth it */
     if (len <= 4) return 0;
     outlen = len-4;
-    if ((out = zmalloc(outlen+1)) == NULL) return 0;
+    if ((out = zmalloc(outlen+1, MALLOC_LOCAL)) == NULL) return 0;
     comprlen = lzf_compress(s, len, out, outlen);
     if (comprlen == 0) {
         zfree(out);
@@ -368,11 +369,11 @@ void *rdbLoadLzfStringObject(rio *rdb, int flags, size_t *lenptr) {
 
     if ((clen = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
     if ((len = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
-    if ((c = zmalloc(clen)) == NULL) goto err;
+    if ((c = zmalloc(clen, MALLOC_SHARED)) == NULL) goto err;
 
     /* Allocate our target according to the uncompressed size. */
     if (plain) {
-        val = zmalloc(len);
+        val = zmalloc(len, MALLOC_SHARED);
     } else {
         val = sdsnewlen(SDS_NOINIT,len);
     }
@@ -501,7 +502,7 @@ void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
 
     if (len == RDB_LENERR) return NULL;
     if (plain || sds) {
-        void *buf = plain ? zmalloc(len) : sdsnewlen(SDS_NOINIT,len);
+        void *buf = plain ? zmalloc(len, MALLOC_SHARED) : sdsnewlen(SDS_NOINIT,len);
         if (lenptr) *lenptr = len;
         if (len && rioRead(rdb,buf,len) == 0) {
             if (plain)
@@ -1290,10 +1291,12 @@ int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
     openChildInfoPipe();
 
     start = ustime();
+    handle_prefork();
     if ((childpid = fork()) == 0) {
         int retval;
 
         /* Child */
+        handle_postfork(0);
         closeListeningSockets(0);
         redisSetProcTitle("redis-rdb-bgsave");
         retval = rdbSave(filename,rsi);
@@ -1312,6 +1315,7 @@ int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
         /* Parent */
+        handle_postfork(childpid);
         server.stat_fork_time = ustime()-start;
         server.stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024*1024*1024); /* GB per second. */
         latencyAddSampleIfNeeded("fork",server.stat_fork_time/1000);
@@ -2141,7 +2145,7 @@ void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
      * If the process returned an error, consider the list of slaves that
      * can continue to be empty, so that it's just a special case of the
      * normal code path. */
-    ok_slaves = zmalloc(sizeof(uint64_t)); /* Make space for the count. */
+    ok_slaves = zmalloc(sizeof(uint64_t), MALLOC_LOCAL); /* Make space for the count. */
     ok_slaves[0] = 0;
     if (!bysignal && exitcode == 0) {
         int readlen = sizeof(uint64_t);
@@ -2258,11 +2262,11 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
 
     /* Collect the file descriptors of the slaves we want to transfer
      * the RDB to, which are i WAIT_BGSAVE_START state. */
-    fds = zmalloc(sizeof(int)*listLength(server.slaves));
+    fds = zmalloc(sizeof(int)*listLength(server.slaves), MALLOC_LOCAL);
     /* We also allocate an array of corresponding client IDs. This will
      * be useful for the child process in order to build the report
      * (sent via unix pipe) that will be sent to the parent. */
-    clientids = zmalloc(sizeof(uint64_t)*listLength(server.slaves));
+    clientids = zmalloc(sizeof(uint64_t)*listLength(server.slaves), MALLOC_LOCAL);
     numfds = 0;
 
     listRewind(server.slaves,&li);
@@ -2326,7 +2330,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
              * can match the report with a specific slave, and 'error' is
              * set to 0 if the replication process terminated with a success
              * or the error code if an error occurred. */
-            void *msg = zmalloc(sizeof(uint64_t)*(1+2*numfds));
+            void *msg = zmalloc(sizeof(uint64_t)*(1+2*numfds), MALLOC_LOCAL);
             uint64_t *len = msg;
             uint64_t *ids = len+1;
             int j, msglen;

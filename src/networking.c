@@ -57,7 +57,7 @@ size_t getStringObjectSdsUsedMemory(robj *o) {
 /* Client.reply list dup and free methods. */
 void *dupClientReplyValue(void *o) {
     clientReplyBlock *old = o;
-    clientReplyBlock *buf = zmalloc(sizeof(clientReplyBlock) + old->size);
+    clientReplyBlock *buf = zmalloc(sizeof(clientReplyBlock) + old->size, MALLOC_LOCAL);
     memcpy(buf, o, sizeof(clientReplyBlock) + old->size);
     return buf;
 }
@@ -83,7 +83,7 @@ void linkClient(client *c) {
 }
 
 client *createClient(int fd) {
-    client *c = zmalloc(sizeof(client));
+    client *c = zmalloc(sizeof(client), MALLOC_LOCAL);
 
     /* passing -1 as fd it is possible to create a non connected client.
      * This is useful since all the commands needs to be executed
@@ -281,7 +281,7 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
         /* Create a new node, make sure it is allocated to at
          * least PROTO_REPLY_CHUNK_BYTES */
         size_t size = len < PROTO_REPLY_CHUNK_BYTES? PROTO_REPLY_CHUNK_BYTES: len;
-        tail = zmalloc(size + sizeof(clientReplyBlock));
+        tail = zmalloc(size + sizeof(clientReplyBlock), MALLOC_LOCAL);
         /* take over the allocation's internal fragmentation */
         tail->size = zmalloc_usable(tail) - sizeof(clientReplyBlock);
         tail->used = len;
@@ -460,7 +460,7 @@ void setDeferredAggregateLen(client *c, void *node, long length, char prefix) {
         listDelNode(c->reply,ln);
     } else {
         /* Create a new node */
-        clientReplyBlock *buf = zmalloc(lenstr_len + sizeof(clientReplyBlock));
+        clientReplyBlock *buf = zmalloc(lenstr_len + sizeof(clientReplyBlock), MALLOC_LOCAL);
         /* Take over the allocation's internal fragmentation */
         buf->size = zmalloc_usable(buf) - sizeof(clientReplyBlock);
         buf->used = lenstr_len;
@@ -1333,7 +1333,7 @@ int processInlineBuffer(client *c) {
     /* Setup argv array on client structure */
     if (argc) {
         if (c->argv) zfree(c->argv);
-        c->argv = zmalloc(sizeof(robj*)*argc);
+        c->argv = zmalloc(sizeof(robj*)*argc, MALLOC_LOCAL);
     }
 
     /* Create redis objects for all arguments. */
@@ -1345,7 +1345,7 @@ int processInlineBuffer(client *c) {
             sdsfree(argv[j]);
         }
     }
-    zfree(argv);
+    sds_free(argv);
     return C_OK;
 }
 
@@ -1431,7 +1431,7 @@ int processMultibulkBuffer(client *c) {
 
         /* Setup argv array on client structure */
         if (c->argv) zfree(c->argv);
-        c->argv = zmalloc(sizeof(robj*)*c->multibulklen);
+        c->argv = zmalloc(sizeof(robj*)*c->multibulklen, MALLOC_LOCAL);
     }
 
     serverAssertWithInfo(c,NULL,c->multibulklen > 0);
@@ -2123,7 +2123,7 @@ void rewriteClientCommandVector(client *c, int argc, ...) {
     int j;
     robj **argv; /* The new argument vector */
 
-    argv = zmalloc(sizeof(robj*)*argc);
+    argv = zmalloc(sizeof(robj*)*argc, MALLOC_LOCAL);
     va_start(ap,argc);
     for (j = 0; j < argc; j++) {
         robj *a;

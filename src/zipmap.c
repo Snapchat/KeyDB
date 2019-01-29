@@ -94,7 +94,7 @@
 
 /* Create a new empty zipmap. */
 unsigned char *zipmapNew(void) {
-    unsigned char *zm = zmalloc(2);
+    unsigned char *zm = zmalloc(2, MALLOC_SHARED);
 
     zm[0] = 0; /* Length */
     zm[1] = ZIPMAP_END;

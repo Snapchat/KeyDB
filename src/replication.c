@@ -76,7 +76,7 @@ char *replicationGetSlaveName(client *c) {
 
 void createReplicationBacklog(void) {
     serverAssert(server.repl_backlog == NULL);
-    server.repl_backlog = zmalloc(server.repl_backlog_size);
+    server.repl_backlog = zmalloc(server.repl_backlog_size, MALLOC_LOCAL);
     server.repl_backlog_histlen = 0;
     server.repl_backlog_idx = 0;
 
@@ -105,7 +105,7 @@ void resizeReplicationBacklog(long long newsize) {
          * worse often we need to alloc additional space before freeing the
          * old buffer. */
         zfree(server.repl_backlog);
-        server.repl_backlog = zmalloc(server.repl_backlog_size);
+        server.repl_backlog = zmalloc(server.repl_backlog_size, MALLOC_LOCAL);
         server.repl_backlog_histlen = 0;
         server.repl_backlog_idx = 0;
         /* Next byte we have is... the next since the buffer is empty. */

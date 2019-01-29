@@ -39,7 +39,7 @@
 /* ===================== Creation and parsing of objects ==================== */
 
 robj *createObject(int type, void *ptr) {
-    robj *o = zmalloc(sizeof(*o));
+    robj *o = salloc_obj(); //zmalloc(sizeof(*o), MALLOC_SHARED);
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
     o->ptr = ptr;
@@ -82,7 +82,7 @@ robj *createRawStringObject(const char *ptr, size_t len) {
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
 robj *createEmbeddedStringObject(const char *ptr, size_t len) {
-    robj *o = zmalloc(sizeof(robj)+sizeof(struct sdshdr8)+len+1);
+    robj *o = zmalloc(sizeof(robj)+sizeof(struct sdshdr8)+len+1, MALLOC_SHARED);
     struct sdshdr8 *sh = (void*)(o+1);
 
     o->type = OBJ_STRING;
@@ -247,7 +247,7 @@ robj *createHashObject(void) {
 }
 
 robj *createZsetObject(void) {
-    zset *zs = zmalloc(sizeof(*zs));
+    zset *zs = zmalloc(sizeof(*zs), MALLOC_SHARED);
     robj *o;
 
     zs->dict = dictCreate(&zsetDictType,NULL);
@@ -272,7 +272,7 @@ robj *createStreamObject(void) {
 }
 
 robj *createModuleObject(moduleType *mt, void *value) {
-    moduleValue *mv = zmalloc(sizeof(*mv));
+    moduleValue *mv = zmalloc(sizeof(*mv), MALLOC_SHARED);
     mv->type = mt;
     mv->value = value;
     return createObject(OBJ_MODULE,mv);
@@ -362,7 +362,10 @@ void decrRefCount(robj *o) {
         case OBJ_STREAM: freeStreamObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
-        zfree(o);
+        if (o->type == OBJ_STRING && o->encoding == OBJ_ENCODING_EMBSTR)
+            zfree(o);
+        else
+            sfree_obj(o);
     } else {
         if (o->refcount <= 0) serverPanic("decrRefCount against refcount <= 0");
         if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount--;
@@ -945,7 +948,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
     size_t mem_total = 0;
     size_t mem = 0;
     size_t zmalloc_used = zmalloc_used_memory();
-    struct redisMemOverhead *mh = zcalloc(sizeof(*mh));
+    struct redisMemOverhead *mh = zcalloc(sizeof(*mh), MALLOC_LOCAL);
 
     mh->total_allocated = zmalloc_used;
     mh->startup_allocated = server.initial_memory_usage;

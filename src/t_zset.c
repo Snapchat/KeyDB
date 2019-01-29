@@ -70,7 +70,7 @@ int zslLexValueLteMax(sds value, zlexrangespec *spec);
  * The SDS string 'ele' is referenced by the node after the call. */
 zskiplistNode *zslCreateNode(int level, double score, sds ele) {
     zskiplistNode *zn =
-        zmalloc(sizeof(*zn)+level*sizeof(struct zskiplistLevel));
+        zmalloc(sizeof(*zn)+level*sizeof(struct zskiplistLevel), MALLOC_SHARED);
     zn->score = score;
     zn->ele = ele;
     return zn;
@@ -81,7 +81,7 @@ zskiplist *zslCreate(void) {
     int j;
     zskiplist *zsl;
 
-    zsl = zmalloc(sizeof(*zsl));
+    zsl = zmalloc(sizeof(*zsl), MALLOC_SHARED);
     zsl->level = 1;
     zsl->length = 0;
     zsl->header = zslCreateNode(ZSKIPLIST_MAXLEVEL,0,NULL);
@@ -1182,7 +1182,7 @@ void zsetConvert(robj *zobj, int encoding) {
         if (encoding != OBJ_ENCODING_SKIPLIST)
             serverPanic("Unknown target encoding");
 
-        zs = zmalloc(sizeof(*zs));
+        zs = zmalloc(sizeof(*zs), MALLOC_SHARED);
         zs->dict = dictCreate(&zsetDictType,NULL);
         zs->zsl = zslCreate();
 
@@ -1590,7 +1590,7 @@ void zaddGenericCommand(client *c, int flags) {
     /* Start parsing all the scores, we need to emit any syntax error
      * before executing additions to the sorted set, as the command should
      * either execute fully or nothing at all. */
-    scores = zmalloc(sizeof(double)*elements);
+    scores = zmalloc(sizeof(double)*elements, MALLOC_SHARED);
     for (j = 0; j < elements; j++) {
         if (getDoubleFromObjectOrReply(c,c->argv[scoreidx+j*2],&scores[j],NULL)
             != C_OK) goto cleanup;
@@ -2203,7 +2203,7 @@ void zunionInterGenericCommand(client *c, robj *dstkey, int op) {
     }
 
     /* read keys to be used for input */
-    src = zcalloc(sizeof(zsetopsrc) * setnum);
+    src = zcalloc(sizeof(zsetopsrc) * setnum, MALLOC_SHARED);
     for (i = 0, j = 3; i < setnum; i++, j++) {
         robj *obj = lookupKeyWrite(c->db,c->argv[j]);
         if (obj != NULL) {

@@ -513,7 +513,7 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
          * is NULL for lists and sorted sets, or the stream ID for streams. */
         void *key_data = NULL;
         if (btype == BLOCKED_STREAM) {
-            key_data = zmalloc(sizeof(streamID));
+            key_data = zmalloc(sizeof(streamID), MALLOC_SHARED);
             memcpy(key_data,ids+j,sizeof(streamID));
         }
 
@@ -596,7 +596,7 @@ void signalKeyAsReady(redisDb *db, robj *key) {
     if (dictFind(db->ready_keys,key) != NULL) return;
 
     /* Ok, we need to queue this key into server.ready_keys. */
-    rl = zmalloc(sizeof(*rl));
+    rl = zmalloc(sizeof(*rl), MALLOC_SHARED);
     rl->key = key;
     rl->db = db;
     incrRefCount(key);

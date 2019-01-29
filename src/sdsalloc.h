@@ -37,6 +37,10 @@
  * to use the default libc allocator). */
 
 #include "zmalloc.h"
-#define s_malloc zmalloc
-#define s_realloc zrealloc
-#define s_free zfree
+#include "storage.h"
+//#define s_malloc zmalloc
+#define s_malloc salloc
+//#define s_realloc zrealloc
+#define s_realloc srealloc
+//#define s_free zfree
+#define s_free sfree

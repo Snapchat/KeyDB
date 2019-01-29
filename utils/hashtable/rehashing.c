@@ -71,7 +71,7 @@ int sortPointers(const void *a, const void *b) {
 void stressGetKeys(dict *d, int times, int *perfect_run, int *approx_run) {
     int j;
 
-    dictEntry **des = zmalloc(sizeof(dictEntry*)*dictSize(d));
+    dictEntry **des = zmalloc(sizeof(dictEntry*)*dictSize(d), MALLOC_SHARED);
     for (j = 0; j < times; j++) {
         int requested = rand() % (dictSize(d)+1);
         int returned = dictGetSomeKeys(d, des, requested);

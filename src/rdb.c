@@ -1291,12 +1291,10 @@ int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
     openChildInfoPipe();
 
     start = ustime();
-    handle_prefork();
     if ((childpid = fork()) == 0) {
         int retval;
 
         /* Child */
-        handle_postfork(0);
         closeListeningSockets(0);
         redisSetProcTitle("redis-rdb-bgsave");
         retval = rdbSave(filename,rsi);
@@ -1315,7 +1313,6 @@ int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
         /* Parent */
-        handle_postfork(childpid);
         server.stat_fork_time = ustime()-start;
         server.stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024*1024*1024); /* GB per second. */
         latencyAddSampleIfNeeded("fork",server.stat_fork_time/1000);

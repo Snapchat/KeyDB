@@ -1,0 +1,785 @@
+.\"
+.\" Copyright (C) 2014 - 2018 Intel Corporation.
+.\" All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions are met:
+.\" 1. Redistributions of source code must retain the above copyright notice(s),
+.\"    this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright notice(s),
+.\"    this list of conditions and the following disclaimer in the documentation
+.\"    and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER(S) ``AS IS'' AND ANY EXPRESS
+.\" OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+.\" MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO
+.\" EVENT SHALL THE COPYRIGHT HOLDER(S) BE LIABLE FOR ANY DIRECT, INDIRECT,
+.\" INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+.\" LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+.\" PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+.\" LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+.\" OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+.\" ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+.\"
+.TH "MEMKIND" 3 "2015-03-31" "Intel Corporation" "MEMKIND" \" -*- nroff -*-
+.SH "NAME"
+memkind \- Heap manager that enables allocations to memory with different properties.
+.br
+This header expose STANDARD and EXPERIMENTAL API. API Standards are described below in this man page.
+.SH "SYNOPSIS"
+.nf
+.B #include <memkind.h>
+.sp
+.B Link with -lmemkind
+.br
+.SS "EXPERIMENTAL API:"
+.sp
+.B "HEAP MANAGEMENT:"
+.br
+.BI "int memkind_posix_memalign(memkind_t " "kind" ", void " "**memptr" ", size_t " "alignment" ", size_t " "size" );
+.sp
+.B "KIND MANAGEMENT:"
+.br
+.BI "int memkind_create_kind(memkind_memtype_t " "memtype_flags" ", memkind_policy_t " "policy" ", memkind_bits_t " "flags" ", memkind_t " "*kind" );
+.sp
+.SS "STANDARD API:"
+.sp
+.B "ERROR HANDLING:"
+.br
+.BI "void memkind_error_message(int " "err" ", char " "*msg" ", size_t " "size" );
+.sp
+.B "LIBRARY VERSION:"
+.br
+.BI "int memkind_get_version();"
+.sp
+.B "HEAP MANAGEMENT:"
+.br
+.BI "void *memkind_malloc(memkind_t " "kind" ", size_t " "size" );
+.br
+.BI "void *memkind_calloc(memkind_t " "kind" ", size_t " "num" ", size_t " "size" );
+.br
+.BI "void *memkind_realloc(memkind_t " "kind" ", void " "*ptr" ", size_t " "size" );
+.br
+.BI "void memkind_free(memkind_t " "kind" ", void " "*ptr" );
+.br
+.BI "size_t memkind_malloc_usable_size(memkind_t " "kind" ", void " "*ptr" );
+.sp
+.B "KIND MANAGEMENT:"
+.br
+.BI "int memkind_create_pmem(const char " "*dir" ", size_t " "max_size" ", memkind_t " "*kind" );
+.br
+.BI "int memkind_destroy_kind(memkind_t " "kind" );
+.br
+.BI "int memkind_check_available(memkind_t " "kind" );
+.sp
+.B "DECORATORS:"
+.br
+.BI "void memkind_malloc_pre(memkind_t " "*kind" ", size_t " "*size" );
+.br
+.BI "void memkind_malloc_post(memkind_t " "kind" ", size_t " "size" ", void " "**result" );
+.br
+.BI "void memkind_calloc_pre(memkind_t " "*kind" ", size_t " "*nmemb" ", size_t " "*size" );
+.br
+.BI "void memkind_calloc_post(memkind_t " "kind" ", size_t " "nmemb" ", size_t " "size" ", void " "**result" );
+.br
+.BI "void memkind_posix_memalign_pre(memkind_t " "*kind" ", void " "**memptr" ", size_t " "*alignment" ", size_t " "*size" );
+.br
+.BI "void memkind_posix_memalign_post(memkind_t " "kind" ", void " "**memptr" ", size_t " "alignment" ", size_t " "size" ", int " "*err" );
+.br
+.BI "void memkind_realloc_pre(memkind_t " "*kind" ", void " "**ptr" ", size_t " "*size" );
+.br
+.BI "void memkind_realloc_post(memkind_t " "*kind" ", void " "*ptr" ", size_t " "size" ", void " "**result" );
+.br
+.BI "void memkind_free_pre(memkind_t " "*kind" ", void " "**ptr" );
+.br
+.BI "void memkind_free_post(memkind_t " "kind" ", void " "*ptr" );
+.sp
+.sp
+.br
+.SH "DESCRIPTION"
+.PP
+.BR memkind_error_message ()
+converts an error number
+.I err
+returned by a member of the memkind
+interface to an error message
+.I msg
+where the maximum size of the message is passed by the
+.I size
+parameter.
+
+.B "HEAP MANAGEMENT:"
+.br
+The functions described in this section define a heap manager with an
+interface modeled on the ISO C standard API's, except that the user
+must specify the
+.I kind
+of memory with the first argument to each function. See the
+.B KINDS
+section below for a full description of the implemented kinds.
+For file-backed kind of memory see
+.BR memkind_create_pmem() .
+.PP
+.BR memkind_malloc ()
+allocates
+.I size
+bytes of uninitialized memory of the specified
+.IR "kind" .
+The allocated space is suitably aligned (after possible pointer
+coercion) for storage of any type of object. If
+.I size
+is 0, then
+.BR memkind_malloc ()
+returns NULL.
+.PP
+.BR memkind_calloc ()
+allocates space for
+.I num
+objects each
+.I size
+bytes in length in memory of the specified
+.IR "kind" .
+The result is identical to calling
+.BR memkind_malloc ()
+with an argument of
+.IR num * size ,
+with the exception that the allocated memory is explicitly
+initialized to zero bytes.
+If
+.I num
+or
+.I size
+is 0, then
+.BR memkind_calloc ()
+returns NULL.
+.PP
+.BR memkind_realloc ()
+changes the size of the previously allocated memory referenced by
+.I ptr
+to
+.I size
+bytes of the specified
+.IR "kind" .
+The contents of the memory are unchanged up to the lesser of
+the new and old sizes. If the new size is larger, the contents of the
+newly allocated portion of the memory are undefined. Upon success, the
+memory referenced by
+.I ptr
+is freed and a pointer to the newly allocated high bandwidth memory is
+returned.
+
+.BR Note:
+.BR memkind_realloc ()
+may move the memory allocation, resulting in a different return value
+than
+.IR "ptr" .
+
+If
+.I ptr
+is NULL, the
+.BR memkind_realloc ()
+function behaves identically to
+.BR memkind_malloc ()
+for the specified size.
+The address
+.IR "ptr" ,
+if not NULL, must have been returned by a previous call to
+.BR memkind_malloc (),
+.BR memkind_calloc (),
+.BR memkind_realloc (),
+or
+.BR memkind_posix_memalign ()
+with the same
+.I kind
+as specified to the call to
+.BR memkind_realloc ().
+Otherwise, if
+.I memkind_free(kind, ptr)
+was called before, undefined behavior occurs.
+.PP
+.BR memkind_posix_memalign ()
+allocates
+.I size
+bytes of memory of a specified
+.I kind
+such that the allocation's base address
+is an even multiple of
+.IR "alignment" ,
+and returns the allocation in the value pointed to by
+.IR "memptr" .
+The requested
+.I alignment
+must be a power of 2 at least as large as
+.IR "sizeof(void *)" .
+If
+.I size
+is 0, then
+.BR memkind_posix_memalign ()
+returns NULL.
+.PP
+.BR memkind_malloc_usable_size ()
+function provides the same semantics as
+.BR malloc_usable_size(3),
+but operates on specified
+.I kind.
+
+.BR Note:
+.BR memkind_malloc_usable_size ()
+is not supported by TBB heap manager described in
+.B ENVIRONMENT
+section.
+
+.PP
+.BR memkind_free ()
+causes the allocated memory referenced by
+.I ptr
+to be made available for future allocations. This pointer
+must have been returned by a previous call to
+.BR memkind_malloc (),
+.BR memkind_calloc (),
+.BR memkind_realloc (),
+or
+.BR memkind_posix_memalign ().
+Otherwise, if
+.I memkind_free(kind, ptr)
+was already called before, undefined behavior occurs.
+If
+.I ptr
+is NULL, no operation is performed.
+The value of
+.B MEMKIND_DEFAULT
+can be given as the
+.I kind
+for all buffers allocated by a kind that leverages the jemalloc
+allocator. In cases where the kind is unknown in the
+context of the call to
+.BR memkind_free ()
+.B 0
+can be given as the
+.I kind
+specified to
+.BR memkind_free ()
+but this will require a look up that can be bypassed by specifying
+a non-zero value.
+.sp
+.B "KIND MANAGEMENT:"
+.br
+There are built-in kinds that are always available and these are enumerated in the
+.B KINDS
+section. The user can also create their own kinds of memory. This
+section describes the API's that enable the tracking of the different
+kinds of memory and determining their properties.
+.PP
+.BR memkind_create_pmem ()
+is a convenient function used to create a file-backed kind of memory.
+It allocates a temporary file in the given directory
+.IR dir .
+The file is created in a fashion similar to
+.BR tmpfile (3),
+so that the file name does not appear when the directory is listed and
+the space is automatically freed when the program terminates.
+The file is truncated to a size of
+.I max_size
+bytes and the resulting space is memory-mapped.
+.br
+Note that the actual file system space is not allocated immediately, but only
+on a call to
+.BR memkind_pmem_mmap ()
+(see
+.BR memkind_pmem (3)).
+This allows to create a pmem memkind of a pretty large size without the
+need to reserve in advance the corresponding file system space for the entire
+heap. If the value of
+.I max_size
+equals 0, pmem memkind is only limited by the capacity of the file system mounted under
+.I dir
+argument.
+ The minimum
+.I max_size
+value which allows to limit the size of kind by the library is defined as
+.BR MEMKIND_PMEM_MIN_SIZE .
+Calling
+.BR memkind_create_pmem ()
+with a size smaller than that and different than 0 will return an error.
+The maximum allowed size is not limited by
+.BR memkind ,
+but by the file system specified by the
+.I dir
+argument.
+The
+.I max_size
+passed in is the raw size of the memory pool and
+.B jemalloc
+will use some of that space for its own metadata.
+Returns zero if the pmem memkind is created successfully or an error code from the
+.B ERRORS
+section if not.
+.PP
+.BR memkind_create_kind ()
+creates kind that allocates memory with specific memory type, memory binding policy and flags (see
+.B MEMORY FLAGS
+section).
+The
+.IR memtype_flags
+(see
+.B MEMORY TYPES
+section) determine memory types to allocate,
+.IR policy
+argument is policy for specifying page binding to memory types selected by
+.IR memtype_flags .
+Returns zero if the specified kind is created successfully or an error code from the
+.B ERRORS
+section if not.
+.PP
+.BR memkind_destroy_kind ()
+destroys previously created kind object, which must have been returned by a previous call to
+.BR memkind_create_pmem ()
+or
+.BR memkind_create_kind () .
+Otherwise, or if
+.I memkind_destroy_kind(kind)
+was already called before, undefined behavior occurs.
+Note that, when the kind was returned by
+.BR memkind_create_kind ()
+all allocated memory must be freed before kind is destroyed,
+otherwise this will cause memory leak. When the kind was returned by
+.BR memkind_create_pmem ()
+all allocated memory will be freed after kind will be destroyed.
+.PP
+.BR memkind_check_available ()
+returns zero if the specified
+.I kind
+is available or an error code from the
+.B ERRORS
+section if it is not.
+.PP
+.BR MEMKIND_PMEM_MIN_SIZE
+The minimum size which allows to limit the file-backed memory partition.
+.sp
+.B "DECORATORS:"
+.br
+The memkind library enables the user to define decorator functions that
+can be called before and after each memkind heap management API. The
+decorators that are called at the beginning of the function end are named
+after that function with
+.I _pre
+appended to the name and those that are called at the end of the
+function are named after that function with
+.I _post
+appended to the name. These are weak symbols and if they are not
+present at link time they are not called. The memkind library does
+not define these symbols which are reserved for user definition.
+These decorators can be used to track calls to the heap management
+interface or to modify parameters. The decorators that are called at
+the beginning of the allocator pass all inputs by reference and the
+decorators that are called at the end of the allocator pass the output
+by reference. This enables the modification of the input and output
+of each heap management function by the decorators.
+.sp
+.B "LIBRARY VERSION:"
+.br
+The memkind library version scheme consist major, minor and patch numbers separated by dot. Combining those numbers, we got the following representation:
+.br
+major.minor.patch, where:
+.br
+	-major number is incremented whenever API is changed (loss of backward compatibility),
+.br
+	-minor number is incremented whenever additional extensions are introduced or behavior has been changed,
+.br
+	-patch number is incremented whenever small bug fixes are added.
+.sp
+memkind library provide numeric representation of the version by exposing the following API:
+.PP
+.BR memkind_get_version ()
+return version number represented by a single integer number, obtained from the formula:
+.br
+major * 1000000 + minor * 1000 + patch
+.sp
+Note: major < 1 means unstable API.
+.sp
+API standards:
+.br
+-STANDARD API, API is considered as stable
+.br
+-NON-STANDARD API, API is considered as stable, however this is not a standard way to use memkind
+.br
+-EXPERIMENTAL API, API is considered as unstable and the subject to change
+.br
+.sp
+.SH "RETURN VALUE"
+.BR memkind_calloc (),
+.BR memkind_malloc (),
+and
+.BR memkind_realloc (),
+returns the pointer to the allocated memory or NULL if the request fails.
+.BR memkind_malloc_usable_size ()
+returns the number of usable bytes in the block of allocated memory pointed to by
+.I ptr,
+a pointer to a block of memory allocated by
+.BR memkind_malloc ()
+or a related function. If
+.I ptr
+is NULL, 0 is returned.
+.BR memkind_free ()
+and
+.BR memkind_error_message ()
+do not have return values.
+All other memkind API's return 0 upon
+success and an error code defined in the
+.B ERRORS
+section upon failure.
+The memkind library avoids setting
+.I errno
+directly, but calls to underlying libraries and system calls may set
+.IR errno
+( e.g.
+.BR memkind_create_pmem ()
+).
+.SH "KINDS"
+The available kinds of memory:
+.TP
+.B MEMKIND_DEFAULT
+Default allocation using standard memory and default page size.
+.TP
+.B MEMKIND_HUGETLB
+Allocate from standard memory using huge pages. Note: This kind requires
+huge pages configuration described in
+.B SYSTEM CONFIGURATION
+section.
+.TP
+.B MEMKIND_GBTLB (DEPRECATED)
+Allocate from standard memory using 1GB chunks backed by huge pages.
+Note: This kind requires huge pages configuration described in
+.B SYSTEM CONFIGURATION
+section.
+.TP
+.B MEMKIND_INTERLEAVE
+Allocate pages interleaved across all NUMA nodes with transparent huge
+pages disabled.
+.TP
+.B MEMKIND_HBW
+Allocate from the closest high bandwidth memory NUMA node at time
+of allocation. If there is not enough high bandwidth memory to satisfy the request
+.I errno
+is set to ENOMEM and the allocated pointer is set to NULL.
+.TP
+.B MEMKIND_HBW_ALL
+Same as
+.B MEMKIND_HBW
+except decision regarding closest NUMA node is postponed until the time of first write.
+.TP
+.B MEMKIND_HBW_HUGETLB
+Same as
+.B MEMKIND_HBW
+except the allocation is backed by huge pages. Note: This kind requires
+huge pages configuration described in
+.B SYSTEM CONFIGURATION
+section.
+.TP
+.B MEMKIND_HBW_ALL_HUGETLB
+Combination of
+.B MEMKIND_HBW_ALL
+and
+.B MEMKIND_HBW_HUGETLB
+properties. Note: This kind requires
+huge pages configuration described in
+.B SYSTEM CONFIGURATION
+section.
+.TP
+.B MEMKIND_HBW_PREFERRED
+Same as
+.B MEMKIND_HBW
+except that if there is not enough high bandwidth memory to satisfy
+the request, the allocation will fall back on standard memory.
+.TP
+.B MEMKIND_HBW_PREFERRED_HUGETLB
+Same as
+.B MEMKIND_HBW_PREFERRED
+except the allocation is backed by huge pages. Note: This kind requires huge pages
+configuration described in
+.B SYSTEM CONFIGURATION
+section.
+.TP
+.B MEMKIND_HBW_GBTLB (DEPRECATED)
+Same as
+.B MEMKIND_HBW
+except the allocation is backed by 1GB chunks of huge pages. Note that
+.I size
+can take on any value, but full gigabyte pages will allocated for each
+request, so remainder of the last page will be wasted.
+This kind requires huge pages configuration described in
+.B SYSTEM CONFIGURATION
+section.
+.TP
+.B MEMKIND_HBW_PREFERRED_GBTLB (DEPRECATED)
+Same as
+.B MEMKIND_HBW_GBTLB
+except that if there is not enough high bandwidth memory to satisfy
+the request, the allocation will fall back on standard memory. Note: This kind
+requires huge pages configuration described in
+.B SYSTEM CONFIGURATION
+section.
+.TP
+.B MEMKIND_HBW_INTERLEAVE
+Same as
+.B MEMKIND_HBW
+except that the pages that support the allocation are interleaved
+across all high bandwidth nodes and transparent huge pages are
+disabled.
+.TP
+.B MEMKIND_REGULAR
+Allocate from regular memory using the default page size. Regular means general purpose memory
+from the NUMA nodes containing CPUs.
+.SH "MEMORY TYPES"
+The available types of memory:
+.TP
+.B MEMKIND_MEMTYPE_DEFAULT
+Standard memory, the same as process uses.
+.TP
+.B MEMKIND_MEMTYPE_HIGH_BANDWIDTH
+High bandwidth memory (HBM). There must be at least two memory types with different bandwidth to determine which is the HBM.
+.SH "MEMORY BINDING POLICY"
+The available types of memory binding policy:
+.TP
+.B MEMKIND_POLICY_BIND_LOCAL
+Allocate local memory. If there is not enough memory to satisfy the request
+.I errno
+is set to
+.BR ENOMEM
+and the allocated pointer is set to
+.IR "NULL" .
+.TP
+.B MEMKIND_POLICY_BIND_ALL
+Memory locality is ignored. If there is not enough memory to satisfy the request
+.I errno
+is set to
+.B ENOMEM
+and the allocated pointer is set to
+.IR "NULL" .
+.TP
+.B MEMKIND_POLICY_PREFERRED_LOCAL
+Allocate preferred memory that is local.
+If there is not enough preferred memory to satisfy the request or
+preferred memory is not available, the allocation will fall back on any other memory.
+.TP
+.B MEMKIND_POLICY_INTERLEAVE_LOCAL
+Interleave allocation across local memory.
+For n memory types the allocation will be interleaved across all of them.
+.TP
+.B MEMKIND_POLICY_INTERLEAVE_ALL
+Interleave allocation. Locality is ignored.
+For n memory types the allocation will be interleaved across all of them.
+.TP
+.B MEMKIND_POLICY_MAX_VALUE
+Max policy value.
+.SH "MEMORY FLAGS"
+The available types of memory flags:
+.TP
+.B MEMKIND_MASK_PAGE_SIZE_2MB
+Allocation backed by 2MB page size.
+.SH "ERRORS"
+.TP
+.BR memkind_posix_memalign ()
+returns the one of the POSIX standard error codes
+.B EINVAL
+or
+.B ENOMEM
+as defined in
+.I <errno.h>
+if an error occurs (these have positive values).
+If the
+.I alignment
+parameter is not a power of two or is not a multiple of
+.IR "sizeof(void *)" ,
+then
+.B EINVAL
+is returned. If there is insufficient memory to satisfy the request then
+.B ENOMEM
+is returned.
+.PP
+All functions other than
+.BR memkind_posix_memalign ()
+which have an integer return type return one of the negative error
+codes as defined in
+.I <memkind.h>
+and described below.
+.TP
+.B MEMKIND_ERROR_UNAVAILABLE
+Requested memory kind is not available
+.TP
+.B MEMKIND_ERROR_MBIND
+Call to
+.BR mbind (2)
+failed
+.TP
+.B MEMKIND_ERROR_MMAP
+Call to
+.BR mmap (2)
+failed
+.TP
+.B MEMKIND_ERROR_MALLOC
+Call to jemalloc's
+.BR malloc ()
+failed
+.TP
+.B MEMKIND_ERROR_ENVIRON
+Error parsing environment variable (MEMKIND_*)
+.TP
+.B MEMKIND_ERROR_INVALID
+Invalid input arguments to memkind routine
+.TP
+.B MEMKIND_ERROR_TOOMANY
+Error trying to initialize more than maximum
+.B MEMKIND_MAX_KIND
+number of kinds
+.TP
+.B MEMKIND_ERROR_BADOPS
+Error memkind operation structure is missing or invalid
+.TP
+.B MEMKIND_ERROR_HUGETLB
+Unable to allocate huge pages
+.TP
+.B MEMKIND_ERROR_MEMTYPE_NOT_AVAILABLE
+Error requested memory type is not available
+.TP
+.B MEMKIND_ERROR_OPERATION_FAILED
+Error memkind operation failed
+.TP
+.B MEMKIND_ERROR_ARENAS_CREATE
+Call to jemalloc's
+.BR arenas.create ()
+failed
+.TP
+.B MEMKIND_ERROR_RUNTIME
+Unspecified run-time error
+.SH "FILES"
+.TP
+.I /usr/bin/memkind-hbw-nodes
+Prints a comma separated list of high bandwidth nodes.
+.SH "MEMORY TYPES"
+.TP
+.B MEMKIND_MEMTYPE_DEFAULT
+Standard memory, the same as process uses.
+.TP
+.B MEMKIND_MEMTYPE_HIGH_BANDWIDTH
+High bandwidth memory (HBM). There must be at least two memory types with different bandwidth to determine which is the HBM.
+.SH "MEMORY BINDING POLICY"
+.TP
+.B MEMKIND_POLICY_BIND_LOCAL
+Allocate local memory.
+If there is not enough memory to satisfy the request 
+.I errno
+is set to
+.BR ENOMEM
+and the allocated pointer is set to
+.I NULL\fR.
+.TP
+.B MEMKIND_POLICY_BIND_ALL
+Memory locality is ignored.
+If there is not enough memory to satisfy the request 
+.I errno
+is set to
+.B ENOMEM
+and the allocated pointer is set to 
+.IR NULL .
+.TP
+.B MEMKIND_POLICY_PREFERRED_LOCAL
+Allocate preferred memory that is local.
+If there is not enough preferred memory to satisfy the request or
+preferred memory is not available, the allocation will fall back on any
+other memory.
+.TP
+.B MEMKIND_POLICY_INTERLEAVE_LOCAL
+Interleave allocation across local memory.
+For n memory types the allocation will be interleaved across all of
+them.
+.TP
+.B MEMKIND_POLICY_INTERLEAVE_ALL
+Interleave allocation. Locality is ignored.
+For n memory types the allocation will be interleaved across all of
+them.
+.TP
+.B MEMKIND_POLICY_MAX_VALUE
+Max policy value.
+.SH "MEMORY FLAGS"
+.TP
+.B MEMKIND_MASK_PAGE_SIZE_2MB
+Allocation backed by 2MB page size.
+.SH "ENVIRONMENT"
+.TP
+.B MEMKIND_HBW_NODES
+This environment variable is a comma separated list of NUMA nodes that
+are treated as high bandwidth. Uses the
+.I libnuma
+routine
+.BR numa_parse_nodestring ()
+for parsing, so the syntax described in the
+.BR numa (3)
+man page for this routine applies: e.g. 1-3,5 is a valid setting.
+.TP
+.B MEMKIND_ARENA_NUM_PER_KIND
+This environment variable allows leveraging internal mechanism of
+the library for setting number of arenas per kind. Value should be
+a positive integer (not greater than INT_MAX defined in limits.h).
+The user should set the value based on the characteristics
+of application that is using the library. Higher value can
+provide better performance in extremely multithreaded applications at
+the cost of memory overhead. See section "IMPLEMENTATION NOTES" of
+.BR jemalloc (3)
+for more details about arenas.
+.TP
+.B MEMKIND_HOG_MEMORY
+Controls behavior of memkind with regards to returning memory to underlaying OS. Setting
+.B MEMKIND_HOG_MEMORY
+to "1" causes memkind to not release memory to OS in anticipation of memory reuse soon. This will
+improve latency of 'free' operations but increase memory usage.
+.TP
+.B MEMKIND_DEBUG
+Controls logging mechanism in memkind. Setting
+.B MEMKIND_DEBUG
+to "1" enables printing messages like errors and general information about environment to
+.IR stderr .
+.TP
+.B MEMKIND_HEAP_MANAGER
+Controls heap management behavior in memkind library by switching to one of the available heap managers.
+.br
+Values:
+.br
+    JEMALLOC – sets the jemalloc heap manager
+.br
+    TBB – sets the Intel Threading Building Blocks heap manager. This option requires installed
+    Intel Threading Building Blocks library.
+If the MEMKIND_HEAP_MANAGER is not set then the jemalloc heap manager will be used by default.
+.SH "SYSTEM CONFIGURATION"
+Interfaces for obtaining 2MB (HUGETLB) need allocated
+huge pages in the kernel's huge page pool.
+.TP
+.B HUGETLB (huge pages)
+Current number of "persistent" huge pages can be read from /proc/sys/vm/nr_hugepages file.
+Proposed way of setting hugepages is: "sudo sysctl vm.nr_hugepages=<number_of_hugepages>".
+More information can be found here:
+https://www.kernel.org/doc/Documentation/vm/hugetlbpage.txt
+.SH "STATIC LINKING"
+.TP
+When linking statically against memkind, libmemkind.a should be used together with its dependencies libnuma and pthread. Pthread can be linked by adding /usr/lib64/libpthread.a as a dependency (exact path may vary). Typically libnuma will need to be compiled from sources to use it as a static dependency. libnuma can be reached on github: https://github.com/numactl/numactl
+.SH "KNOWN ISSUES"
+.TP
+.B HUGETLB (huge pages)
+There might be some overhead in huge pages consumption caused by heap management.
+If your allocation fails because of OOM, please try to allocate extra huge pages (e.g. 8 huge pages).
+.SH "COPYRIGHT"
+Copyright (C) 2014 - 2018 Intel Corporation. All rights reserved.
+.SH "SEE ALSO"
+.BR malloc (3),
+.BR malloc_usable_size (3),
+.BR numa (3),
+.BR numactl (8),
+.BR mbind (2),
+.BR mmap (2),
+.BR move_pages (2),
+.BR jemalloc (3),
+.BR memkind_default (3),
+.BR memkind_arena (3),
+.BR memkind_hbw (3),
+.BR memkind_hugetlb (3),
+.BR memkind_pmem (3)

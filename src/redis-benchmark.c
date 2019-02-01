@@ -653,7 +653,7 @@ int main(int argc, const char **argv) {
 
     client c;
 
-    storage_init();
+    storage_init(NULL);
 
     srandom(time(NULL));
     signal(SIGHUP, SIG_IGN);

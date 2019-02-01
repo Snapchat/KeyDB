@@ -35,9 +35,9 @@
 #define __xstr(s) __str(s)
 #define __str(s) #s
 
-#if 1
-    #define ZMALLOC_LIB ("custom")
-    #include "storage.h"
+#include "storage.h"
+#if defined(USE_MEMKIND)
+    #define ZMALLOC_LIB ("memkind")
     #undef USE_JEMALLOC
     #define USE_MALLOC_CLASS 1
 #elif defined(USE_TCMALLOC)

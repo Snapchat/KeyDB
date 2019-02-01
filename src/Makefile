@@ -38,7 +38,7 @@ MALLOC=libc
 ifneq ($(uname_M),armv6l)
 ifneq ($(uname_M),armv7l)
 ifeq ($(uname_S),Linux)
-	MALLOC=jemalloc
+	MALLOC=memkind
 endif
 endif
 endif
@@ -119,7 +119,7 @@ ifeq ($(uname_S),DragonFly)
 else
 	# All the other OSes (notably Linux)
 	FINAL_LDFLAGS+= -rdynamic
-	FINAL_LIBS+=-ldl -pthread -lrt -lmemkind
+	FINAL_LIBS+=-ldl -pthread -lrt
 endif
 endif
 endif
@@ -143,6 +143,12 @@ ifeq ($(MALLOC),jemalloc)
 	DEPENDENCY_TARGETS+= jemalloc
 	FINAL_CFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
+endif
+
+ifeq ($(MALLOC),memkind)
+	DEPENDENCY_TARGETS+= memkind
+	FINAL_CFLAGS+= -DUSE_MEMKIND -I../deps/memkind/src/include
+	FINAL_LIBS := ../deps/memkind/src/.libs/libmemkind.a -lnuma $(FINAL_LIBS)
 endif
 
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)

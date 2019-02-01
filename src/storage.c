@@ -10,7 +10,7 @@
 #include "storage.h"
 
 struct memkind *mkdisk = NULL;
-static char *PMEM_DIR = "/mnt/btrfs_scratch/";
+static const char *PMEM_DIR = NULL;
 
 void handle_prefork();
 void handle_postfork_parent();
@@ -85,9 +85,6 @@ void *pool_alloc(struct alloc_pool *ppool)
     }
 }
 
-#pragma weak serverLog
-void serverLog(int level, const char*fmt, ...){}
-
 void pool_free(struct alloc_pool *ppool, void *pv)
 {
     struct object_page *cur = ppool->pobjpageHead;
@@ -113,18 +110,62 @@ void pool_free(struct alloc_pool *ppool, void *pv)
 struct alloc_pool poolobj;
 struct alloc_pool poolembstrobj;
 
-void storage_init()
+int forkFile()
 {
-    int errv = memkind_create_pmem(PMEM_DIR, 0, &mkdisk);
-    if (errv)
+    int fdT;
+    memkind_tmpfile(PMEM_DIR, &fdT);
+    if (ioctl(fdT, FICLONE, memkind_fd(mkdisk)) == -1)
     {
-        fprintf(stderr, "Memory pool creation failed: %d\n", errv);
-        exit(EXIT_FAILURE);
+        return -1;
     }
-    pool_initialize(&poolobj, sizeof(robj));
-    pool_initialize(&poolembstrobj, EMBSTR_ROBJ_SIZE);
+    return fdT;
+}
 
-    pthread_atfork(handle_prefork, handle_postfork_parent, handle_postfork_child);
+// initialize the memory subsystem. 
+//  NOTE: This may be called twice, first with NULL specifying we should use ram
+//      later, after the configuration file is loaded with a path to where we should
+//      place our temporary file.
+void storage_init(const char *tmpfilePath)
+{
+    if (tmpfilePath == NULL)
+    {
+        serverAssert(mkdisk == NULL);
+        mkdisk = MEMKIND_DEFAULT;
+    }
+    else
+    {
+        // First create the file
+        serverAssert(mkdisk == MEMKIND_DEFAULT);
+        PMEM_DIR = memkind_malloc(MEMKIND_DEFAULT, strlen(tmpfilePath));
+        strcpy((char*)PMEM_DIR, tmpfilePath);
+        int errv = memkind_create_pmem(PMEM_DIR, 0, &mkdisk);
+        if (errv == MEMKIND_ERROR_INVALID)
+        {
+            serverLog(LOG_CRIT, "Memory pool creation failed: %s", strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+        else if (errv)
+        {
+            char msgbuf[1024];
+            memkind_error_message(errv, msgbuf, 1024);
+            serverLog(LOG_CRIT, "Memory pool creation failed: %s", msgbuf);
+            exit(EXIT_FAILURE);
+        }
+
+        // Next test if COW is working
+        int fdTest = forkFile();
+        if (fdTest < 0)
+        {
+            serverLog(LOG_ERR, "Scratch file system does not support Copy on Write.  To fix this scratch-file-path must point to a path on a filesystem which supports copy on write, such as btrfs.");
+            exit(EXIT_FAILURE);
+        }
+        close(fdTest);
+
+        pool_initialize(&poolobj, sizeof(robj));
+        pool_initialize(&poolembstrobj, EMBSTR_ROBJ_SIZE);
+
+        pthread_atfork(handle_prefork, handle_postfork_parent, handle_postfork_child);
+    }
 }
 
 
@@ -184,12 +225,9 @@ void *srealloc(void *pv, size_t cb)
 int fdNew = -1;
 void handle_prefork()
 {
-    memkind_tmpfile(PMEM_DIR, &fdNew);
-    if (ioctl(fdNew, FICLONE, memkind_fd(mkdisk)) == -1)
-    {
-        perror("failed to fork file");
-        exit(EXIT_FAILURE);
-    }
+    fdNew = forkFile();
+    if (fdNew < 0)
+        serverLog(LOG_ERR, "Failed to clone scratch file");
 }
 
 void handle_postfork_parent()

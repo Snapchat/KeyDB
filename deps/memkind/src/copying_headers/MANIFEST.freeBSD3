@@ -1,0 +1,10 @@
+examples/pmem_kinds.c
+examples/pmem_malloc.c
+examples/pmem_malloc_unlimited.c
+examples/pmem_usable_size.c
+examples/pmem_alignment.c
+examples/pmem_and_default_kind
+examples/pmem_multithreads.c
+examples/pmem_multithreads_onekind.c
+examples/pmem_free_with_unknown_kind.c
+examples/pmem_cpp_allocator.cpp

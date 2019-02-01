@@ -4740,7 +4740,7 @@ int main(int argc, char **argv) {
     struct timeval tv;
     int j;
 
-    storage_init();
+    storage_init(NULL);
 
 #ifdef REDIS_TEST
     if (argc == 3 && !strcasecmp(argv[1], "test")) {

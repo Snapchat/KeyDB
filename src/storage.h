@@ -9,12 +9,7 @@ enum MALLOC_CLASS
     MALLOC_SHARED,
 };
 
-void storage_init(void);
-
-struct redisObject *salloc_obj();
-void sfree_obj(struct redisObject *obj);
-struct redisObject *salloc_objembstr();
-void sfree_objembstr(struct redisObject *obj);
+void storage_init(const char *tmpfilePath);
 
 void *salloc(size_t cb, enum MALLOC_CLASS class);
 void *scalloc(size_t cb, size_t c, enum MALLOC_CLASS class);

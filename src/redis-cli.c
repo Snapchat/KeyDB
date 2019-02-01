@@ -7176,7 +7176,7 @@ static void intrinsicLatencyMode(void) {
 int main(int argc, char **argv) {
     int firstarg;
 
-    storage_init();
+    storage_init(NULL);
     config.hostip = sdsnew("127.0.0.1");
     config.hostport = 6379;
     config.hostsocket = NULL;

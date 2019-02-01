@@ -53,6 +53,11 @@ linenoise: .make-prerequisites
 
 .PHONY: linenoise
 
+.PHONY: memkind
+memkind:
+	cd memkind && $(MAKE)
+
+
 ifeq ($(uname_S),SunOS)
 	# Make isinf() available
 	LUA_CFLAGS= -D__C99FEATURES__=1

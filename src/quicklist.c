@@ -194,7 +194,7 @@ REDIS_STATIC int __quicklistCompressNode(quicklistNode *node) {
         zfree(lzf);
         return 0;
     }
-    lzf = zrealloc(lzf, sizeof(*lzf) + lzf->sz);
+    lzf = zrealloc(lzf, sizeof(*lzf) + lzf->sz, MALLOC_SHARED);
     zfree(node->zl);
     node->zl = (unsigned char *)lzf;
     node->encoding = QUICKLIST_NODE_ENCODING_LZF;

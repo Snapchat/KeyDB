@@ -7,6 +7,7 @@
 #include <linux/fs.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <fcntl.h>
 #include "storage.h"
 
 struct memkind *mkdisk = NULL;
@@ -125,7 +126,7 @@ int forkFile()
 //  NOTE: This may be called twice, first with NULL specifying we should use ram
 //      later, after the configuration file is loaded with a path to where we should
 //      place our temporary file.
-void storage_init(const char *tmpfilePath)
+void storage_init(const char *tmpfilePath, size_t cbFileReserve)
 {
     if (tmpfilePath == NULL)
     {
@@ -161,6 +162,11 @@ void storage_init(const char *tmpfilePath)
         }
         close(fdTest);
 
+        // Now lets make the file big
+        if (cbFileReserve == 0)
+            cbFileReserve = 1*1024*1024*1024;   // 1 GB (enough to be interesting)
+        posix_fallocate64(memkind_fd(mkdisk), 0, cbFileReserve);
+
         pool_initialize(&poolobj, sizeof(robj));
         pool_initialize(&poolembstrobj, EMBSTR_ROBJ_SIZE);
 
@@ -187,28 +193,34 @@ void sfree_objembstr(robj *obj)
     pool_free(&poolembstrobj, obj);
 }
 
-void *salloc(size_t cb, enum MALLOC_CLASS class)
+size_t salloc_usable_size(void *ptr)
+{
+    return memkind_malloc_usable_size(memkind_get_kind(ptr), ptr);
+}
+
+static memkind_t kindFromClass(enum MALLOC_CLASS class)
 {
     switch (class)
     {
     case MALLOC_SHARED:
-        return memkind_malloc(mkdisk, cb);
+        return mkdisk;
     default:
-        return memkind_malloc(MEMKIND_DEFAULT, cb);
+        break;
     }
-    return NULL;
+    return MEMKIND_DEFAULT;
+}
+
+void *salloc(size_t cb, enum MALLOC_CLASS class)
+{
+    if (cb == 0) 
+        cb = 1;
+        
+    return memkind_malloc(kindFromClass(class), cb);
 }
 
 void *scalloc(size_t cb, size_t c, enum MALLOC_CLASS class)
 {
-    switch (class)
-    {
-    case MALLOC_SHARED:
-        return memkind_calloc(mkdisk, cb, c);
-    default:
-        return memkind_calloc(MEMKIND_DEFAULT, cb, c);
-    }
-    return NULL;
+    return memkind_calloc(kindFromClass(class), cb, c);
 }
 
 void sfree(void *pv)
@@ -216,10 +228,9 @@ void sfree(void *pv)
     memkind_free(NULL, pv);
 }
 
-void *srealloc(void *pv, size_t cb)
+void *srealloc(void *pv, size_t cb, enum MALLOC_CLASS class)
 {
-    memkind_t kind = mkdisk;
-    return memkind_realloc(kind, pv, cb);
+    return memkind_realloc(kindFromClass(class), pv, cb);
 }
 
 int fdNew = -1;

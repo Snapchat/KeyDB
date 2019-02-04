@@ -791,3 +791,18 @@ MEMKIND_EXPORT int memkind_get_kind_by_partition(int partition,
     return memkind_get_kind_by_partition_internal(partition, kind);
 }
 
+int memkind_lookup_arena(void *ptr, unsigned int *arena);
+MEMKIND_EXPORT memkind_t memkind_get_kind(void *ptr)
+{
+    unsigned arena;
+    int err = memkind_lookup_arena(ptr, &arena);
+    memkind_t kind = NULL;
+    if (MEMKIND_UNLIKELY(err))
+        return NULL;
+    kind = get_kind_by_arena(arena);
+
+    if (!kind)
+        return MEMKIND_DEFAULT;
+
+    return kind;
+}

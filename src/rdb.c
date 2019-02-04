@@ -2154,7 +2154,7 @@ void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
 
             /* Make space for enough elements as specified by the first
              * uint64_t element in the array. */
-            ok_slaves = zrealloc(ok_slaves,sizeof(uint64_t)+readlen);
+            ok_slaves = zrealloc(ok_slaves,sizeof(uint64_t)+readlen, MALLOC_LOCAL);
             if (readlen &&
                 read(server.rdb_pipe_read_result_from_child, ok_slaves+1,
                      readlen) != readlen)

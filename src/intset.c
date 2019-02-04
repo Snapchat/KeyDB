@@ -104,7 +104,7 @@ intset *intsetNew(void) {
 /* Resize the intset */
 static intset *intsetResize(intset *is, uint32_t len) {
     uint32_t size = len*intrev32ifbe(is->encoding);
-    is = zrealloc(is,sizeof(intset)+size);
+    is = zrealloc(is,sizeof(intset)+size, MALLOC_SHARED);
     return is;
 }
 

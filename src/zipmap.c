@@ -200,7 +200,7 @@ static unsigned int zipmapRawEntryLength(unsigned char *p) {
 }
 
 static inline unsigned char *zipmapResize(unsigned char *zm, unsigned int len) {
-    zm = zrealloc(zm, len);
+    zm = zrealloc(zm, len, MALLOC_SHARED);
     zm[len-1] = ZIPMAP_END;
     return zm;
 }

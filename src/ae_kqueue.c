@@ -60,7 +60,7 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
 static int aeApiResize(aeEventLoop *eventLoop, int setsize) {
     aeApiState *state = eventLoop->apidata;
 
-    state->events = zrealloc(state->events, sizeof(struct kevent)*setsize);
+    state->events = zrealloc(state->events, sizeof(struct kevent)*setsize, MALLOC_LOCAL);
     return 0;
 }
 

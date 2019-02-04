@@ -435,7 +435,7 @@ static void tcache_finalize(void *args)
     }
 }
 
-static inline int memkind_lookup_arena(void *ptr, unsigned int *arena)
+int memkind_lookup_arena(void *ptr, unsigned int *arena)
 {
     size_t sz = sizeof(unsigned);
     unsigned temp_arena;

@@ -60,7 +60,7 @@ void zlibc_free(void *ptr) {
 #if defined(USE_MEMKIND)
 #define malloc(size, type) salloc(size, type)
 #define calloc(count, size, type) scalloc(count, size, type)
-#define realloc(ptr, size) srealloc(ptr, size)
+#define realloc(ptr, size, type) srealloc(ptr, size, type)
 #define free(ptr) sfree(ptr)
 #elif defined(USE_TCMALLOC)
 #define malloc(size) tc_malloc(size)
@@ -156,17 +156,17 @@ void *zcalloc(size_t size, enum MALLOC_CLASS class) {
 #endif
 }
 
-void *zrealloc(void *ptr, size_t size) {
+void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS class) {
 #ifndef HAVE_MALLOC_SIZE
     void *realptr;
 #endif
     size_t oldsize;
     void *newptr;
 
-    if (ptr == NULL) return zmalloc(size, MALLOC_SHARED);
+    if (ptr == NULL) return zmalloc(size, class);
 #ifdef HAVE_MALLOC_SIZE
     oldsize = zmalloc_size(ptr);
-    newptr = realloc(ptr,size);
+    newptr = realloc(ptr,size, class);
     if (!newptr) zmalloc_oom_handler(size);
 
     update_zmalloc_stat_free(oldsize);

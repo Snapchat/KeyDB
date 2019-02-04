@@ -9,11 +9,12 @@ enum MALLOC_CLASS
     MALLOC_SHARED,
 };
 
-void storage_init(const char *tmpfilePath);
+void storage_init(const char *tmpfilePath, size_t cbFileReserve);
 
 void *salloc(size_t cb, enum MALLOC_CLASS class);
 void *scalloc(size_t cb, size_t c, enum MALLOC_CLASS class);
 void sfree(void*);
-void *srealloc(void *pv, size_t cb);
+void *srealloc(void *pv, size_t cb, enum MALLOC_CLASS class);
+size_t salloc_usable_size(void *ptr);
 
 #endif

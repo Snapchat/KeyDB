@@ -2170,7 +2170,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
     robj *oldval;
 
     if (i >= c->argc) {
-        c->argv = zrealloc(c->argv,sizeof(robj*)*(i+1));
+        c->argv = zrealloc(c->argv,sizeof(robj*)*(i+1), MALLOC_LOCAL);
         c->argc = i+1;
         c->argv[i] = NULL;
     }

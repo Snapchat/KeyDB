@@ -2973,7 +2973,7 @@ int redisOpArrayAppend(redisOpArray *oa, struct redisCommand *cmd, int dbid,
 {
     redisOp *op;
 
-    oa->ops = zrealloc(oa->ops,sizeof(redisOp)*(oa->numops+1));
+    oa->ops = zrealloc(oa->ops,sizeof(redisOp)*(oa->numops+1), MALLOC_LOCAL);
     op = oa->ops+oa->numops;
     op->cmd = cmd;
     op->dbid = dbid;
@@ -4740,7 +4740,7 @@ int main(int argc, char **argv) {
     struct timeval tv;
     int j;
 
-    storage_init(NULL);
+    storage_init(NULL, 0);
 
 #ifdef REDIS_TEST
     if (argc == 3 && !strcasecmp(argv[1], "test")) {

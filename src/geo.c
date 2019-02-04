@@ -64,7 +64,7 @@ geoArray *geoArrayCreate(void) {
 geoPoint *geoArrayAppend(geoArray *ga) {
     if (ga->used == ga->buckets) {
         ga->buckets = (ga->buckets == 0) ? 8 : ga->buckets*2;
-        ga->array = zrealloc(ga->array,sizeof(geoPoint)*ga->buckets);
+        ga->array = zrealloc(ga->array,sizeof(geoPoint)*ga->buckets, MALLOC_SHARED);
     }
     geoPoint *gp = ga->array+ga->used;
     ga->used++;

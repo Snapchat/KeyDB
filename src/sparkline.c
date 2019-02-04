@@ -70,7 +70,7 @@ void sparklineSequenceAddSample(struct sequence *seq, double value, char *label)
         if (value < seq->min) seq->min = value;
         else if (value > seq->max) seq->max = value;
     }
-    seq->samples = zrealloc(seq->samples,sizeof(struct sample)*(seq->length+1));
+    seq->samples = zrealloc(seq->samples,sizeof(struct sample)*(seq->length+1), MALLOC_SHARED);
     seq->samples[seq->length].value = value;
     seq->samples[seq->length].label = label;
     seq->length++;

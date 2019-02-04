@@ -280,7 +280,7 @@ void RM_FreeDict(RedisModuleCtx *ctx, RedisModuleDict *d);
  * and in general is taken into account as memory allocated by Redis.
  * You should avoid using malloc(). */
 void *RM_Alloc(size_t bytes) {
-    return zmalloc(bytes, MALLOC_LOCAL);
+    return zmalloc(bytes, MALLOC_SHARED);
 }
 
 /* Use like calloc(). Memory allocated with this function is reported in
@@ -288,12 +288,12 @@ void *RM_Alloc(size_t bytes) {
  * and in general is taken into account as memory allocated by Redis.
  * You should avoid using calloc() directly. */
 void *RM_Calloc(size_t nmemb, size_t size) {
-    return zcalloc(nmemb*size, MALLOC_LOCAL);
+    return zcalloc(nmemb*size, MALLOC_SHARED);
 }
 
 /* Use like realloc() for memory obtained with RedisModule_Alloc(). */
 void* RM_Realloc(void *ptr, size_t bytes) {
-    return zrealloc(ptr,bytes);
+    return zrealloc(ptr,bytes, MALLOC_SHARED);
 }
 
 /* Use like free() for memory obtained by RedisModule_Alloc() and
@@ -558,7 +558,7 @@ int RM_IsKeysPositionRequest(RedisModuleCtx *ctx) {
 void RM_KeyAtPos(RedisModuleCtx *ctx, int pos) {
     if (!(ctx->flags & REDISMODULE_CTX_KEYS_POS_REQUEST)) return;
     if (pos <= 0) return;
-    ctx->keys_pos = zrealloc(ctx->keys_pos,sizeof(int)*(ctx->keys_count+1));
+    ctx->keys_pos = zrealloc(ctx->keys_pos,sizeof(int)*(ctx->keys_count+1), MALLOC_LOCAL);
     ctx->keys_pos[ctx->keys_count++] = pos;
 }
 
@@ -735,7 +735,7 @@ void autoMemoryAdd(RedisModuleCtx *ctx, int type, void *ptr) {
     if (ctx->amqueue_used == ctx->amqueue_len) {
         ctx->amqueue_len *= 2;
         if (ctx->amqueue_len < 16) ctx->amqueue_len = 16;
-        ctx->amqueue = zrealloc(ctx->amqueue,sizeof(struct AutoMemEntry)*ctx->amqueue_len);
+        ctx->amqueue = zrealloc(ctx->amqueue,sizeof(struct AutoMemEntry)*ctx->amqueue_len, MALLOC_LOCAL);
     }
     ctx->amqueue[ctx->amqueue_used].type = type;
     ctx->amqueue[ctx->amqueue_used].ptr = ptr;
@@ -1121,7 +1121,7 @@ int RM_ReplyWithArray(RedisModuleCtx *ctx, long len) {
     if (c == NULL) return REDISMODULE_OK;
     if (len == REDISMODULE_POSTPONED_ARRAY_LEN) {
         ctx->postponed_arrays = zrealloc(ctx->postponed_arrays,sizeof(void*)*
-                (ctx->postponed_arrays_count+1));
+                (ctx->postponed_arrays_count+1), MALLOC_LOCAL);
         ctx->postponed_arrays[ctx->postponed_arrays_count] =
             addReplyDeferredLen(c);
         ctx->postponed_arrays_count++;
@@ -2616,7 +2616,7 @@ robj **moduleCreateArgvFromUserFormat(const char *cmdname, const char *fmt, int 
     /* As a first guess to avoid useless reallocations, size argv to
      * hold one argument for each char specifier in 'fmt'. */
     argv_size = strlen(fmt)+1; /* +1 because of the command name. */
-    argv = zrealloc(argv,sizeof(robj*)*argv_size);
+    argv = zrealloc(argv,sizeof(robj*)*argv_size, MALLOC_LOCAL);
 
     /* Build the arguments vector based on the format specifier. */
     argv[0] = createStringObject(cmdname,strlen(cmdname));
@@ -2648,7 +2648,7 @@ robj **moduleCreateArgvFromUserFormat(const char *cmdname, const char *fmt, int 
               * We resize by vector_len-1 elements, because we held
               * one element in argv for the vector already */
              argv_size += vlen-1;
-             argv = zrealloc(argv,sizeof(robj*)*argv_size);
+             argv = zrealloc(argv,sizeof(robj*)*argv_size, MALLOC_LOCAL);
 
              size_t i = 0;
              for (i = 0; i < vlen; i++) {

@@ -286,7 +286,7 @@ void ACLAddAllowedSubcommand(user *u, unsigned long id, const char *sub) {
     /* Now we can make space for the new item (and the null term). */
     items += 2;
     u->allowed_subcommands[id] = zrealloc(u->allowed_subcommands[id],
-                                 sizeof(sds)*items);
+                                 sizeof(sds)*items, MALLOC_LOCAL);
     u->allowed_subcommands[id][items-2] = sdsnew(sub);
     u->allowed_subcommands[id][items-1] = NULL;
 }

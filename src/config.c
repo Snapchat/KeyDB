@@ -143,7 +143,7 @@ int yesnotoi(char *s) {
 }
 
 void appendServerSaveParams(time_t seconds, int changes) {
-    server.saveparams = zrealloc(server.saveparams,sizeof(struct saveparam)*(server.saveparamslen+1));
+    server.saveparams = zrealloc(server.saveparams,sizeof(struct saveparam)*(server.saveparamslen+1), MALLOC_LOCAL);
     server.saveparams[server.saveparamslen].seconds = seconds;
     server.saveparams[server.saveparamslen].changes = changes;
     server.saveparamslen++;
@@ -805,7 +805,7 @@ void loadServerConfigFromString(char *config) {
                 if (err) goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"scratch-file-path")) {
-            storage_init(argv[1]);
+            storage_init(argv[1], server.maxmemory);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -1642,7 +1642,7 @@ struct rewriteConfigState {
 
 /* Append the new line to the current configuration state. */
 void rewriteConfigAppendLine(struct rewriteConfigState *state, sds line) {
-    state->lines = zrealloc(state->lines, sizeof(char*) * (state->numlines+1));
+    state->lines = zrealloc(state->lines, sizeof(char*) * (state->numlines+1), MALLOC_LOCAL);
     state->lines[state->numlines++] = line;
 }
 

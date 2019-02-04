@@ -36,10 +36,13 @@
 #define __str(s) #s
 
 #include "storage.h"
+#define USE_MEMKIND 1
 #if defined(USE_MEMKIND)
     #define ZMALLOC_LIB ("memkind")
     #undef USE_JEMALLOC
     #define USE_MALLOC_CLASS 1
+    #define HAVE_MALLOC_SIZE 1
+    #define zmalloc_size(p) salloc_usable_size(p)
 #elif defined(USE_TCMALLOC)
 #define ZMALLOC_LIB ("tcmalloc-" __xstr(TC_VERSION_MAJOR) "." __xstr(TC_VERSION_MINOR))
 #include <google/tcmalloc.h>
@@ -84,7 +87,7 @@
 
 void *zmalloc(size_t size, enum MALLOC_CLASS class);
 void *zcalloc(size_t size, enum MALLOC_CLASS class);
-void *zrealloc(void *ptr, size_t size);
+void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS class);
 void zfree(void *ptr);
 char *zstrdup(const char *s);
 size_t zmalloc_used_memory(void);

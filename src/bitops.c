@@ -978,7 +978,7 @@ void bitfieldCommand(client *c) {
         }
 
         /* Populate the array of operations we'll process. */
-        ops = zrealloc(ops,sizeof(*ops)*(numops+1));
+        ops = zrealloc(ops,sizeof(*ops)*(numops+1), MALLOC_SHARED);
         ops[numops].offset = bitoffset;
         ops[numops].i64 = i64;
         ops[numops].opcode = opcode;

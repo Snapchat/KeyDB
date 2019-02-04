@@ -1035,7 +1035,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
         if (keyscount==0) continue;
 
         mh->total_keys += keyscount;
-        mh->db = zrealloc(mh->db,sizeof(mh->db[0])*(mh->num_dbs+1));
+        mh->db = zrealloc(mh->db,sizeof(mh->db[0])*(mh->num_dbs+1), MALLOC_LOCAL);
         mh->db[mh->num_dbs].dbid = j;
 
         mem = dictSize(db->dict) * sizeof(dictEntry) +

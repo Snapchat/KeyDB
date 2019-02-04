@@ -395,7 +395,7 @@ static client createClient(char *cmd, size_t len, client from) {
             c->randptr = zmalloc(sizeof(char*)*c->randfree, MALLOC_LOCAL);
             while ((p = strstr(p,"__rand_int__")) != NULL) {
                 if (c->randfree == 0) {
-                    c->randptr = zrealloc(c->randptr,sizeof(char*)*c->randlen*2);
+                    c->randptr = zrealloc(c->randptr,sizeof(char*)*c->randlen*2, MALLOC_LOCAL);
                     c->randfree += c->randlen;
                 }
                 c->randptr[c->randlen++] = p;
@@ -653,7 +653,7 @@ int main(int argc, const char **argv) {
 
     client c;
 
-    storage_init(NULL);
+    storage_init(NULL, 0);
 
     srandom(time(NULL));
     signal(SIGHUP, SIG_IGN);

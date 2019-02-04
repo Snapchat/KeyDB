@@ -59,7 +59,7 @@ void queueMultiCommand(client *c) {
     int j;
 
     c->mstate.commands = zrealloc(c->mstate.commands,
-            sizeof(multiCmd)*(c->mstate.count+1));
+            sizeof(multiCmd)*(c->mstate.count+1), MALLOC_LOCAL);
     mc = c->mstate.commands+c->mstate.count;
     mc->cmd = c->cmd;
     mc->argc = c->argc;

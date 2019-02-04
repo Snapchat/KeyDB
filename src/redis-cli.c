@@ -529,7 +529,7 @@ static void cliIntegrateHelp(void) {
         if (i != helpEntriesLen) continue;
 
         helpEntriesLen++;
-        helpEntries = zrealloc(helpEntries,sizeof(helpEntry)*helpEntriesLen);
+        helpEntries = zrealloc(helpEntries,sizeof(helpEntry)*helpEntriesLen, MALLOC_LOCAL);
         helpEntry *new = helpEntries+(helpEntriesLen-1);
 
         new->argc = 1;
@@ -1815,7 +1815,7 @@ static void repl(void) {
 static int noninteractive(int argc, char **argv) {
     int retval = 0;
     if (config.stdinarg) {
-        argv = zrealloc(argv, (argc+1)*sizeof(char*));
+        argv = zrealloc(argv, (argc+1)*sizeof(char*), MALLOC_LOCAL);
         argv[argc] = readArgFromStdin();
         retval = issueCommand(argc+1, argv);
     } else {
@@ -3456,7 +3456,7 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts,
                             sds dst = sdsnew(p);
                             node->migrating_count += 2;
                             node->migrating = zrealloc(node->migrating,
-                                (node->migrating_count * sizeof(sds)));
+                                (node->migrating_count * sizeof(sds)), MALLOC_LOCAL);
                             node->migrating[node->migrating_count - 2] =
                                 slot;
                             node->migrating[node->migrating_count - 1] =
@@ -3470,7 +3470,7 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts,
                             sds src = sdsnew(p);
                             node->importing_count += 2;
                             node->importing = zrealloc(node->importing,
-                                (node->importing_count * sizeof(sds)));
+                                (node->importing_count * sizeof(sds)), MALLOC_LOCAL);
                             node->importing[node->importing_count - 2] =
                                 slot;
                             node->importing[node->importing_count - 1] =
@@ -3704,7 +3704,7 @@ static sds clusterManagerGetConfigSignature(clusterManagerNode *node) {
             } else line = p;
             if (slotsdef[0] != '[') {
                 c++;
-                slots = zrealloc(slots, (c * sizeof(char *)));
+                slots = zrealloc(slots, (c * sizeof(char *)), MALLOC_LOCAL);
                 slots[c - 1] = slotsdef;
             }
         }
@@ -3713,7 +3713,7 @@ static sds clusterManagerGetConfigSignature(clusterManagerNode *node) {
                 qsort(slots, c, sizeof(char *), clusterManagerSlotCompare);
             node_count++;
             node_configs =
-                zrealloc(node_configs, (node_count * sizeof(char *)));
+                zrealloc(node_configs, (node_count * sizeof(char *)), MALLOC_LOCAL);
             /* Make room for '|' separators. */
             tot_size += (sizeof(char) * (c - 1));
             char *cfg = zmalloc((sizeof(char) * tot_size) + 1, MALLOC_LOCAL);
@@ -6610,8 +6610,8 @@ static void findBigKeys(void) {
 
         /* Reallocate our type and size array if we need to */
         if(keys->elements > arrsize) {
-            types = zrealloc(types, sizeof(int)*keys->elements);
-            sizes = zrealloc(sizes, sizeof(unsigned long long)*keys->elements);
+            types = zrealloc(types, sizeof(int)*keys->elements, MALLOC_LOCAL);
+            sizes = zrealloc(sizes, sizeof(unsigned long long)*keys->elements, MALLOC_LOCAL);
 
             if(!types || !sizes) {
                 fprintf(stderr, "Failed to allocate storage for keys!\n");
@@ -6760,7 +6760,7 @@ static void findHotKeys(void) {
 
         /* Reallocate our freqs array if we need to */
         if(keys->elements > arrsize) {
-            freqs = zrealloc(freqs, sizeof(unsigned long long)*keys->elements);
+            freqs = zrealloc(freqs, sizeof(unsigned long long)*keys->elements, MALLOC_LOCAL);
 
             if(!freqs) {
                 fprintf(stderr, "Failed to allocate storage for keys!\n");
@@ -7176,7 +7176,7 @@ static void intrinsicLatencyMode(void) {
 int main(int argc, char **argv) {
     int firstarg;
 
-    storage_init(NULL);
+    storage_init(NULL, 0);
     config.hostip = sdsnew("127.0.0.1");
     config.hostport = 6379;
     config.hostsocket = NULL;

@@ -842,7 +842,7 @@ int clusterNodeAddSlave(clusterNode *master, clusterNode *slave) {
     for (j = 0; j < master->numslaves; j++)
         if (master->slaves[j] == slave) return C_ERR;
     master->slaves = zrealloc(master->slaves,
-        sizeof(clusterNode*)*(master->numslaves+1));
+        sizeof(clusterNode*)*(master->numslaves+1), MALLOC_LOCAL);
     master->slaves[master->numslaves] = slave;
     master->numslaves++;
     master->flags |= CLUSTER_NODE_MIGRATE_TO;
@@ -5119,8 +5119,8 @@ void migrateCommand(client *c) {
      * the caller there was nothing to migrate. We don't return an error in
      * this case, since often this is due to a normal condition like the key
      * expiring in the meantime. */
-    ov = zrealloc(ov,sizeof(robj*)*num_keys);
-    kv = zrealloc(kv,sizeof(robj*)*num_keys);
+    ov = zrealloc(ov,sizeof(robj*)*num_keys, MALLOC_LOCAL);
+    kv = zrealloc(kv,sizeof(robj*)*num_keys, MALLOC_LOCAL);
     int oi = 0;
 
     for (j = 0; j < num_keys; j++) {

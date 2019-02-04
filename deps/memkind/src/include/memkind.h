@@ -318,6 +318,7 @@ void memkind_free(memkind_t kind, void *ptr);
 int memkind_fd(struct memkind *kind);
 void memkind_pmem_remapfd(struct memkind *kind, int fdNew);
 int memkind_tmpfile(const char *dir, int *fd);
+memkind_t memkind_get_kind(void *ptr);
 
 #ifdef __cplusplus
 }

@@ -111,8 +111,8 @@ int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
     if (eventLoop->maxfd >= setsize) return AE_ERR;
     if (aeApiResize(eventLoop,setsize) == -1) return AE_ERR;
 
-    eventLoop->events = zrealloc(eventLoop->events,sizeof(aeFileEvent)*setsize);
-    eventLoop->fired = zrealloc(eventLoop->fired,sizeof(aeFiredEvent)*setsize);
+    eventLoop->events = zrealloc(eventLoop->events,sizeof(aeFileEvent)*setsize, MALLOC_LOCAL);
+    eventLoop->fired = zrealloc(eventLoop->fired,sizeof(aeFiredEvent)*setsize, MALLOC_LOCAL);
     eventLoop->setsize = setsize;
 
     /* Make sure that if we created new slots, they are initialized with

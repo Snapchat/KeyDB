@@ -1946,7 +1946,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                     sp->changes, (int)sp->seconds);
                 rdbSaveInfo rsi, *rsiptr;
                 rsiptr = rdbPopulateSaveInfo(&rsi);
-                rdbSaveBackground(server.rdb_filename,rsiptr);
+                rdbSaveBackground(rsiptr);
                 break;
             }
         }
@@ -2019,7 +2019,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     {
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
-        if (rdbSaveBackground(server.rdb_filename,rsiptr) == C_OK)
+        if (rdbSaveBackground(rsiptr) == C_OK)
             server.rdb_bgsave_scheduled = 0;
     }
 
@@ -2266,7 +2266,7 @@ void initServerConfig(void) {
     server.aof_load_truncated = CONFIG_DEFAULT_AOF_LOAD_TRUNCATED;
     server.aof_use_rdb_preamble = CONFIG_DEFAULT_AOF_USE_RDB_PREAMBLE;
     server.pidfile = NULL;
-    server.rdb_filename = zstrdup(CONFIG_DEFAULT_RDB_FILENAME);
+    server.rdb_filename = NULL;
     server.rdb_s3bucketpath = NULL;
     server.aof_filename = zstrdup(CONFIG_DEFAULT_AOF_FILENAME);
     server.acl_filename = zstrdup(CONFIG_DEFAULT_ACL_FILENAME);
@@ -3542,7 +3542,7 @@ int prepareForShutdown(int flags) {
         /* Snapshotting. Perform a SYNC SAVE and exit */
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
-        if (rdbSave(server.rdb_filename,rsiptr) != C_OK) {
+        if (rdbSave(rsiptr) != C_OK) {
             /* Ooops.. error saving! The best we can do is to continue
              * operating. Note that if there was a background saving process,
              * in the next cron() Redis will be notified that the background

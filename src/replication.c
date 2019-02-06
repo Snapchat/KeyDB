@@ -577,7 +577,7 @@ int startBgsaveForReplication(int mincapa) {
         if (socket_target)
             retval = rdbSaveToSlavesSockets(rsiptr);
         else
-            retval = rdbSaveBackground(server.rdb_filename,rsiptr);
+            retval = rdbSaveBackground(rsiptr);
     } else {
         serverLog(LL_WARNING,"BGSAVE for replication: replication information not available, can't generate the RDB file right now. Try later.");
         retval = C_ERR;

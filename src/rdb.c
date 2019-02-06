@@ -1233,8 +1233,19 @@ int rdbSaveFd(int fd, rdbSaveInfo *rsi)
     return C_OK;
 }
 
+int rdbSave(rdbSaveInfo *rsi)
+{
+    int err = C_OK;
+    if (server.rdb_filename != NULL)
+        err = rdbSaveFile(server.rdb_filename, rsi);
+
+    if (err == C_OK && server.rdb_s3bucketpath != NULL)
+        err = rdbSaveS3(server.rdb_s3bucketpath, rsi);
+    return err;
+}
+
 /* Save the DB on disk. Return C_ERR on error, C_OK on success. */
-int rdbSave(char *filename, rdbSaveInfo *rsi) {
+int rdbSaveFile(char *filename, rdbSaveInfo *rsi) {
     char tmpfile[256];
     char cwd[MAXPATHLEN]; /* Current working dir path for error messages. */
     FILE *fp;
@@ -1289,7 +1300,7 @@ werr:
     return C_ERR;
 }
 
-int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
+int rdbSaveBackground(rdbSaveInfo *rsi) {
     pid_t childpid;
     long long start;
 
@@ -1306,7 +1317,7 @@ int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
         /* Child */
         closeListeningSockets(0);
         redisSetProcTitle("redis-rdb-bgsave");
-        retval = rdbSave(filename,rsi);
+        retval = rdbSave(rsi);
         if (retval == C_OK) {
             size_t private_dirty = zmalloc_get_private_dirty(-1);
 
@@ -2413,7 +2424,7 @@ void saveCommand(client *c) {
     }
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
-    if (rdbSave(server.rdb_filename,rsiptr) == C_OK) {
+    if (rdbSave(rsiptr) == C_OK) {
         addReply(c,shared.ok);
     } else {
         addReply(c,shared.err);
@@ -2450,7 +2461,7 @@ void bgsaveCommand(client *c) {
                 "Use BGSAVE SCHEDULE in order to schedule a BGSAVE whenever "
                 "possible.");
         }
-    } else if (rdbSaveBackground(server.rdb_filename,rsiptr) == C_OK) {
+    } else if (rdbSaveBackground(rsiptr) == C_OK) {
         addReplyStatus(c,"Background saving started");
     } else {
         addReply(c,shared.err);

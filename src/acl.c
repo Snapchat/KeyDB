@@ -580,7 +580,7 @@ user *ACLGetUserByName(const char *name, size_t namelen) {
  * command, the second if the command is denied because the user is trying
  * to access keys that are not among the specified patterns. */
 int ACLCheckCommandPerm(client *c) {
-    user *u = c->user;
+    user *u = c->puser;
     uint64_t id = c->cmd->id;
 
     /* If there is no associated user, the connection can run anything. */
@@ -615,7 +615,7 @@ int ACLCheckCommandPerm(client *c) {
 
     /* Check if the user can execute commands explicitly touching the keys
      * mentioned in the command arguments. */
-    if (!(c->user->flags & USER_FLAG_ALLKEYS) &&
+    if (!(c->puser->flags & USER_FLAG_ALLKEYS) &&
         (c->cmd->getkeys_proc || c->cmd->firstkey))
     {
         int numkeys;
@@ -684,8 +684,8 @@ void aclCommand(client *c) {
         }
         addReply(c,shared.ok);
     } else if (!strcasecmp(sub,"whoami")) {
-        if (c->user != NULL) {
-            addReplyBulkCBuffer(c,c->user->name,sdslen(c->user->name));
+        if (c->puser != NULL) {
+            addReplyBulkCBuffer(c,c->puser->name,sdslen(c->puser->name));
         } else {
             addReplyNull(c);
         }

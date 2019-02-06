@@ -3074,11 +3074,11 @@ void moduleRDBLoadError(RedisModuleIO *io) {
 void RM_SaveUnsigned(RedisModuleIO *io, uint64_t value) {
     if (io->error) return;
     /* Save opcode. */
-    int retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_UINT);
+    int retval = rdbSaveLen(io->prio, RDB_MODULE_OPCODE_UINT);
     if (retval == -1) goto saveerr;
     io->bytes += retval;
     /* Save value. */
-    retval = rdbSaveLen(io->rio, value);
+    retval = rdbSaveLen(io->prio, value);
     if (retval == -1) goto saveerr;
     io->bytes += retval;
     return;
@@ -3092,11 +3092,11 @@ saveerr:
  * new data types. */
 uint64_t RM_LoadUnsigned(RedisModuleIO *io) {
     if (io->ver == 2) {
-        uint64_t opcode = rdbLoadLen(io->rio,NULL);
+        uint64_t opcode = rdbLoadLen(io->prio,NULL);
         if (opcode != RDB_MODULE_OPCODE_UINT) goto loaderr;
     }
     uint64_t value;
-    int retval = rdbLoadLenByRef(io->rio, NULL, &value);
+    int retval = rdbLoadLenByRef(io->prio, NULL, &value);
     if (retval == -1) goto loaderr;
     return value;
 
@@ -3128,11 +3128,11 @@ int64_t RM_LoadSigned(RedisModuleIO *io) {
 void RM_SaveString(RedisModuleIO *io, RedisModuleString *s) {
     if (io->error) return;
     /* Save opcode. */
-    ssize_t retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_STRING);
+    ssize_t retval = rdbSaveLen(io->prio, RDB_MODULE_OPCODE_STRING);
     if (retval == -1) goto saveerr;
     io->bytes += retval;
     /* Save value. */
-    retval = rdbSaveStringObject(io->rio, s);
+    retval = rdbSaveStringObject(io->prio, s);
     if (retval == -1) goto saveerr;
     io->bytes += retval;
     return;
@@ -3146,11 +3146,11 @@ saveerr:
 void RM_SaveStringBuffer(RedisModuleIO *io, const char *str, size_t len) {
     if (io->error) return;
     /* Save opcode. */
-    ssize_t retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_STRING);
+    ssize_t retval = rdbSaveLen(io->prio, RDB_MODULE_OPCODE_STRING);
     if (retval == -1) goto saveerr;
     io->bytes += retval;
     /* Save value. */
-    retval = rdbSaveRawString(io->rio, (unsigned char*)str,len);
+    retval = rdbSaveRawString(io->prio, (unsigned char*)str,len);
     if (retval == -1) goto saveerr;
     io->bytes += retval;
     return;
@@ -3162,10 +3162,10 @@ saveerr:
 /* Implements RM_LoadString() and RM_LoadStringBuffer() */
 void *moduleLoadString(RedisModuleIO *io, int plain, size_t *lenptr) {
     if (io->ver == 2) {
-        uint64_t opcode = rdbLoadLen(io->rio,NULL);
+        uint64_t opcode = rdbLoadLen(io->prio,NULL);
         if (opcode != RDB_MODULE_OPCODE_STRING) goto loaderr;
     }
-    void *s = rdbGenericLoadStringObject(io->rio,
+    void *s = rdbGenericLoadStringObject(io->prio,
               plain ? RDB_LOAD_PLAIN : RDB_LOAD_NONE, lenptr);
     if (s == NULL) goto loaderr;
     return s;
@@ -3205,11 +3205,11 @@ char *RM_LoadStringBuffer(RedisModuleIO *io, size_t *lenptr) {
 void RM_SaveDouble(RedisModuleIO *io, double value) {
     if (io->error) return;
     /* Save opcode. */
-    int retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_DOUBLE);
+    int retval = rdbSaveLen(io->prio, RDB_MODULE_OPCODE_DOUBLE);
     if (retval == -1) goto saveerr;
     io->bytes += retval;
     /* Save value. */
-    retval = rdbSaveBinaryDoubleValue(io->rio, value);
+    retval = rdbSaveBinaryDoubleValue(io->prio, value);
     if (retval == -1) goto saveerr;
     io->bytes += retval;
     return;
@@ -3222,11 +3222,11 @@ saveerr:
  * double value saved by RedisModule_SaveDouble(). */
 double RM_LoadDouble(RedisModuleIO *io) {
     if (io->ver == 2) {
-        uint64_t opcode = rdbLoadLen(io->rio,NULL);
+        uint64_t opcode = rdbLoadLen(io->prio,NULL);
         if (opcode != RDB_MODULE_OPCODE_DOUBLE) goto loaderr;
     }
     double value;
-    int retval = rdbLoadBinaryDoubleValue(io->rio, &value);
+    int retval = rdbLoadBinaryDoubleValue(io->prio, &value);
     if (retval == -1) goto loaderr;
     return value;
 
@@ -3241,11 +3241,11 @@ loaderr:
 void RM_SaveFloat(RedisModuleIO *io, float value) {
     if (io->error) return;
     /* Save opcode. */
-    int retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_FLOAT);
+    int retval = rdbSaveLen(io->prio, RDB_MODULE_OPCODE_FLOAT);
     if (retval == -1) goto saveerr;
     io->bytes += retval;
     /* Save value. */
-    retval = rdbSaveBinaryFloatValue(io->rio, value);
+    retval = rdbSaveBinaryFloatValue(io->prio, value);
     if (retval == -1) goto saveerr;
     io->bytes += retval;
     return;
@@ -3258,11 +3258,11 @@ saveerr:
  * float value saved by RedisModule_SaveFloat(). */
 float RM_LoadFloat(RedisModuleIO *io) {
     if (io->ver == 2) {
-        uint64_t opcode = rdbLoadLen(io->rio,NULL);
+        uint64_t opcode = rdbLoadLen(io->prio,NULL);
         if (opcode != RDB_MODULE_OPCODE_FLOAT) goto loaderr;
     }
     float value;
-    int retval = rdbLoadBinaryFloatValue(io->rio, &value);
+    int retval = rdbLoadBinaryFloatValue(io->prio, &value);
     if (retval == -1) goto loaderr;
     return value;
 
@@ -3373,12 +3373,12 @@ void RM_EmitAOF(RedisModuleIO *io, const char *cmdname, const char *fmt, ...) {
     }
 
     /* Bulk count. */
-    if (!io->error && rioWriteBulkCount(io->rio,'*',argc) == 0)
+    if (!io->error && rioWriteBulkCount(io->prio,'*',argc) == 0)
         io->error = 1;
 
     /* Arguments. */
     for (j = 0; j < argc; j++) {
-        if (!io->error && rioWriteBulkObject(io->rio,argv[j]) == 0)
+        if (!io->error && rioWriteBulkObject(io->prio,argv[j]) == 0)
             io->error = 1;
         decrRefCount(argv[j]);
     }

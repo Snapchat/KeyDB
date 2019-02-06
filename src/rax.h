@@ -31,6 +31,12 @@
 #ifndef RAX_H
 #define RAX_H
 
+#ifdef __cplusplus
+#define ZERO_LENGTH_ARRAY_LENGTH 1
+#else
+#define ZERO_LENGTH_ARRAY_LENGTH
+#endif
+
 #include <stdint.h>
 
 /* Representation of a radix tree as implemented in this file, that contains
@@ -127,7 +133,7 @@ typedef struct raxNode {
      * children, an additional value pointer is present (as you can see
      * in the representation above as "value-ptr" field).
      */
-    unsigned char data[];
+    unsigned char data[ZERO_LENGTH_ARRAY_LENGTH];
 } raxNode;
 
 typedef struct rax {

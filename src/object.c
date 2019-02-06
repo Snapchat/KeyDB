@@ -250,7 +250,7 @@ robj *createZsetObject(void) {
     zset *zs = zmalloc(sizeof(*zs), MALLOC_SHARED);
     robj *o;
 
-    zs->dict = dictCreate(&zsetDictType,NULL);
+    zs->pdict = dictCreate(&zsetDictType,NULL);
     zs->zsl = zslCreate();
     o = createObject(OBJ_ZSET,zs);
     o->encoding = OBJ_ENCODING_SKIPLIST;
@@ -310,7 +310,7 @@ void freeZsetObject(robj *o) {
     switch (o->encoding) {
     case OBJ_ENCODING_SKIPLIST:
         zs = o->ptr;
-        dictRelease(zs->dict);
+        dictRelease(zs->pdict);
         zslFree(zs->zsl);
         zfree(zs);
         break;
@@ -823,7 +823,7 @@ size_t objectComputeSize(robj *o, size_t sample_size) {
         if (o->encoding == OBJ_ENCODING_ZIPLIST) {
             asize = sizeof(*o)+(ziplistBlobLen(o->ptr));
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
-            d = ((zset*)o->ptr)->dict;
+            d = ((zset*)o->ptr)->pdict;
             zskiplist *zsl = ((zset*)o->ptr)->zsl;
             zskiplistNode *znode = zsl->header->level[0].forward;
             asize = sizeof(*o)+sizeof(zset)+(sizeof(struct dictEntry*)*dictSlots(d));
@@ -859,14 +859,14 @@ size_t objectComputeSize(robj *o, size_t sample_size) {
     } else if (o->type == OBJ_STREAM) {
         stream *s = o->ptr;
         asize = sizeof(*o);
-        asize += streamRadixTreeMemoryUsage(s->rax);
+        asize += streamRadixTreeMemoryUsage(s->prax);
 
         /* Now we have to add the listpacks. The last listpack is often non
          * complete, so we estimate the size of the first N listpacks, and
          * use the average to compute the size of the first N-1 listpacks, and
          * finally add the real size of the last node. */
         raxIterator ri;
-        raxStart(&ri,s->rax);
+        raxStart(&ri,s->prax);
         raxSeek(&ri,"^",NULL,0);
         size_t lpsize = 0, samples = 0;
         while(samples < sample_size && raxNext(&ri)) {
@@ -874,11 +874,11 @@ size_t objectComputeSize(robj *o, size_t sample_size) {
             lpsize += lpBytes(lp);
             samples++;
         }
-        if (s->rax->numele <= samples) {
+        if (s->prax->numele <= samples) {
             asize += lpsize;
         } else {
             if (samples) lpsize /= samples; /* Compute the average. */
-            asize += lpsize * (s->rax->numele-1);
+            asize += lpsize * (s->prax->numele-1);
             /* No need to check if seek succeeded, we enter this branch only
              * if there are a few elements in the radix tree. */
             raxSeek(&ri,"$",NULL,0);
@@ -1031,16 +1031,16 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
 
     for (j = 0; j < server.dbnum; j++) {
         redisDb *db = server.db+j;
-        long long keyscount = dictSize(db->dict);
+        long long keyscount = dictSize(db->pdict);
         if (keyscount==0) continue;
 
         mh->total_keys += keyscount;
         mh->db = zrealloc(mh->db,sizeof(mh->db[0])*(mh->num_dbs+1), MALLOC_LOCAL);
         mh->db[mh->num_dbs].dbid = j;
 
-        mem = dictSize(db->dict) * sizeof(dictEntry) +
-              dictSlots(db->dict) * sizeof(dictEntry*) +
-              dictSize(db->dict) * sizeof(robj);
+        mem = dictSize(db->pdict) * sizeof(dictEntry) +
+              dictSlots(db->pdict) * sizeof(dictEntry*) +
+              dictSize(db->pdict) * sizeof(robj);
         mh->db[mh->num_dbs].overhead_ht_main = mem;
         mem_total+=mem;
 
@@ -1222,7 +1222,7 @@ void objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
 robj *objectCommandLookup(client *c, robj *key) {
     dictEntry *de;
 
-    if ((de = dictFind(c->db->dict,key->ptr)) == NULL) return NULL;
+    if ((de = dictFind(c->db->pdict,key->ptr)) == NULL) return NULL;
     return (robj*) dictGetVal(de);
 }
 
@@ -1315,7 +1315,7 @@ NULL
                 return;
             }
         }
-        if ((de = dictFind(c->db->dict,c->argv[2]->ptr)) == NULL) {
+        if ((de = dictFind(c->db->pdict,c->argv[2]->ptr)) == NULL) {
             addReplyNull(c);
             return;
         }

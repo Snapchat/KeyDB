@@ -144,10 +144,10 @@ void listTypeInsert(listTypeEntry *entry, robj *value, int where) {
         sds str = value->ptr;
         size_t len = sdslen(str);
         if (where == LIST_TAIL) {
-            quicklistInsertAfter((quicklist *)entry->entry.quicklist,
+            quicklistInsertAfter((quicklist *)entry->entry.qlist,
                                  &entry->entry, str, len);
         } else if (where == LIST_HEAD) {
-            quicklistInsertBefore((quicklist *)entry->entry.quicklist,
+            quicklistInsertBefore((quicklist *)entry->entry.qlist,
                                   &entry->entry, str, len);
         }
         decrRefCount(value);

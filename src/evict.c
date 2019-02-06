@@ -489,9 +489,9 @@ int freeMemoryIfNeeded(void) {
                 for (i = 0; i < server.dbnum; i++) {
                     db = server.db+i;
                     dict = (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) ?
-                            db->dict : db->expires;
+                            db->pdict : db->expires;
                     if ((keys = dictSize(dict)) != 0) {
-                        evictionPoolPopulate(i, dict, db->dict, pool);
+                        evictionPoolPopulate(i, dict, db->pdict, pool);
                         total_keys += keys;
                     }
                 }
@@ -503,7 +503,7 @@ int freeMemoryIfNeeded(void) {
                     bestdbid = pool[k].dbid;
 
                     if (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
-                        de = dictFind(server.db[pool[k].dbid].dict,
+                        de = dictFind(server.db[pool[k].dbid].pdict,
                             pool[k].key);
                     } else {
                         de = dictFind(server.db[pool[k].dbid].expires,
@@ -539,7 +539,7 @@ int freeMemoryIfNeeded(void) {
                 j = (++next_db) % server.dbnum;
                 db = server.db+j;
                 dict = (server.maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM) ?
-                        db->dict : db->expires;
+                        db->pdict : db->expires;
                 if (dictSize(dict) != 0) {
                     de = dictGetRandomKey(dict);
                     bestkey = dictGetKey(de);

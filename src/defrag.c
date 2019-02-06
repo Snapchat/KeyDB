@@ -256,7 +256,7 @@ long activeDefragZsetEntry(zset *zs, dictEntry *de) {
         defragged++, de->key = newsds;
     newscore = zslDefrag(zs->zsl, *(double*)dictGetVal(de), sdsele, newsds);
     if (newscore) {
-        dictSetVal(zs->dict, de, newscore);
+        dictSetVal(zs->pdict, de, newscore);
         defragged++;
     }
     return defragged;
@@ -464,7 +464,7 @@ long scanLaterZset(robj *ob, unsigned long *cursor) {
     if (ob->type != OBJ_ZSET || ob->encoding != OBJ_ENCODING_SKIPLIST)
         return 0;
     zset *zs = (zset*)ob->ptr;
-    dict *d = zs->dict;
+    dict *d = zs->pdict;
     scanLaterZsetData data = {zs, 0};
     *cursor = dictScan(d, *cursor, scanLaterZsetCallback, defragDictBucketCallback, &data);
     return data.defragged;
@@ -539,20 +539,20 @@ long defragZsetSkiplist(redisDb *db, dictEntry *kde) {
         defragged++, zs->zsl = newzsl;
     if ((newheader = activeDefragAlloc(zs->zsl->header)))
         defragged++, zs->zsl->header = newheader;
-    if (dictSize(zs->dict) > server.active_defrag_max_scan_fields)
+    if (dictSize(zs->pdict) > server.active_defrag_max_scan_fields)
         defragLater(db, kde);
     else {
-        dictIterator *di = dictGetIterator(zs->dict);
+        dictIterator *di = dictGetIterator(zs->pdict);
         while((de = dictNext(di)) != NULL) {
             defragged += activeDefragZsetEntry(zs, de);
         }
         dictReleaseIterator(di);
     }
     /* handle the dict struct */
-    if ((newdict = activeDefragAlloc(zs->dict)))
-        defragged++, zs->dict = newdict;
+    if ((newdict = activeDefragAlloc(zs->pdict)))
+        defragged++, zs->pdict = newdict;
     /* defrag the dict tables */
-    defragged += dictDefragTables(zs->dict);
+    defragged += dictDefragTables(zs->pdict);
     return defragged;
 }
 
@@ -775,7 +775,7 @@ long defragKey(redisDb *db, dictEntry *de) {
          /* Dirty code:
           * I can't search in db->expires for that key after i already released
           * the pointer it holds it won't be able to do the string compare */
-        uint64_t hash = dictGetHash(db->dict, de->key);
+        uint64_t hash = dictGetHash(db->pdict, de->key);
         replaceSateliteDictKeyPtrAndOrDefragDictEntry(db->expires, keysds, newsds, hash, &defragged);
     }
 
@@ -953,7 +953,7 @@ int defragLaterStep(redisDb *db, long long endtime) {
         }
 
         /* each time we enter this function we need to fetch the key from the dict again (if it still exists) */
-        dictEntry *de = dictFind(db->dict, current_key);
+        dictEntry *de = dictFind(db->pdict, current_key);
         key_defragged = server.stat_active_defrag_hits;
         do {
             int quit = 0;
@@ -1106,7 +1106,7 @@ void activeDefragCycle(void) {
                 break; /* this will exit the function and we'll continue on the next cycle */
             }
 
-            cursor = dictScan(db->dict, cursor, defragScanCallback, defragDictBucketCallback, db);
+            cursor = dictScan(db->pdict, cursor, defragScanCallback, defragDictBucketCallback, db);
 
             /* Once in 16 scan iterations, 512 pointer reallocations. or 64 keys
              * (if we have a lot of pointers in one hash bucket or rehasing),

@@ -69,7 +69,7 @@ struct _rio {
         } buffer;
         /* Stdio file pointer target. */
         struct {
-            FILE *fp;
+            int fd;
             off_t buffered; /* Bytes written since last fsync. */
             off_t autosync; /* fsync after 'autosync' bytes written. */
         } file;
@@ -124,7 +124,7 @@ static inline int rioFlush(rio *r) {
     return r->flush(r);
 }
 
-void rioInitWithFile(rio *r, FILE *fp);
+void rioInitWithFile(rio *r, int fd);
 void rioInitWithBuffer(rio *r, sds s);
 void rioInitWithFdset(rio *r, int *fds, int numfds);
 

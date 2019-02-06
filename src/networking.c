@@ -119,7 +119,7 @@ client *createClient(int fd) {
     c->argc = 0;
     c->argv = NULL;
     c->cmd = c->lastcmd = NULL;
-    c->user = DefaultUser;
+    c->puser = DefaultUser;
     c->multibulklen = 0;
     c->bulklen = -1;
     c->sentlen = 0;
@@ -127,7 +127,7 @@ client *createClient(int fd) {
     c->ctime = c->lastinteraction = server.unixtime;
     /* If the default user does not require authentication, the user is
      * directly authenticated. */
-    c->authenticated = (c->user->flags & USER_FLAG_NOPASS) != 0;
+    c->authenticated = (c->puser->flags & USER_FLAG_NOPASS) != 0;
     c->replstate = REPL_STATE_NONE;
     c->repl_put_online_on_ack = 0;
     c->reploff = 0;

@@ -141,6 +141,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi);
 void rdbRemoveTempFile(pid_t childpid);
 int rdbSave(char *filename, rdbSaveInfo *rsi);
 int rdbSaveFd(int fd, rdbSaveInfo *rsi);
+int rdbSaveS3(char *path, rdbSaveInfo *rsi);
 ssize_t rdbSaveObject(rio *rdb, robj *o);
 size_t rdbSavedObjectLen(robj *o);
 robj *rdbLoadObject(int type, rio *rdb);

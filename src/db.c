@@ -455,7 +455,7 @@ void flushallCommand(client *c) {
         int saved_dirty = server.dirty;
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
-        rdbSave(server.rdb_filename,rsiptr);
+        rdbSave(rsiptr);
         server.dirty = saved_dirty;
     }
     server.dirty++;

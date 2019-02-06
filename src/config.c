@@ -550,6 +550,9 @@ void loadServerConfigFromString(char *config) {
             }
             zfree(server.rdb_filename);
             server.rdb_filename = zstrdup(argv[1]);
+        } else if(!strcasecmp(argv[0],"db-s3-object") && argc == 2) {
+            zfree(server.rdb_s3bucketpath);
+            server.rdb_s3bucketpath = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"active-defrag-threshold-lower") && argc == 2) {
             server.active_defrag_threshold_lower = atoi(argv[1]);
             if (server.active_defrag_threshold_lower < 0 ||

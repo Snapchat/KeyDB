@@ -85,9 +85,9 @@
 #define HAVE_DEFRAG
 #endif
 
-void *zmalloc(size_t size, enum MALLOC_CLASS class);
-void *zcalloc(size_t size, enum MALLOC_CLASS class);
-void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS class);
+void *zmalloc(size_t size, enum MALLOC_CLASS mclass);
+void *zcalloc(size_t size, enum MALLOC_CLASS mclass);
+void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS mclass);
 void zfree(void *ptr);
 char *zstrdup(const char *s);
 size_t zmalloc_used_memory(void);

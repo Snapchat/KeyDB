@@ -109,14 +109,13 @@ void rioInitWithBuffer(rio *r, sds s) {
 static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
     size_t retval;
 
-    retval = fwrite(buf,len,1,r->io.file.fp);
+    retval = write(r->io.file.fd,buf,len);
     r->io.file.buffered += len;
 
     if (r->io.file.autosync &&
         r->io.file.buffered >= r->io.file.autosync)
     {
-        fflush(r->io.file.fp);
-        redis_fsync(fileno(r->io.file.fp));
+        redis_fsync(r->io.file.fd);
         r->io.file.buffered = 0;
     }
     return retval;
@@ -124,18 +123,18 @@ static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
 
 /* Returns 1 or 0 for success/failure. */
 static size_t rioFileRead(rio *r, void *buf, size_t len) {
-    return fread(buf,len,1,r->io.file.fp);
+    return read(r->io.file.fd,buf,len);
 }
 
 /* Returns read/write position in file. */
 static off_t rioFileTell(rio *r) {
-    return ftello(r->io.file.fp);
+    return lseek(r->io.file.fd, 0, SEEK_CUR);
 }
 
 /* Flushes any buffer to target device if applicable. Returns 1 on success
  * and 0 on failures. */
 static int rioFileFlush(rio *r) {
-    return (fflush(r->io.file.fp) == 0) ? 1 : 0;
+    return (fsync(r->io.file.fd) == 0) ? 1 : 0;
 }
 
 static const rio rioFileIO = {
@@ -150,9 +149,9 @@ static const rio rioFileIO = {
     { { NULL, 0 } } /* union for io-specific vars */
 };
 
-void rioInitWithFile(rio *r, FILE *fp) {
+void rioInitWithFile(rio *r, int fd) {
     *r = rioFileIO;
-    r->io.file.fp = fp;
+    r->io.file.fd = fd;
     r->io.file.buffered = 0;
     r->io.file.autosync = 0;
 }

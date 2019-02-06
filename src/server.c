@@ -2269,6 +2269,7 @@ void initServerConfig(void) {
     server.rdb_filename = zstrdup(CONFIG_DEFAULT_RDB_FILENAME);
     server.rdb_s3bucketpath = NULL;
     server.aof_filename = zstrdup(CONFIG_DEFAULT_AOF_FILENAME);
+    server.acl_filename = zstrdup(CONFIG_DEFAULT_ACL_FILENAME);
     server.rdb_compression = CONFIG_DEFAULT_RDB_COMPRESSION;
     server.rdb_checksum = CONFIG_DEFAULT_RDB_CHECKSUM;
     server.stop_writes_on_bgsave_err = CONFIG_DEFAULT_STOP_WRITES_ON_BGSAVE_ERROR;
@@ -4911,6 +4912,11 @@ int main(int argc, char **argv) {
         linuxMemoryWarnings();
     #endif
         moduleLoadFromQueue();
+        if (ACLLoadConfiguredUsers() == C_ERR) {
+            serverLog(LL_WARNING,
+                "Critical error while loading ACLs. Exiting.");
+            exit(1);
+        }
         loadDataFromDisk();
         if (server.cluster_enabled) {
             if (verifyClusterConfigWithData() == C_ERR) {

@@ -570,7 +570,7 @@ typedef struct moduleValue {
  * to care about error conditions. */
 typedef struct RedisModuleIO {
     size_t bytes;       /* Bytes read / written so far. */
-    rio *rio;           /* Rio stream. */
+    rio *prio;           /* Rio stream. */
     moduleType *type;   /* Module type doing the operation. */
     int error;          /* True if error condition happened. */
     int ver;            /* Module serialization version: 1 (old),
@@ -581,7 +581,7 @@ typedef struct RedisModuleIO {
 /* Macro to initialize an IO context. Note that the 'ver' field is populated
  * inside rdb.c according to the version of the value to load. */
 #define moduleInitIOContext(iovar,mtype,rioptr) do { \
-    iovar.rio = rioptr; \
+    iovar.prio = rioptr; \
     iovar.type = mtype; \
     iovar.bytes = 0; \
     iovar.error = 0; \
@@ -652,14 +652,14 @@ struct evictionPoolEntry; /* Defined in evict.c */
  * which is actually a linked list of blocks like that, that is: client->reply. */
 typedef struct clientReplyBlock {
     size_t size, used;
-    char buf[];
+    char buf[ZERO_LENGTH_ARRAY_LENGTH];
 } clientReplyBlock;
 
 /* Redis database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
 typedef struct redisDb {
-    dict *dict;                 /* The keyspace for this DB */
+    dict *pdict;                 /* The keyspace for this DB */
     dict *expires;              /* Timeout of keys with a timeout set */
     dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
     dict *ready_keys;           /* Blocked keys that received a PUSH */
@@ -791,7 +791,7 @@ typedef struct client {
     int argc;               /* Num of arguments of current command. */
     robj **argv;            /* Arguments of current command. */
     struct redisCommand *cmd, *lastcmd;  /* Last command executed. */
-    user *user;             /* User associated with this connection. If the
+    user *puser;             /* User associated with this connection. If the
                                user is set to NULL the connection can do
                                anything (admin). */
     int reqtype;            /* Request protocol type: PROTO_REQ_* */
@@ -873,7 +873,7 @@ typedef struct zskiplistNode {
     struct zskiplistLevel {
         struct zskiplistNode *forward;
         unsigned long span;
-    } level[];
+    } level[ZERO_LENGTH_ARRAY_LENGTH];
 } zskiplistNode;
 
 typedef struct zskiplist {
@@ -883,7 +883,7 @@ typedef struct zskiplist {
 } zskiplist;
 
 typedef struct zset {
-    dict *dict;
+    dict *pdict;
     zskiplist *zsl;
 } zset;
 
@@ -1165,6 +1165,7 @@ struct redisServer {
     struct saveparam *saveparams;   /* Save points array for RDB */
     int saveparamslen;              /* Number of saving points */
     char *rdb_filename;             /* Name of RDB file */
+    char *rdb_s3bucketpath;         /* Path for AWS S3 backup of RDB file */
     int rdb_compression;            /* Use compression in RDB? */
     int rdb_checksum;               /* Use RDB checksum? */
     time_t lastsave;                /* Unix time of last successful save */
@@ -1353,7 +1354,7 @@ struct redisServer {
 };
 
 typedef struct pubsubPattern {
-    client *client;
+    client *pclient;
     robj *pattern;
 } pubsubPattern;
 
@@ -1553,7 +1554,7 @@ void freeClientsInAsyncFreeQueue(void);
 void asyncCloseClientOnOutputBufferLimitReached(client *c);
 int getClientType(client *c);
 int getClientTypeByName(char *name);
-char *getClientTypeName(int class);
+char *getClientTypeName(int cclass);
 void flushSlavesOutputBuffers(void);
 void disconnectSlaves(void);
 int listenToPort(int port, int *fds, int *count);

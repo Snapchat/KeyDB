@@ -1,5 +1,6 @@
 {
     "files.associations": {
-        "zmalloc.h": "c"
+        "zmalloc.h": "c",
+        "stat.h": "c"
     }
 }

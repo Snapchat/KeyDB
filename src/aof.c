@@ -648,7 +648,7 @@ struct client *createFakeClient(void) {
     c->watched_keys = listCreate();
     c->peerid = NULL;
     c->resp = 2;
-    c->user = NULL;
+    c->puser = NULL;
     listSetFreeMethod(c->reply,freeClientReplyValue);
     listSetDupMethod(c->reply,dupClientReplyValue);
     initClientMultiState(c);
@@ -717,7 +717,7 @@ int loadAppendOnlyFile(char *filename) {
 
         serverLog(LL_NOTICE,"Reading RDB preamble from AOF file...");
         if (fseek(fp,0,SEEK_SET) == -1) goto readerr;
-        rioInitWithFile(&rdb,fp);
+        rioInitWithFile(&rdb,fileno(fp));
         if (rdbLoadRio(&rdb,NULL,1) != C_OK) {
             serverLog(LL_WARNING,"Error reading the RDB preamble of the AOF file, AOF loading aborted");
             goto readerr;
@@ -1017,7 +1017,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
         }
     } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = o->ptr;
-        dictIterator *di = dictGetIterator(zs->dict);
+        dictIterator *di = dictGetIterator(zs->pdict);
         dictEntry *de;
 
         while((de = dictNext(di)) != NULL) {
@@ -1272,7 +1272,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
     for (j = 0; j < server.dbnum; j++) {
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
         redisDb *db = server.db+j;
-        dict *d = db->dict;
+        dict *d = db->pdict;
         if (dictSize(d) == 0) continue;
         di = dictGetSafeIterator(d);
 
@@ -1361,7 +1361,7 @@ int rewriteAppendOnlyFile(char *filename) {
     }
 
     server.aof_child_diff = sdsempty();
-    rioInitWithFile(&aof,fp);
+    rioInitWithFile(&aof,fileno(fp));
 
     if (server.aof_rewrite_incremental_fsync)
         rioSetAutoSync(&aof,REDIS_AUTOSYNC_BYTES);

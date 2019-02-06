@@ -895,7 +895,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o) {
     } else if (o->type == OBJ_STREAM) {
         /* Store how many listpacks we have inside the radix tree. */
         stream *s = o->ptr;
-        rax *rax = s->rax;
+        rax *rax = s->prax;
         if ((n = rdbSaveLen(rdb,raxSize(rax))) == -1) return -1;
         nwritten += n;
 
@@ -1116,7 +1116,7 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
 
     for (j = 0; j < server.dbnum; j++) {
         redisDb *db = server.db+j;
-        dict *d = db->dict;
+        dict *d = db->pdict;
         if (dictSize(d) == 0) continue;
         di = dictGetSafeIterator(d);
 
@@ -1129,7 +1129,7 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
          * However this does not limit the actual size of the DB to load since
          * these sizes are just hints to resize the hash tables. */
         uint64_t db_size, expires_size;
-        db_size = dictSize(db->dict);
+        db_size = dictSize(db->pdict);
         expires_size = dictSize(db->expires);
         if (rdbSaveType(rdb,RDB_OPCODE_RESIZEDB) == -1) goto werr;
         if (rdbSaveLen(rdb,db_size) == -1) goto werr;
@@ -1216,13 +1216,28 @@ werr: /* Write error. */
     return C_ERR;
 }
 
+int rdbSaveFd(int fd, rdbSaveInfo *rsi)
+{
+    int error = 0;
+    rio rdb;
+
+    rioInitWithFile(&rdb,fd);
+
+    if (server.rdb_save_incremental_fsync)
+        rioSetAutoSync(&rdb,REDIS_AUTOSYNC_BYTES);
+
+    if (rdbSaveRio(&rdb,&error,RDB_SAVE_NONE,rsi) == C_ERR) {
+        errno = error;
+        return C_ERR;
+    }
+    return C_OK;
+}
+
 /* Save the DB on disk. Return C_ERR on error, C_OK on success. */
 int rdbSave(char *filename, rdbSaveInfo *rsi) {
     char tmpfile[256];
     char cwd[MAXPATHLEN]; /* Current working dir path for error messages. */
     FILE *fp;
-    rio rdb;
-    int error = 0;
 
     snprintf(tmpfile,256,"temp-%d.rdb", (int) getpid());
     fp = fopen(tmpfile,"w");
@@ -1237,13 +1252,7 @@ int rdbSave(char *filename, rdbSaveInfo *rsi) {
         return C_ERR;
     }
 
-    rioInitWithFile(&rdb,fp);
-
-    if (server.rdb_save_incremental_fsync)
-        rioSetAutoSync(&rdb,REDIS_AUTOSYNC_BYTES);
-
-    if (rdbSaveRio(&rdb,&error,RDB_SAVE_NONE,rsi) == C_ERR) {
-        errno = error;
+    if (rdbSaveFd(fileno(fp), rsi) == C_ERR){
         goto werr;
     }
 
@@ -1459,7 +1468,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
         zs = o->ptr;
 
         if (zsetlen > DICT_HT_INITIAL_SIZE)
-            dictExpand(zs->dict,zsetlen);
+            dictExpand(zs->pdict,zsetlen);
 
         /* Load every single element of the sorted set. */
         while(zsetlen--) {
@@ -1480,7 +1489,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
             if (sdslen(sdsele) > maxelelen) maxelelen = sdslen(sdsele);
 
             znode = zslInsert(zs->zsl,score,sdsele);
-            dictAdd(zs->dict,sdsele,&znode->score);
+            dictAdd(zs->pdict,sdsele,&znode->score);
         }
 
         /* Convert *after* loading, since sorted sets are not stored ordered. */
@@ -1667,7 +1676,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
             }
 
             /* Insert the key in the radix tree. */
-            int retval = raxInsert(s->rax,
+            int retval = raxInsert(s->prax,
                 (unsigned char*)nodekey,sizeof(streamID),lp,NULL);
             sdsfree(nodekey);
             if (!retval)
@@ -1928,7 +1937,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
                 goto eoferr;
             if ((expires_size = rdbLoadLen(rdb,NULL)) == RDB_LENERR)
                 goto eoferr;
-            dictExpand(db->dict,db_size);
+            dictExpand(db->pdict,db_size);
             dictExpand(db->expires,expires_size);
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_AUX) {
@@ -2074,7 +2083,7 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi) {
 
     if ((fp = fopen(filename,"r")) == NULL) return C_ERR;
     startLoading(fp);
-    rioInitWithFile(&rdb,fp);
+    rioInitWithFile(&rdb,fileno(fp));
     retval = rdbLoadRio(&rdb,rsi,0);
     fclose(fp);
     stopLoading();

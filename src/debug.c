@@ -179,7 +179,7 @@ void xorObjectDigest(redisDb *db, robj *keyobj, unsigned char *digest, robj *o) 
             }
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = o->ptr;
-            dictIterator *di = dictGetIterator(zs->dict);
+            dictIterator *di = dictGetIterator(zs->pdict);
             dictEntry *de;
 
             while((de = dictNext(di)) != NULL) {
@@ -267,8 +267,8 @@ void computeDatasetDigest(unsigned char *final) {
     for (j = 0; j < server.dbnum; j++) {
         redisDb *db = server.db+j;
 
-        if (dictSize(db->dict) == 0) continue;
-        di = dictGetSafeIterator(db->dict);
+        if (dictSize(db->pdict) == 0) continue;
+        di = dictGetSafeIterator(db->pdict);
 
         /* hash the DB id, so the same dataset moved in a different
          * DB will lead to a different digest */
@@ -388,7 +388,7 @@ NULL
         robj *val;
         char *strenc;
 
-        if ((de = dictFind(c->db->dict,c->argv[2]->ptr)) == NULL) {
+        if ((de = dictFind(c->db->pdict,c->argv[2]->ptr)) == NULL) {
             addReply(c,shared.nokeyerr);
             return;
         }
@@ -440,7 +440,7 @@ NULL
         robj *val;
         sds key;
 
-        if ((de = dictFind(c->db->dict,c->argv[2]->ptr)) == NULL) {
+        if ((de = dictFind(c->db->pdict,c->argv[2]->ptr)) == NULL) {
             addReply(c,shared.nokeyerr);
             return;
         }
@@ -480,7 +480,7 @@ NULL
 
         if (getLongFromObjectOrReply(c, c->argv[2], &keys, NULL) != C_OK)
             return;
-        dictExpand(c->db->dict,keys);
+        dictExpand(c->db->pdict,keys);
         for (j = 0; j < keys; j++) {
             long valsize = 0;
             snprintf(buf,sizeof(buf),"%s:%lu",
@@ -631,7 +631,7 @@ NULL
         }
 
         stats = sdscatprintf(stats,"[Dictionary HT]\n");
-        dictGetStats(buf,sizeof(buf),server.db[dbid].dict);
+        dictGetStats(buf,sizeof(buf),server.db[dbid].pdict);
         stats = sdscat(stats,buf);
 
         stats = sdscatprintf(stats,"[Expires HT]\n");
@@ -651,7 +651,7 @@ NULL
         case OBJ_ENCODING_SKIPLIST:
             {
                 zset *zs = o->ptr;
-                ht = zs->dict;
+                ht = zs->pdict;
             }
             break;
         case OBJ_ENCODING_HT:
@@ -1192,7 +1192,7 @@ void logCurrentClient(void) {
         dictEntry *de;
 
         key = getDecodedObject(cc->argv[1]);
-        de = dictFind(cc->db->dict, key->ptr);
+        de = dictFind(cc->db->pdict, key->ptr);
         if (de) {
             val = dictGetVal(de);
             serverLog(LL_WARNING,"key '%s' found in DB containing the following object:", (char*)key->ptr);

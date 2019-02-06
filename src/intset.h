@@ -32,10 +32,16 @@
 #define __INTSET_H
 #include <stdint.h>
 
+#ifdef __cplusplus
+#define ZERO_LENGTH_ARRAY_LENGTH 1
+#else
+#define ZERO_LENGTH_ARRAY_LENGTH
+#endif
+
 typedef struct intset {
     uint32_t encoding;
     uint32_t length;
-    int8_t contents[];
+    int8_t contents[ZERO_LENGTH_ARRAY_LENGTH];
 } intset;
 
 intset *intsetNew(void);

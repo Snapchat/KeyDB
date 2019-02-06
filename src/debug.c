@@ -356,7 +356,7 @@ NULL
     } else if (!strcasecmp(c->argv[1]->ptr,"reload")) {
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
-        if (rdbSave(server.rdb_filename,rsiptr) != C_OK) {
+        if (rdbSave(rsiptr) != C_OK) {
             addReply(c,shared.err);
             return;
         }

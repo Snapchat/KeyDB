@@ -1283,7 +1283,7 @@ dictType zsetDictType = {
     NULL                       /* val destructor */
 };
 
-/* Db->dict, keys are sds strings, vals are Redis objects. */
+/* db->pdict, keys are sds strings, vals are Redis objects. */
 dictType dbDictType = {
     dictSdsHash,                /* hash function */
     NULL,                       /* key dup */
@@ -1414,8 +1414,8 @@ int htNeedsResize(dict *dict) {
 /* If the percentage of used slots in the HT reaches HASHTABLE_MIN_FILL
  * we resize the hash table to save memory */
 void tryResizeHashTables(int dbid) {
-    if (htNeedsResize(server.db[dbid].dict))
-        dictResize(server.db[dbid].dict);
+    if (htNeedsResize(server.db[dbid].pdict))
+        dictResize(server.db[dbid].pdict);
     if (htNeedsResize(server.db[dbid].expires))
         dictResize(server.db[dbid].expires);
 }
@@ -1429,8 +1429,8 @@ void tryResizeHashTables(int dbid) {
  * is returned. */
 int incrementallyRehash(int dbid) {
     /* Keys dictionary */
-    if (dictIsRehashing(server.db[dbid].dict)) {
-        dictRehashMilliseconds(server.db[dbid].dict,1);
+    if (dictIsRehashing(server.db[dbid].pdict)) {
+        dictRehashMilliseconds(server.db[dbid].pdict,1);
         return 1; /* already used our millisecond for this loop... */
     }
     /* Expires */
@@ -1856,8 +1856,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         for (j = 0; j < server.dbnum; j++) {
             long long size, used, vkeys;
 
-            size = dictSlots(server.db[j].dict);
-            used = dictSize(server.db[j].dict);
+            size = dictSlots(server.db[j].pdict);
+            used = dictSize(server.db[j].pdict);
             vkeys = dictSize(server.db[j].expires);
             if (used || vkeys) {
                 serverLog(LL_VERBOSE,"DB %d: %lld keys (%lld volatile) in %lld slots HT.",j,used,vkeys,size);
@@ -2267,6 +2267,7 @@ void initServerConfig(void) {
     server.aof_use_rdb_preamble = CONFIG_DEFAULT_AOF_USE_RDB_PREAMBLE;
     server.pidfile = NULL;
     server.rdb_filename = zstrdup(CONFIG_DEFAULT_RDB_FILENAME);
+    server.rdb_s3bucketpath = NULL;
     server.aof_filename = zstrdup(CONFIG_DEFAULT_AOF_FILENAME);
     server.rdb_compression = CONFIG_DEFAULT_RDB_COMPRESSION;
     server.rdb_checksum = CONFIG_DEFAULT_RDB_CHECKSUM;
@@ -2757,7 +2758,7 @@ void initServer(void) {
 
     /* Create the Redis databases, and initialize other internal state. */
     for (j = 0; j < server.dbnum; j++) {
-        server.db[j].dict = dictCreate(&dbDictType,NULL);
+        server.db[j].pdict = dictCreate(&dbDictType,NULL);
         server.db[j].expires = dictCreate(&keyptrDictType,NULL);
         server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
         server.db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
@@ -3630,7 +3631,7 @@ void authCommand(client *c) {
 
     if (ACLCheckUserCredentials(username,password) == C_OK) {
         c->authenticated = 1;
-        c->user = ACLGetUserByName(username->ptr,sdslen(username->ptr));
+        c->puser = ACLGetUserByName(username->ptr,sdslen(username->ptr));
         addReply(c,shared.ok);
     } else {
         addReplyError(c,"-WRONGPASS invalid username-password pair");
@@ -4364,7 +4365,7 @@ sds genRedisInfoString(char *section) {
         for (j = 0; j < server.dbnum; j++) {
             long long keys, vkeys;
 
-            keys = dictSize(server.db[j].dict);
+            keys = dictSize(server.db[j].pdict);
             vkeys = dictSize(server.db[j].expires);
             if (keys || vkeys) {
                 info = sdscatprintf(info,

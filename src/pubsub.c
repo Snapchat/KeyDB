@@ -130,7 +130,7 @@ void freePubsubPattern(void *p) {
 int listMatchPubsubPattern(void *a, void *b) {
     pubsubPattern *pa = a, *pb = b;
 
-    return (pa->client == pb->client) &&
+    return (pa->pclient == pb->pclient) &&
            (equalStringObjects(pa->pattern,pb->pattern));
 }
 
@@ -211,7 +211,7 @@ int pubsubSubscribePattern(client *c, robj *pattern) {
         incrRefCount(pattern);
         pat = zmalloc(sizeof(*pat), MALLOC_LOCAL);
         pat->pattern = getDecodedObject(pattern);
-        pat->client = c;
+        pat->pclient = c;
         listAddNodeTail(server.pubsub_patterns,pat);
     }
     /* Notify the client */
@@ -230,7 +230,7 @@ int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
     if ((ln = listSearchKey(c->pubsub_patterns,pattern)) != NULL) {
         retval = 1;
         listDelNode(c->pubsub_patterns,ln);
-        pat.client = c;
+        pat.pclient = c;
         pat.pattern = pattern;
         ln = listSearchKey(server.pubsub_patterns,&pat);
         listDelNode(server.pubsub_patterns,ln);
@@ -309,7 +309,7 @@ int pubsubPublishMessage(robj *channel, robj *message) {
                                 (char*)channel->ptr,
                                 sdslen(channel->ptr),0))
             {
-                addReplyPubsubPatMessage(pat->client,
+                addReplyPubsubPatMessage(pat->pclient,
                     pat->pattern,channel,message);
                 receivers++;
             }

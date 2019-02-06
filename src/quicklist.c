@@ -75,7 +75,7 @@ static const size_t optimization_level[] = {4096, 8192, 16384, 32768, 65536};
     do {                                                                       \
         (e)->zi = (e)->value = NULL;                                           \
         (e)->longval = -123456789;                                             \
-        (e)->quicklist = NULL;                                                 \
+        (e)->qlist = NULL;                                                 \
         (e)->node = NULL;                                                      \
         (e)->offset = 123456789;                                               \
         (e)->sz = 0;                                                           \
@@ -634,7 +634,7 @@ REDIS_STATIC int quicklistDelIndex(quicklist *quicklist, quicklistNode *node,
 void quicklistDelEntry(quicklistIter *iter, quicklistEntry *entry) {
     quicklistNode *prev = entry->node->prev;
     quicklistNode *next = entry->node->next;
-    int deleted_node = quicklistDelIndex((quicklist *)entry->quicklist,
+    int deleted_node = quicklistDelIndex((quicklist *)entry->qlist,
                                          entry->node, &entry->zi);
 
     /* after delete, the zi is now invalid for any future usage. */
@@ -1059,7 +1059,7 @@ quicklistIter *quicklistGetIterator(const quicklist *quicklist, int direction) {
     }
 
     iter->direction = direction;
-    iter->quicklist = quicklist;
+    iter->qlist = quicklist;
 
     iter->zi = NULL;
 
@@ -1088,7 +1088,7 @@ quicklistIter *quicklistGetIteratorAtIdx(const quicklist *quicklist,
  * If we still have a valid current node, then re-encode current node. */
 void quicklistReleaseIterator(quicklistIter *iter) {
     if (iter->current)
-        quicklistCompress(iter->quicklist, iter->current);
+        quicklistCompress(iter->qlist, iter->current);
 
     zfree(iter);
 }
@@ -1122,7 +1122,7 @@ int quicklistNext(quicklistIter *iter, quicklistEntry *entry) {
         return 0;
     }
 
-    entry->quicklist = iter->quicklist;
+    entry->qlist = iter->qlist;
     entry->node = iter->current;
 
     if (!iter->current) {
@@ -1160,7 +1160,7 @@ int quicklistNext(quicklistIter *iter, quicklistEntry *entry) {
     } else {
         /* We ran out of ziplist entries.
          * Pick next node, update offset, then re-run retrieval. */
-        quicklistCompress(iter->quicklist, iter->current);
+        quicklistCompress(iter->qlist, iter->current);
         if (iter->direction == AL_START_HEAD) {
             /* Forward traversal */
             D("Jumping to start of next node");
@@ -1230,7 +1230,7 @@ int quicklistIndex(const quicklist *quicklist, const long long idx,
     int forward = idx < 0 ? 0 : 1; /* < 0 -> reverse, 0+ -> forward */
 
     initEntry(entry);
-    entry->quicklist = quicklist;
+    entry->qlist = quicklist;
 
     if (!forward) {
         index = (-idx) - 1;

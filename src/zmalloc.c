@@ -175,7 +175,7 @@ void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS class) {
 #else
     realptr = (char*)ptr-PREFIX_SIZE;
     oldsize = *((size_t*)realptr);
-    newptr = realloc(realptr,size+PREFIX_SIZE);
+    newptr = realloc(realptr,size+PREFIX_SIZE, class);
     if (!newptr) zmalloc_oom_handler(size);
 
     *((size_t*)newptr) = size;

@@ -74,6 +74,19 @@ MEMKIND_EXPORT void memkind_pmem_remapfd(struct memkind *kind, int fdNew)
 	priv->fd = fdNew;
 }
 
+MEMKIND_EXPORT int memkind_pmem_iskind(struct memkind *kind, void *pv)
+{
+    struct memkind_pmem *priv = kind->priv;
+    char *pb = pv;
+	for (int iextent = 0; iextent < priv->cextents; ++iextent)
+    {
+        struct memkind_pmem_extent *extent = priv->rgextents + iextent;
+        if ((((char*)extent->addrBase) <= pb) && (((char*)extent->addrBase)+extent->cb) > pb)
+            return 1;
+    }
+    return 0;
+}
+
 void *pmem_extent_alloc(extent_hooks_t *extent_hooks,
                         void *new_addr,
                         size_t size,

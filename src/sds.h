@@ -92,17 +92,24 @@ struct __attribute__ ((__packed__)) sdshdr64 {
 
 static inline size_t sdslen(const sds s) {
     unsigned char flags = s[-1];
-    switch(flags&SDS_TYPE_MASK) {
-        case SDS_TYPE_5:
-            return SDS_TYPE_5_LEN(flags);
-        case SDS_TYPE_8:
-            return SDS_HDR(8,s)->len;
-        case SDS_TYPE_16:
-            return SDS_HDR(16,s)->len;
-        case SDS_TYPE_32:
-            return SDS_HDR(32,s)->len;
-        case SDS_TYPE_64:
-            return SDS_HDR(64,s)->len;
+    int type = flags & SDS_TYPE_MASK;
+
+    if (__builtin_expect((type == SDS_TYPE_5), 1))
+    {
+        return SDS_TYPE_5_LEN(flags);
+    }
+    else
+    {
+        switch(type) {
+            case SDS_TYPE_8:
+                return SDS_HDR(8,s)->len;
+            case SDS_TYPE_16:
+                return SDS_HDR(16,s)->len;
+            case SDS_TYPE_32:
+                return SDS_HDR(32,s)->len;
+            case SDS_TYPE_64:
+                return SDS_HDR(64,s)->len;
+        }
     }
     return 0;
 }

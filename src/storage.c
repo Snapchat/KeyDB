@@ -13,6 +13,8 @@
 struct memkind *mkdisk = NULL;
 static const char *PMEM_DIR = NULL;
 
+int memkind_pmem_iskind(struct memkind *kind, const void *pv);
+
 void handle_prefork();
 void handle_postfork_parent();
 void handle_postfork_child();
@@ -193,9 +195,19 @@ void sfree_objembstr(robj *obj)
     pool_free(&poolembstrobj, obj);
 }
 
+static memkind_t kindFromPtr(const void *pv)
+{
+    if (mkdisk == MEMKIND_DEFAULT)
+        return MEMKIND_DEFAULT;
+    
+    if (memkind_pmem_iskind(mkdisk, pv))
+        return mkdisk;
+    return MEMKIND_DEFAULT;
+}
+
 size_t salloc_usable_size(void *ptr)
 {
-    return memkind_malloc_usable_size(memkind_get_kind(ptr), ptr);
+    return memkind_malloc_usable_size(kindFromPtr(ptr), ptr);
 }
 
 static memkind_t kindFromClass(enum MALLOC_CLASS class)
@@ -225,7 +237,7 @@ void *scalloc(size_t cb, size_t c, enum MALLOC_CLASS class)
 
 void sfree(void *pv)
 {
-    memkind_free(NULL, pv);
+    memkind_free(kindFromPtr(pv), pv);
 }
 
 void *srealloc(void *pv, size_t cb, enum MALLOC_CLASS class)

@@ -420,7 +420,7 @@ Anatomy of a Redis command
 All the Redis commands are defined in the following way:
 
     void foobarCommand(client *c) {
-        printf("%s",c->argv[1]->ptr); /* Do something with the argument. */
+        printf("%s",ptrFromObj(c->argv[1])); /* Do something with the argument. */
         addReply(c,shared.ok); /* Reply something to the client. */
     }
 

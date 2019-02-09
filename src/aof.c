@@ -506,11 +506,11 @@ sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
     for (j = 0; j < argc; j++) {
         o = getDecodedObject(argv[j]);
         buf[0] = '$';
-        len = 1+ll2string(buf+1,sizeof(buf)-1,sdslen(o->ptr));
+        len = 1+ll2string(buf+1,sizeof(buf)-1,sdslen(ptrFromObj(o)));
         buf[len++] = '\r';
         buf[len++] = '\n';
         dst = sdscatlen(dst,buf,len);
-        dst = sdscatlen(dst,o->ptr,sdslen(o->ptr));
+        dst = sdscatlen(dst,ptrFromObj(o),sdslen(ptrFromObj(o)));
         dst = sdscatlen(dst,"\r\n",2);
         decrRefCount(o);
     }
@@ -530,7 +530,7 @@ sds catAppendOnlyExpireAtCommand(sds buf, struct redisCommand *cmd, robj *key, r
 
     /* Make sure we can use strtoll */
     seconds = getDecodedObject(seconds);
-    when = strtoll(seconds->ptr,NULL,10);
+    when = strtoll(ptrFromObj(seconds),NULL,10);
     /* Convert argument into milliseconds for EXPIRE, SETEX, EXPIREAT */
     if (cmd->proc == expireCommand || cmd->proc == setexCommand ||
         cmd->proc == expireatCommand)
@@ -587,8 +587,8 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
         /* Translate SET [EX seconds][PX milliseconds] to SET and PEXPIREAT */
         buf = catAppendOnlyGenericCommand(buf,3,argv);
         for (i = 3; i < argc; i ++) {
-            if (!strcasecmp(argv[i]->ptr, "ex")) exarg = argv[i+1];
-            if (!strcasecmp(argv[i]->ptr, "px")) pxarg = argv[i+1];
+            if (!strcasecmp(ptrFromObj(argv[i]), "ex")) exarg = argv[i+1];
+            if (!strcasecmp(ptrFromObj(argv[i]), "px")) pxarg = argv[i+1];
         }
         serverAssert(!(exarg && pxarg));
         if (exarg)
@@ -780,11 +780,11 @@ int loadAppendOnlyFile(char *filename) {
         }
 
         /* Command lookup */
-        cmd = lookupCommand(argv[0]->ptr);
+        cmd = lookupCommand(ptrFromObj(argv[0]));
         if (!cmd) {
             serverLog(LL_WARNING,
                 "Unknown command '%s' reading the append only file",
-                (char*)argv[0]->ptr);
+                (char*)ptrFromObj(argv[0]));
             exit(1);
         }
 
@@ -886,9 +886,9 @@ int rioWriteBulkObject(rio *r, robj *obj) {
     /* Avoid using getDecodedObject to help copy-on-write (we are often
      * in a child process when this function is called). */
     if (obj->encoding == OBJ_ENCODING_INT) {
-        return rioWriteBulkLongLong(r,(long)obj->ptr);
+        return rioWriteBulkLongLong(r,(long)obj->m_ptr);
     } else if (sdsEncodedObject(obj)) {
-        return rioWriteBulkString(r,obj->ptr,sdslen(obj->ptr));
+        return rioWriteBulkString(r,ptrFromObj(obj),sdslen(ptrFromObj(obj)));
     } else {
         serverPanic("Unknown string encoding");
     }
@@ -900,7 +900,7 @@ int rewriteListObject(rio *r, robj *key, robj *o) {
     long long count = 0, items = listTypeLength(o);
 
     if (o->encoding == OBJ_ENCODING_QUICKLIST) {
-        quicklist *list = o->ptr;
+        quicklist *list = ptrFromObj(o);
         quicklistIter *li = quicklistGetIterator(list, AL_START_HEAD);
         quicklistEntry entry;
 
@@ -937,7 +937,7 @@ int rewriteSetObject(rio *r, robj *key, robj *o) {
         int ii = 0;
         int64_t llval;
 
-        while(intsetGet(o->ptr,ii++,&llval)) {
+        while(intsetGet(ptrFromObj(o),ii++,&llval)) {
             if (count == 0) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ?
                     AOF_REWRITE_ITEMS_PER_CMD : items;
@@ -951,7 +951,7 @@ int rewriteSetObject(rio *r, robj *key, robj *o) {
             items--;
         }
     } else if (o->encoding == OBJ_ENCODING_HT) {
-        dictIterator *di = dictGetIterator(o->ptr);
+        dictIterator *di = dictGetIterator(ptrFromObj(o));
         dictEntry *de;
 
         while((de = dictNext(di)) != NULL) {
@@ -981,7 +981,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
     long long count = 0, items = zsetLength(o);
 
     if (o->encoding == OBJ_ENCODING_ZIPLIST) {
-        unsigned char *zl = o->ptr;
+        unsigned char *zl = ptrFromObj(o);
         unsigned char *eptr, *sptr;
         unsigned char *vstr;
         unsigned int vlen;
@@ -1016,7 +1016,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
             items--;
         }
     } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = o->ptr;
+        zset *zs = ptrFromObj(o);
         dictIterator *di = dictGetIterator(zs->pdict);
         dictEntry *de;
 
@@ -1137,7 +1137,7 @@ int rioWriteStreamPendingEntry(rio *r, robj *key, const char *groupname, size_t 
 /* Emit the commands needed to rebuild a stream object.
  * The function returns 0 on error, 1 on success. */
 int rewriteStreamObject(rio *r, robj *key, robj *o) {
-    stream *s = o->ptr;
+    stream *s = ptrFromObj(o);
     streamIterator si;
     streamIteratorStart(&si,s,NULL,NULL,0);
     streamID id;
@@ -1237,7 +1237,7 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
  * The function returns 0 on error, 1 on success. */
 int rewriteModuleObject(rio *r, robj *key, robj *o) {
     RedisModuleIO io;
-    moduleValue *mv = o->ptr;
+    moduleValue *mv = ptrFromObj(o);
     moduleType *mt = mv->type;
     moduleInitIOContext(io,mt,r);
     mt->aof_rewrite(&io,key,mv->value);

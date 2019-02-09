@@ -48,7 +48,7 @@ size_t sdsZmallocSize(sds s) {
 size_t getStringObjectSdsUsedMemory(robj *o) {
     serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
     switch(o->encoding) {
-    case OBJ_ENCODING_RAW: return sdsZmallocSize(o->ptr);
+    case OBJ_ENCODING_RAW: return sdsZmallocSize(ptrFromObj(o));
     case OBJ_ENCODING_EMBSTR: return zmalloc_size(o)-sizeof(robj);
     default: return 0; /* Just integer encoding for now. */
     }
@@ -302,14 +302,14 @@ void addReply(client *c, robj *obj) {
     if (prepareClientToWrite(c) != C_OK) return;
 
     if (sdsEncodedObject(obj)) {
-        if (_addReplyToBuffer(c,obj->ptr,sdslen(obj->ptr)) != C_OK)
-            _addReplyProtoToList(c,obj->ptr,sdslen(obj->ptr));
+        if (_addReplyToBuffer(c,ptrFromObj(obj),sdslen(ptrFromObj(obj))) != C_OK)
+            _addReplyProtoToList(c,ptrFromObj(obj),sdslen(ptrFromObj(obj)));
     } else if (obj->encoding == OBJ_ENCODING_INT) {
         /* For integer encoded strings we just convert it into a string
          * using our optimized function, and attach the resulting string
          * to the output buffer. */
         char buf[32];
-        size_t len = ll2string(buf,sizeof(buf),(long)obj->ptr);
+        size_t len = ll2string(buf,sizeof(buf),(long)ptrFromObj(obj));
         if (_addReplyToBuffer(c,buf,len) != C_OK)
             _addReplyProtoToList(c,buf,len);
     } else {
@@ -639,9 +639,9 @@ void addReplyBulkLen(client *c, robj *obj) {
     size_t len;
 
     if (sdsEncodedObject(obj)) {
-        len = sdslen(obj->ptr);
+        len = sdslen(ptrFromObj(obj));
     } else {
-        long n = (long)obj->ptr;
+        long n = (long)ptrFromObj(obj);
 
         /* Compute how many bytes will take this integer as a radix 10 string */
         len = 1;
@@ -733,7 +733,7 @@ void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext) {
  * subcommands in response to the 'help' subcommand. The help array
  * is terminated by NULL sentinel. */
 void addReplyHelp(client *c, const char **help) {
-    sds cmd = sdsnew((char*) c->argv[0]->ptr);
+    sds cmd = sdsnew((char*) ptrFromObj(c->argv[0]));
     void *blenp = addReplyDeferredLen(c);
     int blen = 0;
 
@@ -752,11 +752,11 @@ void addReplyHelp(client *c, const char **help) {
  * This function is typically invoked by from commands that support
  * subcommands in response to an unknown subcommand or argument error. */
 void addReplySubcommandSyntaxError(client *c) {
-    sds cmd = sdsnew((char*) c->argv[0]->ptr);
+    sds cmd = sdsnew((char*) ptrFromObj(c->argv[0]));
     sdstoupper(cmd);
     addReplyErrorFormat(c,
         "Unknown subcommand or wrong number of arguments for '%s'. Try %s HELP.",
-        (char*)c->argv[1]->ptr,cmd);
+        (char*)ptrFromObj(c->argv[1]),cmd);
     sdsfree(cmd);
 }
 
@@ -1785,7 +1785,7 @@ sds catClientInfoString(sds s, client *client) {
         (unsigned long long) client->id,
         getClientPeerId(client),
         client->fd,
-        client->name ? (char*)client->name->ptr : "",
+        client->name ? (char*)ptrFromObj(client->name) : "",
         (long long)(server.unixtime - client->ctime),
         (long long)(server.unixtime - client->lastinteraction),
         flags,
@@ -1823,7 +1823,7 @@ void clientCommand(client *c) {
     listIter li;
     client *client;
 
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+    if (c->argc == 2 && !strcasecmp(ptrFromObj(c->argv[1]),"help")) {
         const char *help[] = {
 "id                     -- Return the ID of the current connection.",
 "getname                -- Return the name of the current connection.",
@@ -1841,17 +1841,17 @@ void clientCommand(client *c) {
 NULL
         };
         addReplyHelp(c, help);
-    } else if (!strcasecmp(c->argv[1]->ptr,"id") && c->argc == 2) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"id") && c->argc == 2) {
         /* CLIENT ID */
         addReplyLongLong(c,c->id);
-    } else if (!strcasecmp(c->argv[1]->ptr,"list")) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"list")) {
         /* CLIENT LIST */
         int type = -1;
-        if (c->argc == 4 && !strcasecmp(c->argv[2]->ptr,"type")) {
-            type = getClientTypeByName(c->argv[3]->ptr);
+        if (c->argc == 4 && !strcasecmp(ptrFromObj(c->argv[2]),"type")) {
+            type = getClientTypeByName(ptrFromObj(c->argv[3]));
             if (type == -1) {
                 addReplyErrorFormat(c,"Unknown client type '%s'",
-                    (char*) c->argv[3]->ptr);
+                    (char*) ptrFromObj(c->argv[3]));
                 return;
              }
         } else if (c->argc != 2) {
@@ -1861,21 +1861,21 @@ NULL
         sds o = getAllClientsInfoString(type);
         addReplyBulkCBuffer(c,o,sdslen(o));
         sdsfree(o);
-    } else if (!strcasecmp(c->argv[1]->ptr,"reply") && c->argc == 3) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"reply") && c->argc == 3) {
         /* CLIENT REPLY ON|OFF|SKIP */
-        if (!strcasecmp(c->argv[2]->ptr,"on")) {
+        if (!strcasecmp(ptrFromObj(c->argv[2]),"on")) {
             c->flags &= ~(CLIENT_REPLY_SKIP|CLIENT_REPLY_OFF);
             addReply(c,shared.ok);
-        } else if (!strcasecmp(c->argv[2]->ptr,"off")) {
+        } else if (!strcasecmp(ptrFromObj(c->argv[2]),"off")) {
             c->flags |= CLIENT_REPLY_OFF;
-        } else if (!strcasecmp(c->argv[2]->ptr,"skip")) {
+        } else if (!strcasecmp(ptrFromObj(c->argv[2]),"skip")) {
             if (!(c->flags & CLIENT_REPLY_OFF))
                 c->flags |= CLIENT_REPLY_SKIP_NEXT;
         } else {
             addReply(c,shared.syntaxerr);
             return;
         }
-    } else if (!strcasecmp(c->argv[1]->ptr,"kill")) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"kill")) {
         /* CLIENT KILL <ip:port>
          * CLIENT KILL <option> [value] ... <option> [value] */
         char *addr = NULL;
@@ -1886,7 +1886,7 @@ NULL
 
         if (c->argc == 3) {
             /* Old style syntax: CLIENT KILL <addr> */
-            addr = c->argv[2]->ptr;
+            addr = ptrFromObj(c->argv[2]);
             skipme = 0; /* With the old form, you can kill yourself. */
         } else if (c->argc > 3) {
             int i = 2; /* Next option index. */
@@ -1895,25 +1895,25 @@ NULL
             while(i < c->argc) {
                 int moreargs = c->argc > i+1;
 
-                if (!strcasecmp(c->argv[i]->ptr,"id") && moreargs) {
+                if (!strcasecmp(ptrFromObj(c->argv[i]),"id") && moreargs) {
                     long long tmp;
 
                     if (getLongLongFromObjectOrReply(c,c->argv[i+1],&tmp,NULL)
                         != C_OK) return;
                     id = tmp;
-                } else if (!strcasecmp(c->argv[i]->ptr,"type") && moreargs) {
-                    type = getClientTypeByName(c->argv[i+1]->ptr);
+                } else if (!strcasecmp(ptrFromObj(c->argv[i]),"type") && moreargs) {
+                    type = getClientTypeByName(ptrFromObj(c->argv[i+1]));
                     if (type == -1) {
                         addReplyErrorFormat(c,"Unknown client type '%s'",
-                            (char*) c->argv[i+1]->ptr);
+                            (char*) ptrFromObj(c->argv[i+1]));
                         return;
                     }
-                } else if (!strcasecmp(c->argv[i]->ptr,"addr") && moreargs) {
-                    addr = c->argv[i+1]->ptr;
-                } else if (!strcasecmp(c->argv[i]->ptr,"skipme") && moreargs) {
-                    if (!strcasecmp(c->argv[i+1]->ptr,"yes")) {
+                } else if (!strcasecmp(ptrFromObj(c->argv[i]),"addr") && moreargs) {
+                    addr = ptrFromObj(c->argv[i+1]);
+                } else if (!strcasecmp(ptrFromObj(c->argv[i]),"skipme") && moreargs) {
+                    if (!strcasecmp(ptrFromObj(c->argv[i+1]),"yes")) {
                         skipme = 1;
-                    } else if (!strcasecmp(c->argv[i+1]->ptr,"no")) {
+                    } else if (!strcasecmp(ptrFromObj(c->argv[i+1]),"no")) {
                         skipme = 0;
                     } else {
                         addReply(c,shared.syntaxerr);
@@ -1961,7 +1961,7 @@ NULL
         /* If this client has to be closed, flag it as CLOSE_AFTER_REPLY
          * only after we queued the reply to its output buffers. */
         if (close_this_client) c->flags |= CLIENT_CLOSE_AFTER_REPLY;
-    } else if (!strcasecmp(c->argv[1]->ptr,"unblock") && (c->argc == 3 ||
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"unblock") && (c->argc == 3 ||
                                                           c->argc == 4))
     {
         /* CLIENT UNBLOCK <id> [timeout|error] */
@@ -1969,9 +1969,9 @@ NULL
         int unblock_error = 0;
 
         if (c->argc == 4) {
-            if (!strcasecmp(c->argv[3]->ptr,"timeout")) {
+            if (!strcasecmp(ptrFromObj(c->argv[3]),"timeout")) {
                 unblock_error = 0;
-            } else if (!strcasecmp(c->argv[3]->ptr,"error")) {
+            } else if (!strcasecmp(ptrFromObj(c->argv[3]),"error")) {
                 unblock_error = 1;
             } else {
                 addReplyError(c,
@@ -1993,9 +1993,9 @@ NULL
         } else {
             addReply(c,shared.czero);
         }
-    } else if (!strcasecmp(c->argv[1]->ptr,"setname") && c->argc == 3) {
-        int j, len = sdslen(c->argv[2]->ptr);
-        char *p = c->argv[2]->ptr;
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"setname") && c->argc == 3) {
+        int j, len = sdslen(ptrFromObj(c->argv[2]));
+        char *p = ptrFromObj(c->argv[2]);
 
         /* Setting the client name to an empty string actually removes
          * the current name. */
@@ -2021,12 +2021,12 @@ NULL
         c->name = c->argv[2];
         incrRefCount(c->name);
         addReply(c,shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr,"getname") && c->argc == 2) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"getname") && c->argc == 2) {
         if (c->name)
             addReplyBulk(c,c->name);
         else
             addReplyNull(c);
-    } else if (!strcasecmp(c->argv[1]->ptr,"pause") && c->argc == 3) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"pause") && c->argc == 3) {
         long long duration;
 
         if (getTimeoutFromObjectOrReply(c,c->argv[2],&duration,UNIT_MILLISECONDS)
@@ -2034,7 +2034,7 @@ NULL
         pauseClients(duration);
         addReply(c,shared.ok);
     } else {
-        addReplyErrorFormat(c, "Unknown subcommand or wrong number of arguments for '%s'. Try CLIENT HELP", (char*)c->argv[1]->ptr);
+        addReplyErrorFormat(c, "Unknown subcommand or wrong number of arguments for '%s'. Try CLIENT HELP", (char*)ptrFromObj(c->argv[1]));
     }
 }
 
@@ -2140,7 +2140,7 @@ void rewriteClientCommandVector(client *c, int argc, ...) {
     /* Replace argv and argc with our new versions. */
     c->argv = argv;
     c->argc = argc;
-    c->cmd = lookupCommandOrOriginal(c->argv[0]->ptr);
+    c->cmd = lookupCommandOrOriginal(ptrFromObj(c->argv[0]));
     serverAssertWithInfo(c,NULL,c->cmd != NULL);
     va_end(ap);
 }
@@ -2151,7 +2151,7 @@ void replaceClientCommandVector(client *c, int argc, robj **argv) {
     zfree(c->argv);
     c->argv = argv;
     c->argc = argc;
-    c->cmd = lookupCommandOrOriginal(c->argv[0]->ptr);
+    c->cmd = lookupCommandOrOriginal(ptrFromObj(c->argv[0]));
     serverAssertWithInfo(c,NULL,c->cmd != NULL);
 }
 
@@ -2181,7 +2181,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
 
     /* If this is the command name make sure to fix c->cmd. */
     if (i == 0) {
-        c->cmd = lookupCommandOrOriginal(c->argv[0]->ptr);
+        c->cmd = lookupCommandOrOriginal(ptrFromObj(c->argv[0]));
         serverAssertWithInfo(c,NULL,c->cmd != NULL);
     }
 }

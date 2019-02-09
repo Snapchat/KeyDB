@@ -64,13 +64,13 @@ slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long dur
             /* Trim too long strings as well... */
             if (argv[j]->type == OBJ_STRING &&
                 sdsEncodedObject(argv[j]) &&
-                sdslen(argv[j]->ptr) > SLOWLOG_ENTRY_MAX_STRING)
+                sdslen(ptrFromObj(argv[j])) > SLOWLOG_ENTRY_MAX_STRING)
             {
-                sds s = sdsnewlen(argv[j]->ptr, SLOWLOG_ENTRY_MAX_STRING);
+                sds s = sdsnewlen(ptrFromObj(argv[j]), SLOWLOG_ENTRY_MAX_STRING);
 
                 s = sdscatprintf(s,"... (%lu more bytes)",
                     (unsigned long)
-                    sdslen(argv[j]->ptr) - SLOWLOG_ENTRY_MAX_STRING);
+                    sdslen(ptrFromObj(argv[j])) - SLOWLOG_ENTRY_MAX_STRING);
                 se->argv[j] = createObject(OBJ_STRING,s);
             } else if (argv[j]->refcount == OBJ_SHARED_REFCOUNT) {
                 se->argv[j] = argv[j];
@@ -89,7 +89,7 @@ slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long dur
     se->duration = duration;
     se->id = server.slowlog_entry_id++;
     se->peerid = sdsnew(getClientPeerId(c));
-    se->cname = c->name ? sdsnew(c->name->ptr) : sdsempty();
+    se->cname = c->name ? sdsnew(ptrFromObj(c->name)) : sdsempty();
     return se;
 }
 
@@ -140,7 +140,7 @@ void slowlogReset(void) {
 /* The SLOWLOG command. Implements all the subcommands needed to handle the
  * Redis slow log. */
 void slowlogCommand(client *c) {
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+    if (c->argc == 2 && !strcasecmp(ptrFromObj(c->argv[1]),"help")) {
         const char *help[] = {
 "GET [count] -- Return top entries from the slowlog (default: 10)."
 "    Entries are made of:",
@@ -150,13 +150,13 @@ void slowlogCommand(client *c) {
 NULL
         };
         addReplyHelp(c, help);
-    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"reset")) {
+    } else if (c->argc == 2 && !strcasecmp(ptrFromObj(c->argv[1]),"reset")) {
         slowlogReset();
         addReply(c,shared.ok);
-    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"len")) {
+    } else if (c->argc == 2 && !strcasecmp(ptrFromObj(c->argv[1]),"len")) {
         addReplyLongLong(c,listLength(server.slowlog));
     } else if ((c->argc == 2 || c->argc == 3) &&
-               !strcasecmp(c->argv[1]->ptr,"get"))
+               !strcasecmp(ptrFromObj(c->argv[1]),"get"))
     {
         long count = 10, sent = 0;
         listIter li;

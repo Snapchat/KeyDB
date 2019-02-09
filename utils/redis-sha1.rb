@@ -1,4 +1,4 @@
-# redis-sha1.rb - Copyright (C) 2009 Salvatore Sanfilippo
+# keydb-sha1.rb - Copyright (C) 2009 Salvatore Sanfilippo
 # BSD license, See the COPYING file for more information.
 #
 # Performs the SHA1 sum of the whole datset.

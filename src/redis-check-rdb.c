@@ -328,7 +328,7 @@ err:
 }
 
 /* RDB check main: called form redis.c when Redis is executed with the
- * redis-check-rdb alias, on during RDB loading errors.
+ * keydb-check-rdb alias, on during RDB loading errors.
  *
  * The function works in two ways: can be called with argc/argv as a
  * standalone executable, or called with a non NULL 'fp' argument if we

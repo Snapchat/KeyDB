@@ -636,9 +636,9 @@ typedef struct redisObject {
     void *m_ptr;
 } robj;
 
-inline void *ptrFromObj(const robj *o)
+__attribute__((always_inline)) inline void *ptrFromObj(const robj *o)
 {
-    if (o->type == OBJ_STRING && o->encoding == OBJ_ENCODING_EMBSTR)
+    if (o->encoding == OBJ_ENCODING_EMBSTR)
         return ((char*)&((robj*)o)->m_ptr) + sizeof(struct sdshdr8);
     return o->m_ptr;
 }

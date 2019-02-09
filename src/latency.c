@@ -579,21 +579,21 @@ NULL
     };
     struct latencyTimeSeries *ts;
 
-    if (!strcasecmp(c->argv[1]->ptr,"history") && c->argc == 3) {
+    if (!strcasecmp(ptrFromObj(c->argv[1]),"history") && c->argc == 3) {
         /* LATENCY HISTORY <event> */
-        ts = dictFetchValue(server.latency_events,c->argv[2]->ptr);
+        ts = dictFetchValue(server.latency_events,ptrFromObj(c->argv[2]));
         if (ts == NULL) {
             addReplyArrayLen(c,0);
         } else {
             latencyCommandReplyWithSamples(c,ts);
         }
-    } else if (!strcasecmp(c->argv[1]->ptr,"graph") && c->argc == 3) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"graph") && c->argc == 3) {
         /* LATENCY GRAPH <event> */
         sds graph;
         dictEntry *de;
         char *event;
 
-        de = dictFind(server.latency_events,c->argv[2]->ptr);
+        de = dictFind(server.latency_events,ptrFromObj(c->argv[2]));
         if (de == NULL) goto nodataerr;
         ts = dictGetVal(de);
         event = dictGetKey(de);
@@ -601,16 +601,16 @@ NULL
         graph = latencyCommandGenSparkeline(event,ts);
         addReplyBulkCString(c,graph);
         sdsfree(graph);
-    } else if (!strcasecmp(c->argv[1]->ptr,"latest") && c->argc == 2) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"latest") && c->argc == 2) {
         /* LATENCY LATEST */
         latencyCommandReplyWithLatestEvents(c);
-    } else if (!strcasecmp(c->argv[1]->ptr,"doctor") && c->argc == 2) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"doctor") && c->argc == 2) {
         /* LATENCY DOCTOR */
         sds report = createLatencyReport();
 
         addReplyBulkCBuffer(c,report,sdslen(report));
         sdsfree(report);
-    } else if (!strcasecmp(c->argv[1]->ptr,"reset") && c->argc >= 2) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"reset") && c->argc >= 2) {
         /* LATENCY RESET */
         if (c->argc == 2) {
             addReplyLongLong(c,latencyResetEvent(NULL));
@@ -618,10 +618,10 @@ NULL
             int j, resets = 0;
 
             for (j = 2; j < c->argc; j++)
-                resets += latencyResetEvent(c->argv[j]->ptr);
+                resets += latencyResetEvent(ptrFromObj(c->argv[j]));
             addReplyLongLong(c,resets);
         }
-    } else if (!strcasecmp(c->argv[1]->ptr,"help") && c->argc >= 2) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"help") && c->argc >= 2) {
         addReplyHelp(c, help);
     } else {
         addReplySubcommandSyntaxError(c);
@@ -632,6 +632,6 @@ nodataerr:
     /* Common error when the user asks for an event we have no latency
      * information about. */
     addReplyErrorFormat(c,
-        "No samples available for event '%s'", (char*) c->argv[2]->ptr);
+        "No samples available for event '%s'", (char*) ptrFromObj(c->argv[2]));
 }
 

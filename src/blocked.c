@@ -374,7 +374,7 @@ void handleClientsBlockedOnKeys(void) {
             /* Serve clients blocked on stream key. */
             else if (o != NULL && o->type == OBJ_STREAM) {
                 dictEntry *de = dictFind(rl->db->blocking_keys,rl->key);
-                stream *s = o->ptr;
+                stream *s = ptrFromObj(o);
 
                 /* We need to provide the new data arrived on the stream
                  * to all the clients that are waiting for an offset smaller
@@ -403,7 +403,7 @@ void handleClientsBlockedOnKeys(void) {
                         streamCG *group = NULL;
                         if (receiver->bpop.xread_group) {
                             group = streamLookupCG(s,
-                                    receiver->bpop.xread_group->ptr);
+                                    ptrFromObj(receiver->bpop.xread_group));
                             /* If the group was not found, send an error
                              * to the consumer. */
                             if (!group) {
@@ -427,7 +427,7 @@ void handleClientsBlockedOnKeys(void) {
 
                             if (group) {
                                 consumer = streamLookupConsumer(group,
-                                           receiver->bpop.xread_consumer->ptr,
+                                           ptrFromObj(receiver->bpop.xread_consumer),
                                            1);
                                 noack = receiver->bpop.xread_group_noack;
                             }

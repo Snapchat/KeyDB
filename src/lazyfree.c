@@ -30,16 +30,16 @@ size_t lazyfreeGetPendingObjectsCount(void) {
  * representing the list. */
 size_t lazyfreeGetFreeEffort(robj *obj) {
     if (obj->type == OBJ_LIST) {
-        quicklist *ql = obj->ptr;
+        quicklist *ql = ptrFromObj(obj);
         return ql->len;
     } else if (obj->type == OBJ_SET && obj->encoding == OBJ_ENCODING_HT) {
-        dict *ht = obj->ptr;
+        dict *ht = ptrFromObj(obj);
         return dictSize(ht);
     } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_SKIPLIST){
-        zset *zs = obj->ptr;
+        zset *zs = ptrFromObj(obj);
         return zs->zsl->length;
     } else if (obj->type == OBJ_HASH && obj->encoding == OBJ_ENCODING_HT) {
-        dict *ht = obj->ptr;
+        dict *ht = ptrFromObj(obj);
         return dictSize(ht);
     } else {
         return 1; /* Everything else is a single allocation. */
@@ -54,12 +54,12 @@ size_t lazyfreeGetFreeEffort(robj *obj) {
 int dbAsyncDelete(redisDb *db, robj *key) {
     /* Deleting an entry from the expires dict will not free the sds of
      * the key, because it is shared with the main dictionary. */
-    if (dictSize(db->expires) > 0) dictDelete(db->expires,key->ptr);
+    if (dictSize(db->expires) > 0) dictDelete(db->expires,ptrFromObj(key));
 
     /* If the value is composed of a few allocations, to free in a lazy way
      * is actually just slower... So under a certain limit we just free
      * the object synchronously. */
-    dictEntry *de = dictUnlink(db->pdict,key->ptr);
+    dictEntry *de = dictUnlink(db->pdict,ptrFromObj(key));
     if (de) {
         robj *val = dictGetVal(de);
         size_t free_effort = lazyfreeGetFreeEffort(val);

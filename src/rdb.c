@@ -459,10 +459,10 @@ ssize_t rdbSaveStringObject(rio *rdb, robj *obj) {
     /* Avoid to decode the object, then encode it again, if the
      * object is already integer encoded. */
     if (obj->encoding == OBJ_ENCODING_INT) {
-        return rdbSaveLongLongAsStringObject(rdb,(long)obj->ptr);
+        return rdbSaveLongLongAsStringObject(rdb,(long)ptrFromObj(obj));
     } else {
         serverAssertWithInfo(NULL,obj,sdsEncodedObject(obj));
-        return rdbSaveRawString(rdb,obj->ptr,sdslen(obj->ptr));
+        return rdbSaveRawString(rdb,ptrFromObj(obj),sdslen(ptrFromObj(obj)));
     }
 }
 
@@ -472,7 +472,7 @@ ssize_t rdbSaveStringObject(rio *rdb, robj *obj) {
  * RDB_LOAD_ENC: If the returned type is a Redis object, try to
  *               encode it in a special way to be more memory
  *               efficient. When this flag is passed the function
- *               no longer guarantees that obj->ptr is an SDS string.
+ *               no longer guarantees that ptrFromObj(obj) is an SDS string.
  * RDB_LOAD_PLAIN: Return a plain string allocated with zmalloc()
  *                 instead of a Redis object with an sds in it.
  * RDB_LOAD_SDS: Return an SDS string instead of a Redis object.
@@ -515,7 +515,7 @@ void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
     } else {
         robj *o = encode ? createStringObject(SDS_NOINIT,len) :
                            createRawStringObject(SDS_NOINIT,len);
-        if (len && rioRead(rdb,o->ptr,len) == 0) {
+        if (len && rioRead(rdb,ptrFromObj(o),len) == 0) {
             decrRefCount(o);
             return NULL;
         }
@@ -762,7 +762,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o) {
     } else if (o->type == OBJ_LIST) {
         /* Save a list value */
         if (o->encoding == OBJ_ENCODING_QUICKLIST) {
-            quicklist *ql = o->ptr;
+            quicklist *ql = ptrFromObj(o);
             quicklistNode *node = ql->head;
 
             if ((n = rdbSaveLen(rdb,ql->len)) == -1) return -1;
@@ -786,7 +786,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o) {
     } else if (o->type == OBJ_SET) {
         /* Save a set value */
         if (o->encoding == OBJ_ENCODING_HT) {
-            dict *set = o->ptr;
+            dict *set = ptrFromObj(o);
             dictIterator *di = dictGetIterator(set);
             dictEntry *de;
 
@@ -808,9 +808,9 @@ ssize_t rdbSaveObject(rio *rdb, robj *o) {
             }
             dictReleaseIterator(di);
         } else if (o->encoding == OBJ_ENCODING_INTSET) {
-            size_t l = intsetBlobLen((intset*)o->ptr);
+            size_t l = intsetBlobLen((intset*)ptrFromObj(o));
 
-            if ((n = rdbSaveRawString(rdb,o->ptr,l)) == -1) return -1;
+            if ((n = rdbSaveRawString(rdb,ptrFromObj(o),l)) == -1) return -1;
             nwritten += n;
         } else {
             serverPanic("Unknown set encoding");
@@ -818,12 +818,12 @@ ssize_t rdbSaveObject(rio *rdb, robj *o) {
     } else if (o->type == OBJ_ZSET) {
         /* Save a sorted set value */
         if (o->encoding == OBJ_ENCODING_ZIPLIST) {
-            size_t l = ziplistBlobLen((unsigned char*)o->ptr);
+            size_t l = ziplistBlobLen((unsigned char*)ptrFromObj(o));
 
-            if ((n = rdbSaveRawString(rdb,o->ptr,l)) == -1) return -1;
+            if ((n = rdbSaveRawString(rdb,ptrFromObj(o),l)) == -1) return -1;
             nwritten += n;
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
-            zset *zs = o->ptr;
+            zset *zs = ptrFromObj(o);
             zskiplist *zsl = zs->zsl;
 
             if ((n = rdbSaveLen(rdb,zsl->length)) == -1) return -1;
@@ -854,16 +854,16 @@ ssize_t rdbSaveObject(rio *rdb, robj *o) {
     } else if (o->type == OBJ_HASH) {
         /* Save a hash value */
         if (o->encoding == OBJ_ENCODING_ZIPLIST) {
-            size_t l = ziplistBlobLen((unsigned char*)o->ptr);
+            size_t l = ziplistBlobLen((unsigned char*)ptrFromObj(o));
 
-            if ((n = rdbSaveRawString(rdb,o->ptr,l)) == -1) return -1;
+            if ((n = rdbSaveRawString(rdb,ptrFromObj(o),l)) == -1) return -1;
             nwritten += n;
 
         } else if (o->encoding == OBJ_ENCODING_HT) {
-            dictIterator *di = dictGetIterator(o->ptr);
+            dictIterator *di = dictGetIterator(ptrFromObj(o));
             dictEntry *de;
 
-            if ((n = rdbSaveLen(rdb,dictSize((dict*)o->ptr))) == -1) {
+            if ((n = rdbSaveLen(rdb,dictSize((dict*)ptrFromObj(o)))) == -1) {
                 dictReleaseIterator(di);
                 return -1;
             }
@@ -894,7 +894,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o) {
         }
     } else if (o->type == OBJ_STREAM) {
         /* Store how many listpacks we have inside the radix tree. */
-        stream *s = o->ptr;
+        stream *s = ptrFromObj(o);
         rax *rax = s->prax;
         if ((n = rdbSaveLen(rdb,raxSize(rax))) == -1) return -1;
         nwritten += n;
@@ -965,7 +965,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o) {
     } else if (o->type == OBJ_MODULE) {
         /* Save a module-specific value. */
         RedisModuleIO io;
-        moduleValue *mv = o->ptr;
+        moduleValue *mv = ptrFromObj(o);
         moduleType *mt = mv->type;
         moduleInitIOContext(io,mt,rdb);
 
@@ -1167,7 +1167,7 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
         di = dictGetIterator(server.lua_scripts);
         while((de = dictNext(di)) != NULL) {
             robj *body = dictGetVal(de);
-            if (rdbSaveAuxField(rdb,"lua",3,body->ptr,sdslen(body->ptr)) == -1)
+            if (rdbSaveAuxField(rdb,"lua",3,ptrFromObj(body),sdslen(ptrFromObj(body))) == -1)
                 goto werr;
         }
         dictReleaseIterator(di);
@@ -1415,15 +1415,15 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
         if ((len = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
 
         o = createQuicklistObject();
-        quicklistSetOptions(o->ptr, server.list_max_ziplist_size,
+        quicklistSetOptions(ptrFromObj(o), server.list_max_ziplist_size,
                             server.list_compress_depth);
 
         /* Load every single element of the list */
         while(len--) {
             if ((ele = rdbLoadEncodedStringObject(rdb)) == NULL) return NULL;
             dec = getDecodedObject(ele);
-            size_t len = sdslen(dec->ptr);
-            quicklistPushTail(o->ptr, dec->ptr, len);
+            size_t len = sdslen(ptrFromObj(dec));
+            quicklistPushTail(ptrFromObj(o), ptrFromObj(dec), len);
             decrRefCount(dec);
             decrRefCount(ele);
         }
@@ -1437,7 +1437,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
             /* It's faster to expand the dict to the right size asap in order
              * to avoid rehashing */
             if (len > DICT_HT_INITIAL_SIZE)
-                dictExpand(o->ptr,len);
+                dictExpand(ptrFromObj(o),len);
         } else {
             o = createIntsetObject();
         }
@@ -1453,17 +1453,17 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
             if (o->encoding == OBJ_ENCODING_INTSET) {
                 /* Fetch integer value from element. */
                 if (isSdsRepresentableAsLongLong(sdsele,&llval) == C_OK) {
-                    o->ptr = intsetAdd(o->ptr,llval,NULL);
+                    o->m_ptr = intsetAdd(ptrFromObj(o),llval,NULL);
                 } else {
                     setTypeConvert(o,OBJ_ENCODING_HT);
-                    dictExpand(o->ptr,len);
+                    dictExpand(ptrFromObj(o),len);
                 }
             }
 
             /* This will also be called when the set was just converted
              * to a regular hash table encoded set. */
             if (o->encoding == OBJ_ENCODING_HT) {
-                dictAdd((dict*)o->ptr,sdsele,NULL);
+                dictAdd((dict*)ptrFromObj(o),sdsele,NULL);
             } else {
                 sdsfree(sdsele);
             }
@@ -1476,7 +1476,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
 
         if ((zsetlen = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
         o = createZsetObject();
-        zs = o->ptr;
+        zs = ptrFromObj(o);
 
         if (zsetlen > DICT_HT_INITIAL_SIZE)
             dictExpand(zs->pdict,zsetlen);
@@ -1531,9 +1531,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
                 == NULL) return NULL;
 
             /* Add pair to ziplist */
-            o->ptr = ziplistPush(o->ptr, (unsigned char*)field,
+            o->m_ptr = ziplistPush(ptrFromObj(o), (unsigned char*)field,
                     sdslen(field), ZIPLIST_TAIL);
-            o->ptr = ziplistPush(o->ptr, (unsigned char*)value,
+            o->m_ptr = ziplistPush(ptrFromObj(o), (unsigned char*)value,
                     sdslen(value), ZIPLIST_TAIL);
 
             /* Convert to hash table if size threshold is exceeded */
@@ -1550,7 +1550,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
         }
 
         if (o->encoding == OBJ_ENCODING_HT && len > DICT_HT_INITIAL_SIZE)
-            dictExpand(o->ptr,len);
+            dictExpand(ptrFromObj(o),len);
 
         /* Load remaining fields and values into the hash table */
         while (o->encoding == OBJ_ENCODING_HT && len > 0) {
@@ -1562,7 +1562,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
                 == NULL) return NULL;
 
             /* Add pair to hash table */
-            ret = dictAdd((dict*)o->ptr, field, value);
+            ret = dictAdd((dict*)ptrFromObj(o), field, value);
             if (ret == DICT_ERR) {
                 rdbExitReportCorruptRDB("Duplicate keys detected");
             }
@@ -1573,14 +1573,14 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
     } else if (rdbtype == RDB_TYPE_LIST_QUICKLIST) {
         if ((len = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
         o = createQuicklistObject();
-        quicklistSetOptions(o->ptr, server.list_max_ziplist_size,
+        quicklistSetOptions(ptrFromObj(o), server.list_max_ziplist_size,
                             server.list_compress_depth);
 
         while (len--) {
             unsigned char *zl =
                 rdbGenericLoadStringObject(rdb,RDB_LOAD_PLAIN,NULL);
             if (zl == NULL) return NULL;
-            quicklistAppendZiplist(o->ptr, zl);
+            quicklistAppendZiplist(ptrFromObj(o), zl);
         }
     } else if (rdbtype == RDB_TYPE_HASH_ZIPMAP  ||
                rdbtype == RDB_TYPE_LIST_ZIPLIST ||
@@ -1605,7 +1605,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
                  * when loading dumps created by Redis 2.4 gets deprecated. */
                 {
                     unsigned char *zl = ziplistNew();
-                    unsigned char *zi = zipmapRewind(o->ptr);
+                    unsigned char *zi = zipmapRewind(ptrFromObj(o));
                     unsigned char *fstr, *vstr;
                     unsigned int flen, vlen;
                     unsigned int maxlen = 0;
@@ -1617,8 +1617,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
                         zl = ziplistPush(zl, vstr, vlen, ZIPLIST_TAIL);
                     }
 
-                    zfree(o->ptr);
-                    o->ptr = zl;
+                    zfree(ptrFromObj(o));
+                    o->m_ptr = zl;
                     o->type = OBJ_HASH;
                     o->encoding = OBJ_ENCODING_ZIPLIST;
 
@@ -1637,7 +1637,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
             case RDB_TYPE_SET_INTSET:
                 o->type = OBJ_SET;
                 o->encoding = OBJ_ENCODING_INTSET;
-                if (intsetLen(o->ptr) > server.set_max_intset_entries)
+                if (intsetLen(ptrFromObj(o)) > server.set_max_intset_entries)
                     setTypeConvert(o,OBJ_ENCODING_HT);
                 break;
             case RDB_TYPE_ZSET_ZIPLIST:
@@ -1658,7 +1658,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
         }
     } else if (rdbtype == RDB_TYPE_STREAM_LISTPACKS) {
         o = createStreamObject();
-        stream *s = o->ptr;
+        stream *s = ptrFromObj(o);
         uint64_t listpacks = rdbLoadLen(rdb,NULL);
 
         while(listpacks--) {
@@ -1961,34 +1961,34 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
             if ((auxkey = rdbLoadStringObject(rdb)) == NULL) goto eoferr;
             if ((auxval = rdbLoadStringObject(rdb)) == NULL) goto eoferr;
 
-            if (((char*)auxkey->ptr)[0] == '%') {
+            if (((char*)ptrFromObj(auxkey))[0] == '%') {
                 /* All the fields with a name staring with '%' are considered
                  * information fields and are logged at startup with a log
                  * level of NOTICE. */
                 serverLog(LL_NOTICE,"RDB '%s': %s",
-                    (char*)auxkey->ptr,
-                    (char*)auxval->ptr);
-            } else if (!strcasecmp(auxkey->ptr,"repl-stream-db")) {
-                if (rsi) rsi->repl_stream_db = atoi(auxval->ptr);
-            } else if (!strcasecmp(auxkey->ptr,"repl-id")) {
-                if (rsi && sdslen(auxval->ptr) == CONFIG_RUN_ID_SIZE) {
-                    memcpy(rsi->repl_id,auxval->ptr,CONFIG_RUN_ID_SIZE+1);
+                    (char*)ptrFromObj(auxkey),
+                    (char*)ptrFromObj(auxval));
+            } else if (!strcasecmp(ptrFromObj(auxkey),"repl-stream-db")) {
+                if (rsi) rsi->repl_stream_db = atoi(ptrFromObj(auxval));
+            } else if (!strcasecmp(ptrFromObj(auxkey),"repl-id")) {
+                if (rsi && sdslen(ptrFromObj(auxval)) == CONFIG_RUN_ID_SIZE) {
+                    memcpy(rsi->repl_id,ptrFromObj(auxval),CONFIG_RUN_ID_SIZE+1);
                     rsi->repl_id_is_set = 1;
                 }
-            } else if (!strcasecmp(auxkey->ptr,"repl-offset")) {
-                if (rsi) rsi->repl_offset = strtoll(auxval->ptr,NULL,10);
-            } else if (!strcasecmp(auxkey->ptr,"lua")) {
+            } else if (!strcasecmp(ptrFromObj(auxkey),"repl-offset")) {
+                if (rsi) rsi->repl_offset = strtoll(ptrFromObj(auxval),NULL,10);
+            } else if (!strcasecmp(ptrFromObj(auxkey),"lua")) {
                 /* Load the script back in memory. */
                 if (luaCreateFunction(NULL,server.lua,auxval) == NULL) {
                     rdbExitReportCorruptRDB(
                         "Can't load Lua script from RDB file! "
-                        "BODY: %s", auxval->ptr);
+                        "BODY: %s", ptrFromObj(auxval));
                 }
             } else {
                 /* We ignore fields we don't understand, as by AUX field
                  * contract. */
                 serverLog(LL_DEBUG,"Unrecognized RDB AUX field: '%s'",
-                    (char*)auxkey->ptr);
+                    (char*)ptrFromObj(auxkey));
             }
 
             decrRefCount(auxkey);
@@ -2438,7 +2438,7 @@ void bgsaveCommand(client *c) {
     /* The SCHEDULE option changes the behavior of BGSAVE when an AOF rewrite
      * is in progress. Instead of returning an error a BGSAVE gets scheduled. */
     if (c->argc > 1) {
-        if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"schedule")) {
+        if (c->argc == 2 && !strcasecmp(ptrFromObj(c->argv[1]),"schedule")) {
             schedule = 1;
         } else {
             addReply(c,shared.syntaxerr);

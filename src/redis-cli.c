@@ -573,14 +573,14 @@ static void cliOutputCommandHelp(struct commandHelp *help, int group) {
 static void cliOutputGenericHelp(void) {
     sds version = cliVersion();
     printf(
-        "redis-cli %s\n"
+        "keydb-cli %s\n"
         "To get help about Redis commands type:\n"
         "      \"help @<group>\" to get a list of commands in <group>\n"
         "      \"help <command>\" for help on <command>\n"
         "      \"help <tab>\" to get a list of possible help topics\n"
         "      \"quit\" to exit\n"
         "\n"
-        "To set redis-cli preferences:\n"
+        "To set keydb-cli preferences:\n"
         "      \":set hints\" enable online hints\n"
         "      \":set nohints\" disable online hints\n"
         "Set your preferences in ~/.redisclirc\n",
@@ -1426,7 +1426,7 @@ static int parseOptions(int argc, char **argv) {
                 CLUSTER_MANAGER_CMD_FLAG_CHECK_OWNERS;
         } else if (!strcmp(argv[i],"-v") || !strcmp(argv[i], "--version")) {
             sds version = cliVersion();
-            printf("redis-cli %s\n", version);
+            printf("keydb-cli %s\n", version);
             sdsfree(version);
             exit(0);
         } else if (CLUSTER_MANAGER_MODE() && argv[i][0] != '-') {
@@ -1494,9 +1494,9 @@ static sds readArgFromStdin(void) {
 static void usage(void) {
     sds version = cliVersion();
     fprintf(stderr,
-"redis-cli %s\n"
+"keydb-cli %s\n"
 "\n"
-"Usage: redis-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
+"Usage: keydb-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
 "  -h <hostname>      Server hostname (default: 127.0.0.1).\n"
 "  -p <port>          Server port (default: 6379).\n"
 "  -s <socket>        Server socket (overrides hostname and port).\n"
@@ -1562,16 +1562,16 @@ static void usage(void) {
 "  Use --cluster help to list all available cluster manager commands.\n"
 "\n"
 "Examples:\n"
-"  cat /etc/passwd | redis-cli -x set mypasswd\n"
-"  redis-cli get mypasswd\n"
-"  redis-cli -r 100 lpush mylist x\n"
-"  redis-cli -r 100 -i 1 info | grep used_memory_human:\n"
-"  redis-cli --eval myscript.lua key1 key2 , arg1 arg2 arg3\n"
-"  redis-cli --scan --pattern '*:12345*'\n"
+"  cat /etc/passwd | keydb-cli -x set mypasswd\n"
+"  keydb-cli get mypasswd\n"
+"  keydb-cli -r 100 lpush mylist x\n"
+"  keydb-cli -r 100 -i 1 info | grep used_memory_human:\n"
+"  keydb-cli --eval myscript.lua key1 key2 , arg1 arg2 arg3\n"
+"  keydb-cli --scan --pattern '*:12345*'\n"
 "\n"
 "  (Note: when using --eval the comma separates KEYS[] from ARGV[] items)\n"
 "\n"
-"When no command is given, redis-cli starts in interactive mode.\n"
+"When no command is given, keydb-cli starts in interactive mode.\n"
 "Type \"help\" in interactive mode for information on available commands\n"
 "and settings.\n"
 "\n");
@@ -1656,12 +1656,12 @@ void cliSetPreferences(char **argv, int argc, int interactive) {
         if (!strcasecmp(argv[1],"hints")) pref.hints = 1;
         else if (!strcasecmp(argv[1],"nohints")) pref.hints = 0;
         else {
-            printf("%sunknown redis-cli preference '%s'\n",
+            printf("%sunknown keydb-cli preference '%s'\n",
                 interactive ? "" : ".redisclirc: ",
                 argv[1]);
         }
     } else {
-        printf("%sunknown redis-cli internal command '%s'\n",
+        printf("%sunknown keydb-cli internal command '%s'\n",
             interactive ? "" : ".redisclirc: ",
             argv[0]);
     }
@@ -1733,7 +1733,7 @@ static void repl(void) {
                 repeat = strtol(argv[0], &endptr, 10);
                 if (argc > 1 && *endptr == '\0') {
                     if (errno == ERANGE || errno == EINVAL || repeat <= 0) {
-                        fputs("Invalid redis-cli repeat command option value.\n", stdout);
+                        fputs("Invalid keydb-cli repeat command option value.\n", stdout);
                         sdsfreesplitres(argv, argc);
                         linenoiseFree(line);
                         continue;
@@ -4398,7 +4398,7 @@ static int clusterManagerFixOpenSlot(int slot) {
         } else {
 unhandled_case:
             success = 0;
-            clusterManagerLogErr("[ERR] Sorry, redis-cli can't fix this slot "
+            clusterManagerLogErr("[ERR] Sorry, keydb-cli can't fix this slot "
                                  "yet (work in progress). Slot is set as "
                                  "migrating in %s, as importing in %s, "
                                  "owner is %s:%d\n", migrating_str,
@@ -4784,7 +4784,7 @@ static void clusterManagerPrintNotClusterNodeError(clusterManagerNode *node,
     clusterManagerLogErr("[ERR] Node %s:%d %s\n", node->ip, node->port, msg);
 }
 
-/* Execute redis-cli in Cluster Manager mode */
+/* Execute keydb-cli in Cluster Manager mode */
 static void clusterManagerMode(clusterManagerCommandProc *proc) {
     int argc = config.cluster_manager_command.argc;
     char **argv = config.cluster_manager_command.argv;

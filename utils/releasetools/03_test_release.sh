@@ -6,7 +6,7 @@ then
 fi
 
 TAG=$1
-TARNAME="redis-${TAG}.tar.gz"
+TARNAME="keydb-${TAG}.tar.gz"
 DOWNLOADURL="http://download.redis.io/releases/${TARNAME}"
 
 ssh antirez@metal "export TERM=xterm;
@@ -14,10 +14,10 @@ ssh antirez@metal "export TERM=xterm;
                    rm -rf test_release_tmp_dir;
                    cd test_release_tmp_dir;
                    rm -f $TARNAME;
-                   rm -rf redis-${TAG};
+                   rm -rf keydb-${TAG};
                    wget $DOWNLOADURL;
                    tar xvzf $TARNAME;
-                   cd redis-${TAG};
+                   cd keydb-${TAG};
                    make;
                    ./runtest;
                    ./runtest-sentinel;

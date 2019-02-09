@@ -759,7 +759,7 @@ void ACLInit(void) {
  *  ENONENT: if the specified user does not exist at all.
  */
 int ACLCheckUserCredentials(robj *username, robj *password) {
-    user *u = ACLGetUserByName(username->ptr,sdslen(username->ptr));
+    user *u = ACLGetUserByName(ptrFromObj(username),sdslen(ptrFromObj(username)));
     if (u == NULL) {
         errno = ENOENT;
         return C_ERR;
@@ -781,7 +781,7 @@ int ACLCheckUserCredentials(robj *username, robj *password) {
     listRewind(u->passwords,&li);
     while((ln = listNext(&li))) {
         sds thispass = listNodeValue(ln);
-        if (!time_independent_strcmp(password->ptr, thispass))
+        if (!time_independent_strcmp(ptrFromObj(password), thispass))
             return C_OK;
     }
 
@@ -868,7 +868,7 @@ int ACLCheckCommandPerm(client *c) {
             while (1) {
                 if (u->allowed_subcommands[id][subid] == NULL)
                     return ACL_DENIED_CMD;
-                if (!strcasecmp(c->argv[1]->ptr,
+                if (!strcasecmp(ptrFromObj(c->argv[1]),
                                 u->allowed_subcommands[id][subid]))
                     break; /* Subcommand match found. Stop here. */
                 subid++;
@@ -894,8 +894,8 @@ int ACLCheckCommandPerm(client *c) {
                 sds pattern = listNodeValue(ln);
                 size_t plen = sdslen(pattern);
                 int idx = keyidx[j];
-                if (stringmatchlen(pattern,plen,c->argv[idx]->ptr,
-                                   sdslen(c->argv[idx]->ptr),0))
+                if (stringmatchlen(pattern,plen,ptrFromObj(c->argv[idx]),
+                                   sdslen(ptrFromObj(c->argv[idx])),0))
                 {
                     match = 1;
                     break;
@@ -1021,18 +1021,18 @@ int ACLLoadConfiguredUsers(void) {
  * ACL GETUSER <username>
  */
 void aclCommand(client *c) {
-    char *sub = c->argv[1]->ptr;
+    char *sub = ptrFromObj(c->argv[1]);
     if (!strcasecmp(sub,"setuser") && c->argc >= 3) {
-        sds username = c->argv[2]->ptr;
+        sds username = ptrFromObj(c->argv[2]);
         user *u = ACLGetUserByName(username,sdslen(username));
         if (!u) u = ACLCreateUser(username,sdslen(username));
         serverAssert(u != NULL);
         for (int j = 3; j < c->argc; j++) {
-            if (ACLSetUser(u,c->argv[j]->ptr,sdslen(c->argv[j]->ptr)) != C_OK) {
+            if (ACLSetUser(u,ptrFromObj(c->argv[j]),sdslen(ptrFromObj(c->argv[j]))) != C_OK) {
                 char *errmsg = ACLSetUserStringError();
                 addReplyErrorFormat(c,
                     "Error in ACL SETUSER modifier '%s': %s",
-                    (char*)c->argv[j]->ptr, errmsg);
+                    (char*)ptrFromObj(c->argv[j]), errmsg);
                 return;
             }
         }
@@ -1040,7 +1040,7 @@ void aclCommand(client *c) {
     } else if (!strcasecmp(sub,"deluser") && c->argc >= 3) {
         int deleted = 0;
         for (int j = 2; j < c->argc; j++) {
-            sds username = c->argv[j]->ptr;
+            sds username = ptrFromObj(c->argv[j]);
             if (!strcmp(username,"default")) {
                 addReplyError(c,"The 'default' user cannot be removed");
                 return;
@@ -1076,7 +1076,7 @@ void aclCommand(client *c) {
         }
         addReplyLongLong(c,deleted);
     } else if (!strcasecmp(sub,"getuser") && c->argc == 3) {
-        user *u = ACLGetUserByName(c->argv[2]->ptr,sdslen(c->argv[2]->ptr));
+        user *u = ACLGetUserByName(ptrFromObj(c->argv[2]),sdslen(ptrFromObj(c->argv[2])));
         if (u == NULL) {
             addReplyNull(c);
             return;

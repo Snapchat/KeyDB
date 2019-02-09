@@ -392,7 +392,7 @@ int moduleCreateEmptyKey(RedisModuleKey *key, int type) {
     switch(type) {
     case REDISMODULE_KEYTYPE_LIST:
         obj = createQuicklistObject();
-        quicklistSetOptions(obj->ptr, server.list_max_ziplist_size,
+        quicklistSetOptions(obj->m_ptr, server.list_max_ziplist_size,
                             server.list_compress_depth);
         break;
     case REDISMODULE_KEYTYPE_ZSET:
@@ -938,8 +938,8 @@ const char *RM_StringPtrLen(const RedisModuleString *str, size_t *len) {
         if (len) *len = strlen(errmsg);
         return errmsg;
     }
-    if (len) *len = sdslen(str->ptr);
-    return str->ptr;
+    if (len) *len = sdslen(ptrFromObj(str));
+    return ptrFromObj(str);
 }
 
 /* --------------------------------------------------------------------------
@@ -951,7 +951,7 @@ const char *RM_StringPtrLen(const RedisModuleString *str, size_t *len) {
  * as a valid, strict long long (no spaces before/after), REDISMODULE_ERR
  * is returned. */
 int RM_StringToLongLong(const RedisModuleString *str, long long *ll) {
-    return string2ll(str->ptr,sdslen(str->ptr),ll) ? REDISMODULE_OK :
+    return string2ll(ptrFromObj(str),sdslen(ptrFromObj(str)),ll) ? REDISMODULE_OK :
                                                      REDISMODULE_ERR;
 }
 
@@ -983,11 +983,11 @@ RedisModuleString *moduleAssertUnsharedString(RedisModuleString *str) {
     if (str->encoding == OBJ_ENCODING_EMBSTR) {
         /* Note: here we "leak" the additional allocation that was
          * used in order to store the embedded string in the object. */
-        str->ptr = sdsnewlen(str->ptr,sdslen(str->ptr));
+        str->m_ptr = sdsnewlen(ptrFromObj(str),sdslen(ptrFromObj(str)));
         str->encoding = OBJ_ENCODING_RAW;
     } else if (str->encoding == OBJ_ENCODING_INT) {
         /* Convert the string from integer to raw encoding. */
-        str->ptr = sdsfromlonglong((long)str->ptr);
+        str->m_ptr = sdsfromlonglong((long)str->m_ptr);
         str->encoding = OBJ_ENCODING_RAW;
     }
     return str;
@@ -1000,7 +1000,7 @@ int RM_StringAppendBuffer(RedisModuleCtx *ctx, RedisModuleString *str, const cha
     UNUSED(ctx);
     str = moduleAssertUnsharedString(str);
     if (str == NULL) return REDISMODULE_ERR;
-    str->ptr = sdscatlen(str->ptr,buf,len);
+    str->m_ptr = sdscatlen(str->m_ptr,buf,len);
     return REDISMODULE_OK;
 }
 
@@ -1024,7 +1024,7 @@ int RM_StringAppendBuffer(RedisModuleCtx *ctx, RedisModuleString *str, const cha
 int RM_WrongArity(RedisModuleCtx *ctx) {
     addReplyErrorFormat(ctx->client,
         "wrong number of arguments for '%s' command",
-        (char*)ctx->client->argv[0]->ptr);
+        (char*)ptrFromObj(ctx->client->argv[0]));
     return REDISMODULE_OK;
 }
 
@@ -1650,8 +1650,8 @@ char *RM_StringDMA(RedisModuleKey *key, size_t *len, int mode) {
     if ((mode & REDISMODULE_WRITE) || key->value->encoding != OBJ_ENCODING_RAW)
         key->value = dbUnshareStringValue(key->db, key->key, key->value);
 
-    *len = sdslen(key->value->ptr);
-    return key->value->ptr;
+    *len = sdslen(ptrFromObj(key->value));
+    return ptrFromObj(key->value);
 }
 
 /* If the string is open for writing and is of string type, resize it, padding
@@ -1684,14 +1684,14 @@ int RM_StringTruncate(RedisModuleKey *key, size_t newlen) {
     } else {
         /* Unshare and resize. */
         key->value = dbUnshareStringValue(key->db, key->key, key->value);
-        size_t curlen = sdslen(key->value->ptr);
+        size_t curlen = sdslen(ptrFromObj(key->value));
         if (newlen > curlen) {
-            key->value->ptr = sdsgrowzero(key->value->ptr,newlen);
+            key->value->m_ptr = sdsgrowzero(ptrFromObj(key->value),newlen);
         } else if (newlen < curlen) {
-            sdsrange(key->value->ptr,0,newlen-1);
+            sdsrange(ptrFromObj(key->value),0,newlen-1);
             /* If the string is too wasteful, reallocate it. */
-            if (sdslen(key->value->ptr) < sdsavail(key->value->ptr))
-                key->value->ptr = sdsRemoveFreeSpace(key->value->ptr);
+            if (sdslen(ptrFromObj(key->value)) < sdsavail(ptrFromObj(key->value)))
+                key->value->m_ptr = sdsRemoveFreeSpace(ptrFromObj(key->value));
         }
     }
     return REDISMODULE_OK;
@@ -1790,7 +1790,7 @@ int RM_ZsetAdd(RedisModuleKey *key, double score, RedisModuleString *ele, int *f
     if (key->value && key->value->type != OBJ_ZSET) return REDISMODULE_ERR;
     if (key->value == NULL) moduleCreateEmptyKey(key,REDISMODULE_KEYTYPE_ZSET);
     if (flagsptr) flags = RM_ZsetAddFlagsToCoreFlags(*flagsptr);
-    if (zsetAdd(key->value,score,ele->ptr,&flags,NULL) == 0) {
+    if (zsetAdd(key->value,score,ptrFromObj(ele),&flags,NULL) == 0) {
         if (flagsptr) *flagsptr = 0;
         return REDISMODULE_ERR;
     }
@@ -1818,7 +1818,7 @@ int RM_ZsetIncrby(RedisModuleKey *key, double score, RedisModuleString *ele, int
     if (key->value == NULL) moduleCreateEmptyKey(key,REDISMODULE_KEYTYPE_ZSET);
     if (flagsptr) flags = RM_ZsetAddFlagsToCoreFlags(*flagsptr);
     flags |= ZADD_INCR;
-    if (zsetAdd(key->value,score,ele->ptr,&flags,newscore) == 0) {
+    if (zsetAdd(key->value,score,ptrFromObj(ele),&flags,newscore) == 0) {
         if (flagsptr) *flagsptr = 0;
         return REDISMODULE_ERR;
     }
@@ -1852,7 +1852,7 @@ int RM_ZsetIncrby(RedisModuleKey *key, double score, RedisModuleString *ele, int
 int RM_ZsetRem(RedisModuleKey *key, RedisModuleString *ele, int *deleted) {
     if (!(key->mode & REDISMODULE_WRITE)) return REDISMODULE_ERR;
     if (key->value && key->value->type != OBJ_ZSET) return REDISMODULE_ERR;
-    if (key->value != NULL && zsetDel(key->value,ele->ptr)) {
+    if (key->value != NULL && zsetDel(key->value,ptrFromObj(ele))) {
         if (deleted) *deleted = 1;
     } else {
         if (deleted) *deleted = 0;
@@ -1871,7 +1871,7 @@ int RM_ZsetRem(RedisModuleKey *key, RedisModuleString *ele, int *deleted) {
 int RM_ZsetScore(RedisModuleKey *key, RedisModuleString *ele, double *score) {
     if (key->value == NULL) return REDISMODULE_ERR;
     if (key->value->type != OBJ_ZSET) return REDISMODULE_ERR;
-    if (zsetScore(key->value,ele->ptr,score) == C_ERR) return REDISMODULE_ERR;
+    if (zsetScore(key->value,ptrFromObj(ele),score) == C_ERR) return REDISMODULE_ERR;
     return REDISMODULE_OK;
 }
 
@@ -1923,10 +1923,10 @@ int zsetInitScoreRange(RedisModuleKey *key, double min, double max, int minex, i
     zrs->maxex = maxex;
 
     if (key->value->encoding == OBJ_ENCODING_ZIPLIST) {
-        key->zcurrent = first ? zzlFirstInRange(key->value->ptr,zrs) :
-                                zzlLastInRange(key->value->ptr,zrs);
+        key->zcurrent = first ? zzlFirstInRange(ptrFromObj(key->value),zrs) :
+                                zzlLastInRange(ptrFromObj(key->value),zrs);
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = key->value->ptr;
+        zset *zs = ptrFromObj(key->value);
         zskiplist *zsl = zs->zsl;
         key->zcurrent = first ? zslFirstInRange(zsl,zrs) :
                                 zslLastInRange(zsl,zrs);
@@ -1987,10 +1987,10 @@ int zsetInitLexRange(RedisModuleKey *key, RedisModuleString *min, RedisModuleStr
     key->ztype = REDISMODULE_ZSET_RANGE_LEX;
 
     if (key->value->encoding == OBJ_ENCODING_ZIPLIST) {
-        key->zcurrent = first ? zzlFirstInLexRange(key->value->ptr,zlrs) :
-                                zzlLastInLexRange(key->value->ptr,zlrs);
+        key->zcurrent = first ? zzlFirstInLexRange(ptrFromObj(key->value),zlrs) :
+                                zzlLastInLexRange(ptrFromObj(key->value),zlrs);
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = key->value->ptr;
+        zset *zs = ptrFromObj(key->value);
         zskiplist *zsl = zs->zsl;
         key->zcurrent = first ? zslFirstInLexRange(zsl,zlrs) :
                                 zslLastInLexRange(zsl,zlrs);
@@ -2036,7 +2036,7 @@ RedisModuleString *RM_ZsetRangeCurrentElement(RedisModuleKey *key, double *score
         eptr = key->zcurrent;
         sds ele = ziplistGetObject(eptr);
         if (score) {
-            sptr = ziplistNext(key->value->ptr,eptr);
+            sptr = ziplistNext(ptrFromObj(key->value),eptr);
             *score = zzlGetScore(sptr);
         }
         str = createObject(OBJ_STRING,ele);
@@ -2058,7 +2058,7 @@ int RM_ZsetRangeNext(RedisModuleKey *key) {
     if (!key->ztype || !key->zcurrent) return 0; /* No active iterator. */
 
     if (key->value->encoding == OBJ_ENCODING_ZIPLIST) {
-        unsigned char *zl = key->value->ptr;
+        unsigned char *zl = ptrFromObj(key->value);
         unsigned char *eptr = key->zcurrent;
         unsigned char *next;
         next = ziplistNext(zl,eptr); /* Skip element. */
@@ -2121,7 +2121,7 @@ int RM_ZsetRangePrev(RedisModuleKey *key) {
     if (!key->ztype || !key->zcurrent) return 0; /* No active iterator. */
 
     if (key->value->encoding == OBJ_ENCODING_ZIPLIST) {
-        unsigned char *zl = key->value->ptr;
+        unsigned char *zl = ptrFromObj(key->value);
         unsigned char *eptr = key->zcurrent;
         unsigned char *prev;
         prev = ziplistPrev(zl,eptr); /* Go back to previous score. */
@@ -2256,7 +2256,7 @@ int RM_HashSet(RedisModuleKey *key, int flags, ...) {
 
         /* Handle XX and NX */
         if (flags & (REDISMODULE_HASH_XX|REDISMODULE_HASH_NX)) {
-            int exists = hashTypeExists(key->value, field->ptr);
+            int exists = hashTypeExists(key->value, ptrFromObj(field));
             if (((flags & REDISMODULE_HASH_XX) && !exists) ||
                 ((flags & REDISMODULE_HASH_NX) && exists))
             {
@@ -2267,7 +2267,7 @@ int RM_HashSet(RedisModuleKey *key, int flags, ...) {
 
         /* Handle deletion if value is REDISMODULE_HASH_DELETE. */
         if (value == REDISMODULE_HASH_DELETE) {
-            updated += hashTypeDelete(key->value, field->ptr);
+            updated += hashTypeDelete(key->value, ptrFromObj(field));
             if (flags & REDISMODULE_HASH_CFIELDS) decrRefCount(field);
             continue;
         }
@@ -2281,12 +2281,12 @@ int RM_HashSet(RedisModuleKey *key, int flags, ...) {
 
         robj *argv[2] = {field,value};
         hashTypeTryConversion(key->value,argv,0,1);
-        updated += hashTypeSet(key->value, field->ptr, value->ptr, low_flags);
+        updated += hashTypeSet(key->value, ptrFromObj(field), ptrFromObj(value), low_flags);
 
         /* If CFIELDS is active, SDS string ownership is now of hashTypeSet(),
          * however we still have to release the 'field' object shell. */
         if (flags & REDISMODULE_HASH_CFIELDS) {
-           field->ptr = NULL; /* Prevent the SDS string from being freed. */
+           field->m_ptr = NULL; /* Prevent the SDS string from being freed. */
            decrRefCount(field);
         }
     }
@@ -2358,13 +2358,13 @@ int RM_HashGet(RedisModuleKey *key, int flags, ...) {
         if (flags & REDISMODULE_HASH_EXISTS) {
             existsptr = va_arg(ap,int*);
             if (key->value)
-                *existsptr = hashTypeExists(key->value,field->ptr);
+                *existsptr = hashTypeExists(key->value,ptrFromObj(field));
             else
                 *existsptr = 0;
         } else {
             valueptr = va_arg(ap,RedisModuleString**);
             if (key->value) {
-                *valueptr = hashTypeGetValueObject(key->value,field->ptr);
+                *valueptr = hashTypeGetValueObject(key->value,ptrFromObj(field));
                 if (*valueptr) {
                     robj *decoded = getDecodedObject(*valueptr);
                     decrRefCount(*valueptr);
@@ -3035,7 +3035,7 @@ moduleType *RM_ModuleTypeGetType(RedisModuleKey *key) {
     if (key == NULL ||
         key->value == NULL ||
         RM_KeyType(key) != REDISMODULE_KEYTYPE_MODULE) return NULL;
-    moduleValue *mv = key->value->ptr;
+    moduleValue *mv = ptrFromObj(key->value);
     return mv->type;
 }
 
@@ -3049,7 +3049,7 @@ void *RM_ModuleTypeGetValue(RedisModuleKey *key) {
     if (key == NULL ||
         key->value == NULL ||
         RM_KeyType(key) != REDISMODULE_KEYTYPE_MODULE) return NULL;
-    moduleValue *mv = key->value->ptr;
+    moduleValue *mv = ptrFromObj(key->value);
     return mv->value;
 }
 
@@ -4407,12 +4407,12 @@ int RM_DictReplaceC(RedisModuleDict *d, void *key, size_t keylen, void *ptr) {
 
 /* Like RedisModule_DictSetC() but takes the key as a RedisModuleString. */
 int RM_DictSet(RedisModuleDict *d, RedisModuleString *key, void *ptr) {
-    return RM_DictSetC(d,key->ptr,sdslen(key->ptr),ptr);
+    return RM_DictSetC(d,ptrFromObj(key),sdslen(ptrFromObj(key)),ptr);
 }
 
 /* Like RedisModule_DictReplaceC() but takes the key as a RedisModuleString. */
 int RM_DictReplace(RedisModuleDict *d, RedisModuleString *key, void *ptr) {
-    return RM_DictReplaceC(d,key->ptr,sdslen(key->ptr),ptr);
+    return RM_DictReplaceC(d,ptrFromObj(key),sdslen(ptrFromObj(key)),ptr);
 }
 
 /* Return the value stored at the specified key. The function returns NULL
@@ -4428,7 +4428,7 @@ void *RM_DictGetC(RedisModuleDict *d, void *key, size_t keylen, int *nokey) {
 
 /* Like RedisModule_DictGetC() but takes the key as a RedisModuleString. */
 void *RM_DictGet(RedisModuleDict *d, RedisModuleString *key, int *nokey) {
-    return RM_DictGetC(d,key->ptr,sdslen(key->ptr),nokey);
+    return RM_DictGetC(d,ptrFromObj(key),sdslen(ptrFromObj(key)),nokey);
 }
 
 /* Remove the specified key from the dictionary, returning REDISMODULE_OK if
@@ -4445,7 +4445,7 @@ int RM_DictDelC(RedisModuleDict *d, void *key, size_t keylen, void *oldval) {
 
 /* Like RedisModule_DictDelC() but gets the key as a RedisModuleString. */
 int RM_DictDel(RedisModuleDict *d, RedisModuleString *key, void *oldval) {
-    return RM_DictDelC(d,key->ptr,sdslen(key->ptr),oldval);
+    return RM_DictDelC(d,ptrFromObj(key),sdslen(ptrFromObj(key)),oldval);
 }
 
 /* Return an interator, setup in order to start iterating from the specified
@@ -4479,7 +4479,7 @@ RedisModuleDictIter *RM_DictIteratorStartC(RedisModuleDict *d, const char *op, v
 /* Exactly like RedisModule_DictIteratorStartC, but the key is passed as a
  * RedisModuleString. */
 RedisModuleDictIter *RM_DictIteratorStart(RedisModuleDict *d, const char *op, RedisModuleString *key) {
-    return RM_DictIteratorStartC(d,op,key->ptr,sdslen(key->ptr));
+    return RM_DictIteratorStartC(d,op,ptrFromObj(key),sdslen(ptrFromObj(key)));
 }
 
 /* Release the iterator created with RedisModule_DictIteratorStart(). This call
@@ -4503,7 +4503,7 @@ int RM_DictIteratorReseekC(RedisModuleDictIter *di, const char *op, void *key, s
 /* Like RedisModule_DictIteratorReseekC() but takes the key as as a
  * RedisModuleString. */
 int RM_DictIteratorReseek(RedisModuleDictIter *di, const char *op, RedisModuleString *key) {
-    return RM_DictIteratorReseekC(di,op,key->ptr,sdslen(key->ptr));
+    return RM_DictIteratorReseekC(di,op,ptrFromObj(key),sdslen(ptrFromObj(key)));
 }
 
 /* Return the current item of the dictionary iterator 'di' and steps to the
@@ -4594,7 +4594,7 @@ int RM_DictCompareC(RedisModuleDictIter *di, const char *op, void *key, size_t k
  * iterator key as a RedisModuleString. */
 int RM_DictCompare(RedisModuleDictIter *di, const char *op, RedisModuleString *key) {
     if (raxEOF(&di->ri)) return REDISMODULE_ERR;
-    int res = raxCompare(&di->ri,op,key->ptr,sdslen(key->ptr));
+    int res = raxCompare(&di->ri,op,ptrFromObj(key),sdslen(ptrFromObj(key)));
     return res ? REDISMODULE_OK : REDISMODULE_ERR;
 }
 
@@ -4844,7 +4844,7 @@ void addReplyLoadedModules(client *c) {
  *
  * MODULE LOAD <path> [args...] */
 void moduleCommand(client *c) {
-    char *subcmd = c->argv[1]->ptr;
+    char *subcmd = ptrFromObj(c->argv[1]);
     if (c->argc == 2 && !strcasecmp(subcmd,"help")) {
         const char *help[] = {
 "LIST -- Return a list of loaded modules.",
@@ -4863,13 +4863,13 @@ NULL
             argv = &c->argv[3];
         }
 
-        if (moduleLoad(c->argv[2]->ptr,(void **)argv,argc) == C_OK)
+        if (moduleLoad(ptrFromObj(c->argv[2]),(void **)argv,argc) == C_OK)
             addReply(c,shared.ok);
         else
             addReplyError(c,
                 "Error loading the extension. Please check the server logs.");
     } else if (!strcasecmp(subcmd,"unload") && c->argc == 3) {
-        if (moduleUnload(c->argv[2]->ptr) == C_OK)
+        if (moduleUnload(ptrFromObj(c->argv[2])) == C_OK)
             addReply(c,shared.ok);
         else {
             char *errmsg;

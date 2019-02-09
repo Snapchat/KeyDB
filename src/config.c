@@ -889,36 +889,36 @@ void loadServerConfig(char *filename, char *options) {
  *----------------------------------------------------------------------------*/
 
 #define config_set_bool_field(_name,_var) \
-    } else if (!strcasecmp(c->argv[2]->ptr,_name)) { \
-        int yn = yesnotoi(o->ptr); \
+    } else if (!strcasecmp(ptrFromObj(c->argv[2]),_name)) { \
+        int yn = yesnotoi(ptrFromObj(o)); \
         if (yn == -1) goto badfmt; \
         _var = yn;
 
 #define config_set_numerical_field(_name,_var,min,max) \
-    } else if (!strcasecmp(c->argv[2]->ptr,_name)) { \
+    } else if (!strcasecmp(ptrFromObj(c->argv[2]),_name)) { \
         if (getLongLongFromObject(o,&ll) == C_ERR) goto badfmt; \
         if (min != LLONG_MIN && ll < min) goto badfmt; \
         if (max != LLONG_MAX && ll > max) goto badfmt; \
         _var = ll;
 
 #define config_set_memory_field(_name,_var) \
-    } else if (!strcasecmp(c->argv[2]->ptr,_name)) { \
-        ll = memtoll(o->ptr,&err); \
+    } else if (!strcasecmp(ptrFromObj(c->argv[2]),_name)) { \
+        ll = memtoll(ptrFromObj(o),&err); \
         if (err || ll < 0) goto badfmt; \
         _var = ll;
 
 #define config_set_enum_field(_name,_var,_enumvar) \
-    } else if (!strcasecmp(c->argv[2]->ptr,_name)) { \
-        int enumval = configEnumGetValue(_enumvar,o->ptr); \
+    } else if (!strcasecmp(ptrFromObj(c->argv[2]),_name)) { \
+        int enumval = configEnumGetValue(_enumvar,ptrFromObj(o)); \
         if (enumval == INT_MIN) goto badfmt; \
         _var = enumval;
 
 #define config_set_special_field(_name) \
-    } else if (!strcasecmp(c->argv[2]->ptr,_name)) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[2]),_name)) {
 
 #define config_set_special_field_with_alias(_name1,_name2) \
-    } else if (!strcasecmp(c->argv[2]->ptr,_name1) || \
-               !strcasecmp(c->argv[2]->ptr,_name2)) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[2]),_name1) || \
+               !strcasecmp(ptrFromObj(c->argv[2]),_name2)) {
 
 #define config_set_else } else
 
@@ -934,26 +934,26 @@ void configSetCommand(client *c) {
 
     /* Special fields that can't be handled with general macros. */
     config_set_special_field("dbfilename") {
-        if (!pathIsBaseName(o->ptr)) {
+        if (!pathIsBaseName(ptrFromObj(o))) {
             addReplyError(c, "dbfilename can't be a path, just a filename");
             return;
         }
         zfree(server.rdb_filename);
-        server.rdb_filename = zstrdup(o->ptr);
+        server.rdb_filename = zstrdup(ptrFromObj(o));
     } config_set_special_field("requirepass") {
-        if (sdslen(o->ptr) > CONFIG_AUTHPASS_MAX_LEN) goto badfmt;
+        if (sdslen(ptrFromObj(o)) > CONFIG_AUTHPASS_MAX_LEN) goto badfmt;
         /* The old "requirepass" directive just translates to setting
          * a password to the default user. */
         ACLSetUser(DefaultUser,"resetpass",-1);
-        sds aclop = sdscatprintf(sdsempty(),">%s",(char*)o->ptr);
+        sds aclop = sdscatprintf(sdsempty(),">%s",(char*)ptrFromObj(o));
         ACLSetUser(DefaultUser,aclop,sdslen(aclop));
         sdsfree(aclop);
     } config_set_special_field("masterauth") {
         zfree(server.masterauth);
-        server.masterauth = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
+        server.masterauth = ((char*)ptrFromObj(o))[0] ? zstrdup(ptrFromObj(o)) : NULL;
     } config_set_special_field("cluster-announce-ip") {
         zfree(server.cluster_announce_ip);
-        server.cluster_announce_ip = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
+        server.cluster_announce_ip = ((char*)ptrFromObj(o))[0] ? zstrdup(ptrFromObj(o)) : NULL;
     } config_set_special_field("maxclients") {
         int orig_value = server.maxclients;
 
@@ -981,7 +981,7 @@ void configSetCommand(client *c) {
             }
         }
     } config_set_special_field("appendonly") {
-        int enable = yesnotoi(o->ptr);
+        int enable = yesnotoi(ptrFromObj(o));
 
         if (enable == -1) goto badfmt;
         if (enable == 0 && server.aof_state != AOF_OFF) {
@@ -995,7 +995,7 @@ void configSetCommand(client *c) {
         }
     } config_set_special_field("save") {
         int vlen, j;
-        sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
+        sds *v = sdssplitlen(ptrFromObj(o),sdslen(ptrFromObj(o))," ",1,&vlen);
 
         /* Perform sanity check before setting the new config:
          * - Even number of args
@@ -1028,13 +1028,13 @@ void configSetCommand(client *c) {
         }
         sdsfreesplitres(v,vlen);
     } config_set_special_field("dir") {
-        if (chdir((char*)o->ptr) == -1) {
+        if (chdir((char*)ptrFromObj(o)) == -1) {
             addReplyErrorFormat(c,"Changing directory: %s", strerror(errno));
             return;
         }
     } config_set_special_field("client-output-buffer-limit") {
         int vlen, j;
-        sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
+        sds *v = sdssplitlen(ptrFromObj(o),sdslen(ptrFromObj(o))," ",1,&vlen);
 
         /* We need a multiple of 4: <class> <hard> <soft> <soft_seconds> */
         if (vlen % 4) {
@@ -1079,7 +1079,7 @@ void configSetCommand(client *c) {
         }
         sdsfreesplitres(v,vlen);
     } config_set_special_field("notify-keyspace-events") {
-        int flags = keyspaceEventsStringToFlags(o->ptr);
+        int flags = keyspaceEventsStringToFlags(ptrFromObj(o));
 
         if (flags == -1) goto badfmt;
         server.notify_keyspace_events = flags;
@@ -1087,7 +1087,7 @@ void configSetCommand(client *c) {
                                           "replica-announce-ip")
     {
         zfree(server.slave_announce_ip);
-        server.slave_announce_ip = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
+        server.slave_announce_ip = ((char*)ptrFromObj(o))[0] ? zstrdup(ptrFromObj(o)) : NULL;
 
     /* Boolean fields.
      * config_set_bool_field(name,var). */
@@ -1298,7 +1298,7 @@ void configSetCommand(client *c) {
     /* Everyhing else is an error... */
     } config_set_else {
         addReplyErrorFormat(c,"Unsupported CONFIG parameter: %s",
-            (char*)c->argv[2]->ptr);
+            (char*)ptrFromObj(c->argv[2]));
         return;
     }
 
@@ -1308,8 +1308,8 @@ void configSetCommand(client *c) {
 
 badfmt: /* Bad format errors */
     addReplyErrorFormat(c,"Invalid argument '%s' for CONFIG SET '%s'",
-            (char*)o->ptr,
-            (char*)c->argv[2]->ptr);
+            (char*)ptrFromObj(o),
+            (char*)ptrFromObj(c->argv[2]));
 }
 
 /*-----------------------------------------------------------------------------
@@ -1352,7 +1352,7 @@ badfmt: /* Bad format errors */
 void configGetCommand(client *c) {
     robj *o = c->argv[2];
     void *replylen = addReplyDeferredLen(c);
-    char *pattern = o->ptr;
+    char *pattern = ptrFromObj(o);
     char buf[128];
     int matches = 0;
     serverAssertWithInfo(c,o,sdsEncodedObject(o));
@@ -2335,12 +2335,12 @@ int rewriteConfig(char *path) {
 
 void configCommand(client *c) {
     /* Only allow CONFIG GET while loading. */
-    if (server.loading && strcasecmp(c->argv[1]->ptr,"get")) {
+    if (server.loading && strcasecmp(ptrFromObj(c->argv[1]),"get")) {
         addReplyError(c,"Only CONFIG GET is allowed during loading");
         return;
     }
 
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+    if (c->argc == 2 && !strcasecmp(ptrFromObj(c->argv[1]),"help")) {
         const char *help[] = {
 "GET <pattern> -- Return parameters matching the glob-like <pattern> and their values.",
 "SET <parameter> <value> -- Set parameter to value.",
@@ -2349,15 +2349,15 @@ void configCommand(client *c) {
 NULL
         };
         addReplyHelp(c, help);
-    } else if (!strcasecmp(c->argv[1]->ptr,"set") && c->argc == 4) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"set") && c->argc == 4) {
         configSetCommand(c);
-    } else if (!strcasecmp(c->argv[1]->ptr,"get") && c->argc == 3) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"get") && c->argc == 3) {
         configGetCommand(c);
-    } else if (!strcasecmp(c->argv[1]->ptr,"resetstat") && c->argc == 2) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"resetstat") && c->argc == 2) {
         resetServerStats();
         resetCommandTableStats();
         addReply(c,shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr,"rewrite") && c->argc == 2) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"rewrite") && c->argc == 2) {
         if (server.configfile == NULL) {
             addReplyError(c,"The server is running without a config file");
             return;

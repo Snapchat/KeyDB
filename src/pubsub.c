@@ -304,10 +304,10 @@ int pubsubPublishMessage(robj *channel, robj *message) {
         while ((ln = listNext(&li)) != NULL) {
             pubsubPattern *pat = ln->value;
 
-            if (stringmatchlen((char*)pat->pattern->ptr,
-                                sdslen(pat->pattern->ptr),
-                                (char*)channel->ptr,
-                                sdslen(channel->ptr),0))
+            if (stringmatchlen((char*)ptrFromObj(pat->pattern),
+                                sdslen(ptrFromObj(pat->pattern)),
+                                (char*)ptrFromObj(channel),
+                                sdslen(ptrFromObj(channel)),0))
             {
                 addReplyPubsubPatMessage(pat->pclient,
                     pat->pattern,channel,message);
@@ -374,7 +374,7 @@ void publishCommand(client *c) {
 
 /* PUBSUB command for Pub/Sub introspection. */
 void pubsubCommand(client *c) {
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+    if (c->argc == 2 && !strcasecmp(ptrFromObj(c->argv[1]),"help")) {
         const char *help[] = {
 "CHANNELS [<pattern>] -- Return the currently active channels matching a pattern (default: all).",
 "NUMPAT -- Return number of subscriptions to patterns.",
@@ -382,11 +382,11 @@ void pubsubCommand(client *c) {
 NULL
         };
         addReplyHelp(c, help);
-    } else if (!strcasecmp(c->argv[1]->ptr,"channels") &&
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"channels") &&
         (c->argc == 2 || c->argc == 3))
     {
         /* PUBSUB CHANNELS [<pattern>] */
-        sds pat = (c->argc == 2) ? NULL : c->argv[2]->ptr;
+        sds pat = (c->argc == 2) ? NULL : ptrFromObj(c->argv[2]);
         dictIterator *di = dictGetIterator(server.pubsub_channels);
         dictEntry *de;
         long mblen = 0;
@@ -395,7 +395,7 @@ NULL
         replylen = addReplyDeferredLen(c);
         while((de = dictNext(di)) != NULL) {
             robj *cobj = dictGetKey(de);
-            sds channel = cobj->ptr;
+            sds channel = ptrFromObj(cobj);
 
             if (!pat || stringmatchlen(pat, sdslen(pat),
                                        channel, sdslen(channel),0))
@@ -406,7 +406,7 @@ NULL
         }
         dictReleaseIterator(di);
         setDeferredArrayLen(c,replylen,mblen);
-    } else if (!strcasecmp(c->argv[1]->ptr,"numsub") && c->argc >= 2) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"numsub") && c->argc >= 2) {
         /* PUBSUB NUMSUB [Channel_1 ... Channel_N] */
         int j;
 
@@ -417,7 +417,7 @@ NULL
             addReplyBulk(c,c->argv[j]);
             addReplyLongLong(c,l ? listLength(l) : 0);
         }
-    } else if (!strcasecmp(c->argv[1]->ptr,"numpat") && c->argc == 2) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"numpat") && c->argc == 2) {
         /* PUBSUB NUMPAT */
         addReplyLongLong(c,listLength(server.pubsub_patterns));
     } else {

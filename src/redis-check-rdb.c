@@ -113,7 +113,7 @@ void rdbCheckError(const char *fmt, ...) {
         rdb_check_doing_string[rdbstate.doing]);
     if (rdbstate.key)
         printf("[additional info] Reading key '%s'\n",
-            (char*)rdbstate.key->ptr);
+            (char*)ptrFromObj(rdbstate.key));
     if (rdbstate.key_type != -1)
         printf("[additional info] Reading type %d (%s)\n",
             rdbstate.key_type,
@@ -266,7 +266,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             if ((auxval = rdbLoadStringObject(&rdb)) == NULL) goto eoferr;
 
             rdbCheckInfo("AUX FIELD %s = '%s'",
-                (char*)auxkey->ptr, (char*)auxval->ptr);
+                (char*)ptrFromObj(auxkey), (char*)ptrFromObj(auxval));
             decrRefCount(auxkey);
             decrRefCount(auxval);
             continue; /* Read type again. */

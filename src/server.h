@@ -633,8 +633,15 @@ typedef struct redisObject {
                             * LFU data (least significant 8 bits frequency
                             * and most significant 16 bits access time). */
     int refcount;
-    void *ptr;
+    void *m_ptr;
 } robj;
+
+inline void *ptrFromObj(const robj *o)
+{
+    if (o->type == OBJ_STRING && o->encoding == OBJ_ENCODING_EMBSTR)
+        return ((char*)&((robj*)o)->m_ptr) + sizeof(struct sdshdr8);
+    return o->m_ptr;
+}
 
 /* Macro used to initialize a Redis object allocated on the stack.
  * Note that this macro is taken near the structure definition to make sure
@@ -644,7 +651,7 @@ typedef struct redisObject {
     _var.refcount = 1; \
     _var.type = OBJ_STRING; \
     _var.encoding = OBJ_ENCODING_RAW; \
-    _var.ptr = _ptr; \
+    _var.m_ptr = _ptr; \
 } while(0)
 
 struct evictionPoolEntry; /* Defined in evict.c */

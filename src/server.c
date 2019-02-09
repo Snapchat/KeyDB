@@ -1184,12 +1184,13 @@ int dictObjKeyCompare(void *privdata, const void *key1,
         const void *key2)
 {
     const robj *o1 = key1, *o2 = key2;
-    return dictSdsKeyCompare(privdata,o1->ptr,o2->ptr);
+    return dictSdsKeyCompare(privdata,ptrFromObj(o1),ptrFromObj(o2));
 }
 
 uint64_t dictObjHash(const void *key) {
     const robj *o = key;
-    return dictGenHashFunction(o->ptr, sdslen((sds)o->ptr));
+    void *ptr = ptrFromObj(o);
+    return dictGenHashFunction(ptr, sdslen((sds)ptr));
 }
 
 uint64_t dictSdsHash(const void *key) {
@@ -1208,11 +1209,11 @@ int dictEncObjKeyCompare(void *privdata, const void *key1,
 
     if (o1->encoding == OBJ_ENCODING_INT &&
         o2->encoding == OBJ_ENCODING_INT)
-            return o1->ptr == o2->ptr;
+            return ptrFromObj(o1) == ptrFromObj(o2);
 
     o1 = getDecodedObject(o1);
     o2 = getDecodedObject(o2);
-    cmp = dictSdsKeyCompare(privdata,o1->ptr,o2->ptr);
+    cmp = dictSdsKeyCompare(privdata,ptrFromObj(o1),ptrFromObj(o2));
     decrRefCount(o1);
     decrRefCount(o2);
     return cmp;
@@ -1222,19 +1223,19 @@ uint64_t dictEncObjHash(const void *key) {
     robj *o = (robj*) key;
 
     if (sdsEncodedObject(o)) {
-        return dictGenHashFunction(o->ptr, sdslen((sds)o->ptr));
+        return dictGenHashFunction(ptrFromObj(o), sdslen((sds)ptrFromObj(o)));
     } else {
         if (o->encoding == OBJ_ENCODING_INT) {
             char buf[32];
             int len;
 
-            len = ll2string(buf,32,(long)o->ptr);
+            len = ll2string(buf,32,(long)ptrFromObj(o));
             return dictGenHashFunction((unsigned char*)buf, len);
         } else {
             uint64_t hash;
 
             o = getDecodedObject(o);
-            hash = dictGenHashFunction(o->ptr, sdslen((sds)o->ptr));
+            hash = dictGenHashFunction(ptrFromObj(o), sdslen((sds)ptrFromObj(o)));
             decrRefCount(o);
             return hash;
         }
@@ -3273,7 +3274,7 @@ int processCommand(client *c) {
      * go through checking for replication and QUIT will cause trouble
      * when FORCE_REPLICATION is enabled and would be implemented in
      * a regular command proc. */
-    if (!strcasecmp(c->argv[0]->ptr,"quit")) {
+    if (!strcasecmp(ptrFromObj(c->argv[0]),"quit")) {
         addReply(c,shared.ok);
         c->flags |= CLIENT_CLOSE_AFTER_REPLY;
         return C_ERR;
@@ -3281,15 +3282,15 @@ int processCommand(client *c) {
 
     /* Now lookup the command and check ASAP about trivial error conditions
      * such as wrong arity, bad command name and so forth. */
-    c->cmd = c->lastcmd = lookupCommand(c->argv[0]->ptr);
+    c->cmd = c->lastcmd = lookupCommand(ptrFromObj(c->argv[0]));
     if (!c->cmd) {
         flagTransaction(c);
         sds args = sdsempty();
         int i;
         for (i=1; i < c->argc && sdslen(args) < 128; i++)
-            args = sdscatprintf(args, "`%.*s`, ", 128-(int)sdslen(args), (char*)c->argv[i]->ptr);
+            args = sdscatprintf(args, "`%.*s`, ", 128-(int)sdslen(args), (char*)ptrFromObj(c->argv[i]));
         addReplyErrorFormat(c,"unknown command `%s`, with args beginning with: %s",
-            (char*)c->argv[0]->ptr, args);
+            (char*)ptrFromObj(c->argv[0]), args);
         sdsfree(args);
         return C_OK;
     } else if ((c->cmd->arity > 0 && c->cmd->arity != c->argc) ||
@@ -3456,10 +3457,10 @@ int processCommand(client *c) {
           c->cmd->proc != replconfCommand &&
         !(c->cmd->proc == shutdownCommand &&
           c->argc == 2 &&
-          tolower(((char*)c->argv[1]->ptr)[0]) == 'n') &&
+          tolower(((char*)ptrFromObj(c->argv[1]))[0]) == 'n') &&
         !(c->cmd->proc == scriptCommand &&
           c->argc == 2 &&
-          tolower(((char*)c->argv[1]->ptr)[0]) == 'k'))
+          tolower(((char*)ptrFromObj(c->argv[1]))[0]) == 'k'))
     {
         flagTransaction(c);
         addReply(c, shared.slowscripterr);
@@ -3632,7 +3633,7 @@ void authCommand(client *c) {
 
     if (ACLCheckUserCredentials(username,password) == C_OK) {
         c->authenticated = 1;
-        c->puser = ACLGetUserByName(username->ptr,sdslen(username->ptr));
+        c->puser = ACLGetUserByName(ptrFromObj(username),sdslen(ptrFromObj(username)));
         addReply(c,shared.ok);
     } else {
         addReplyError(c,"-WRONGPASS invalid username-password pair");
@@ -3736,7 +3737,7 @@ void commandCommand(client *c) {
     dictIterator *di;
     dictEntry *de;
 
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+    if (c->argc == 2 && !strcasecmp(ptrFromObj(c->argv[1]),"help")) {
         const char *help[] = {
 "(no subcommand) -- Return details about all Redis commands.",
 "COUNT -- Return the total number of commands in this Redis server.",
@@ -3752,16 +3753,16 @@ NULL
             addReplyCommand(c, dictGetVal(de));
         }
         dictReleaseIterator(di);
-    } else if (!strcasecmp(c->argv[1]->ptr, "info")) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]), "info")) {
         int i;
         addReplyArrayLen(c, c->argc-2);
         for (i = 2; i < c->argc; i++) {
-            addReplyCommand(c, dictFetchValue(server.commands, c->argv[i]->ptr));
+            addReplyCommand(c, dictFetchValue(server.commands, ptrFromObj(c->argv[i])));
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "count") && c->argc == 2) {
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]), "count") && c->argc == 2) {
         addReplyLongLong(c, dictSize(server.commands));
-    } else if (!strcasecmp(c->argv[1]->ptr,"getkeys") && c->argc >= 3) {
-        struct redisCommand *cmd = lookupCommand(c->argv[2]->ptr);
+    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"getkeys") && c->argc >= 3) {
+        struct redisCommand *cmd = lookupCommand(ptrFromObj(c->argv[2]));
         int *keys, numkeys, j;
 
         if (!cmd) {
@@ -4379,7 +4380,7 @@ sds genRedisInfoString(char *section) {
 }
 
 void infoCommand(client *c) {
-    char *section = c->argc == 2 ? c->argv[1]->ptr : "default";
+    char *section = c->argc == 2 ? ptrFromObj(c->argv[1]) : "default";
 
     if (c->argc > 2) {
         addReply(c,shared.syntaxerr);

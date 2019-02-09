@@ -156,11 +156,11 @@ void feedReplicationBacklogWithObject(robj *o) {
     size_t len;
 
     if (o->encoding == OBJ_ENCODING_INT) {
-        len = ll2string(llstr,sizeof(llstr),(long)o->ptr);
+        len = ll2string(llstr,sizeof(llstr),(long)ptrFromObj(o));
         p = llstr;
     } else {
-        len = sdslen(o->ptr);
-        p = o->ptr;
+        len = sdslen(ptrFromObj(o));
+        p = ptrFromObj(o);
     }
     feedReplicationBacklog(p,len);
 }
@@ -320,10 +320,10 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
 
     for (j = 0; j < argc; j++) {
         if (argv[j]->encoding == OBJ_ENCODING_INT) {
-            cmdrepr = sdscatprintf(cmdrepr, "\"%ld\"", (long)argv[j]->ptr);
+            cmdrepr = sdscatprintf(cmdrepr, "\"%ld\"", (long)ptrFromObj(argv[j]));
         } else {
-            cmdrepr = sdscatrepr(cmdrepr,(char*)argv[j]->ptr,
-                        sdslen(argv[j]->ptr));
+            cmdrepr = sdscatrepr(cmdrepr,(char*)ptrFromObj(argv[j]),
+                        sdslen(ptrFromObj(argv[j])));
         }
         if (j != argc-1)
             cmdrepr = sdscatlen(cmdrepr," ",1);
@@ -446,7 +446,7 @@ int replicationSetupSlaveForFullResync(client *slave, long long offset) {
  * with the usual full resync. */
 int masterTryPartialResynchronization(client *c) {
     long long psync_offset, psync_len;
-    char *master_replid = c->argv[1]->ptr;
+    char *master_replid = ptrFromObj(c->argv[1]);
     char buf[128];
     int buflen;
 
@@ -656,12 +656,12 @@ void syncCommand(client *c) {
      *
      * So the slave knows the new replid and offset to try a PSYNC later
      * if the connection with the master is lost. */
-    if (!strcasecmp(c->argv[0]->ptr,"psync")) {
+    if (!strcasecmp(ptrFromObj(c->argv[0]),"psync")) {
         if (masterTryPartialResynchronization(c) == C_OK) {
             server.stat_sync_partial_ok++;
             return; /* No full resync needed, return. */
         } else {
-            char *master_replid = c->argv[1]->ptr;
+            char *master_replid = ptrFromObj(c->argv[1]);
 
             /* Increment stats for failed PSYNCs, but only if the
              * replid is not "?", as this is used by slaves to force a full
@@ -785,15 +785,15 @@ void replconfCommand(client *c) {
 
     /* Process every option-value pair. */
     for (j = 1; j < c->argc; j+=2) {
-        if (!strcasecmp(c->argv[j]->ptr,"listening-port")) {
+        if (!strcasecmp(ptrFromObj(c->argv[j]),"listening-port")) {
             long port;
 
             if ((getLongFromObjectOrReply(c,c->argv[j+1],
                     &port,NULL) != C_OK))
                 return;
             c->slave_listening_port = port;
-        } else if (!strcasecmp(c->argv[j]->ptr,"ip-address")) {
-            sds ip = c->argv[j+1]->ptr;
+        } else if (!strcasecmp(ptrFromObj(c->argv[j]),"ip-address")) {
+            sds ip = ptrFromObj(c->argv[j+1]);
             if (sdslen(ip) < sizeof(c->slave_ip)) {
                 memcpy(c->slave_ip,ip,sdslen(ip)+1);
             } else {
@@ -801,13 +801,13 @@ void replconfCommand(client *c) {
                     "replica instance is too long: %zd bytes", sdslen(ip));
                 return;
             }
-        } else if (!strcasecmp(c->argv[j]->ptr,"capa")) {
+        } else if (!strcasecmp(ptrFromObj(c->argv[j]),"capa")) {
             /* Ignore capabilities not understood by this master. */
-            if (!strcasecmp(c->argv[j+1]->ptr,"eof"))
+            if (!strcasecmp(ptrFromObj(c->argv[j+1]),"eof"))
                 c->slave_capa |= SLAVE_CAPA_EOF;
-            else if (!strcasecmp(c->argv[j+1]->ptr,"psync2"))
+            else if (!strcasecmp(ptrFromObj(c->argv[j+1]),"psync2"))
                 c->slave_capa |= SLAVE_CAPA_PSYNC2;
-        } else if (!strcasecmp(c->argv[j]->ptr,"ack")) {
+        } else if (!strcasecmp(ptrFromObj(c->argv[j]),"ack")) {
             /* REPLCONF ACK is used by slave to inform the master the amount
              * of replication stream that it processed so far. It is an
              * internal only command that normal clients should never use. */
@@ -826,14 +826,14 @@ void replconfCommand(client *c) {
                 putSlaveOnline(c);
             /* Note: this command does not reply anything! */
             return;
-        } else if (!strcasecmp(c->argv[j]->ptr,"getack")) {
+        } else if (!strcasecmp(ptrFromObj(c->argv[j]),"getack")) {
             /* REPLCONF GETACK is used in order to request an ACK ASAP
              * to the slave. */
             if (server.masterhost && server.master) replicationSendAck();
             return;
         } else {
             addReplyErrorFormat(c,"Unrecognized REPLCONF option: %s",
-                (char*)c->argv[j]->ptr);
+                (char*)ptrFromObj(c->argv[j]));
             return;
         }
     }
@@ -2020,8 +2020,8 @@ void replicaofCommand(client *c) {
 
     /* The special host/port combination "NO" "ONE" turns the instance
      * into a master. Otherwise the new master address is set. */
-    if (!strcasecmp(c->argv[1]->ptr,"no") &&
-        !strcasecmp(c->argv[2]->ptr,"one")) {
+    if (!strcasecmp(ptrFromObj(c->argv[1]),"no") &&
+        !strcasecmp(ptrFromObj(c->argv[2]),"one")) {
         if (server.masterhost) {
             replicationUnsetMaster();
             sds client = catClientInfoString(sdsempty(),c);
@@ -2036,7 +2036,7 @@ void replicaofCommand(client *c) {
             return;
 
         /* Check if we are already attached to the specified slave */
-        if (server.masterhost && !strcasecmp(server.masterhost,c->argv[1]->ptr)
+        if (server.masterhost && !strcasecmp(server.masterhost,ptrFromObj(c->argv[1]))
             && server.masterport == port) {
             serverLog(LL_NOTICE,"REPLICAOF would result into synchronization with the master we are already connected with. No operation performed.");
             addReplySds(c,sdsnew("+OK Already connected to specified master\r\n"));
@@ -2044,7 +2044,7 @@ void replicaofCommand(client *c) {
         }
         /* There was no previous master or the user specified a different one,
          * we can continue. */
-        replicationSetMaster(c->argv[1]->ptr, port);
+        replicationSetMaster(ptrFromObj(c->argv[1]), port);
         sds client = catClientInfoString(sdsempty(),c);
         serverLog(LL_NOTICE,"REPLICAOF %s:%d enabled (user request from '%s')",
             server.masterhost, server.masterport, client);

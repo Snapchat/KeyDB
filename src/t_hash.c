@@ -44,7 +44,7 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
 
     for (i = start; i <= end; i++) {
         if (sdsEncodedObject(argv[i]) &&
-            sdslen(argv[i]->ptr) > server.hash_max_ziplist_value)
+            sdslen(ptrFromObj(argv[i])) > server.hash_max_ziplist_value)
         {
             hashTypeConvert(o, OBJ_ENCODING_HT);
             break;
@@ -64,7 +64,7 @@ int hashTypeGetFromZiplist(robj *o, sds field,
 
     serverAssert(o->encoding == OBJ_ENCODING_ZIPLIST);
 
-    zl = o->ptr;
+    zl = ptrFromObj(o);
     fptr = ziplistIndex(zl, ZIPLIST_HEAD);
     if (fptr != NULL) {
         fptr = ziplistFind(fptr, (unsigned char*)field, sdslen(field), 1);
@@ -92,7 +92,7 @@ sds hashTypeGetFromHashTable(robj *o, sds field) {
 
     serverAssert(o->encoding == OBJ_ENCODING_HT);
 
-    de = dictFind(o->ptr, field);
+    de = dictFind(ptrFromObj(o), field);
     if (de == NULL) return NULL;
     return dictGetVal(de);
 }
@@ -205,7 +205,7 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
     if (o->encoding == OBJ_ENCODING_ZIPLIST) {
         unsigned char *zl, *fptr, *vptr;
 
-        zl = o->ptr;
+        zl = ptrFromObj(o);
         fptr = ziplistIndex(zl, ZIPLIST_HEAD);
         if (fptr != NULL) {
             fptr = ziplistFind(fptr, (unsigned char*)field, sdslen(field), 1);
@@ -231,13 +231,13 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
             zl = ziplistPush(zl, (unsigned char*)value, sdslen(value),
                     ZIPLIST_TAIL);
         }
-        o->ptr = zl;
+        o->m_ptr = zl;
 
         /* Check if the ziplist needs to be converted to a hash table */
         if (hashTypeLength(o) > server.hash_max_ziplist_entries)
             hashTypeConvert(o, OBJ_ENCODING_HT);
     } else if (o->encoding == OBJ_ENCODING_HT) {
-        dictEntry *de = dictFind(o->ptr,field);
+        dictEntry *de = dictFind(ptrFromObj(o),field);
         if (de) {
             sdsfree(dictGetVal(de));
             if (flags & HASH_SET_TAKE_VALUE) {
@@ -261,7 +261,7 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
             } else {
                 v = sdsdup(value);
             }
-            dictAdd(o->ptr,f,v);
+            dictAdd(ptrFromObj(o),f,v);
         }
     } else {
         serverPanic("Unknown hash encoding");
@@ -282,23 +282,23 @@ int hashTypeDelete(robj *o, sds field) {
     if (o->encoding == OBJ_ENCODING_ZIPLIST) {
         unsigned char *zl, *fptr;
 
-        zl = o->ptr;
+        zl = ptrFromObj(o);
         fptr = ziplistIndex(zl, ZIPLIST_HEAD);
         if (fptr != NULL) {
             fptr = ziplistFind(fptr, (unsigned char*)field, sdslen(field), 1);
             if (fptr != NULL) {
                 zl = ziplistDelete(zl,&fptr); /* Delete the key. */
                 zl = ziplistDelete(zl,&fptr); /* Delete the value. */
-                o->ptr = zl;
+                o->m_ptr = zl;
                 deleted = 1;
             }
         }
     } else if (o->encoding == OBJ_ENCODING_HT) {
-        if (dictDelete((dict*)o->ptr, field) == C_OK) {
+        if (dictDelete((dict*)ptrFromObj(o), field) == C_OK) {
             deleted = 1;
 
             /* Always check if the dictionary needs a resize after a delete. */
-            if (htNeedsResize(o->ptr)) dictResize(o->ptr);
+            if (htNeedsResize(ptrFromObj(o))) dictResize(ptrFromObj(o));
         }
 
     } else {
@@ -312,9 +312,9 @@ unsigned long hashTypeLength(const robj *o) {
     unsigned long length = ULONG_MAX;
 
     if (o->encoding == OBJ_ENCODING_ZIPLIST) {
-        length = ziplistLen(o->ptr) / 2;
+        length = ziplistLen(ptrFromObj(o)) / 2;
     } else if (o->encoding == OBJ_ENCODING_HT) {
-        length = dictSize((const dict*)o->ptr);
+        length = dictSize((const dict*)ptrFromObj(o));
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -330,7 +330,7 @@ hashTypeIterator *hashTypeInitIterator(robj *subject) {
         hi->fptr = NULL;
         hi->vptr = NULL;
     } else if (hi->encoding == OBJ_ENCODING_HT) {
-        hi->di = dictGetIterator(subject->ptr);
+        hi->di = dictGetIterator(subject->m_ptr);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -350,7 +350,7 @@ int hashTypeNext(hashTypeIterator *hi) {
         unsigned char *zl;
         unsigned char *fptr, *vptr;
 
-        zl = hi->subject->ptr;
+        zl = hi->subject->m_ptr;
         fptr = hi->fptr;
         vptr = hi->vptr;
 
@@ -484,14 +484,14 @@ void hashTypeConvertZiplist(robj *o, int enc) {
             ret = dictAdd(dict, key, value);
             if (ret != DICT_OK) {
                 serverLogHexDump(LL_WARNING,"ziplist with dup elements dump",
-                    o->ptr,ziplistBlobLen(o->ptr));
+                    ptrFromObj(o),ziplistBlobLen(ptrFromObj(o)));
                 serverPanic("Ziplist corruption detected");
             }
         }
         hashTypeReleaseIterator(hi);
-        zfree(o->ptr);
+        zfree(ptrFromObj(o));
         o->encoding = OBJ_ENCODING_HT;
-        o->ptr = dict;
+        o->m_ptr = dict;
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -516,10 +516,10 @@ void hsetnxCommand(client *c) {
     if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
     hashTypeTryConversion(o,c->argv,2,3);
 
-    if (hashTypeExists(o, c->argv[2]->ptr)) {
+    if (hashTypeExists(o, ptrFromObj(c->argv[2]))) {
         addReply(c, shared.czero);
     } else {
-        hashTypeSet(o,c->argv[2]->ptr,c->argv[3]->ptr,HASH_SET_COPY);
+        hashTypeSet(o,ptrFromObj(c->argv[2]),ptrFromObj(c->argv[3]),HASH_SET_COPY);
         addReply(c, shared.cone);
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_HASH,"hset",c->argv[1],c->db->id);
@@ -540,10 +540,10 @@ void hsetCommand(client *c) {
     hashTypeTryConversion(o,c->argv,2,c->argc-1);
 
     for (i = 2; i < c->argc; i += 2)
-        created += !hashTypeSet(o,c->argv[i]->ptr,c->argv[i+1]->ptr,HASH_SET_COPY);
+        created += !hashTypeSet(o,ptrFromObj(c->argv[i]),ptrFromObj(c->argv[i+1]),HASH_SET_COPY);
 
     /* HMSET (deprecated) and HSET return value is different. */
-    char *cmdname = c->argv[0]->ptr;
+    char *cmdname = ptrFromObj(c->argv[0]);
     if (cmdname[1] == 's' || cmdname[1] == 'S') {
         /* HSET */
         addReplyLongLong(c, created);
@@ -565,7 +565,7 @@ void hincrbyCommand(client *c) {
 
     if (getLongLongFromObjectOrReply(c,c->argv[3],&incr,NULL) != C_OK) return;
     if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
-    if (hashTypeGetValue(o,c->argv[2]->ptr,&vstr,&vlen,&value) == C_OK) {
+    if (hashTypeGetValue(o,ptrFromObj(c->argv[2]),&vstr,&vlen,&value) == C_OK) {
         if (vstr) {
             if (string2ll((char*)vstr,vlen,&value) == 0) {
                 addReplyError(c,"hash value is not an integer");
@@ -584,7 +584,7 @@ void hincrbyCommand(client *c) {
     }
     value += incr;
     new = sdsfromlonglong(value);
-    hashTypeSet(o,c->argv[2]->ptr,new,HASH_SET_TAKE_VALUE);
+    hashTypeSet(o,ptrFromObj(c->argv[2]),new,HASH_SET_TAKE_VALUE);
     addReplyLongLong(c,value);
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH,"hincrby",c->argv[1],c->db->id);
@@ -601,7 +601,7 @@ void hincrbyfloatCommand(client *c) {
 
     if (getLongDoubleFromObjectOrReply(c,c->argv[3],&incr,NULL) != C_OK) return;
     if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
-    if (hashTypeGetValue(o,c->argv[2]->ptr,&vstr,&vlen,&ll) == C_OK) {
+    if (hashTypeGetValue(o,ptrFromObj(c->argv[2]),&vstr,&vlen,&ll) == C_OK) {
         if (vstr) {
             if (string2ld((char*)vstr,vlen,&value) == 0) {
                 addReplyError(c,"hash value is not a float");
@@ -619,7 +619,7 @@ void hincrbyfloatCommand(client *c) {
     char buf[MAX_LONG_DOUBLE_CHARS];
     int len = ld2string(buf,sizeof(buf),value,1);
     new = sdsnewlen(buf,len);
-    hashTypeSet(o,c->argv[2]->ptr,new,HASH_SET_TAKE_VALUE);
+    hashTypeSet(o,ptrFromObj(c->argv[2]),new,HASH_SET_TAKE_VALUE);
     addReplyBulkCBuffer(c,buf,len);
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH,"hincrbyfloat",c->argv[1],c->db->id);
@@ -678,7 +678,7 @@ void hgetCommand(client *c) {
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == NULL ||
         checkType(c,o,OBJ_HASH)) return;
 
-    addHashFieldToReply(c, o, c->argv[2]->ptr);
+    addHashFieldToReply(c, o, ptrFromObj(c->argv[2]));
 }
 
 void hmgetCommand(client *c) {
@@ -695,7 +695,7 @@ void hmgetCommand(client *c) {
 
     addReplyArrayLen(c, c->argc-2);
     for (i = 2; i < c->argc; i++) {
-        addHashFieldToReply(c, o, c->argv[i]->ptr);
+        addHashFieldToReply(c, o, ptrFromObj(c->argv[i]));
     }
 }
 
@@ -707,7 +707,7 @@ void hdelCommand(client *c) {
         checkType(c,o,OBJ_HASH)) return;
 
     for (j = 2; j < c->argc; j++) {
-        if (hashTypeDelete(o,c->argv[j]->ptr)) {
+        if (hashTypeDelete(o,ptrFromObj(c->argv[j]))) {
             deleted++;
             if (hashTypeLength(o) == 0) {
                 dbDelete(c->db,c->argv[1]);
@@ -741,7 +741,7 @@ void hstrlenCommand(client *c) {
 
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,o,OBJ_HASH)) return;
-    addReplyLongLong(c,hashTypeGetValueLength(o,c->argv[2]->ptr));
+    addReplyLongLong(c,hashTypeGetValueLength(o,ptrFromObj(c->argv[2])));
 }
 
 static void addHashIteratorCursorToReply(client *c, hashTypeIterator *hi, int what) {
@@ -816,7 +816,7 @@ void hexistsCommand(client *c) {
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,o,OBJ_HASH)) return;
 
-    addReply(c, hashTypeExists(o,c->argv[2]->ptr) ? shared.cone : shared.czero);
+    addReply(c, hashTypeExists(o,ptrFromObj(c->argv[2])) ? shared.cone : shared.czero);
 }
 
 void hscanCommand(client *c) {

@@ -85,7 +85,8 @@ struct __attribute__ ((__packed__)) sdshdr64 {
 
 static inline size_t sdslen(const sds s) {
     unsigned char flags = s[-1];
-    switch(flags&SDS_TYPE_MASK) {
+    
+    switch(__builtin_expect((flags&SDS_TYPE_MASK), SDS_TYPE_5)) {
         case SDS_TYPE_5:
             return SDS_TYPE_5_LEN(flags);
         case SDS_TYPE_8:

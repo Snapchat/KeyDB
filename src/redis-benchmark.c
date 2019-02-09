@@ -566,7 +566,7 @@ invalid:
 
 usage:
     printf(
-"Usage: redis-benchmark [-h <host>] [-p <port>] [-c <clients>] [-n <requests>] [-k <boolean>]\n\n"
+"Usage: keydb-benchmark [-h <host>] [-p <port>] [-c <clients>] [-n <requests>] [-k <boolean>]\n\n"
 " -h <hostname>      Server hostname (default 127.0.0.1)\n"
 " -p <port>          Server port (default 6379)\n"
 " -s <socket>        Server socket (overrides host and port)\n"
@@ -593,17 +593,17 @@ usage:
 " -I                 Idle mode. Just open N idle connections and wait.\n\n"
 "Examples:\n\n"
 " Run the benchmark with the default configuration against 127.0.0.1:6379:\n"
-"   $ redis-benchmark\n\n"
+"   $ keydb-benchmark\n\n"
 " Use 20 parallel clients, for a total of 100k requests, against 192.168.1.1:\n"
-"   $ redis-benchmark -h 192.168.1.1 -p 6379 -n 100000 -c 20\n\n"
+"   $ keydb-benchmark -h 192.168.1.1 -p 6379 -n 100000 -c 20\n\n"
 " Fill 127.0.0.1:6379 with about 1 million keys only using the SET test:\n"
-"   $ redis-benchmark -t set -n 1000000 -r 100000000\n\n"
+"   $ keydb-benchmark -t set -n 1000000 -r 100000000\n\n"
 " Benchmark 127.0.0.1:6379 for a few commands producing CSV output:\n"
-"   $ redis-benchmark -t ping,set,get -n 100000 --csv\n\n"
+"   $ keydb-benchmark -t ping,set,get -n 100000 --csv\n\n"
 " Benchmark a specific command line:\n"
-"   $ redis-benchmark -r 10000 -n 10000 eval 'return redis.call(\"ping\")' 0\n\n"
+"   $ keydb-benchmark -r 10000 -n 10000 eval 'return redis.call(\"ping\")' 0\n\n"
 " Fill a list with 10000 random elements:\n"
-"   $ redis-benchmark -r 10000 -n 10000 lpush mylist __rand_int__\n\n"
+"   $ keydb-benchmark -r 10000 -n 10000 lpush mylist __rand_int__\n\n"
 " On user specified command lines __rand_int__ is replaced with a random integer\n"
 " with a range of values selected by the -r option.\n"
     );

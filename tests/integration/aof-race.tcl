@@ -14,7 +14,7 @@ tags {"aof"} {
     # was subsequently appended to the new AOF, resulting in duplicate commands.
     start_server_aof [list dir $server_path] {
         set client [redis [srv host] [srv port]]
-        set bench [open "|src/redis-benchmark -q -p [srv port] -c 20 -n 20000 incr foo" "r+"]
+        set bench [open "|src/keydb-benchmark -q -p [srv port] -c 20 -n 20000 incr foo" "r+"]
         after 100
 
         # Benchmark should be running by now: start background rewrite

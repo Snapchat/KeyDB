@@ -4466,19 +4466,19 @@ void version(void) {
 }
 
 void usage(void) {
-    fprintf(stderr,"Usage: ./redis-server [/path/to/redis.conf] [options]\n");
-    fprintf(stderr,"       ./redis-server - (read config from stdin)\n");
-    fprintf(stderr,"       ./redis-server -v or --version\n");
-    fprintf(stderr,"       ./redis-server -h or --help\n");
-    fprintf(stderr,"       ./redis-server --test-memory <megabytes>\n\n");
+    fprintf(stderr,"Usage: ./keydb-server [/path/to/redis.conf] [options]\n");
+    fprintf(stderr,"       ./keydb-server - (read config from stdin)\n");
+    fprintf(stderr,"       ./keydb-server -v or --version\n");
+    fprintf(stderr,"       ./keydb-server -h or --help\n");
+    fprintf(stderr,"       ./keydb-server --test-memory <megabytes>\n\n");
     fprintf(stderr,"Examples:\n");
-    fprintf(stderr,"       ./redis-server (run the server with default conf)\n");
-    fprintf(stderr,"       ./redis-server /etc/redis/6379.conf\n");
-    fprintf(stderr,"       ./redis-server --port 7777\n");
-    fprintf(stderr,"       ./redis-server --port 7777 --replicaof 127.0.0.1 8888\n");
-    fprintf(stderr,"       ./redis-server /etc/myredis.conf --loglevel verbose\n\n");
+    fprintf(stderr,"       ./keydb-server (run the server with default conf)\n");
+    fprintf(stderr,"       ./keydb-server /etc/redis/6379.conf\n");
+    fprintf(stderr,"       ./keydb-server --port 7777\n");
+    fprintf(stderr,"       ./keydb-server --port 7777 --replicaof 127.0.0.1 8888\n");
+    fprintf(stderr,"       ./keydb-server /etc/myredis.conf --loglevel verbose\n\n");
     fprintf(stderr,"Sentinel mode:\n");
-    fprintf(stderr,"       ./redis-server /etc/sentinel.conf --sentinel\n");
+    fprintf(stderr,"       ./keydb-server /etc/sentinel.conf --sentinel\n");
     exit(1);
 }
 
@@ -4574,11 +4574,11 @@ void setupSignalHandlers(void) {
 void memtest(size_t megabytes, int passes);
 
 /* Returns 1 if there is --sentinel among the arguments or if
- * argv[0] contains "redis-sentinel". */
+ * argv[0] contains "keydb-sentinel". */
 int checkForSentinelMode(int argc, char **argv) {
     int j;
 
-    if (strstr(argv[0],"redis-sentinel") != NULL) return 1;
+    if (strstr(argv[0],"keydb-sentinel") != NULL) return 1;
     for (j = 1; j < argc; j++)
         if (!strcmp(argv[j],"--sentinel")) return 1;
     return 0;
@@ -4806,12 +4806,12 @@ int main(int argc, char **argv) {
         initSentinel();
     }
 
-    /* Check if we need to start in redis-check-rdb/aof mode. We just execute
+    /* Check if we need to start in keydb-check-rdb/aof mode. We just execute
      * the program main. However the program is part of the Redis executable
      * so that we can easily execute an RDB check on loading errors. */
-    if (strstr(argv[0],"redis-check-rdb") != NULL)
+    if (strstr(argv[0],"keydb-check-rdb") != NULL)
         redis_check_rdb_main(argc,argv,NULL);
-    else if (strstr(argv[0],"redis-check-aof") != NULL)
+    else if (strstr(argv[0],"keydb-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
 
     if (argc >= 2) {
@@ -4830,7 +4830,7 @@ int main(int argc, char **argv) {
                 exit(0);
             } else {
                 fprintf(stderr,"Please specify the amount of memory to test in megabytes.\n");
-                fprintf(stderr,"Example: ./redis-server --test-memory 4096\n\n");
+                fprintf(stderr,"Example: ./keydb-server --test-memory 4096\n\n");
                 exit(1);
             }
         }

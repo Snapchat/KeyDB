@@ -108,19 +108,19 @@ Running Redis
 To run Redis with the default configuration just type:
 
     % cd src
-    % ./redis-server
+    % ./keydb-server
 
 If you want to provide your redis.conf, you have to run it using an additional
 parameter (the path of the configuration file):
 
     % cd src
-    % ./redis-server /path/to/redis.conf
+    % ./keydb-server /path/to/redis.conf
 
 It is possible to alter the Redis configuration by passing parameters directly
 as options using the command line. Examples:
 
-    % ./redis-server --port 9999 --replicaof 127.0.0.1 6379
-    % ./redis-server /etc/redis/6379.conf --loglevel debug
+    % ./keydb-server --port 9999 --replicaof 127.0.0.1 6379
+    % ./keydb-server /etc/redis/6379.conf --loglevel debug
 
 All the options in redis.conf are also supported as options using the command
 line, with exactly the same name.
@@ -128,11 +128,11 @@ line, with exactly the same name.
 Playing with Redis
 ------------------
 
-You can use redis-cli to play with Redis. Start a redis-server instance,
+You can use keydb-cli to play with Redis. Start a keydb-server instance,
 then in another terminal try the following:
 
     % cd src
-    % ./redis-cli
+    % ./keydb-cli
     redis> ping
     PONG
     redis> set foo bar

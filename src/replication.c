@@ -856,7 +856,7 @@ void putSlaveOnline(client *slave) {
     slave->replstate = SLAVE_STATE_ONLINE;
     slave->repl_put_online_on_ack = 0;
     slave->repl_ack_time = server.unixtime; /* Prevent false timeout. */
-    if (aeCreateFileEvent(server.el, slave->fd, AE_WRITABLE,
+    if (aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN], slave->fd, AE_WRITABLE,
         sendReplyToClient, slave) == AE_ERR) {
         serverLog(LL_WARNING,"Unable to register writable event for replica bulk transfer: %s", strerror(errno));
         freeClient(slave);
@@ -918,7 +918,7 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
     if (slave->repldboff == slave->repldbsize) {
         close(slave->repldbfd);
         slave->repldbfd = -1;
-        aeDeleteFileEvent(server.el,slave->fd,AE_WRITABLE);
+        aeDeleteFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],slave->fd,AE_WRITABLE);
         putSlaveOnline(slave);
     }
 }
@@ -989,8 +989,8 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
                 slave->replpreamble = sdscatprintf(sdsempty(),"$%lld\r\n",
                     (unsigned long long) slave->repldbsize);
 
-                aeDeleteFileEvent(server.el,slave->fd,AE_WRITABLE);
-                if (aeCreateFileEvent(server.el, slave->fd, AE_WRITABLE, sendBulkToSlave, slave) == AE_ERR) {
+                aeDeleteFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],slave->fd,AE_WRITABLE);
+                if (aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN], slave->fd, AE_WRITABLE, sendBulkToSlave, slave) == AE_ERR) {
                     freeClient(slave);
                     continue;
                 }
@@ -1075,7 +1075,7 @@ void replicationEmptyDbCallback(void *privdata) {
  * performed, this function materializes the master client we store
  * at server.master, starting from the specified file descriptor. */
 void replicationCreateMasterClient(int fd, int dbid) {
-    server.master = createClient(fd);
+    server.master = createClient(fd, IDX_EVENT_LOOP_MAIN);
     server.master->flags |= CLIENT_MASTER;
     server.master->authenticated = 1;
     server.master->reploff = server.master_initial_offset;
@@ -1276,7 +1276,7 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
          * handler, otherwise it will get called recursively since
          * rdbLoad() will call the event loop to process events from time to
          * time for non blocking loading. */
-        aeDeleteFileEvent(server.el,server.repl_transfer_s,AE_READABLE);
+        aeDeleteFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],server.repl_transfer_s,AE_READABLE);
         serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Loading DB in memory");
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
         if (rdbLoad(server.rdb_filename,&rsi) != C_OK) {
@@ -1464,7 +1464,7 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
         if (reply != NULL) {
             serverLog(LL_WARNING,"Unable to send PSYNC to master: %s",reply);
             sdsfree(reply);
-            aeDeleteFileEvent(server.el,fd,AE_READABLE);
+            aeDeleteFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],fd,AE_READABLE);
             return PSYNC_WRITE_ERROR;
         }
         return PSYNC_WAIT_REPLY;
@@ -1479,7 +1479,7 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
         return PSYNC_WAIT_REPLY;
     }
 
-    aeDeleteFileEvent(server.el,fd,AE_READABLE);
+    aeDeleteFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],fd,AE_READABLE);
 
     if (!strncmp(reply,"+FULLRESYNC",11)) {
         char *replid = NULL, *offset = NULL;
@@ -1626,7 +1626,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         serverLog(LL_NOTICE,"Non blocking connect for SYNC fired the event.");
         /* Delete the writable event so that the readable event remains
          * registered and we can wait for the PONG reply. */
-        aeDeleteFileEvent(server.el,fd,AE_WRITABLE);
+        aeDeleteFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],fd,AE_WRITABLE);
         server.repl_state = REPL_STATE_RECEIVE_PONG;
         /* Send the PING, don't check for errors at all, we have the timeout
          * that will take care about this. */
@@ -1841,7 +1841,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 
     /* Setup the non blocking download of the bulk file. */
-    if (aeCreateFileEvent(server.el,fd, AE_READABLE,readSyncBulkPayload,NULL)
+    if (aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],fd, AE_READABLE,readSyncBulkPayload,NULL)
             == AE_ERR)
     {
         serverLog(LL_WARNING,
@@ -1860,7 +1860,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
     return;
 
 error:
-    aeDeleteFileEvent(server.el,fd,AE_READABLE|AE_WRITABLE);
+    aeDeleteFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],fd,AE_READABLE|AE_WRITABLE);
     if (dfd != -1) close(dfd);
     close(fd);
     server.repl_transfer_s = -1;
@@ -1884,7 +1884,7 @@ int connectWithMaster(void) {
         return C_ERR;
     }
 
-    if (aeCreateFileEvent(server.el,fd,AE_READABLE|AE_WRITABLE,syncWithMaster,NULL) ==
+    if (aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],fd,AE_READABLE|AE_WRITABLE,syncWithMaster,NULL) ==
             AE_ERR)
     {
         close(fd);
@@ -1905,7 +1905,7 @@ int connectWithMaster(void) {
 void undoConnectWithMaster(void) {
     int fd = server.repl_transfer_s;
 
-    aeDeleteFileEvent(server.el,fd,AE_READABLE|AE_WRITABLE);
+    aeDeleteFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],fd,AE_READABLE|AE_WRITABLE);
     close(fd);
     server.repl_transfer_s = -1;
 }
@@ -2236,7 +2236,7 @@ void replicationResurrectCachedMaster(int newfd) {
 
     /* Re-add to the list of clients. */
     linkClient(server.master);
-    if (aeCreateFileEvent(server.el, newfd, AE_READABLE,
+    if (aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN], newfd, AE_READABLE,
                           readQueryFromClient, server.master)) {
         serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the readable handler: %s", strerror(errno));
         freeClientAsync(server.master); /* Close ASAP. */
@@ -2245,7 +2245,7 @@ void replicationResurrectCachedMaster(int newfd) {
     /* We may also need to install the write handler as well if there is
      * pending data in the write buffers. */
     if (clientHasPendingReplies(server.master)) {
-        if (aeCreateFileEvent(server.el, newfd, AE_WRITABLE,
+        if (aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN], newfd, AE_WRITABLE,
                           sendReplyToClient, server.master)) {
             serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the writable handler: %s", strerror(errno));
             freeClientAsync(server.master); /* Close ASAP. */

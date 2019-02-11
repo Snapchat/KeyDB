@@ -968,15 +968,18 @@ void configSetCommand(client *c) {
                 server.maxclients = orig_value;
                 return;
             }
-            if ((unsigned int) aeGetSetSize(server.el) <
+            if ((unsigned int) aeGetSetSize(server.rgel[IDX_EVENT_LOOP_MAIN]) <
                 server.maxclients + CONFIG_FDSET_INCR)
             {
-                if (aeResizeSetSize(server.el,
-                    server.maxclients + CONFIG_FDSET_INCR) == AE_ERR)
+                for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
                 {
-                    addReplyError(c,"The event loop API used by Redis is not able to handle the specified number of clients");
-                    server.maxclients = orig_value;
-                    return;
+                    if (aeResizeSetSize(server.rgel[iel],
+                        server.maxclients + CONFIG_FDSET_INCR) == AE_ERR)
+                    {
+                        addReplyError(c,"The event loop API used by Redis is not able to handle the specified number of clients");
+                        server.maxclients = orig_value;
+                        return;
+                    }
                 }
             }
         }

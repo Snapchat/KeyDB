@@ -34,6 +34,7 @@
 #define __AE_H__
 
 #include <time.h>
+#include "fastlock.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -71,6 +72,7 @@ typedef void aeFileProc(struct aeEventLoop *eventLoop, int fd, void *clientData,
 typedef int aeTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData);
 typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientData);
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
+typedef void aePostFunctionProc(void *pvArgs);
 
 /* File event structure */
 typedef struct aeFileEvent {
@@ -110,16 +112,23 @@ typedef struct aeEventLoop {
     int stop;
     void *apidata; /* This is used for polling API specific data */
     aeBeforeSleepProc *beforesleep;
+    int beforesleepFlags;
     aeBeforeSleepProc *aftersleep;
+    int aftersleepFlags;
+    struct fastlock flock;
+    int fdCmdWrite;
+    int fdCmdRead;
 } aeEventLoop;
 
 /* Prototypes */
 aeEventLoop *aeCreateEventLoop(int setsize);
+int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg);
 void aeDeleteEventLoop(aeEventLoop *eventLoop);
 void aeStop(aeEventLoop *eventLoop);
 int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
         aeFileProc *proc, void *clientData);
 void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask);
+void aeDeleteFileEventAsync(aeEventLoop *eventLoop, int fd, int mask);
 int aeGetFileEvents(aeEventLoop *eventLoop, int fd);
 long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds,
         aeTimeProc *proc, void *clientData,
@@ -129,10 +138,13 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags);
 int aeWait(int fd, int mask, long long milliseconds);
 void aeMain(aeEventLoop *eventLoop);
 const char *aeGetApiName(void);
-void aeSetBeforeSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *beforesleep);
-void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *aftersleep);
+void aeSetBeforeSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *beforesleep, int flags);
+void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *aftersleep, int flags);
 int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
+
+void aeAcquireLock();
+void aeReleaseLock();
 
 #ifdef __cplusplus
 }

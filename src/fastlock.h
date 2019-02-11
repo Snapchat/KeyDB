@@ -21,6 +21,11 @@ struct fastlock
     int m_lock;
 
 #ifdef __cplusplus
+    fastlock()
+    {
+        fastlock_init(this);
+    }
+
     void lock()
     {
         fastlock_lock(this);

@@ -493,7 +493,7 @@ void clusterInit(void) {
         int j;
 
         for (j = 0; j < server.cfd_count; j++) {
-            if (aeCreateFileEvent(server.el, server.cfd[j], AE_READABLE,
+            if (aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN], server.cfd[j], AE_READABLE,
                 clusterAcceptHandler, NULL) == AE_ERR)
                     serverPanic("Unrecoverable error creating Redis Cluster "
                                 "file event.");
@@ -601,7 +601,7 @@ clusterLink *createClusterLink(clusterNode *node) {
  * with this link will have the 'link' field set to NULL. */
 void freeClusterLink(clusterLink *link) {
     if (link->fd != -1) {
-        aeDeleteFileEvent(server.el, link->fd, AE_READABLE|AE_WRITABLE);
+        aeDeleteFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN], link->fd, AE_READABLE|AE_WRITABLE);
     }
     sdsfree(link->sndbuf);
     sdsfree(link->rcvbuf);
@@ -645,7 +645,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
          * node identity. */
         link = createClusterLink(NULL);
         link->fd = cfd;
-        aeCreateFileEvent(server.el,cfd,AE_READABLE,clusterReadHandler,link);
+        aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],cfd,AE_READABLE,clusterReadHandler,link);
     }
 }
 
@@ -2132,7 +2132,7 @@ void clusterWriteHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
     sdsrange(link->sndbuf,nwritten,-1);
     if (sdslen(link->sndbuf) == 0)
-        aeDeleteFileEvent(server.el, link->fd, AE_WRITABLE);
+        aeDeleteFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN], link->fd, AE_WRITABLE);
 }
 
 /* Read data. Try to read the first field of the header first to check the
@@ -2208,7 +2208,7 @@ void clusterReadHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  * from event handlers that will do stuff with the same link later. */
 void clusterSendMessage(clusterLink *link, unsigned char *msg, size_t msglen) {
     if (sdslen(link->sndbuf) == 0 && msglen != 0)
-        aeCreateFileEvent(server.el,link->fd,AE_WRITABLE|AE_BARRIER,
+        aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],link->fd,AE_WRITABLE|AE_BARRIER,
                     clusterWriteHandler,link);
 
     link->sndbuf = sdscatlen(link->sndbuf, msg, msglen);
@@ -3402,7 +3402,7 @@ void clusterCron(void) {
             link = createClusterLink(node);
             link->fd = fd;
             node->link = link;
-            aeCreateFileEvent(server.el,link->fd,AE_READABLE,
+            aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],link->fd,AE_READABLE,
                     clusterReadHandler,link);
             /* Queue a PING in the new connection ASAP: this is crucial
              * to avoid false positives in failure detection.

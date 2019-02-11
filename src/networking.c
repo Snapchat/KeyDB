@@ -82,7 +82,7 @@ void linkClient(client *c) {
     raxInsert(server.clients_index,(unsigned char*)&id,sizeof(id),c,NULL);
 }
 
-client *createClient(int fd) {
+client *createClient(int fd, int iel) {
     client *c = zmalloc(sizeof(client), MALLOC_LOCAL);
 
     /* passing -1 as fd it is possible to create a non connected client.
@@ -94,7 +94,7 @@ client *createClient(int fd) {
         anetEnableTcpNoDelay(NULL,fd);
         if (server.tcpkeepalive)
             anetKeepAlive(NULL,fd,server.tcpkeepalive);
-        if (aeCreateFileEvent(server.el,fd,AE_READABLE,
+        if (aeCreateFileEvent(server.rgel[iel],fd,AE_READABLE|AE_THREADSAFE,
             readQueryFromClient, c) == AE_ERR)
         {
             close(fd);
@@ -106,6 +106,7 @@ client *createClient(int fd) {
     selectDb(c,0);
     uint64_t client_id;
     atomicGetIncr(server.next_client_id,client_id,1);
+    c->iel = iel;
     c->id = client_id;
     c->resp = 2;
     c->fd = fd;
@@ -186,7 +187,7 @@ void clientInstallWriteHandler(client *c) {
          * a system call. We'll only really install the write handler if
          * we'll not be able to write the whole reply at once. */
         c->flags |= CLIENT_PENDING_WRITE;
-        listAddNodeHead(server.clients_pending_write,c);
+        listAddNodeHead(server.rgclients_pending_write[c->iel],c);
     }
 }
 
@@ -779,9 +780,9 @@ int clientHasPendingReplies(client *c) {
 }
 
 #define MAX_ACCEPTS_PER_CALL 1000
-static void acceptCommonHandler(int fd, int flags, char *ip) {
+static void acceptCommonHandler(int fd, int flags, char *ip, int iel) {
     client *c;
-    if ((c = createClient(fd)) == NULL) {
+    if ((c = createClient(fd, iel)) == NULL) {
         serverLog(LL_WARNING,
             "Error registering fd event for the new client: %s (fd=%d)",
             strerror(errno),fd);
@@ -849,6 +850,32 @@ static void acceptCommonHandler(int fd, int flags, char *ip) {
     c->flags |= flags;
 }
 
+struct AcceptCommonHandlerAsyncArgs
+{
+    int fd;
+    int flags;
+    char cip[NET_IP_STR_LEN];
+    int fUseCip;
+    int iel;
+};
+static void AcceptCommonHandlerAsync(void *args)
+{
+    struct AcceptCommonHandlerAsyncArgs *aargs = args;
+    acceptCommonHandler(aargs->fd, aargs->flags, aargs->cip, aargs->iel);
+    zfree(args);
+}
+static void EnqueueAcceptCommonHandler(int fd, int flags, char *ip, int iel)
+{
+    struct AcceptCommonHandlerAsyncArgs *args = zmalloc(sizeof(struct AcceptCommonHandlerAsyncArgs), MALLOC_LOCAL);
+    args->fd = fd;
+    args->flags = flags;
+    if (ip != NULL)
+        memcpy(args->cip, ip, NET_IP_STR_LEN);
+    args->fUseCip = (ip != NULL);
+    args->iel = iel;
+    aePostFunction(server.rgel[iel], AcceptCommonHandlerAsync, args);
+}
+
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd, max = MAX_ACCEPTS_PER_CALL;
     char cip[NET_IP_STR_LEN];
@@ -865,7 +892,24 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
-        acceptCommonHandler(cfd,0,cip);
+        int ielCur = 0;
+        for (; ielCur < MAX_EVENT_LOOPS; ++ielCur)
+        {
+            if (el == server.rgel[ielCur])
+                break;
+        }
+        serverAssert(ielCur < MAX_EVENT_LOOPS);
+        int iel = rand() % MAX_EVENT_LOOPS;
+        if (iel == ielCur)
+        {
+            aeAcquireLock();
+            acceptCommonHandler(cfd,0,cip, iel);
+            aeReleaseLock();
+        }
+        else
+        {
+            EnqueueAcceptCommonHandler(cfd, 0, cip, iel);
+        }
     }
 }
 
@@ -884,7 +928,7 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         serverLog(LL_VERBOSE,"Accepted connection to %s", server.unixsocket);
-        acceptCommonHandler(cfd,CLIENT_UNIX_SOCKET,NULL);
+        EnqueueAcceptCommonHandler(cfd,CLIENT_UNIX_SOCKET,NULL, rand() % MAX_EVENT_LOOPS);
     }
 }
 
@@ -928,26 +972,26 @@ void unlinkClient(client *c) {
         }
 
         /* Unregister async I/O handlers and close the socket. */
-        aeDeleteFileEvent(server.el,c->fd,AE_READABLE);
-        aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
+        aeDeleteFileEventAsync(server.rgel[c->iel],c->fd,AE_READABLE);
+        aeDeleteFileEventAsync(server.rgel[c->iel],c->fd,AE_WRITABLE);
         close(c->fd);
         c->fd = -1;
     }
 
     /* Remove from the list of pending writes if needed. */
     if (c->flags & CLIENT_PENDING_WRITE) {
-        ln = listSearchKey(server.clients_pending_write,c);
+        ln = listSearchKey(server.rgclients_pending_write[c->iel],c);
         serverAssert(ln != NULL);
-        listDelNode(server.clients_pending_write,ln);
+        listDelNode(server.rgclients_pending_write[c->iel],ln);
         c->flags &= ~CLIENT_PENDING_WRITE;
     }
 
     /* When client was just unblocked because of a blocking operation,
      * remove it from the list of unblocked clients. */
     if (c->flags & CLIENT_UNBLOCKED) {
-        ln = listSearchKey(server.unblocked_clients,c);
+        ln = listSearchKey(server.rgunblocked_clients[c->iel],c);
         serverAssert(ln != NULL);
-        listDelNode(server.unblocked_clients,ln);
+        listDelNode(server.rgunblocked_clients[c->iel],ln);
         c->flags &= ~CLIENT_UNBLOCKED;
     }
 }
@@ -1092,6 +1136,7 @@ int writeToClient(int fd, client *c, int handler_installed) {
     while(clientHasPendingReplies(c)) {
         if (c->bufpos > 0) {
             nwritten = write(fd,c->buf+c->sentlen,c->bufpos-c->sentlen);
+
             if (nwritten <= 0) break;
             c->sentlen += nwritten;
             totwritten += nwritten;
@@ -1113,6 +1158,7 @@ int writeToClient(int fd, client *c, int handler_installed) {
             }
 
             nwritten = write(fd, o->buf + c->sentlen, objlen - c->sentlen);
+
             if (nwritten <= 0) break;
             c->sentlen += nwritten;
             totwritten += nwritten;
@@ -1145,7 +1191,8 @@ int writeToClient(int fd, client *c, int handler_installed) {
              zmalloc_used_memory() < server.maxmemory) &&
             !(c->flags & CLIENT_SLAVE)) break;
     }
-    server.stat_net_output_bytes += totwritten;
+    
+    __atomic_fetch_add(&server.stat_net_output_bytes, totwritten, __ATOMIC_RELAXED);
     if (nwritten == -1) {
         if (errno == EAGAIN) {
             nwritten = 0;
@@ -1165,7 +1212,7 @@ int writeToClient(int fd, client *c, int handler_installed) {
     }
     if (!clientHasPendingReplies(c)) {
         c->sentlen = 0;
-        if (handler_installed) aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
+        if (handler_installed) aeDeleteFileEvent(server.rgel[c->iel],c->fd,AE_WRITABLE);
 
         /* Close connection after entire reply has been sent. */
         if (c->flags & CLIENT_CLOSE_AFTER_REPLY) {
@@ -1187,16 +1234,17 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
  * we can just write the replies to the client output buffer without any
  * need to use a syscall in order to install the writable event handler,
  * get it called, and so forth. */
-int handleClientsWithPendingWrites(void) {
+int handleClientsWithPendingWrites(int iel) {
     listIter li;
     listNode *ln;
-    int processed = listLength(server.clients_pending_write);
+    list *pending_writes = server.rgclients_pending_write[iel];
+    int processed = listLength(pending_writes);
 
-    listRewind(server.clients_pending_write,&li);
+    listRewind(pending_writes,&li);
     while((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
         c->flags &= ~CLIENT_PENDING_WRITE;
-        listDelNode(server.clients_pending_write,ln);
+        listDelNode(pending_writes,ln);
 
         /* If a client is protected, don't do anything,
          * that may trigger write error or recreate handler. */
@@ -1219,7 +1267,7 @@ int handleClientsWithPendingWrites(void) {
             {
                 ae_flags |= AE_BARRIER;
             }
-            if (aeCreateFileEvent(server.el, c->fd, ae_flags,
+            if (aeCreateFileEvent(server.rgel[c->iel], c->fd, ae_flags,
                 sendReplyToClient, c) == AE_ERR)
             {
                     freeClientAsync(c);
@@ -1268,15 +1316,15 @@ void resetClient(client *c) {
  *    path, it is not really released, but only marked for later release. */
 void protectClient(client *c) {
     c->flags |= CLIENT_PROTECTED;
-    aeDeleteFileEvent(server.el,c->fd,AE_READABLE);
-    aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
+    aeDeleteFileEvent(server.rgel[c->iel],c->fd,AE_READABLE);
+    aeDeleteFileEvent(server.rgel[c->iel],c->fd,AE_WRITABLE);
 }
 
 /* This will undo the client protection done by protectClient() */
 void unprotectClient(client *c) {
     if (c->flags & CLIENT_PROTECTED) {
         c->flags &= ~CLIENT_PROTECTED;
-        aeCreateFileEvent(server.el,c->fd,AE_READABLE,readQueryFromClient,c);
+        aeCreateFileEvent(server.rgel[c->iel],c->fd,AE_READABLE|AE_THREADSAFE,readQueryFromClient,c);
         if (clientHasPendingReplies(c)) clientInstallWriteHandler(c);
     }
 }
@@ -1630,6 +1678,14 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(el);
     UNUSED(mask);
 
+    int iel = 0;
+    for (; iel < MAX_EVENT_LOOPS; ++iel)
+    {
+        if (server.rgel[iel] == el)
+            break;
+    }
+    serverAssert(iel == c->iel);
+
     readlen = PROTO_IOBUF_LEN;
     /* If this is a multi bulk request, and we are processing a bulk reply
      * that is large enough, try to maximize the probability that the query
@@ -1650,18 +1706,24 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     qblen = sdslen(c->querybuf);
     if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
     c->querybuf = sdsMakeRoomFor(c->querybuf, readlen);
+    
     nread = read(fd, c->querybuf+qblen, readlen);
+    
     if (nread == -1) {
         if (errno == EAGAIN) {
             return;
         } else {
             serverLog(LL_VERBOSE, "Reading from client: %s",strerror(errno));
+            aeAcquireLock();
             freeClient(c);
+            aeReleaseLock();
             return;
         }
     } else if (nread == 0) {
         serverLog(LL_VERBOSE, "Client closed connection");
+        aeAcquireLock();
         freeClient(c);
+        aeReleaseLock();
         return;
     } else if (c->flags & CLIENT_MASTER) {
         /* Append the query buffer to the pending (not applied) buffer
@@ -1682,7 +1744,9 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
         serverLog(LL_WARNING,"Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci, bytes);
         sdsfree(ci);
         sdsfree(bytes);
+        aeAcquireLock();
         freeClient(c);
+        aeReleaseLock();
         return;
     }
 
@@ -1692,7 +1756,9 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
      * was actually applied to the master state: this quantity, and its
      * corresponding part of the replication stream, will be propagated to
      * the sub-slaves and to the replication backlog. */
+    aeAcquireLock();
     processInputBufferAndReplicate(c);
+    aeReleaseLock();
 }
 
 void getClientsMaxBuffers(unsigned long *longest_output_list,
@@ -1775,7 +1841,7 @@ sds catClientInfoString(sds s, client *client) {
     if (p == flags) *p++ = 'N';
     *p++ = '\0';
 
-    emask = client->fd == -1 ? 0 : aeGetFileEvents(server.el,client->fd);
+    emask = client->fd == -1 ? 0 : aeGetFileEvents(server.rgel[client->iel],client->fd);
     p = events;
     if (emask & AE_READABLE) *p++ = 'r';
     if (emask & AE_WRITABLE) *p++ = 'w';
@@ -2323,7 +2389,7 @@ void flushSlavesOutputBuffers(void) {
          * of put_online_on_ack is to postpone the moment it is installed.
          * This is what we want since slaves in this state should not receive
          * writes before the first ACK. */
-        events = aeGetFileEvents(server.el,slave->fd);
+        events = aeGetFileEvents(server.rgel[IDX_EVENT_LOOP_MAIN],slave->fd);
         if (events & AE_WRITABLE &&
             slave->replstate == SLAVE_STATE_ONLINE &&
             clientHasPendingReplies(slave))
@@ -2395,13 +2461,13 @@ int clientsArePaused(void) {
  * write, close sequence needed to serve a client.
  *
  * The function returns the total number of events processed. */
-int processEventsWhileBlocked(void) {
+int processEventsWhileBlocked(int iel) {
     int iterations = 4; /* See the function top-comment. */
     int count = 0;
     while (iterations--) {
         int events = 0;
-        events += aeProcessEvents(server.el, AE_FILE_EVENTS|AE_DONT_WAIT);
-        events += handleClientsWithPendingWrites();
+        events += aeProcessEvents(server.rgel[iel], AE_FILE_EVENTS|AE_DONT_WAIT);
+        events += handleClientsWithPendingWrites(iel);
         if (!events) break;
         count += events;
     }

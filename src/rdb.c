@@ -1862,7 +1862,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         if (server.masterhost && server.repl_state == REPL_STATE_TRANSFER)
             replicationSendNewlineToMaster();
         loadingProgress(r->processed_bytes);
-        processEventsWhileBlocked();
+        processEventsWhileBlocked(IDX_EVENT_LOOP_MAIN);
     }
 }
 

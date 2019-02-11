@@ -30,7 +30,9 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <mutex>
 #include <stdio.h>
+#include <fcntl.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -41,10 +43,16 @@
 #include <errno.h>
 
 #include "ae.h"
+#include "fastlock.h"
 extern "C" {
 #include "zmalloc.h"
 #include "config.h"
 }
+
+fastlock g_lock;
+thread_local aeEventLoop *g_eventLoopThisThread = NULL;
+
+#define AE_ASSERT(x) if (!(x)) do { fprintf(stderr, "AE_ASSER FAILURE\n"); *((volatile int*)0) = 1; } while(0)
 
 /* Include the best multiplexing layer supported by this system.
  * The following should be ordered by performances, descending. */
@@ -61,6 +69,59 @@ extern "C" {
         #endif
     #endif
 #endif
+
+enum class AE_ASYNC_OP
+{
+    PostFunction,
+    DeleteFileEvent,
+};
+typedef struct aeCommand
+{
+    AE_ASYNC_OP op;
+    int fd; 
+    int mask;
+    aePostFunctionProc *proc;
+    void *clientData;
+} aeCommand;
+
+void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
+{
+    aeCommand cmd;
+    for (;;)
+    {
+        auto cb = read(fd, &cmd, sizeof(aeCommand));
+        if (cb != sizeof(cmd))
+        {
+            if (errno == EAGAIN)
+                break;
+            fprintf(stderr, "Failed to read pipe.\n");
+        }
+        switch (cmd.op)
+        {
+        case AE_ASYNC_OP::DeleteFileEvent:
+            aeDeleteFileEvent(eventLoop, cmd.fd, cmd.mask);
+            break;
+
+        case AE_ASYNC_OP::PostFunction:
+            {
+            std::unique_lock<decltype(g_lock)> ulock(g_lock);
+            ((aePostFunctionProc*)cmd.proc)(cmd.clientData);
+            break;
+            }
+        }
+    }
+}
+
+int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg)
+{
+    aeCommand cmd;
+    cmd.op = AE_ASYNC_OP::PostFunction;
+    cmd.proc = proc;
+    cmd.clientData = arg;
+    auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
+    AE_ASSERT(size == sizeof(cmd));
+    return AE_OK;
+}
 
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
@@ -83,6 +144,16 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
      * vector with it. */
     for (i = 0; i < setsize; i++)
         eventLoop->events[i].mask = AE_NONE;
+
+    fastlock_init(&eventLoop->flock);
+    int rgfd[2];
+    if (pipe(rgfd) < 0)
+        goto err;
+    eventLoop->fdCmdRead = rgfd[0];
+    eventLoop->fdCmdWrite = rgfd[1];
+    fcntl(eventLoop->fdCmdRead, F_SETFL, O_NONBLOCK);
+    aeCreateFileEvent(eventLoop, eventLoop->fdCmdRead, AE_READABLE|AE_THREADSAFE, aeProcessCmd, NULL);
+
     return eventLoop;
 
 err:
@@ -107,6 +178,7 @@ int aeGetSetSize(aeEventLoop *eventLoop) {
  *
  * Otherwise AE_OK is returned and the operation is successful. */
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
+    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     int i;
 
     if (setsize == eventLoop->setsize) return AE_OK;
@@ -129,19 +201,25 @@ extern "C" void aeDeleteEventLoop(aeEventLoop *eventLoop) {
     zfree(eventLoop->events);
     zfree(eventLoop->fired);
     zfree(eventLoop);
+    fastlock_free(&eventLoop->flock);
+    close(eventLoop->fdCmdRead);
+    close(eventLoop->fdCmdWrite);
 }
 
 extern "C" void aeStop(aeEventLoop *eventLoop) {
+    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     eventLoop->stop = 1;
 }
 
 extern "C" int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
         aeFileProc *proc, void *clientData)
 {
+    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     if (fd >= eventLoop->setsize) {
         errno = ERANGE;
         return AE_ERR;
     }
+
     aeFileEvent *fe = &eventLoop->events[fd];
 
     if (aeApiAddEvent(eventLoop, fd, mask) == -1)
@@ -155,8 +233,22 @@ extern "C" int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
     return AE_OK;
 }
 
+void aeDeleteFileEventAsync(aeEventLoop *eventLoop, int fd, int mask)
+{
+    if (eventLoop == g_eventLoopThisThread)
+        return aeDeleteFileEvent(eventLoop, fd, mask);
+    aeCommand cmd;
+    cmd.op = AE_ASYNC_OP::DeleteFileEvent;
+    cmd.fd = fd;
+    cmd.mask = mask;
+    auto cb = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
+    if (cb != sizeof(cmd))
+        fprintf(stderr, "Failed to write to pipe.\n");
+}
+
 extern "C" void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask)
 {
+    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     if (fd >= eventLoop->setsize) return;
     aeFileEvent *fe = &eventLoop->events[fd];
     if (fe->mask == AE_NONE) return;
@@ -178,6 +270,7 @@ extern "C" void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask)
 }
 
 extern "C" int aeGetFileEvents(aeEventLoop *eventLoop, int fd) {
+    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     if (fd >= eventLoop->setsize) return 0;
     aeFileEvent *fe = &eventLoop->events[fd];
 
@@ -211,6 +304,7 @@ extern "C" long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long millise
         aeTimeProc *proc, void *clientData,
         aeEventFinalizerProc *finalizerProc)
 {
+    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     long long id = eventLoop->timeEventNextId++;
     aeTimeEvent *te;
 
@@ -231,6 +325,7 @@ extern "C" long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long millise
 
 extern "C" int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id)
 {
+    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     aeTimeEvent *te = eventLoop->timeEventHead;
     while(te) {
         if (te->id == id) {
@@ -270,6 +365,7 @@ static aeTimeEvent *aeSearchNearestTimer(aeEventLoop *eventLoop)
 
 /* Process time events */
 static int processTimeEvents(aeEventLoop *eventLoop) {
+    std::unique_lock<decltype(g_lock)> ulock(g_lock);
     int processed = 0;
     aeTimeEvent *te;
     long long maxId;
@@ -343,6 +439,62 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
     return processed;
 }
 
+extern "C" void ProcessEventCore(aeEventLoop *eventLoop, aeFileEvent *fe, int mask, int fd)
+{
+#define LOCK_IF_NECESSARY(fe) \
+    std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock); \
+    if (!(fe->mask & AE_THREADSAFE)) \
+        ulock.lock()
+
+    int fired = 0; /* Number of events fired for current fd. */
+
+    /* Normally we execute the readable event first, and the writable
+    * event laster. This is useful as sometimes we may be able
+    * to serve the reply of a query immediately after processing the
+    * query.
+    *
+    * However if AE_BARRIER is set in the mask, our application is
+    * asking us to do the reverse: never fire the writable event
+    * after the readable. In such a case, we invert the calls.
+    * This is useful when, for instance, we want to do things
+    * in the beforeSleep() hook, like fsynching a file to disk,
+    * before replying to a client. */
+    int invert = fe->mask & AE_BARRIER;
+
+    /* Note the "fe->mask & mask & ..." code: maybe an already
+        * processed event removed an element that fired and we still
+        * didn't processed, so we check if the event is still valid.
+        *
+        * Fire the readable event if the call sequence is not
+        * inverted. */
+    if (!invert && fe->mask & mask & AE_READABLE) {
+        LOCK_IF_NECESSARY(fe);
+        fe->rfileProc(eventLoop,fd,fe->clientData,mask);
+        fired++;
+    }
+
+    /* Fire the writable event. */
+    if (fe->mask & mask & AE_WRITABLE) {
+        if (!fired || fe->wfileProc != fe->rfileProc) {
+            LOCK_IF_NECESSARY(fe);
+            fe->wfileProc(eventLoop,fd,fe->clientData,mask);
+            fired++;
+        }
+    }
+
+    /* If we have to invert the call, fire the readable event now
+        * after the writable one. */
+    if (invert && fe->mask & mask & AE_READABLE) {
+        if (!fired || fe->wfileProc != fe->rfileProc) {
+            LOCK_IF_NECESSARY(fe);
+            fe->rfileProc(eventLoop,fd,fe->clientData,mask);
+            fired++;
+        }
+    }
+
+#undef LOCK_IF_NECESSARY
+}
+
 /* Process every pending time event, then every pending file event
  * (that may be registered by time event callbacks just processed).
  * Without special flags the function sleeps until some file event
@@ -413,55 +565,19 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         numevents = aeApiPoll(eventLoop, tvp);
 
         /* After sleep callback. */
-        if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP)
+        if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP) {
+            std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
+            if (!(eventLoop->beforesleepFlags & AE_THREADSAFE))
+                ulock.lock();
             eventLoop->aftersleep(eventLoop);
+        }
 
         for (j = 0; j < numevents; j++) {
             aeFileEvent *fe = &eventLoop->events[eventLoop->fired[j].fd];
             int mask = eventLoop->fired[j].mask;
             int fd = eventLoop->fired[j].fd;
-            int fired = 0; /* Number of events fired for current fd. */
 
-            /* Normally we execute the readable event first, and the writable
-             * event laster. This is useful as sometimes we may be able
-             * to serve the reply of a query immediately after processing the
-             * query.
-             *
-             * However if AE_BARRIER is set in the mask, our application is
-             * asking us to do the reverse: never fire the writable event
-             * after the readable. In such a case, we invert the calls.
-             * This is useful when, for instance, we want to do things
-             * in the beforeSleep() hook, like fsynching a file to disk,
-             * before replying to a client. */
-            int invert = fe->mask & AE_BARRIER;
-
-            /* Note the "fe->mask & mask & ..." code: maybe an already
-             * processed event removed an element that fired and we still
-             * didn't processed, so we check if the event is still valid.
-             *
-             * Fire the readable event if the call sequence is not
-             * inverted. */
-            if (!invert && fe->mask & mask & AE_READABLE) {
-                fe->rfileProc(eventLoop,fd,fe->clientData,mask);
-                fired++;
-            }
-
-            /* Fire the writable event. */
-            if (fe->mask & mask & AE_WRITABLE) {
-                if (!fired || fe->wfileProc != fe->rfileProc) {
-                    fe->wfileProc(eventLoop,fd,fe->clientData,mask);
-                    fired++;
-                }
-            }
-
-            /* If we have to invert the call, fire the readable event now
-             * after the writable one. */
-            if (invert && fe->mask & mask & AE_READABLE) {
-                if (!fired || fe->wfileProc != fe->rfileProc) {
-                    fe->rfileProc(eventLoop,fd,fe->clientData,mask);
-                    fired++;
-                }
-            }
+            ProcessEventCore(eventLoop, fe, mask, fd);
 
             processed++;
         }
@@ -497,9 +613,14 @@ int aeWait(int fd, int mask, long long milliseconds) {
 
 void aeMain(aeEventLoop *eventLoop) {
     eventLoop->stop = 0;
+    g_eventLoopThisThread = eventLoop;
     while (!eventLoop->stop) {
-        if (eventLoop->beforesleep != NULL)
+        if (eventLoop->beforesleep != NULL) {
+            std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
+            if (!(eventLoop->beforesleepFlags & AE_THREADSAFE))
+                ulock.lock();
             eventLoop->beforesleep(eventLoop);
+        }
         aeProcessEvents(eventLoop, AE_ALL_EVENTS|AE_CALL_AFTER_SLEEP);
     }
 }
@@ -508,10 +629,22 @@ const char *aeGetApiName(void) {
     return aeApiName();
 }
 
-void aeSetBeforeSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *beforesleep) {
+void aeSetBeforeSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *beforesleep, int flags) {
     eventLoop->beforesleep = beforesleep;
+    eventLoop->beforesleepFlags = flags;
 }
 
-void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *aftersleep) {
+void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *aftersleep, int flags) {
     eventLoop->aftersleep = aftersleep;
+    eventLoop->aftersleepFlags = flags;
+}
+
+void aeAcquireLock()
+{
+    g_lock.lock();
+}
+
+void aeReleaseLock()
+{
+    g_lock.unlock();
 }

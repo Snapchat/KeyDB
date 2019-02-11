@@ -51,6 +51,7 @@
 
 typedef long long mstime_t; /* millisecond time type. */
 
+#include "fastlock.h"
 #include "ae.h"      /* Event driven programming library */
 #include "sds.h"     /* Dynamic safe strings */
 #include "dict.h"    /* Hash tables */
@@ -845,6 +846,8 @@ typedef struct client {
     /* Response buffer */
     int bufpos;
     char buf[PROTO_REPLY_CHUNK_BYTES];
+
+    int iel; /* the event loop index we're registered with */
 } client;
 
 struct saveparam {
@@ -1005,6 +1008,9 @@ struct clusterState;
 #define CHILD_INFO_TYPE_RDB 0
 #define CHILD_INFO_TYPE_AOF 1
 
+#define MAX_EVENT_LOOPS 2
+#define IDX_EVENT_LOOP_MAIN 0
+
 struct redisServer {
     /* General */
     pid_t pid;                  /* Main process pid. */
@@ -1019,7 +1025,8 @@ struct redisServer {
     redisDb *db;
     dict *commands;             /* Command table */
     dict *orig_commands;        /* Command table before command renaming. */
-    aeEventLoop *el;
+    int cel;
+    aeEventLoop *rgel[MAX_EVENT_LOOPS];
     unsigned int lruclock;      /* Clock for LRU eviction */
     int shutdown_asap;          /* SHUTDOWN needed ASAP */
     int activerehashing;        /* Incremental rehash in serverCron() */
@@ -1051,7 +1058,7 @@ struct redisServer {
     int cfd_count;              /* Used slots in cfd[] */
     list *clients;              /* List of active clients */
     list *clients_to_close;     /* Clients to close asynchronously */
-    list *clients_pending_write; /* There is to write or install handler. */
+    list *rgclients_pending_write[MAX_EVENT_LOOPS]; /* There is to write or install handler. */
     list *slaves, *monitors;    /* List of slaves and MONITORs */
     client *current_client; /* Current client, only used on crash report */
     rax *clients_index;         /* Active clients dictionary by client ID. */
@@ -1272,7 +1279,7 @@ struct redisServer {
     /* Blocked clients */
     unsigned int blocked_clients;   /* # of clients executing a blocking cmd.*/
     unsigned int blocked_clients_by_type[BLOCKED_NUM];
-    list *unblocked_clients; /* list of clients to unblock before next loop */
+    list *rgunblocked_clients[MAX_EVENT_LOOPS]; /* list of clients to unblock before next loop */
     list *ready_keys;        /* List of readyList structures for BLPOP & co */
     /* Sort parameters - qsort_r() is only available under BSD so we
      * have to take this state global, in order to pass it to sortCompare() */
@@ -1362,6 +1369,8 @@ struct redisServer {
     pthread_mutex_t lruclock_mutex;
     pthread_mutex_t next_client_id_mutex;
     pthread_mutex_t unixtime_mutex;
+
+    struct fastlock flock;
 };
 
 typedef struct pubsubPattern {
@@ -1504,7 +1513,7 @@ size_t redisPopcount(void *s, long count);
 void redisSetProcTitle(char *title);
 
 /* networking.c -- Networking and Client related operations */
-client *createClient(int fd);
+client *createClient(int fd, int iel);
 void closeTimedoutClients(void);
 void freeClient(client *c);
 void freeClientAsync(client *c);
@@ -1571,8 +1580,8 @@ void disconnectSlaves(void);
 int listenToPort(int port, int *fds, int *count);
 void pauseClients(mstime_t duration);
 int clientsArePaused(void);
-int processEventsWhileBlocked(void);
-int handleClientsWithPendingWrites(void);
+int processEventsWhileBlocked(int iel);
+int handleClientsWithPendingWrites(int iel);
 int clientHasPendingReplies(client *c);
 void unlinkClient(client *c);
 int writeToClient(int fd, client *c, int handler_installed);
@@ -2014,7 +2023,7 @@ int ldbPendingChildren(void);
 sds luaCreateFunction(client *c, lua_State *lua, robj *body);
 
 /* Blocked clients */
-void processUnblockedClients(void);
+void processUnblockedClients(int iel);
 void blockClient(client *c, int btype);
 void unblockClient(client *c);
 void queueClientForReprocessing(client *c);

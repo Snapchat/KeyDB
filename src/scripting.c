@@ -1104,7 +1104,7 @@ void scriptingInit(int setup) {
      * Note: there is no need to create it again when this function is called
      * by scriptingReset(). */
     if (server.lua_client == NULL) {
-        server.lua_client = createClient(-1);
+        server.lua_client = createClient(-1, IDX_EVENT_LOOP_MAIN);
         server.lua_client->flags |= CLIENT_LUA;
     }
 
@@ -1278,7 +1278,7 @@ void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
          * here when the EVAL command will return. */
         protectClient(server.lua_caller);
     }
-    if (server.lua_timedout) processEventsWhileBlocked();
+    if (server.lua_timedout) processEventsWhileBlocked(IDX_EVENT_LOOP_MAIN);
     if (server.lua_kill) {
         serverLog(LL_WARNING,"Lua script killed by user with SCRIPT KILL.");
         lua_pushstring(lua,"Script killed by user with SCRIPT KILL...");

@@ -109,15 +109,15 @@ void blockClient(client *c, int btype) {
 /* This function is called in the beforeSleep() function of the event loop
  * in order to process the pending input buffer of clients that were
  * unblocked after a blocking operation. */
-void processUnblockedClients(void) {
+void processUnblockedClients(int iel) {
     listNode *ln;
     client *c;
 
-    while (listLength(server.unblocked_clients)) {
-        ln = listFirst(server.unblocked_clients);
+    while (listLength(server.rgunblocked_clients[iel])) {
+        ln = listFirst(server.rgunblocked_clients[iel]);
         serverAssert(ln != NULL);
         c = ln->value;
-        listDelNode(server.unblocked_clients,ln);
+        listDelNode(server.rgunblocked_clients[iel],ln);
         c->flags &= ~CLIENT_UNBLOCKED;
 
         /* Process remaining data in the input buffer, unless the client
@@ -153,7 +153,7 @@ void queueClientForReprocessing(client *c) {
      * blocking operation, don't add back it into the list multiple times. */
     if (!(c->flags & CLIENT_UNBLOCKED)) {
         c->flags |= CLIENT_UNBLOCKED;
-        listAddNodeTail(server.unblocked_clients,c);
+        listAddNodeTail(server.rgunblocked_clients[c->iel],c);
     }
 }
 

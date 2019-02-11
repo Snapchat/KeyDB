@@ -1619,6 +1619,16 @@ void getExpansiveClientsInfo(size_t *in_usage, size_t *out_usage) {
     *out_usage = o;
 }
 
+
+void AsyncClientCron(void *pv)
+{
+    client *c = (client*)pv;
+    mstime_t now = mstime();
+    if (clientsCronHandleTimeout(c,now)) return;
+    if (clientsCronResizeQueryBuffer(c)) return;
+    if (clientsCronTrackExpansiveClients(c)) return;
+}
+
 /* This function is called by serverCron() and is used in order to perform
  * operations on clients that are important to perform constantly. For instance
  * we use this function in order to disconnect clients after a timeout, including
@@ -1661,12 +1671,20 @@ void clientsCron(void) {
         listRotate(server.clients);
         head = listFirst(server.clients);
         c = listNodeValue(head);
-        /* The following functions do different service checks on the client.
-         * The protocol is that they return non-zero if the client was
-         * terminated. */
-        if (clientsCronHandleTimeout(c,now)) continue;
-        if (clientsCronResizeQueryBuffer(c)) continue;
-        if (clientsCronTrackExpansiveClients(c)) continue;
+        if (c->iel == IDX_EVENT_LOOP_MAIN)
+        {
+            /* The following functions do different service checks on the client.
+            * The protocol is that they return non-zero if the client was
+            * terminated. */
+            if (clientsCronHandleTimeout(c,now)) continue;
+            if (clientsCronResizeQueryBuffer(c)) continue;
+            if (clientsCronTrackExpansiveClients(c)) continue;
+        }
+        else if (IDX_EVENT_LOOP_MAIN > 1)
+        {
+            aePostFunction(server.rgel[c->iel], AsyncClientCron, c);
+        }
+        
     }
 }
 
@@ -2070,19 +2088,43 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     moduleHandleBlockedClients();
 
     /* Try to process pending commands for clients that were just unblocked. */
-    if (listLength(server.unblocked_clients))
-        processUnblockedClients();
+    if (listLength(server.rgunblocked_clients[IDX_EVENT_LOOP_MAIN]))
+    {
+        aeReleaseLock();
+        processUnblockedClients(IDX_EVENT_LOOP_MAIN);
+        aeAcquireLock();
+    }
 
     /* Write the AOF buffer on disk */
     flushAppendOnlyFile(0);
 
     /* Handle writes with pending output buffers. */
-    handleClientsWithPendingWrites();
+    aeReleaseLock();
+    handleClientsWithPendingWrites(IDX_EVENT_LOOP_MAIN);
+    aeAcquireLock();
 
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
      * time. */
     if (moduleCount()) moduleReleaseGIL();
+}
+
+void beforeSleepLite(struct aeEventLoop *eventLoop)
+{
+    int iel = 0;
+    for (; iel < MAX_EVENT_LOOPS; ++iel)
+    {
+        if (server.rgel[iel] == eventLoop)
+            break;
+    }
+    serverAssert(iel < MAX_EVENT_LOOPS);
+    
+    /* Try to process pending commands for clients that were just unblocked. */
+    if (listLength(server.rgunblocked_clients[iel]))
+        processUnblockedClients(iel);
+    
+    /* Handle writes with pending output buffers. */
+    handleClientsWithPendingWrites(iel);
 }
 
 /* This function is called immadiately after the event loop multiplexing
@@ -2702,6 +2744,8 @@ void initServer(void) {
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
 
+    fastlock_init(&server.flock);
+
     if (server.syslog_enabled) {
         openlog(server.syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,
             server.syslog_facility);
@@ -2715,9 +2759,12 @@ void initServer(void) {
     server.clients_to_close = listCreate();
     server.slaves = listCreate();
     server.monitors = listCreate();
-    server.clients_pending_write = listCreate();
+    for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
+    {
+        server.rgclients_pending_write[iel] = listCreate();
+        server.rgunblocked_clients[iel] = listCreate();
+    }
     server.slaveseldb = -1; /* Force to emit the first SELECT command. */
-    server.unblocked_clients = listCreate();
     server.ready_keys = listCreate();
     server.clients_waiting_acks = listCreate();
     server.get_ack_from_slaves = 0;
@@ -2726,12 +2773,15 @@ void initServer(void) {
 
     createSharedObjects();
     adjustOpenFilesLimit();
-    server.el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
-    if (server.el == NULL) {
-        serverLog(LL_WARNING,
-            "Failed creating the event loop. Error message: '%s'",
-            strerror(errno));
-        exit(1);
+    for (int i = 0; i < MAX_EVENT_LOOPS; ++i)
+    {
+        server.rgel[i] = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
+        if (server.rgel[i] == NULL) {
+            serverLog(LL_WARNING,
+                "Failed creating the event loop. Error message: '%s'",
+                strerror(errno));
+            exit(1);
+        }
     }
     server.db = zmalloc(sizeof(redisDb)*server.dbnum, MALLOC_LOCAL);
 
@@ -2808,7 +2858,7 @@ void initServer(void) {
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
      * expired keys and so forth. */
-    if (aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL) == AE_ERR) {
+    if (aeCreateTimeEvent(server.rgel[IDX_EVENT_LOOP_MAIN], 1, serverCron, NULL, NULL) == AE_ERR) {
         serverPanic("Can't create event loop timers.");
         exit(1);
     }
@@ -2816,20 +2866,23 @@ void initServer(void) {
     /* Create an event handler for accepting new connections in TCP and Unix
      * domain sockets. */
     for (j = 0; j < server.ipfd_count; j++) {
-        if (aeCreateFileEvent(server.el, server.ipfd[j], AE_READABLE,
-            acceptTcpHandler,NULL) == AE_ERR)
-            {
-                serverPanic(
-                    "Unrecoverable error creating server.ipfd file event.");
-            }
+        for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
+        {
+            if (aeCreateFileEvent(server.rgel[iel], server.ipfd[j], AE_READABLE|AE_THREADSAFE,
+                acceptTcpHandler,NULL) == AE_ERR)
+                {
+                    serverPanic(
+                        "Unrecoverable error creating server.ipfd file event.");
+                }
+        }
     }
-    if (server.sofd > 0 && aeCreateFileEvent(server.el,server.sofd,AE_READABLE,
+    if (server.sofd > 0 && aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],server.sofd,AE_READABLE,
         acceptUnixHandler,NULL) == AE_ERR) serverPanic("Unrecoverable error creating server.sofd file event.");
 
 
     /* Register a readable event for the pipe used to awake the event loop
      * when a blocked client in a module needs attention. */
-    if (aeCreateFileEvent(server.el, server.module_blocked_pipe[0], AE_READABLE,
+    if (aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN], server.module_blocked_pipe[0], AE_READABLE,
         moduleBlockedClientPipeReadable,NULL) == AE_ERR) {
             serverPanic(
                 "Error registering the readable event for the module "
@@ -4738,6 +4791,17 @@ int redisIsSupervised(int mode) {
     return 0;
 }
 
+void *workerThreadMain(void *parg)
+{
+    int iel = (int)((int64_t)parg);
+
+    int isMainThread = (iel == IDX_EVENT_LOOP_MAIN);
+    aeSetBeforeSleepProc(server.rgel[iel], isMainThread ? beforeSleep : beforeSleepLite, isMainThread ? 0 : AE_THREADSAFE);
+    aeSetAfterSleepProc(server.rgel[iel], isMainThread ? afterSleep : NULL, 0);
+    aeMain(server.rgel[iel]);
+    aeDeleteEventLoop(server.rgel[iel]);
+    return NULL;
+}
 
 int main(int argc, char **argv) {
     struct timeval tv;
@@ -4940,10 +5004,13 @@ int main(int argc, char **argv) {
         serverLog(LL_WARNING,"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?", server.maxmemory);
     }
 
-    aeSetBeforeSleepProc(server.el,beforeSleep);
-    aeSetAfterSleepProc(server.el,afterSleep);
-    aeMain(server.el);
-    aeDeleteEventLoop(server.el);
+    pthread_t rgthread[MAX_EVENT_LOOPS];
+    for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
+    {
+        pthread_create(rgthread + iel, NULL, workerThreadMain, (void*)((int64_t)iel));
+    }
+    void *pretT;
+    pthread_join(rgthread[IDX_EVENT_LOOP_MAIN], &pretT);
     return 0;
 }
 

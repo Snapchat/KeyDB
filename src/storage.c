@@ -134,6 +134,8 @@ void storage_init(const char *tmpfilePath, size_t cbFileReserve)
     {
         serverAssert(mkdisk == NULL);
         mkdisk = MEMKIND_DEFAULT;
+        pool_initialize(&poolobj, sizeof(robj));
+        pool_initialize(&poolembstrobj, EMBSTR_ROBJ_SIZE);
     }
     else
     {
@@ -168,9 +170,6 @@ void storage_init(const char *tmpfilePath, size_t cbFileReserve)
         if (cbFileReserve == 0)
             cbFileReserve = 1*1024*1024*1024;   // 1 GB (enough to be interesting)
         posix_fallocate64(memkind_fd(mkdisk), 0, cbFileReserve);
-
-        pool_initialize(&poolobj, sizeof(robj));
-        pool_initialize(&poolembstrobj, EMBSTR_ROBJ_SIZE);
 
         pthread_atfork(handle_prefork, handle_postfork_parent, handle_postfork_child);
     }

@@ -17,4 +17,9 @@ void sfree(void*);
 void *srealloc(void *pv, size_t cb, enum MALLOC_CLASS mclass);
 size_t salloc_usable_size(void *ptr);
 
+struct redisObject *salloc_objembstr();
+void sfree_objembstr(struct redisObject *obj);
+struct redisObject *salloc_obj();
+void sfree_obj(struct redisObject *obj);
+
 #endif

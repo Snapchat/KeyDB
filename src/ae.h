@@ -35,6 +35,10 @@
 
 #include <time.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define AE_OK 0
 #define AE_ERR -1
 
@@ -46,6 +50,7 @@
                            loop iteration. Useful when you want to persist
                            things to disk before sending replies, and want
                            to do that in a group fashion. */
+#define AE_THREADSAFE 8 /* Ok to run concurrently */
 
 #define AE_FILE_EVENTS 1
 #define AE_TIME_EVENTS 2
@@ -123,10 +128,14 @@ int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id);
 int aeProcessEvents(aeEventLoop *eventLoop, int flags);
 int aeWait(int fd, int mask, long long milliseconds);
 void aeMain(aeEventLoop *eventLoop);
-char *aeGetApiName(void);
+const char *aeGetApiName(void);
 void aeSetBeforeSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *beforesleep);
 void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *aftersleep);
 int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

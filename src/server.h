@@ -169,6 +169,8 @@ typedef long long mstime_t; /* millisecond time type. */
 #define CONFIG_DEFAULT_DEFRAG_MAX_SCAN_FIELDS 1000 /* keys with more than 1000 fields will be processed separately */
 #define CONFIG_DEFAULT_PROTO_MAX_BULK_LEN (512ll*1024*1024) /* Bulk request max size */
 
+#define CONFIG_DEFAULT_THREADS 1
+
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
 #define ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC 25 /* CPU max % for keys collection */
@@ -1008,7 +1010,7 @@ struct clusterState;
 #define CHILD_INFO_TYPE_RDB 0
 #define CHILD_INFO_TYPE_AOF 1
 
-#define MAX_EVENT_LOOPS 2
+#define MAX_EVENT_LOOPS 16
 #define IDX_EVENT_LOOP_MAIN 0
 
 struct redisServer {
@@ -2278,6 +2280,18 @@ void serverLogHexDump(int level, char *descr, void *value, size_t len);
 int memtest_preserving_test(unsigned long *m, size_t bytes, int passes);
 void mixDigest(unsigned char *digest, void *ptr, size_t len);
 void xorDigest(unsigned char *digest, void *ptr, size_t len);
+
+inline int ielFromEventLoop(const aeEventLoop *eventLoop)
+{
+    int iel = 0;
+    for (; iel < server.cel; ++iel)
+    {
+        if (server.rgel[iel] == eventLoop)
+            break;
+    }
+    serverAssert(iel < server.cel);
+    return iel;
+}
 
 #define redisDebug(fmt, ...) \
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)

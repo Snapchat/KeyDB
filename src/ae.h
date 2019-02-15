@@ -51,7 +51,9 @@ extern "C" {
                            loop iteration. Useful when you want to persist
                            things to disk before sending replies, and want
                            to do that in a group fashion. */
-#define AE_THREADSAFE 8 /* Ok to run concurrently */
+#define AE_READ_THREADSAFE 8
+#define AE_WRITE_THREADSAFE 16
+#define AE_SLEEP_THREADSAFE 32
 
 #define AE_FILE_EVENTS 1
 #define AE_TIME_EVENTS 2
@@ -118,6 +120,7 @@ typedef struct aeEventLoop {
     struct fastlock flock;
     int fdCmdWrite;
     int fdCmdRead;
+    int cevents;
 } aeEventLoop;
 
 /* Prototypes */

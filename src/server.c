@@ -2111,13 +2111,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
 void beforeSleepLite(struct aeEventLoop *eventLoop)
 {
-    int iel = 0;
-    for (; iel < MAX_EVENT_LOOPS; ++iel)
-    {
-        if (server.rgel[iel] == eventLoop)
-            break;
-    }
-    serverAssert(iel < MAX_EVENT_LOOPS);
+    int iel = ielFromEventLoop(eventLoop);
     
     /* Try to process pending commands for clients that were just unblocked. */
     if (listLength(server.rgunblocked_clients[iel]))
@@ -2451,6 +2445,9 @@ void initServerConfig(void) {
      * script to the slave / AOF. This is the new way starting from
      * Redis 5. However it is possible to revert it via redis.conf. */
     server.lua_always_replicate_commands = 1;
+
+    /* Multithreading */
+    server.cel = CONFIG_DEFAULT_THREADS;
 }
 
 extern char **environ;
@@ -2737,9 +2734,24 @@ void resetServerStats(void) {
     server.aof_delayed_fsync = 0;
 }
 
-void initServer(void) {
-    int j;
+void initServerAcceptHandlers(void)
+{
+    /* Create an event handler for accepting new connections in TCP and Unix
+     * domain sockets. */
+    for (int j = 0; j < server.ipfd_count; j++) {
+        int iel = j % server.cel;
+        if (aeCreateFileEvent(server.rgel[iel], server.ipfd[j], AE_READABLE|AE_READ_THREADSAFE,
+            acceptTcpHandler,NULL) == AE_ERR)
+            {
+                serverPanic(
+                    "Unrecoverable error creating server.ipfd file event.");
+            }
+    }
+    if (server.sofd > 0 && aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],server.sofd,AE_READABLE|AE_READ_THREADSAFE,
+        acceptUnixHandler,NULL) == AE_ERR) serverPanic("Unrecoverable error creating server.sofd file event.");
+}
 
+void initServer(void) {
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
@@ -2809,7 +2821,7 @@ void initServer(void) {
     }
 
     /* Create the Redis databases, and initialize other internal state. */
-    for (j = 0; j < server.dbnum; j++) {
+    for (int j = 0; j < server.dbnum; j++) {
         server.db[j].pdict = dictCreate(&dbDictType,NULL);
         server.db[j].expires = dictCreate(&keyptrDictType,NULL);
         server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
@@ -2862,23 +2874,6 @@ void initServer(void) {
         serverPanic("Can't create event loop timers.");
         exit(1);
     }
-
-    /* Create an event handler for accepting new connections in TCP and Unix
-     * domain sockets. */
-    for (j = 0; j < server.ipfd_count; j++) {
-        for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
-        {
-            if (aeCreateFileEvent(server.rgel[iel], server.ipfd[j], AE_READABLE|AE_THREADSAFE,
-                acceptTcpHandler,NULL) == AE_ERR)
-                {
-                    serverPanic(
-                        "Unrecoverable error creating server.ipfd file event.");
-                }
-        }
-    }
-    if (server.sofd > 0 && aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],server.sofd,AE_READABLE,
-        acceptUnixHandler,NULL) == AE_ERR) serverPanic("Unrecoverable error creating server.sofd file event.");
-
 
     /* Register a readable event for the pipe used to awake the event loop
      * when a blocked client in a module needs attention. */
@@ -4794,9 +4789,10 @@ int redisIsSupervised(int mode) {
 void *workerThreadMain(void *parg)
 {
     int iel = (int)((int64_t)parg);
+    serverLog(LOG_INFO, "Thread %d alive.", iel);
 
     int isMainThread = (iel == IDX_EVENT_LOOP_MAIN);
-    aeSetBeforeSleepProc(server.rgel[iel], isMainThread ? beforeSleep : beforeSleepLite, isMainThread ? 0 : AE_THREADSAFE);
+    aeSetBeforeSleepProc(server.rgel[iel], isMainThread ? beforeSleep : beforeSleepLite, isMainThread ? 0 : AE_SLEEP_THREADSAFE);
     aeSetAfterSleepProc(server.rgel[iel], isMainThread ? afterSleep : NULL, 0);
     aeMain(server.rgel[iel]);
     aeDeleteEventLoop(server.rgel[iel]);
@@ -5004,8 +5000,14 @@ int main(int argc, char **argv) {
         serverLog(LL_WARNING,"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?", server.maxmemory);
     }
 
+    
+
+    server.cel = 4; //testing
+    initServerAcceptHandlers();
+
+    serverAssert(server.cel > 0 && server.cel <= MAX_EVENT_LOOPS);
     pthread_t rgthread[MAX_EVENT_LOOPS];
-    for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
+    for (int iel = 0; iel < server.cel; ++iel)
     {
         pthread_create(rgthread + iel, NULL, workerThreadMain, (void*)((int64_t)iel));
     }

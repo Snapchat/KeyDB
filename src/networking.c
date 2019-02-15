@@ -94,7 +94,7 @@ client *createClient(int fd, int iel) {
         anetEnableTcpNoDelay(NULL,fd);
         if (server.tcpkeepalive)
             anetKeepAlive(NULL,fd,server.tcpkeepalive);
-        if (aeCreateFileEvent(server.rgel[iel],fd,AE_READABLE|AE_THREADSAFE,
+        if (aeCreateFileEvent(server.rgel[iel],fd,AE_READABLE|AE_READ_THREADSAFE,
             readQueryFromClient, c) == AE_ERR)
         {
             close(fd);
@@ -850,36 +850,9 @@ static void acceptCommonHandler(int fd, int flags, char *ip, int iel) {
     c->flags |= flags;
 }
 
-struct AcceptCommonHandlerAsyncArgs
-{
-    int fd;
-    int flags;
-    char cip[NET_IP_STR_LEN];
-    int fUseCip;
-    int iel;
-};
-static void AcceptCommonHandlerAsync(void *args)
-{
-    struct AcceptCommonHandlerAsyncArgs *aargs = args;
-    acceptCommonHandler(aargs->fd, aargs->flags, aargs->cip, aargs->iel);
-    zfree(args);
-}
-static void EnqueueAcceptCommonHandler(int fd, int flags, char *ip, int iel)
-{
-    struct AcceptCommonHandlerAsyncArgs *args = zmalloc(sizeof(struct AcceptCommonHandlerAsyncArgs), MALLOC_LOCAL);
-    args->fd = fd;
-    args->flags = flags;
-    if (ip != NULL)
-        memcpy(args->cip, ip, NET_IP_STR_LEN);
-    args->fUseCip = (ip != NULL);
-    args->iel = iel;
-    aePostFunction(server.rgel[iel], AcceptCommonHandlerAsync, args);
-}
-
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd, max = MAX_ACCEPTS_PER_CALL;
     char cip[NET_IP_STR_LEN];
-    UNUSED(el);
     UNUSED(mask);
     UNUSED(privdata);
 
@@ -892,24 +865,12 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
-        int ielCur = 0;
-        for (; ielCur < MAX_EVENT_LOOPS; ++ielCur)
-        {
-            if (el == server.rgel[ielCur])
-                break;
-        }
-        serverAssert(ielCur < MAX_EVENT_LOOPS);
-        int iel = rand() % MAX_EVENT_LOOPS;
-        if (iel == ielCur)
-        {
-            aeAcquireLock();
-            acceptCommonHandler(cfd,0,cip, iel);
-            aeReleaseLock();
-        }
-        else
-        {
-            EnqueueAcceptCommonHandler(cfd, 0, cip, iel);
-        }
+        int ielCur = ielFromEventLoop(el);
+
+        // We always accept on the same thread
+        aeAcquireLock();
+        acceptCommonHandler(cfd,0,cip, ielCur);
+        aeReleaseLock();
     }
 }
 
@@ -927,8 +888,13 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     "Accepting client connection: %s", server.neterr);
             return;
         }
+        int ielCur = ielFromEventLoop(el);
         serverLog(LL_VERBOSE,"Accepted connection to %s", server.unixsocket);
-        EnqueueAcceptCommonHandler(cfd,CLIENT_UNIX_SOCKET,NULL, rand() % MAX_EVENT_LOOPS);
+
+        aeAcquireLock();
+        acceptCommonHandler(cfd,CLIENT_UNIX_SOCKET,NULL, ielCur);
+        aeReleaseLock();
+        
     }
 }
 
@@ -1324,7 +1290,7 @@ void protectClient(client *c) {
 void unprotectClient(client *c) {
     if (c->flags & CLIENT_PROTECTED) {
         c->flags &= ~CLIENT_PROTECTED;
-        aeCreateFileEvent(server.rgel[c->iel],c->fd,AE_READABLE|AE_THREADSAFE,readQueryFromClient,c);
+        aeCreateFileEvent(server.rgel[c->iel],c->fd,AE_READABLE|AE_READ_THREADSAFE,readQueryFromClient,c);
         if (clientHasPendingReplies(c)) clientInstallWriteHandler(c);
     }
 }
@@ -1677,14 +1643,6 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     size_t qblen;
     UNUSED(el);
     UNUSED(mask);
-
-    int iel = 0;
-    for (; iel < MAX_EVENT_LOOPS; ++iel)
-    {
-        if (server.rgel[iel] == el)
-            break;
-    }
-    serverAssert(iel == c->iel);
 
     readlen = PROTO_IOBUF_LEN;
     /* If this is a multi bulk request, and we are processing a bulk reply

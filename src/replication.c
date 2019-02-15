@@ -2236,7 +2236,7 @@ void replicationResurrectCachedMaster(int newfd) {
 
     /* Re-add to the list of clients. */
     linkClient(server.master);
-    if (aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN], newfd, AE_READABLE,
+    if (aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN], newfd, AE_READABLE|AE_READ_THREADSAFE,
                           readQueryFromClient, server.master)) {
         serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the readable handler: %s", strerror(errno));
         freeClientAsync(server.master); /* Close ASAP. */

@@ -473,7 +473,7 @@ extern "C" void ProcessEventCore(aeEventLoop *eventLoop, aeFileEvent *fe, int ma
         * inverted. */
     if (!invert && fe->mask & mask & AE_READABLE) {
         LOCK_IF_NECESSARY(fe, AE_READ_THREADSAFE);
-        fe->rfileProc(eventLoop,fd,fe->clientData,mask);
+        fe->rfileProc(eventLoop,fd,fe->clientData,mask | (fe->mask & AE_READ_THREADSAFE));
         fired++;
     }
 
@@ -481,7 +481,7 @@ extern "C" void ProcessEventCore(aeEventLoop *eventLoop, aeFileEvent *fe, int ma
     if (fe->mask & mask & AE_WRITABLE) {
         if (!fired || fe->wfileProc != fe->rfileProc) {
             LOCK_IF_NECESSARY(fe, AE_WRITE_THREADSAFE);
-            fe->wfileProc(eventLoop,fd,fe->clientData,mask);
+            fe->wfileProc(eventLoop,fd,fe->clientData,mask | (fe->mask & AE_WRITE_THREADSAFE));
             fired++;
         }
     }
@@ -491,7 +491,7 @@ extern "C" void ProcessEventCore(aeEventLoop *eventLoop, aeFileEvent *fe, int ma
     if (invert && fe->mask & mask & AE_READABLE) {
         if (!fired || fe->wfileProc != fe->rfileProc) {
             LOCK_IF_NECESSARY(fe, AE_READ_THREADSAFE);
-            fe->rfileProc(eventLoop,fd,fe->clientData,mask);
+            fe->rfileProc(eventLoop,fd,fe->clientData,mask | (fe->mask & AE_READ_THREADSAFE));
             fired++;
         }
     }

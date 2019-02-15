@@ -276,7 +276,7 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
          * new node */
         size_t avail = tail->size - tail->used;
         size_t copy = avail >= len? len: avail;
-        memcpy(tail->buf + tail->used, s, copy);
+        memcpy(tail->buf() + tail->used, s, copy);
         tail->used += copy;
         s += copy;
         len -= copy;
@@ -289,7 +289,7 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
         /* take over the allocation's internal fragmentation */
         tail->size = zmalloc_usable(tail) - sizeof(clientReplyBlock);
         tail->used = len;
-        memcpy(tail->buf, s, len);
+        memcpy(tail->buf(), s, len);
         listAddNodeTail(c->reply, tail);
         c->reply_bytes += tail->size;
     }
@@ -458,8 +458,8 @@ void setDeferredAggregateLen(client *c, void *node, long length, char prefix) {
     if (ln->next != NULL && (next = (clientReplyBlock*)listNodeValue(ln->next)) &&
         next->size - next->used >= lenstr_len &&
         next->used < PROTO_REPLY_CHUNK_BYTES * 4) {
-        memmove(next->buf + lenstr_len, next->buf, next->used);
-        memcpy(next->buf, lenstr, lenstr_len);
+        memmove(next->buf() + lenstr_len, next->buf(), next->used);
+        memcpy(next->buf(), lenstr, lenstr_len);
         next->used += lenstr_len;
         listDelNode(c->reply,ln);
     } else {
@@ -468,7 +468,7 @@ void setDeferredAggregateLen(client *c, void *node, long length, char prefix) {
         /* Take over the allocation's internal fragmentation */
         buf->size = zmalloc_usable(buf) - sizeof(clientReplyBlock);
         buf->used = lenstr_len;
-        memcpy(buf->buf, lenstr, lenstr_len);
+        memcpy(buf->buf(), lenstr, lenstr_len);
         listNodeValue(ln) = buf;
         c->reply_bytes += buf->size;
     }
@@ -1126,7 +1126,7 @@ int writeToClient(int fd, client *c, int handler_installed) {
                 continue;
             }
 
-            nwritten = write(fd, o->buf + c->sentlen, objlen - c->sentlen);
+            nwritten = write(fd, o->buf() + c->sentlen, objlen - c->sentlen);
 
             if (nwritten <= 0) break;
             c->sentlen += nwritten;
@@ -1646,6 +1646,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     size_t qblen;
     UNUSED(el);
     UNUSED(mask);
+    serverAssert(mask & AE_READ_THREADSAFE);
 
     readlen = PROTO_IOBUF_LEN;
     /* If this is a multi bulk request, and we are processing a bulk reply

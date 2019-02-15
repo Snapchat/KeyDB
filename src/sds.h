@@ -40,43 +40,47 @@ extern const char *SDS_NOINIT;
 #include <stdarg.h>
 #include <stdint.h>
 
-#ifdef __cplusplus
-#define ZERO_LENGTH_ARRAY_LENGTH 1
-#else
-#define ZERO_LENGTH_ARRAY_LENGTH
-#endif
-
 typedef char *sds;
 
 /* Note: sdshdr5 is never used, we just access the flags byte directly.
  * However is here to document the layout of type 5 SDS strings. */
 struct __attribute__ ((__packed__)) sdshdr5 {
     unsigned char flags; /* 3 lsb of type, and 5 msb of string length */
-    char buf[ZERO_LENGTH_ARRAY_LENGTH];
+#ifndef __cplusplus
+    char buf[];
+#endif
 };
 struct __attribute__ ((__packed__)) sdshdr8 {
     uint8_t len; /* used */
     uint8_t alloc; /* excluding the header and null terminator */
     unsigned char flags; /* 3 lsb of type, 5 unused bits */
-    char buf[ZERO_LENGTH_ARRAY_LENGTH];
+#ifndef __cplusplus
+    char buf[];
+#endif
 };
 struct __attribute__ ((__packed__)) sdshdr16 {
     uint16_t len; /* used */
     uint16_t alloc; /* excluding the header and null terminator */
     unsigned char flags; /* 3 lsb of type, 5 unused bits */
-    char buf[ZERO_LENGTH_ARRAY_LENGTH];
+#ifndef __cplusplus
+    char buf[];
+#endif
 };
 struct __attribute__ ((__packed__)) sdshdr32 {
     uint32_t len; /* used */
     uint32_t alloc; /* excluding the header and null terminator */
     unsigned char flags; /* 3 lsb of type, 5 unused bits */
-    char buf[ZERO_LENGTH_ARRAY_LENGTH];
+#ifndef __cplusplus
+    char buf[];
+#endif
 };
 struct __attribute__ ((__packed__)) sdshdr64 {
     uint64_t len; /* used */
     uint64_t alloc; /* excluding the header and null terminator */
     unsigned char flags; /* 3 lsb of type, 5 unused bits */
-    char buf[ZERO_LENGTH_ARRAY_LENGTH];
+#ifndef __cplusplus
+    char buf[];
+#endif
 };
 
 #define SDS_TYPE_5  0

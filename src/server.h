@@ -663,7 +663,14 @@ struct evictionPoolEntry; /* Defined in evict.c */
  * which is actually a linked list of blocks like that, that is: client->reply. */
 typedef struct clientReplyBlock {
     size_t size, used;
-    char buf[ZERO_LENGTH_ARRAY_LENGTH];
+#ifndef __cplusplus
+    char buf[];
+#else
+    __attribute__((always_inline)) char *buf()
+    {
+        return reinterpret_cast<char*>(this+1);
+    }
+#endif
 } clientReplyBlock;
 
 /* Redis database representation. There are multiple databases identified
@@ -884,10 +891,12 @@ typedef struct zskiplistNode {
     sds ele;
     double score;
     struct zskiplistNode *backward;
+#ifndef __cplusplus
     struct zskiplistLevel {
         struct zskiplistNode *forward;
         unsigned long span;
-    } level[ZERO_LENGTH_ARRAY_LENGTH];
+    } level[];
+#endif
 } zskiplistNode;
 
 typedef struct zskiplist {
@@ -1575,8 +1584,8 @@ unsigned long getClientOutputBufferMemoryUsage(client *c);
 void freeClientsInAsyncFreeQueue(void);
 void asyncCloseClientOnOutputBufferLimitReached(client *c);
 int getClientType(client *c);
-int getClientTypeByName(char *name);
-char *getClientTypeName(int cclass);
+int getClientTypeByName(const char *name);
+const char *getClientTypeName(int cclass);
 void flushSlavesOutputBuffers(void);
 void disconnectSlaves(void);
 int listenToPort(int port, int *fds, int *count);

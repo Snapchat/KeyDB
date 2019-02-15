@@ -31,12 +31,6 @@
 #ifndef __QUICKLIST_H__
 #define __QUICKLIST_H__
 
-#ifdef __cplusplus
-#define ZERO_LENGTH_ARRAY_LENGTH 1
-#else
-#define ZERO_LENGTH_ARRAY_LENGTH
-#endif
-
 /* Node, quicklist, and Iterator are the only data structures used currently. */
 
 /* quicklistNode is a 32 byte struct describing a ziplist for a quicklist.
@@ -67,7 +61,9 @@ typedef struct quicklistNode {
  * When quicklistNode->zl is compressed, node->zl points to a quicklistLZF */
 typedef struct quicklistLZF {
     unsigned int sz; /* LZF size in bytes*/
-    char compressed[ZERO_LENGTH_ARRAY_LENGTH];
+#ifndef __cplusplus
+    char compressed[];
+#endif
 } quicklistLZF;
 
 /* quicklist is a 40 byte struct (on 64-bit systems) describing a quicklist.

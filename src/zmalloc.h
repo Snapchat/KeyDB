@@ -86,6 +86,10 @@
 #define HAVE_DEFRAG
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void *zmalloc(size_t size, enum MALLOC_CLASS mclass);
 void *zcalloc(size_t size, enum MALLOC_CLASS mclass);
 void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS mclass);
@@ -114,6 +118,10 @@ size_t zmalloc_usable(void *ptr);
 
 #ifdef REDIS_TEST
 int zmalloc_test(int argc, char **argv);
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif /* __ZMALLOC_H */

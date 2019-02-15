@@ -73,6 +73,7 @@ thread_local aeEventLoop *g_eventLoopThisThread = NULL;
 enum class AE_ASYNC_OP
 {
     PostFunction,
+    PostCppFunction,
     DeleteFileEvent,
 };
 typedef struct aeCommand
@@ -80,7 +81,10 @@ typedef struct aeCommand
     AE_ASYNC_OP op;
     int fd; 
     int mask;
-    aePostFunctionProc *proc;
+    union {
+        aePostFunctionProc *proc;
+        std::function<void()> *pfn;
+    };
     void *clientData;
 } aeCommand;
 
@@ -108,6 +112,13 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
             ((aePostFunctionProc*)cmd.proc)(cmd.clientData);
             break;
             }
+
+        case AE_ASYNC_OP::PostCppFunction:
+            {
+            std::unique_lock<decltype(g_lock)> ulock(g_lock);
+            (*cmd.pfn)();
+            delete cmd.pfn;
+            }
         }
     }
 }
@@ -118,6 +129,16 @@ int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg)
     cmd.op = AE_ASYNC_OP::PostFunction;
     cmd.proc = proc;
     cmd.clientData = arg;
+    auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
+    AE_ASSERT(size == sizeof(cmd));
+    return AE_OK;
+}
+
+int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn)
+{
+    aeCommand cmd;
+    cmd.op = AE_ASYNC_OP::PostCppFunction;
+    cmd.pfn = new std::function<void()>(fn);
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
     AE_ASSERT(size == sizeof(cmd));
     return AE_OK;

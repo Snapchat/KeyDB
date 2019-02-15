@@ -35,6 +35,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef __DICT_H
 #define __DICT_H
 
@@ -185,5 +189,9 @@ dictEntry **dictFindEntryRefByPtrAndHash(dict *d, const void *oldptr, uint64_t h
 extern dictType dictTypeHeapStringCopyKey;
 extern dictType dictTypeHeapStrings;
 extern dictType dictTypeHeapStringCopyKeyValue;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* __DICT_H */

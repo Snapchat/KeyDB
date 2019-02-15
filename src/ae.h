@@ -33,6 +33,9 @@
 #ifndef __AE_H__
 #define __AE_H__
 
+#ifdef __cplusplus
+#include <functional>
+#endif
 #include <time.h>
 #include "fastlock.h"
 
@@ -126,6 +129,11 @@ typedef struct aeEventLoop {
 /* Prototypes */
 aeEventLoop *aeCreateEventLoop(int setsize);
 int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg);
+#ifdef __cplusplus
+}   // EXTERN C
+int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn);
+extern "C" {
+#endif
 void aeDeleteEventLoop(aeEventLoop *eventLoop);
 void aeStop(aeEventLoop *eventLoop);
 int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,

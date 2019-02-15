@@ -971,7 +971,7 @@ void configSetCommand(client *c) {
             if ((unsigned int) aeGetSetSize(server.rgel[IDX_EVENT_LOOP_MAIN]) <
                 server.maxclients + CONFIG_FDSET_INCR)
             {
-                for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
+                for (int iel = 0; iel < server.cel; ++iel)
                 {
                     if (aeResizeSetSize(server.rgel[iel],
                         server.maxclients + CONFIG_FDSET_INCR) == AE_ERR)

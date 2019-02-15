@@ -152,7 +152,8 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->fdCmdRead = rgfd[0];
     eventLoop->fdCmdWrite = rgfd[1];
     fcntl(eventLoop->fdCmdRead, F_SETFL, O_NONBLOCK);
-    aeCreateFileEvent(eventLoop, eventLoop->fdCmdRead, AE_READABLE|AE_THREADSAFE, aeProcessCmd, NULL);
+    eventLoop->cevents = 0;
+    aeCreateFileEvent(eventLoop, eventLoop->fdCmdRead, AE_READABLE|AE_READ_THREADSAFE, aeProcessCmd, NULL);
 
     return eventLoop;
 
@@ -256,6 +257,9 @@ extern "C" void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask)
     /* We want to always remove AE_BARRIER if set when AE_WRITABLE
      * is removed. */
     if (mask & AE_WRITABLE) mask |= AE_BARRIER;
+
+    if (mask & AE_WRITABLE) mask |= AE_WRITE_THREADSAFE;
+    if (mask & AE_READABLE) mask |= AE_READ_THREADSAFE;
 
     aeApiDelEvent(eventLoop, fd, mask);
     fe->mask = fe->mask & (~mask);
@@ -441,9 +445,9 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
 
 extern "C" void ProcessEventCore(aeEventLoop *eventLoop, aeFileEvent *fe, int mask, int fd)
 {
-#define LOCK_IF_NECESSARY(fe) \
+#define LOCK_IF_NECESSARY(fe, tsmask) \
     std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock); \
-    if (!(fe->mask & AE_THREADSAFE)) \
+    if (!(fe->mask & tsmask)) \
         ulock.lock()
 
     int fired = 0; /* Number of events fired for current fd. */
@@ -468,7 +472,7 @@ extern "C" void ProcessEventCore(aeEventLoop *eventLoop, aeFileEvent *fe, int ma
         * Fire the readable event if the call sequence is not
         * inverted. */
     if (!invert && fe->mask & mask & AE_READABLE) {
-        LOCK_IF_NECESSARY(fe);
+        LOCK_IF_NECESSARY(fe, AE_READ_THREADSAFE);
         fe->rfileProc(eventLoop,fd,fe->clientData,mask);
         fired++;
     }
@@ -476,7 +480,7 @@ extern "C" void ProcessEventCore(aeEventLoop *eventLoop, aeFileEvent *fe, int ma
     /* Fire the writable event. */
     if (fe->mask & mask & AE_WRITABLE) {
         if (!fired || fe->wfileProc != fe->rfileProc) {
-            LOCK_IF_NECESSARY(fe);
+            LOCK_IF_NECESSARY(fe, AE_WRITE_THREADSAFE);
             fe->wfileProc(eventLoop,fd,fe->clientData,mask);
             fired++;
         }
@@ -486,7 +490,7 @@ extern "C" void ProcessEventCore(aeEventLoop *eventLoop, aeFileEvent *fe, int ma
         * after the writable one. */
     if (invert && fe->mask & mask & AE_READABLE) {
         if (!fired || fe->wfileProc != fe->rfileProc) {
-            LOCK_IF_NECESSARY(fe);
+            LOCK_IF_NECESSARY(fe, AE_READ_THREADSAFE);
             fe->rfileProc(eventLoop,fd,fe->clientData,mask);
             fired++;
         }
@@ -567,7 +571,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         /* After sleep callback. */
         if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP) {
             std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
-            if (!(eventLoop->beforesleepFlags & AE_THREADSAFE))
+            if (!(eventLoop->beforesleepFlags & AE_SLEEP_THREADSAFE))
                 ulock.lock();
             eventLoop->aftersleep(eventLoop);
         }
@@ -586,6 +590,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
     if (flags & AE_TIME_EVENTS)
         processed += processTimeEvents(eventLoop);
 
+    eventLoop->cevents += processed;
     return processed; /* return the number of processed file/time events */
 }
 
@@ -617,7 +622,7 @@ void aeMain(aeEventLoop *eventLoop) {
     while (!eventLoop->stop) {
         if (eventLoop->beforesleep != NULL) {
             std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
-            if (!(eventLoop->beforesleepFlags & AE_THREADSAFE))
+            if (!(eventLoop->beforesleepFlags & AE_SLEEP_THREADSAFE))
                 ulock.lock();
             eventLoop->beforesleep(eventLoop);
         }

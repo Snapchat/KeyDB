@@ -27,11 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-extern "C"
-{
 #include "server.h"
 #include "atomicvar.h"
-}
 #include <sys/uio.h>
 #include <math.h>
 #include <ctype.h>

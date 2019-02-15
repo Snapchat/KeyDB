@@ -74,6 +74,10 @@ typedef long long mstime_t; /* millisecond time type. */
 #include "endianconv.h"
 #include "crc64.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Error codes */
 #define C_OK                    0
 #define C_ERR                   -1
@@ -2306,5 +2310,9 @@ inline int ielFromEventLoop(const aeEventLoop *eventLoop)
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define redisDebugMark() \
     printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

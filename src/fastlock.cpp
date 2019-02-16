@@ -1,7 +1,18 @@
 #include "fastlock.h"
 #include <unistd.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
+#include <sched.h>
 
-thread_local int tls_pid = -1; 
+static_assert(sizeof(pid_t) <= sizeof(fastlock::m_pidOwner), "fastlock::m_pidOwner not large enough");
+
+static pid_t gettid()
+{
+    static thread_local int pidCache = -1;
+    if (pidCache == -1)
+        pidCache = syscall(SYS_gettid);
+    return pidCache;
+}
 
 extern "C" void fastlock_init(struct fastlock *lock)
 {
@@ -11,16 +22,18 @@ extern "C" void fastlock_init(struct fastlock *lock)
 
 extern "C" void fastlock_lock(struct fastlock *lock)
 {
+    if (lock->m_pidOwner == gettid())
+    {
+        ++lock->m_depth;
+        return;
+    }
+
     while (!__sync_bool_compare_and_swap(&lock->m_lock, 0, 1))
     {
-        if (lock->m_pidOwner == getpid())
-        {
-            ++lock->m_depth;
-            return;
-        }
+        sched_yield();
     }
     lock->m_depth = 1;
-    lock->m_pidOwner = getpid();
+    lock->m_pidOwner = gettid();
 }
 
 extern "C" void fastlock_unlock(struct fastlock *lock)
@@ -29,7 +42,6 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
     if (lock->m_depth == 0)
     {
         lock->m_pidOwner = -1;
-        asm volatile ("": : :"memory");
         __sync_bool_compare_and_swap(&lock->m_lock, 1, 0);
     }
 }

@@ -2257,7 +2257,10 @@ void initServerConfig(void) {
     server.bindaddr_count = 0;
     server.unixsocket = NULL;
     server.unixsocketperm = CONFIG_DEFAULT_UNIX_SOCKET_PERM;
-    server.ipfd_count = 0;
+    for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
+    {
+        server.rgbindinfo[iel].ipfd_count = 0;
+    }
     server.sofd = -1;
     server.protected_mode = CONFIG_DEFAULT_PROTECTED_MODE;
     server.dbnum = CONFIG_DEFAULT_DBNUM;
@@ -2634,7 +2637,7 @@ void checkTcpBacklogSettings(void) {
  * impossible to bind, or no bind addresses were specified in the server
  * configuration but the function is not able to bind * for at least
  * one of the IPv4 or IPv6 protocols. */
-int listenToPort(int port, int *fds, int *count) {
+int listenToPort(int port, int *fds, int *count, int fReusePort) {
     int j;
 
     /* Force binding of 0.0.0.0 if no bind address is specified, always
@@ -2646,7 +2649,7 @@ int listenToPort(int port, int *fds, int *count) {
             /* Bind * for both IPv6 and IPv4, we enter here only if
              * server.bindaddr_count == 0. */
             fds[*count] = anetTcp6Server(server.neterr,port,NULL,
-                server.tcp_backlog);
+                server.tcp_backlog, fReusePort);
             if (fds[*count] != ANET_ERR) {
                 anetNonBlock(NULL,fds[*count]);
                 (*count)++;
@@ -2658,7 +2661,7 @@ int listenToPort(int port, int *fds, int *count) {
             if (*count == 1 || unsupported) {
                 /* Bind the IPv4 address as well. */
                 fds[*count] = anetTcpServer(server.neterr,port,NULL,
-                    server.tcp_backlog);
+                    server.tcp_backlog, fReusePort);
                 if (fds[*count] != ANET_ERR) {
                     anetNonBlock(NULL,fds[*count]);
                     (*count)++;
@@ -2674,11 +2677,11 @@ int listenToPort(int port, int *fds, int *count) {
         } else if (strchr(server.bindaddr[j],':')) {
             /* Bind IPv6 address. */
             fds[*count] = anetTcp6Server(server.neterr,port,server.bindaddr[j],
-                server.tcp_backlog);
+                server.tcp_backlog, fReusePort);
         } else {
             /* Bind IPv4 address. */
             fds[*count] = anetTcpServer(server.neterr,port,server.bindaddr[j],
-                server.tcp_backlog);
+                server.tcp_backlog, fReusePort);
         }
         if (fds[*count] == ANET_ERR) {
             serverLog(LL_WARNING,
@@ -2734,19 +2737,48 @@ void resetServerStats(void) {
     server.aof_delayed_fsync = 0;
 }
 
-void initServerAcceptHandlers(void)
+static void initNetworkingThread(int iel, int fReusePort)
 {
-    /* Create an event handler for accepting new connections in TCP and Unix
-     * domain sockets. */
-    for (int j = 0; j < server.ipfd_count; j++) {
-        int iel = j % server.cel;
-        if (aeCreateFileEvent(server.rgel[iel], server.ipfd[j], AE_READABLE|AE_READ_THREADSAFE,
+    /* Open the TCP listening socket for the user commands. */
+    if (server.port != 0 &&
+        listenToPort(server.port,server.rgbindinfo[iel].ipfd,&server.rgbindinfo[iel].ipfd_count, fReusePort) == C_ERR)
+        exit(1);
+
+    /* Create an event handler for accepting new connections in TCP */
+    for (int j = 0; j < server.rgbindinfo[iel].ipfd_count; j++) {
+        if (aeCreateFileEvent(server.rgel[iel], server.rgbindinfo[iel].ipfd[j], AE_READABLE|AE_READ_THREADSAFE,
             acceptTcpHandler,NULL) == AE_ERR)
             {
                 serverPanic(
                     "Unrecoverable error creating server.ipfd file event.");
             }
     }
+}
+
+static void initNetworking(int fReusePort)
+{
+    int celListen = (fReusePort) ? server.cel : 1;
+    for (int iel = 0; iel < celListen; ++iel)
+        initNetworkingThread(iel, fReusePort);
+
+    /* Open the listening Unix domain socket. */
+    if (server.unixsocket != NULL) {
+        unlink(server.unixsocket); /* don't care if this fails */
+        server.sofd = anetUnixServer(server.neterr,server.unixsocket,
+            server.unixsocketperm, server.tcp_backlog);
+        if (server.sofd == ANET_ERR) {
+            serverLog(LL_WARNING, "Opening Unix socket: %s", server.neterr);
+            exit(1);
+        }
+        anetNonBlock(NULL,server.sofd);
+    }
+
+    /* Abort if there are no listening sockets at all. */
+    if (server.rgbindinfo[IDX_EVENT_LOOP_MAIN].ipfd_count == 0 && server.sofd < 0) {
+        serverLog(LL_WARNING, "Configured to not listen anywhere, exiting.");
+        exit(1);
+    }
+
     if (server.sofd > 0 && aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],server.sofd,AE_READABLE|AE_READ_THREADSAFE,
         acceptUnixHandler,NULL) == AE_ERR) serverPanic("Unrecoverable error creating server.sofd file event.");
 }
@@ -2796,29 +2828,6 @@ void initServer(void) {
         }
     }
     server.db = zmalloc(sizeof(redisDb)*server.dbnum, MALLOC_LOCAL);
-
-    /* Open the TCP listening socket for the user commands. */
-    if (server.port != 0 &&
-        listenToPort(server.port,server.ipfd,&server.ipfd_count) == C_ERR)
-        exit(1);
-
-    /* Open the listening Unix domain socket. */
-    if (server.unixsocket != NULL) {
-        unlink(server.unixsocket); /* don't care if this fails */
-        server.sofd = anetUnixServer(server.neterr,server.unixsocket,
-            server.unixsocketperm, server.tcp_backlog);
-        if (server.sofd == ANET_ERR) {
-            serverLog(LL_WARNING, "Opening Unix socket: %s", server.neterr);
-            exit(1);
-        }
-        anetNonBlock(NULL,server.sofd);
-    }
-
-    /* Abort if there are no listening sockets at all. */
-    if (server.ipfd_count == 0 && server.sofd < 0) {
-        serverLog(LL_WARNING, "Configured to not listen anywhere, exiting.");
-        exit(1);
-    }
 
     /* Create the Redis databases, and initialize other internal state. */
     for (int j = 0; j < server.dbnum; j++) {
@@ -3538,7 +3547,11 @@ int processCommand(client *c) {
 void closeListeningSockets(int unlink_unix_socket) {
     int j;
 
-    for (j = 0; j < server.ipfd_count; j++) close(server.ipfd[j]);
+    for (int iel = 0; iel < server.cel; ++iel)
+    {
+        for (j = 0; j < server.rgbindinfo[iel].ipfd_count; j++) 
+            close(server.rgbindinfo[iel].ipfd[j]);
+    }
     if (server.sofd != -1) close(server.sofd);
     if (server.cluster_enabled)
         for (j = 0; j < server.cfd_count; j++) close(server.cfd[j]);
@@ -4961,6 +4974,9 @@ int main(int argc, char **argv) {
     if (background) daemonize();
 
     initServer();
+    server.cel = 4; //testing
+    initNetworking(1 /* fReusePort */);
+
     if (background || server.pidfile) createPidFile();
     redisSetProcTitle(argv[0]);
     redisAsciiArt();
@@ -4987,7 +5003,7 @@ int main(int argc, char **argv) {
                 exit(1);
             }
         }
-        if (server.ipfd_count > 0)
+        if (server.rgbindinfo[IDX_EVENT_LOOP_MAIN].ipfd_count > 0)
             serverLog(LL_NOTICE,"Ready to accept connections");
         if (server.sofd > 0)
             serverLog(LL_NOTICE,"The server is now ready to accept connections at %s", server.unixsocket);
@@ -4999,11 +5015,6 @@ int main(int argc, char **argv) {
     if (server.maxmemory > 0 && server.maxmemory < 1024*1024) {
         serverLog(LL_WARNING,"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?", server.maxmemory);
     }
-
-    
-
-    server.cel = 4; //testing
-    initServerAcceptHandlers();
 
     serverAssert(server.cel > 0 && server.cel <= MAX_EVENT_LOOPS);
     pthread_t rgthread[MAX_EVENT_LOOPS];

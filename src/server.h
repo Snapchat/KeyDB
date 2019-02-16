@@ -1026,6 +1026,11 @@ struct clusterState;
 #define MAX_EVENT_LOOPS 16
 #define IDX_EVENT_LOOP_MAIN 0
 
+struct bindinfo {
+    int ipfd[CONFIG_BINDADDR_MAX]; /* TCP socket file descriptors */
+    int ipfd_count;             /* Used slots in ipfd[] */
+};
+
 struct redisServer {
     /* General */
     pid_t pid;                  /* Main process pid. */
@@ -1066,8 +1071,7 @@ struct redisServer {
     int bindaddr_count;         /* Number of addresses in server.bindaddr[] */
     char *unixsocket;           /* UNIX socket path */
     mode_t unixsocketperm;      /* UNIX socket permission */
-    int ipfd[CONFIG_BINDADDR_MAX]; /* TCP socket file descriptors */
-    int ipfd_count;             /* Used slots in ipfd[] */
+    struct bindinfo rgbindinfo[MAX_EVENT_LOOPS];
     int sofd;                   /* Unix socket file descriptor */
     int cfd[CONFIG_BINDADDR_MAX];/* Cluster bus listening socket */
     int cfd_count;              /* Used slots in cfd[] */
@@ -1592,7 +1596,7 @@ int getClientTypeByName(const char *name);
 const char *getClientTypeName(int cclass);
 void flushSlavesOutputBuffers(void);
 void disconnectSlaves(void);
-int listenToPort(int port, int *fds, int *count);
+int listenToPort(int port, int *fds, int *count, int fReusePort);
 void pauseClients(mstime_t duration);
 int clientsArePaused(void);
 int processEventsWhileBlocked(int iel);

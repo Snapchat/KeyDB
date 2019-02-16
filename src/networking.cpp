@@ -1644,6 +1644,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(el);
     UNUSED(mask);
     serverAssert(mask & AE_READ_THREADSAFE);
+    serverAssert(c->iel == ielFromEventLoop(el));
 
     readlen = PROTO_IOBUF_LEN;
     /* If this is a multi bulk request, and we are processing a bulk reply

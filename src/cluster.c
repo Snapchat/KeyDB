@@ -486,7 +486,7 @@ void clusterInit(void) {
     }
 
     if (listenToPort(server.port+CLUSTER_PORT_INCR,
-        server.cfd,&server.cfd_count) == C_ERR)
+        server.cfd,&server.cfd_count, 0 /*fReusePort*/) == C_ERR)
     {
         exit(1);
     } else {

@@ -138,6 +138,8 @@ void aeDeleteEventLoop(aeEventLoop *eventLoop);
 void aeStop(aeEventLoop *eventLoop);
 int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
         aeFileProc *proc, void *clientData);
+int aeCreateRemoteFileEventSync(aeEventLoop *eventLoop, int fd, int mask,
+        aeFileProc *proc, void *clientData);
 void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask);
 void aeDeleteFileEventAsync(aeEventLoop *eventLoop, int fd, int mask);
 int aeGetFileEvents(aeEventLoop *eventLoop, int fd);
@@ -156,6 +158,7 @@ int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
 
 void aeAcquireLock();
 void aeReleaseLock();
+int aeThreadOwnsLock();
 
 #ifdef __cplusplus
 }

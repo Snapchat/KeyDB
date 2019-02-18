@@ -30,6 +30,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <condition_variable>
+#include <atomic>
 #include <mutex>
 #include <stdio.h>
 #include <fcntl.h>
@@ -75,18 +77,29 @@ enum class AE_ASYNC_OP
     PostFunction,
     PostCppFunction,
     DeleteFileEvent,
+    CreateFileEvent,
 };
-typedef struct aeCommand
+
+struct aeCommandControl
+{
+    std::condition_variable cv;
+    std::atomic<int> rval;
+    std::mutex mutexcv;
+};
+
+struct aeCommand
 {
     AE_ASYNC_OP op;
     int fd; 
     int mask;
     union {
         aePostFunctionProc *proc;
+        aeFileProc *fproc;
         std::function<void()> *pfn;
     };
     void *clientData;
-} aeCommand;
+    aeCommandControl *pctl;
+};
 
 void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
 {
@@ -106,6 +119,14 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
             aeDeleteFileEvent(eventLoop, cmd.fd, cmd.mask);
             break;
 
+        case AE_ASYNC_OP::CreateFileEvent:
+        {
+            std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv);
+            std::atomic_store(&cmd.pctl->rval, aeCreateFileEvent(eventLoop, cmd.fd, cmd.mask, cmd.fproc, cmd.clientData));
+            cmd.pctl->cv.notify_all();
+        }
+            break;
+
         case AE_ASYNC_OP::PostFunction:
             {
             std::unique_lock<decltype(g_lock)> ulock(g_lock);
@@ -114,13 +135,37 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
             }
 
         case AE_ASYNC_OP::PostCppFunction:
-            {
+        {
             std::unique_lock<decltype(g_lock)> ulock(g_lock);
             (*cmd.pfn)();
             delete cmd.pfn;
-            }
+        }
+            break;
         }
     }
+}
+
+int aeCreateRemoteFileEventSync(aeEventLoop *eventLoop, int fd, int mask,
+        aeFileProc *proc, void *clientData)
+{
+    if (eventLoop == g_eventLoopThisThread)
+        return aeCreateFileEvent(eventLoop, fd, mask, proc, clientData);
+    
+    aeCommand cmd;
+    cmd.op = AE_ASYNC_OP::CreateFileEvent;
+    cmd.fd = fd;
+    cmd.mask = mask;
+    cmd.fproc = proc;
+    cmd.clientData = clientData;
+    cmd.pctl = new aeCommandControl();
+
+    std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv);
+    auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
+    AE_ASSERT(size == sizeof(cmd));
+    cmd.pctl->cv.wait(ulock);
+    int ret = cmd.pctl->rval;
+    delete cmd.pctl;
+    return ret;
 }
 
 int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg)
@@ -295,7 +340,6 @@ extern "C" void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask)
 }
 
 extern "C" int aeGetFileEvents(aeEventLoop *eventLoop, int fd) {
-    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     if (fd >= eventLoop->setsize) return 0;
     aeFileEvent *fe = &eventLoop->events[fd];
 
@@ -673,4 +717,9 @@ void aeAcquireLock()
 void aeReleaseLock()
 {
     g_lock.unlock();
+}
+
+int aeThreadOwnsLock()
+{
+    return g_lock.fOwnLock();
 }

@@ -1641,6 +1641,8 @@ void addReplySdsAsync(client *c, sds s);
 void addReplyBulkSdsAsync(client *c, sds s);
 void addReplyPushLenAsync(client *c, long length);
 
+void ProcessPendingAsyncWrites(void);
+
 #ifdef __GNUC__
 void addReplyErrorFormat(client *c, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));

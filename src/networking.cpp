@@ -1154,6 +1154,7 @@ void disconnectSlaves(void) {
  * This is used by freeClient() and replicationCacheMaster(). */
 void unlinkClient(client *c) {
     listNode *ln;
+    AssertCorrectThread(c);
 
     /* If this is marked as current client unset it. */
     if (server.current_client == c) server.current_client = NULL;
@@ -1195,6 +1196,13 @@ void unlinkClient(client *c) {
         serverAssert(ln != NULL);
         listDelNode(server.rgthreadvar[c->iel].unblocked_clients,ln);
         c->flags &= ~CLIENT_UNBLOCKED;
+    }
+
+    if (c->flags & CLIENT_PENDING_ASYNCWRITE) {
+        ln = listSearchKey(server.rgthreadvar[c->iel].clients_pending_asyncwrite,c);
+        serverAssert(ln != NULL);
+        listDelNode(server.rgthreadvar[c->iel].clients_pending_asyncwrite,ln);
+        c->flags &= ~CLIENT_PENDING_ASYNCWRITE;
     }
 }
 

@@ -30,6 +30,9 @@
 #ifndef __REDIS_H
 #define __REDIS_H
 
+#define TRUE 1
+#define FALSE 0
+
 #include "fmacros.h"
 #include "config.h"
 #include "solarisfixes.h"
@@ -290,6 +293,7 @@ extern "C" {
 #define CLIENT_LUA_DEBUG_SYNC (1<<26)  /* EVAL debugging without fork() */
 #define CLIENT_MODULE (1<<27) /* Non connected client used by some module. */
 #define CLIENT_PROTECTED (1<<28) /* Client should not be freed for now. */
+#define CLIENT_PENDING_ASYNCWRITE (1<<29) /* client is in the async write list */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -824,6 +828,7 @@ typedef struct client {
     unsigned long long reply_bytes; /* Tot bytes of objects in reply list. */
     size_t sentlen;         /* Amount of bytes already sent in the current
                                buffer or object being sent. */
+    size_t sentlenAsync;    /* same as sentlen buf for async buffers (which are a different stream) */
     time_t ctime;           /* Client creation time. */
     time_t lastinteraction; /* Time of the last interaction, used for timeout */
     time_t obuf_soft_limit_reached_time;
@@ -859,6 +864,13 @@ typedef struct client {
     /* Response buffer */
     int bufpos;
     char buf[PROTO_REPLY_CHUNK_BYTES];
+
+    /* Async Response Buffer - other threads write here */
+    int bufposAsync;
+    int buflenAsync;
+    char *bufAsync;
+    /* Async Done Buffer, moved after a thread is done async writing */
+    list *listbufferDoneAsync;
 
     int iel; /* the event loop index we're registered with */
 } client;
@@ -1026,9 +1038,14 @@ struct clusterState;
 #define MAX_EVENT_LOOPS 16
 #define IDX_EVENT_LOOP_MAIN 0
 
-struct bindinfo {
+// Per-thread variabels that may be accessed without a lock
+struct redisServerThreadVars {
+    aeEventLoop *el;
     int ipfd[CONFIG_BINDADDR_MAX]; /* TCP socket file descriptors */
     int ipfd_count;             /* Used slots in ipfd[] */
+    list *clients_pending_write; /* There is to write or install handler. */
+    list *unblocked_clients;     /* list of clients to unblock before next loop */
+    list *clients_pending_asyncwrite;
 };
 
 struct redisServer {
@@ -1045,8 +1062,10 @@ struct redisServer {
     redisDb *db;
     dict *commands;             /* Command table */
     dict *orig_commands;        /* Command table before command renaming. */
-    int cel;
-    aeEventLoop *rgel[MAX_EVENT_LOOPS];
+
+    int cthreads;               /* Number of main worker threads */
+    struct redisServerThreadVars rgthreadvar[MAX_EVENT_LOOPS];
+
     unsigned int lruclock;      /* Clock for LRU eviction */
     int shutdown_asap;          /* SHUTDOWN needed ASAP */
     int activerehashing;        /* Incremental rehash in serverCron() */
@@ -1071,13 +1090,11 @@ struct redisServer {
     int bindaddr_count;         /* Number of addresses in server.bindaddr[] */
     char *unixsocket;           /* UNIX socket path */
     mode_t unixsocketperm;      /* UNIX socket permission */
-    struct bindinfo rgbindinfo[MAX_EVENT_LOOPS];
     int sofd;                   /* Unix socket file descriptor */
     int cfd[CONFIG_BINDADDR_MAX];/* Cluster bus listening socket */
     int cfd_count;              /* Used slots in cfd[] */
     list *clients;              /* List of active clients */
     list *clients_to_close;     /* Clients to close asynchronously */
-    list *rgclients_pending_write[MAX_EVENT_LOOPS]; /* There is to write or install handler. */
     list *slaves, *monitors;    /* List of slaves and MONITORs */
     client *current_client; /* Current client, only used on crash report */
     rax *clients_index;         /* Active clients dictionary by client ID. */
@@ -1298,7 +1315,6 @@ struct redisServer {
     /* Blocked clients */
     unsigned int blocked_clients;   /* # of clients executing a blocking cmd.*/
     unsigned int blocked_clients_by_type[BLOCKED_NUM];
-    list *rgunblocked_clients[MAX_EVENT_LOOPS]; /* list of clients to unblock before next loop */
     list *ready_keys;        /* List of readyList structures for BLPOP & co */
     /* Sort parameters - qsort_r() is only available under BSD so we
      * have to take this state global, in order to pass it to sortCompare() */
@@ -1484,6 +1500,7 @@ typedef struct {
  *----------------------------------------------------------------------------*/
 
 extern struct redisServer server;
+extern __thread struct redisServerThreadVars *serverTL;   // thread local server vars
 extern struct sharedObjectsStruct shared;
 extern dictType objectKeyPointerValueDictType;
 extern dictType objectKeyHeapPointerValueDictType;
@@ -1589,7 +1606,7 @@ void rewriteClientCommandVector(client *c, int argc, ...);
 void rewriteClientCommandArgument(client *c, int i, robj *newval);
 void replaceClientCommandVector(client *c, int argc, robj **argv);
 unsigned long getClientOutputBufferMemoryUsage(client *c);
-void freeClientsInAsyncFreeQueue(void);
+void freeClientsInAsyncFreeQueue(int iel);
 void asyncCloseClientOnOutputBufferLimitReached(client *c);
 int getClientType(client *c);
 int getClientTypeByName(const char *name);
@@ -1601,12 +1618,27 @@ void pauseClients(mstime_t duration);
 int clientsArePaused(void);
 int processEventsWhileBlocked(int iel);
 int handleClientsWithPendingWrites(int iel);
-int clientHasPendingReplies(client *c);
+int clientHasPendingReplies(client *c, int fIncludeAsync);
 void unlinkClient(client *c);
 int writeToClient(int fd, client *c, int handler_installed);
 void linkClient(client *c);
 void protectClient(client *c);
 void unprotectClient(client *c);
+
+// Special Thread-safe addReply() commands for posting messages to clients from a different thread
+void addReplyAsync(client *c, robj *obj);
+void addReplyArrayLenAsync(client *c, long length);
+void addReplyBulkAsync(client *c, robj *obj);
+void addReplyBulkCBufferAsync(client *c, const void *p, size_t len);
+void addReplyErrorAsync(client *c, const char *err);
+void addReplyMapLenAsync(client *c, long length);
+void addReplyNullAsync(client *c);
+void addReplyDoubleAsync(client *c, double d);
+void *addReplyDeferredLenAsync(client *c);
+void setDeferredArrayLenAsync(client *c, void *node, long length);
+void addReplySdsAsync(client *c, sds s);
+void addReplyBulkSdsAsync(client *c, sds s);
+void addReplyPushLenAsync(client *c, long length);
 
 #ifdef __GNUC__
 void addReplyErrorFormat(client *c, const char *fmt, ...)
@@ -1694,7 +1726,7 @@ unsigned long long estimateObjectIdleTime(robj *o);
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
 
 /* Synchronous I/O with timeout */
-ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);
+ssize_t syncWrite(int fd, const char *ptr, ssize_t size, long long timeout);
 ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout);
 ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout);
 
@@ -2301,14 +2333,20 @@ void xorDigest(unsigned char *digest, void *ptr, size_t len);
 inline int ielFromEventLoop(const aeEventLoop *eventLoop)
 {
     int iel = 0;
-    for (; iel < server.cel; ++iel)
+    for (; iel < server.cthreads; ++iel)
     {
-        if (server.rgel[iel] == eventLoop)
+        if (server.rgthreadvar[iel].el == eventLoop)
             break;
     }
-    serverAssert(iel < server.cel);
+    serverAssert(iel < server.cthreads);
     return iel;
 }
+
+inline int FCorrectThread(client *c)
+{
+    return server.rgthreadvar[c->iel].el == serverTL->el;
+}
+#define AssertCorrectThread(c) serverAssert(FCorrectThread(c))
 
 #define redisDebug(fmt, ...) \
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)

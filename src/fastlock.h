@@ -37,5 +37,7 @@ struct fastlock
     {
         fastlock_unlock(this);
     }
+
+    bool fOwnLock();   // true if this thread owns the lock, NOTE: not 100% reliable, use for debugging only
 #endif
 };

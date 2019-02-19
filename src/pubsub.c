@@ -38,12 +38,12 @@ int clientSubscriptionsCount(client *c);
 /* Send a pubsub message of type "message" to the client. */
 void addReplyPubsubMessage(client *c, robj *channel, robj *msg) {
     if (c->resp == 2)
-        addReply(c,shared.mbulkhdr[3]);
+        addReplyAsync(c,shared.mbulkhdr[3]);
     else
-        addReplyPushLen(c,3);
-    addReply(c,shared.messagebulk);
-    addReplyBulk(c,channel);
-    addReplyBulk(c,msg);
+        addReplyPushLenAsync(c,3);
+    addReplyAsync(c,shared.messagebulk);
+    addReplyBulkAsync(c,channel);
+    addReplyBulkAsync(c,msg);
 }
 
 /* Send a pubsub message of type "pmessage" to the client. The difference

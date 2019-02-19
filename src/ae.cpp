@@ -144,8 +144,17 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
 
         case AE_ASYNC_OP::PostCppFunction:
         {
+            if (cmd.pctl != nullptr)
+                cmd.pctl->mutexcv.lock();
+            
             std::unique_lock<decltype(g_lock)> ulock(g_lock);
             (*cmd.pfn)();
+            
+            if (cmd.pctl != nullptr)
+            {
+                cmd.pctl->cv.notify_all();
+                cmd.pctl->mutexcv.unlock();
+            }
             delete cmd.pfn;
         }
             break;
@@ -186,6 +195,11 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
 
 int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg)
 {
+    if (eventLoop == g_eventLoopThisThread)
+    {
+        proc(arg);
+        return AE_OK;
+    }
     aeCommand cmd;
     cmd.op = AE_ASYNC_OP::PostFunction;
     cmd.proc = proc;
@@ -195,14 +209,33 @@ int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg)
     return AE_OK;
 }
 
-int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn)
+int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynchronous)
 {
+    if (eventLoop == g_eventLoopThisThread)
+    {
+        fn();
+        return AE_OK;
+    }
+
     aeCommand cmd;
     cmd.op = AE_ASYNC_OP::PostCppFunction;
     cmd.pfn = new std::function<void()>(fn);
+    cmd.pctl = nullptr;
+    if (fSynchronous)
+        cmd.pctl = new aeCommandControl();
+    std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::defer_lock);
+    if (fSynchronous)
+        cmd.pctl->mutexcv.lock();
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
     AE_ASSERT(size == sizeof(cmd));
-    return AE_OK;
+    int ret = AE_OK;
+    if (fSynchronous)
+    {
+        cmd.pctl->cv.wait(ulock);
+        ret = cmd.pctl->rval;
+        delete cmd.pctl;
+    }
+    return ret;
 }
 
 aeEventLoop *aeCreateEventLoop(int setsize) {
@@ -232,7 +265,8 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     if (pipe(rgfd) < 0)
         goto err;
     eventLoop->fdCmdRead = rgfd[0];
-    eventLoop->fdCmdWrite = rgfd[1];
+    eventLoop->fdCmdWrite = rgfd[1];;
+    fcntl(eventLoop->fdCmdWrite, F_SETFL, O_NONBLOCK);
     fcntl(eventLoop->fdCmdRead, F_SETFL, O_NONBLOCK);
     eventLoop->cevents = 0;
     aeCreateFileEvent(eventLoop, eventLoop->fdCmdRead, AE_READABLE|AE_READ_THREADSAFE, aeProcessCmd, NULL);
@@ -325,8 +359,7 @@ void aeDeleteFileEventAsync(aeEventLoop *eventLoop, int fd, int mask)
     cmd.fd = fd;
     cmd.mask = mask;
     auto cb = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
-    if (cb != sizeof(cmd))
-        fprintf(stderr, "Failed to write to pipe.\n");
+    AE_ASSERT(cb == sizeof(cmd));
 }
 
 extern "C" void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask)

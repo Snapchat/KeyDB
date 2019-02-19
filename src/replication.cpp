@@ -298,6 +298,9 @@ void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t bufle
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
         addReplyProtoAsync(slave,buf,buflen);
     }
+    
+    if (listLength(slaves))
+        ProcessPendingAsyncWrites();    // flush them to their respective threads
 }
 
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc) {
@@ -2039,13 +2042,33 @@ void replicationHandleMasterDisconnection(void) {
      * the slaves only if we'll have to do a full resync with our master. */
 }
 
+void replicaofCommandCore(client *c);
 void replicaofCommand(client *c) {
+    // Changing the master needs to be done on the main thread.
+
     /* SLAVEOF is not allowed in cluster mode as replication is automatically
      * configured using the current address of the master node. */
     if (server.cluster_enabled) {
         addReplyError(c,"REPLICAOF not allowed in cluster mode.");
         return;
     }
+
+    if ((serverTL - server.rgthreadvar) == IDX_EVENT_LOOP_MAIN)
+    {
+        replicaofCommandCore(c);
+    }
+    else
+    {
+        aeReleaseLock();
+        aePostFunction(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [=]{
+            replicaofCommandCore(c);
+        }, true /*fSync*/);
+        aeAcquireLock();
+    }
+}
+
+void replicaofCommandCore(client *c) {
+    
 
     /* The special host/port combination "NO" "ONE" turns the instance
      * into a master. Otherwise the new master address is set. */
@@ -2068,7 +2091,7 @@ void replicaofCommand(client *c) {
         if (server.masterhost && !strcasecmp(server.masterhost,(const char*)ptrFromObj(c->argv[1]))
             && server.masterport == port) {
             serverLog(LL_NOTICE,"REPLICAOF would result into synchronization with the master we are already connected with. No operation performed.");
-            addReplySds(c,sdsnew("+OK Already connected to specified master\r\n"));
+            addReplySdsAsync(c,sdsnew("+OK Already connected to specified master\r\n"));
             return;
         }
         /* There was no previous master or the user specified a different one,
@@ -2079,7 +2102,7 @@ void replicaofCommand(client *c) {
             server.masterhost, server.masterport, client);
         sdsfree(client);
     }
-    addReply(c,shared.ok);
+    addReplyAsync(c,shared.ok);
 }
 
 /* ROLE command: provide information about the role of the instance

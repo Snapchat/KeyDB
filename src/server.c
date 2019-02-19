@@ -3181,7 +3181,7 @@ void preventCommandReplication(client *c) {
     c->flags |= CLIENT_PREVENT_REPL_PROP;
 }
 
-static void ProcessPendingAsyncWrites()
+void ProcessPendingAsyncWrites()
 {
     while(listLength(serverTL->clients_pending_asyncwrite)) {
         client *c = (client*)listNodeValue(listFirst(serverTL->clients_pending_asyncwrite));
@@ -5046,8 +5046,9 @@ int main(int argc, char **argv) {
 
     initServer();
 
-    server.cthreads = 2; //testing
+    server.cthreads = 1; //testing
     initNetworking(1 /* fReusePort */);
+    serverTL = &server.rgthreadvar[IDX_EVENT_LOOP_MAIN];
 
     if (background || server.pidfile) createPidFile();
     redisSetProcTitle(argv[0]);

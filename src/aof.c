@@ -96,6 +96,8 @@ void aofChildWriteDiffData(aeEventLoop *el, int fd, void *privdata, int mask) {
     listNode *ln;
     aofrwblock *block;
     ssize_t nwritten;
+    serverAssert(el == server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el);
+    
     UNUSED(el);
     UNUSED(fd);
     UNUSED(privdata);
@@ -105,7 +107,7 @@ void aofChildWriteDiffData(aeEventLoop *el, int fd, void *privdata, int mask) {
         ln = listFirst(server.aof_rewrite_buf_blocks);
         block = ln ? ln->value : NULL;
         if (server.aof_stop_sending_diff || !block) {
-            aeDeleteFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],server.aof_pipe_write_data_to_child,
+            aeDeleteFileEvent(el,server.aof_pipe_write_data_to_child,
                               AE_WRITABLE);
             return;
         }
@@ -118,6 +120,15 @@ void aofChildWriteDiffData(aeEventLoop *el, int fd, void *privdata, int mask) {
             block->free += nwritten;
         }
         if (block->used == 0) listDelNode(server.aof_rewrite_buf_blocks,ln);
+    }
+}
+
+static void QueueAofPipeWrite(void *arg)
+{
+    UNUSED(arg);
+    if (aeGetFileEvents(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,server.aof_pipe_write_data_to_child) == 0) {
+        aeCreateFileEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el, server.aof_pipe_write_data_to_child,
+            AE_WRITABLE, aofChildWriteDiffData, NULL);
     }
 }
 
@@ -162,10 +173,7 @@ void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
 
     /* Install a file event to send data to the rewrite child if there is
      * not one already. */
-    if (aeGetFileEvents(server.rgel[IDX_EVENT_LOOP_MAIN],server.aof_pipe_write_data_to_child) == 0) {
-        aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN], server.aof_pipe_write_data_to_child,
-            AE_WRITABLE, aofChildWriteDiffData, NULL);
-    }
+    aePostFunction(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el, QueueAofPipeWrite, NULL);
 }
 
 /* Write the buffer (possibly composed of multiple blocks) into the specified
@@ -631,6 +639,7 @@ struct client *createFakeClient(void) {
 
     selectDb(c,0);
     c->fd = -1;
+    c->iel = IDX_EVENT_LOOP_MAIN;
     c->name = NULL;
     c->querybuf = sdsempty();
     c->querybuf_peak = 0;
@@ -1470,7 +1479,7 @@ void aofChildPipeReadable(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
     /* Remove the handler since this can be called only one time during a
      * rewrite. */
-    aeDeleteFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],server.aof_pipe_read_ack_from_child,AE_READABLE);
+    aeDeleteFileEventAsync(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,server.aof_pipe_read_ack_from_child,AE_READABLE);
 }
 
 /* Create the pipes used for parent - child process IPC during rewrite.
@@ -1488,7 +1497,7 @@ int aofCreatePipes(void) {
     /* Parent -> children data is non blocking. */
     if (anetNonBlock(NULL,fds[0]) != ANET_OK) goto error;
     if (anetNonBlock(NULL,fds[1]) != ANET_OK) goto error;
-    if (aeCreateFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN], fds[2], AE_READABLE, aofChildPipeReadable, NULL) == AE_ERR) goto error;
+    if (aeCreateRemoteFileEventSync(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el, fds[2], AE_READABLE, aofChildPipeReadable, NULL) == AE_ERR) goto error;
 
     server.aof_pipe_write_data_to_child = fds[1];
     server.aof_pipe_read_data_from_parent = fds[0];
@@ -1507,8 +1516,8 @@ error:
 }
 
 void aofClosePipes(void) {
-    aeDeleteFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],server.aof_pipe_read_ack_from_child,AE_READABLE);
-    aeDeleteFileEvent(server.rgel[IDX_EVENT_LOOP_MAIN],server.aof_pipe_write_data_to_child,AE_WRITABLE);
+    aeDeleteFileEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,server.aof_pipe_read_ack_from_child,AE_READABLE);
+    aeDeleteFileEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,server.aof_pipe_write_data_to_child,AE_WRITABLE);
     close(server.aof_pipe_write_data_to_child);
     close(server.aof_pipe_read_data_from_parent);
     close(server.aof_pipe_write_ack_to_parent);

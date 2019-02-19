@@ -51,3 +51,9 @@ extern "C" void fastlock_free(struct fastlock *lock)
     // NOP
     (void)lock;
 }
+
+
+bool fastlock::fOwnLock()
+{
+    return gettid() == m_pidOwner;
+}

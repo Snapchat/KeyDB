@@ -112,12 +112,14 @@ void blockClient(client *c, int btype) {
 void processUnblockedClients(int iel) {
     listNode *ln;
     client *c;
+    list *unblocked_clients = server.rgthreadvar[iel].unblocked_clients;
+    serverAssert(iel == (serverTL - server.rgthreadvar));
 
-    while (listLength(server.rgunblocked_clients[iel])) {
-        ln = listFirst(server.rgunblocked_clients[iel]);
+    while (listLength(unblocked_clients)) {
+        ln = listFirst(unblocked_clients);
         serverAssert(ln != NULL);
         c = ln->value;
-        listDelNode(server.rgunblocked_clients[iel],ln);
+        listDelNode(unblocked_clients,ln);
         c->flags &= ~CLIENT_UNBLOCKED;
 
         /* Process remaining data in the input buffer, unless the client
@@ -125,9 +127,11 @@ void processUnblockedClients(int iel) {
          * client is not blocked before to proceed, but things may change and
          * the code is conceptually more correct this way. */
         if (!(c->flags & CLIENT_BLOCKED)) {
+            aeAcquireLock();
             if (c->querybuf && sdslen(c->querybuf) > 0) {
                 processInputBufferAndReplicate(c);
             }
+            aeReleaseLock();
         }
     }
 }
@@ -151,9 +155,10 @@ void processUnblockedClients(int iel) {
 void queueClientForReprocessing(client *c) {
     /* The client may already be into the unblocked list because of a previous
      * blocking operation, don't add back it into the list multiple times. */
+    AssertCorrectThread(c);
     if (!(c->flags & CLIENT_UNBLOCKED)) {
         c->flags |= CLIENT_UNBLOCKED;
-        listAddNodeTail(server.rgunblocked_clients[c->iel],c);
+        listAddNodeTail(server.rgthreadvar[c->iel].unblocked_clients,c);
     }
 }
 
@@ -213,7 +218,7 @@ void disconnectAllBlockedClients(void) {
         client *c = listNodeValue(ln);
 
         if (c->flags & CLIENT_BLOCKED) {
-            addReplySds(c,sdsnew(
+            addReplySdsAsync(c,sdsnew(
                 "-UNBLOCKED force unblock from blocking operation, "
                 "instance state changed (master -> replica?)\r\n"));
             unblockClient(c);
@@ -407,7 +412,7 @@ void handleClientsBlockedOnKeys(void) {
                             /* If the group was not found, send an error
                              * to the consumer. */
                             if (!group) {
-                                addReplyError(receiver,
+                                addReplyErrorAsync(receiver,
                                     "-NOGROUP the consumer group this client "
                                     "was blocked on no longer exists");
                                 unblockClient(receiver);
@@ -437,12 +442,12 @@ void handleClientsBlockedOnKeys(void) {
                              * extracted from it. Wrapped in a single-item
                              * array, since we have just one key. */
                             if (receiver->resp == 2) {
-                                addReplyArrayLen(receiver,1);
-                                addReplyArrayLen(receiver,2);
+                                addReplyArrayLenAsync(receiver,1);
+                                addReplyArrayLenAsync(receiver,2);
                             } else {
-                                addReplyMapLen(receiver,1);
+                                addReplyMapLenAsync(receiver,1);
                             }
-                            addReplyBulk(receiver,rl->key);
+                            addReplyBulkAsync(receiver,rl->key);
 
                             streamPropInfo pi = {
                                 rl->key,

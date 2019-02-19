@@ -2013,7 +2013,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
             link->pending_commands = 0;
             link->cc_conn_time = mstime();
             link->cc->data = link;
-            redisAeAttach(server.rgel[IDX_EVENT_LOOP_MAIN],link->cc);
+            redisAeAttach(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,link->cc);
             redisAsyncSetConnectCallback(link->cc,
                     sentinelLinkEstablishedCallback);
             redisAsyncSetDisconnectCallback(link->cc,
@@ -2037,7 +2037,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
 
             link->pc_conn_time = mstime();
             link->pc->data = link;
-            redisAeAttach(server.rgel[IDX_EVENT_LOOP_MAIN],link->pc);
+            redisAeAttach(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,link->pc);
             redisAsyncSetConnectCallback(link->pc,
                     sentinelLinkEstablishedCallback);
             redisAsyncSetDisconnectCallback(link->pc,

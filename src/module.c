@@ -3633,8 +3633,14 @@ void moduleHandleBlockedClients(void) {
         ln = listFirst(moduleUnblockedClients);
         bc = ln->value;
         client *c = bc->client;
+        serverAssert(c->iel == IDX_EVENT_LOOP_MAIN);
         listDelNode(moduleUnblockedClients,ln);
         pthread_mutex_unlock(&moduleUnblockedClientsMutex);
+
+        if (c)
+        {
+            AssertCorrectThread(c);
+        }
 
         /* Release the lock during the loop, as long as we don't
          * touch the shared list. */
@@ -3688,11 +3694,11 @@ void moduleHandleBlockedClients(void) {
             /* Put the client in the list of clients that need to write
              * if there are pending replies here. This is needed since
              * during a non blocking command the client may receive output. */
-            if (clientHasPendingReplies(c) &&
+            if (clientHasPendingReplies(c, TRUE) &&
                 !(c->flags & CLIENT_PENDING_WRITE))
             {
                 c->flags |= CLIENT_PENDING_WRITE;
-                listAddNodeHead(server.rgclients_pending_write[IDX_EVENT_LOOP_MAIN],c);
+                listAddNodeHead(server.rgthreadvar[c->iel].clients_pending_write,c);
             }
         }
 
@@ -4300,7 +4306,7 @@ RedisModuleTimerID RM_CreateTimer(RedisModuleCtx *ctx, mstime_t period, RedisMod
         if (memcmp(ri.key,&key,sizeof(key)) == 0) {
             /* This is the first key, we need to re-install the timer according
              * to the just added event. */
-            aeDeleteTimeEvent(server.rgel[IDX_EVENT_LOOP_MAIN],aeTimer);
+            aeDeleteTimeEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,aeTimer);
             aeTimer = -1;
         }
         raxStop(&ri);
@@ -4309,7 +4315,7 @@ RedisModuleTimerID RM_CreateTimer(RedisModuleCtx *ctx, mstime_t period, RedisMod
     /* If we have no main timer (the old one was invalidated, or this is the
      * first module timer we have), install one. */
     if (aeTimer == -1)
-        aeTimer = aeCreateTimeEvent(server.rgel[IDX_EVENT_LOOP_MAIN],period,moduleTimerHandler,NULL,NULL);
+        aeTimer = aeCreateTimeEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,period,moduleTimerHandler,NULL,NULL);
 
     return key;
 }

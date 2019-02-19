@@ -856,8 +856,8 @@ void putSlaveOnline(client *slave) {
     slave->replstate = SLAVE_STATE_ONLINE;
     slave->repl_put_online_on_ack = 0;
     slave->repl_ack_time = server.unixtime; /* Prevent false timeout. */
-    AssertCorrectThread(slave);
-    if (aeCreateFileEvent(serverTL->el, slave->fd, AE_WRITABLE,
+    //AssertCorrectThread(slave);
+    if (aeCreateFileEvent(server.rgthreadvar[slave->iel].el, slave->fd, AE_WRITABLE,
         sendReplyToClient, slave) == AE_ERR) {
         serverLog(LL_WARNING,"Unable to register writable event for replica bulk transfer: %s", strerror(errno));
         freeClient(slave);
@@ -954,7 +954,6 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
             startbgsave = 1;
             mincapa = (mincapa == -1) ? slave->slave_capa :
                         (mincapa & slave->slave_capa);
-            break;
         }
     }
 

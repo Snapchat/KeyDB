@@ -1559,7 +1559,7 @@ NULL
             addReply(c,shared.ok);
         }
     } else if (c->argc == 3 && !strcasecmp(ptrFromObj(c->argv[1]),"debug")) {
-        if (clientHasPendingReplies(c)) {
+        if (clientHasPendingReplies(c, TRUE)) {
             addReplyError(c,"SCRIPT DEBUG must be called outside a pipeline");
             return;
         }

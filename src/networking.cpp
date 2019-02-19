@@ -32,6 +32,7 @@
 #include <sys/uio.h>
 #include <math.h>
 #include <ctype.h>
+#include <vector>
 
 static void setProtocolError(const char *errstr, client *c);
 void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool fAsync);
@@ -233,13 +234,10 @@ void clientInstallWriteHandler(client *c) {
 }
 
 void clientInstallAsyncWriteHandler(client *c) {
-    UNUSED(c);
-#if 0   // Not yet
     if (!(c->flags & CLIENT_PENDING_ASYNCWRITE)) {
         c->flags |= CLIENT_PENDING_ASYNCWRITE;
         listAddNodeHead(serverTL->clients_pending_asyncwrite,c);
     }
-#endif
 }
 
 /* This function is called every time we are going to transmit new data
@@ -434,6 +432,10 @@ void addReplyProtoCore(client *c, const char *s, size_t len, bool fAsync) {
 
 void addReplyProto(client *c, const char *s, size_t len) {
     addReplyProtoCore(c, s, len, false);
+}
+
+void addReplyProtoAsync(client *c, const char *s, size_t len) {
+    addReplyProtoCore(c, s, len, true);
 }
 
 /* Low level function called by the addReplyError...() functions.
@@ -1127,10 +1129,24 @@ static void freeClientArgv(client *c) {
  * when we resync with our own master and want to force all our slaves to
  * resync with us as well. */
 void disconnectSlaves(void) {
-    while (listLength(server.slaves)) {
-        listNode *ln = listFirst(server.slaves);
-        freeClient((client*)ln->value);
+    std::vector<client*> vecfreeImmediate;
+    listNode *ln;
+    listIter li;
+    listRewind(server.slaves, &li);
+    while ((ln = listNext(&li))) {
+        client *c = (client*)ln->value;
+        if (c->iel == serverTL - server.rgthreadvar)
+        {
+            vecfreeImmediate.push_back(c);
+        }
+        else
+        {
+            freeClientAsync(c);
+        }
     }
+
+    for (client *c : vecfreeImmediate)
+        freeClient(c);
 }
 
 /* Remove the specified client from global lists where the client could
@@ -2706,6 +2722,9 @@ int clientsArePaused(void) {
 int processEventsWhileBlocked(int iel) {
     int iterations = 4; /* See the function top-comment. */
     int count = 0;
+
+    // BUGBUG - This function isn't fair - why should clients on this thread get to run, but not clients elsewhere?
+    //      We mix up replies when releasing the lock here so more work is needed to fix this
     while (iterations--) {
         int events = 0;
         events += aeProcessEvents(server.rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);

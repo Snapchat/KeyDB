@@ -110,6 +110,8 @@ void blockClient(client *c, int btype) {
  * in order to process the pending input buffer of clients that were
  * unblocked after a blocking operation. */
 void processUnblockedClients(int iel) {
+    serverAssert(aeThreadOwnsLock());
+
     listNode *ln;
     client *c;
     list *unblocked_clients = server.rgthreadvar[iel].unblocked_clients;
@@ -127,11 +129,9 @@ void processUnblockedClients(int iel) {
          * client is not blocked before to proceed, but things may change and
          * the code is conceptually more correct this way. */
         if (!(c->flags & CLIENT_BLOCKED)) {
-            aeAcquireLock();
             if (c->querybuf && sdslen(c->querybuf) > 0) {
                 processInputBufferAndReplicate(c);
             }
-            aeReleaseLock();
         }
     }
 }
@@ -155,7 +155,7 @@ void processUnblockedClients(int iel) {
 void queueClientForReprocessing(client *c) {
     /* The client may already be into the unblocked list because of a previous
      * blocking operation, don't add back it into the list multiple times. */
-    AssertCorrectThread(c);
+    serverAssert(aeThreadOwnsLock());
     if (!(c->flags & CLIENT_UNBLOCKED)) {
         c->flags |= CLIENT_UNBLOCKED;
         listAddNodeTail(server.rgthreadvar[c->iel].unblocked_clients,c);

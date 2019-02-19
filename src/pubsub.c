@@ -51,13 +51,13 @@ void addReplyPubsubMessage(client *c, robj *channel, robj *msg) {
  * this message format also includes the pattern that matched the message. */
 void addReplyPubsubPatMessage(client *c, robj *pat, robj *channel, robj *msg) {
     if (c->resp == 2)
-        addReply(c,shared.mbulkhdr[4]);
+        addReplyAsync(c,shared.mbulkhdr[4]);
     else
-        addReplyPushLen(c,4);
-    addReply(c,shared.pmessagebulk);
-    addReplyBulk(c,pat);
-    addReplyBulk(c,channel);
-    addReplyBulk(c,msg);
+        addReplyPushLenAsync(c,4);
+    addReplyAsync(c,shared.pmessagebulk);
+    addReplyBulkAsync(c,pat);
+    addReplyBulkAsync(c,channel);
+    addReplyBulkAsync(c,msg);
 }
 
 /* Send the pubsub subscription notification to the client. */

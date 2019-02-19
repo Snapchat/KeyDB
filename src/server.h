@@ -1044,7 +1044,7 @@ struct redisServerThreadVars {
     int ipfd[CONFIG_BINDADDR_MAX]; /* TCP socket file descriptors */
     int ipfd_count;             /* Used slots in ipfd[] */
     list *clients_pending_write; /* There is to write or install handler. */
-    list *unblocked_clients;     /* list of clients to unblock before next loop */
+    list *unblocked_clients;     /* list of clients to unblock before next loop NOT THREADSAFE */
     list *clients_pending_asyncwrite;
 };
 
@@ -1628,6 +1628,7 @@ void unprotectClient(client *c);
 // Special Thread-safe addReply() commands for posting messages to clients from a different thread
 void addReplyAsync(client *c, robj *obj);
 void addReplyArrayLenAsync(client *c, long length);
+void addReplyProtoAsync(client *c, const char *s, size_t len);
 void addReplyBulkAsync(client *c, robj *obj);
 void addReplyBulkCBufferAsync(client *c, const void *p, size_t len);
 void addReplyErrorAsync(client *c, const char *err);

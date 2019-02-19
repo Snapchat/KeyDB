@@ -296,7 +296,7 @@ void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t bufle
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
-        addReplyProto(slave,buf,buflen);
+        addReplyProtoAsync(slave,buf,buflen);
     }
 }
 
@@ -334,7 +334,7 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
     listRewind(monitors,&li);
     while((ln = listNext(&li))) {
         client *monitor = (client*)ln->value;
-        addReply(monitor,cmdobj);
+        addReplyAsync(monitor,cmdobj);
     }
     decrRefCount(cmdobj);
 }

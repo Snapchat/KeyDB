@@ -2104,9 +2104,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Try to process pending commands for clients that were just unblocked. */
     if (listLength(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].unblocked_clients))
     {
-        aeReleaseLock();
         processUnblockedClients(IDX_EVENT_LOOP_MAIN);
-        aeAcquireLock();
     }
 
     /* Write the AOF buffer on disk */
@@ -2129,8 +2127,11 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
     
     /* Try to process pending commands for clients that were just unblocked. */
     if (listLength(server.rgthreadvar[iel].unblocked_clients)) {
+        aeAcquireLock();
         processUnblockedClients(iel);
+        aeReleaseLock();
     }
+    
     
     /* Handle writes with pending output buffers. */
     handleClientsWithPendingWrites(iel);
@@ -3213,7 +3214,7 @@ static void ProcessPendingAsyncWrites()
             ae_flags |= AE_BARRIER;
         }
         
-        if (aeCreateRemoteFileEventSync(server.rgthreadvar[c->iel].el, c->fd, ae_flags, sendReplyToClient, c) == AE_ERR)
+        if (aeCreateRemoteFileEvent(server.rgthreadvar[c->iel].el, c->fd, ae_flags, sendReplyToClient, c, FALSE) == AE_ERR)
             freeClientAsync(c);
     }
 }
@@ -5045,7 +5046,7 @@ int main(int argc, char **argv) {
 
     initServer();
 
-    server.cthreads = 1; //testing
+    server.cthreads = 2; //testing
     initNetworking(1 /* fReusePort */);
 
     if (background || server.pidfile) createPidFile();

@@ -121,9 +121,17 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
 
         case AE_ASYNC_OP::CreateFileEvent:
         {
-            std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv);
-            std::atomic_store(&cmd.pctl->rval, aeCreateFileEvent(eventLoop, cmd.fd, cmd.mask, cmd.fproc, cmd.clientData));
-            cmd.pctl->cv.notify_all();
+            if (cmd.pctl != nullptr)
+            {
+                cmd.pctl->mutexcv.lock();
+                std::atomic_store(&cmd.pctl->rval, aeCreateFileEvent(eventLoop, cmd.fd, cmd.mask, cmd.fproc, cmd.clientData));
+                cmd.pctl->cv.notify_all();
+                cmd.pctl->mutexcv.unlock();
+            }
+            else
+            {
+                aeCreateFileEvent(eventLoop, cmd.fd, cmd.mask, cmd.fproc, cmd.clientData);
+            }
         }
             break;
 
@@ -145,8 +153,8 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
     }
 }
 
-int aeCreateRemoteFileEventSync(aeEventLoop *eventLoop, int fd, int mask,
-        aeFileProc *proc, void *clientData)
+int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
+        aeFileProc *proc, void *clientData, int fSynchronous)
 {
     if (eventLoop == g_eventLoopThisThread)
         return aeCreateFileEvent(eventLoop, fd, mask, proc, clientData);
@@ -157,14 +165,22 @@ int aeCreateRemoteFileEventSync(aeEventLoop *eventLoop, int fd, int mask,
     cmd.mask = mask;
     cmd.fproc = proc;
     cmd.clientData = clientData;
-    cmd.pctl = new aeCommandControl();
+    cmd.pctl = nullptr;
+    if (fSynchronous)
+        cmd.pctl = new aeCommandControl();
 
-    std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv);
+    std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::defer_lock);
+    if (fSynchronous)
+        cmd.pctl->mutexcv.lock();
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
     AE_ASSERT(size == sizeof(cmd));
-    cmd.pctl->cv.wait(ulock);
-    int ret = cmd.pctl->rval;
-    delete cmd.pctl;
+    int ret = AE_OK;
+    if (fSynchronous)
+    {
+        cmd.pctl->cv.wait(ulock);
+        ret = cmd.pctl->rval;
+        delete cmd.pctl;
+    }
     return ret;
 }
 
@@ -691,7 +707,9 @@ void aeMain(aeEventLoop *eventLoop) {
                 ulock.lock();
             eventLoop->beforesleep(eventLoop);
         }
+        AE_ASSERT(!aeThreadOwnsLock()); // we should have relinquished it after processing
         aeProcessEvents(eventLoop, AE_ALL_EVENTS|AE_CALL_AFTER_SLEEP);
+        AE_ASSERT(!aeThreadOwnsLock()); // we should have relinquished it after processing
     }
 }
 

@@ -1526,6 +1526,7 @@ int clientsCronHandleTimeout(client *c, mstime_t now_ms) {
  *
  * The function always returns 0 as it never terminates the client. */
 int clientsCronResizeQueryBuffer(client *c) {
+    AssertCorrectThread(c);
     size_t querybuf_size = sdsAllocSize(c->querybuf);
     time_t idletime = server.unixtime - c->lastinteraction;
 
@@ -1620,16 +1621,6 @@ void getExpansiveClientsInfo(size_t *in_usage, size_t *out_usage) {
     *out_usage = o;
 }
 
-
-void AsyncClientCron(void *pv)
-{
-    client *c = (client*)pv;
-    mstime_t now = mstime();
-    if (clientsCronHandleTimeout(c,now)) return;
-    if (clientsCronResizeQueryBuffer(c)) return;
-    if (clientsCronTrackExpansiveClients(c)) return;
-}
-
 /* This function is called by serverCron() and is used in order to perform
  * operations on clients that are important to perform constantly. For instance
  * we use this function in order to disconnect clients after a timeout, including
@@ -1646,7 +1637,7 @@ void AsyncClientCron(void *pv)
  * of clients per second, turning this function into a source of latency.
  */
 #define CLIENTS_CRON_MIN_ITERATIONS 5
-void clientsCron(void) {
+void clientsCron(int iel) {
     /* Try to process at least numclients/server.hz of clients
      * per call. Since normally (if there are no big latency events) this
      * function is called server.hz times per second, in the average case we
@@ -1672,7 +1663,7 @@ void clientsCron(void) {
         listRotate(server.clients);
         head = listFirst(server.clients);
         c = listNodeValue(head);
-        if (c->iel == IDX_EVENT_LOOP_MAIN)
+        if (c->iel == iel)
         {
             /* The following functions do different service checks on the client.
             * The protocol is that they return non-zero if the client was
@@ -1680,12 +1671,7 @@ void clientsCron(void) {
             if (clientsCronHandleTimeout(c,now)) continue;
             if (clientsCronResizeQueryBuffer(c)) continue;
             if (clientsCronTrackExpansiveClients(c)) continue;
-        }
-        else if (IDX_EVENT_LOOP_MAIN > 1)
-        {
-            aePostFunction(server.rgthreadvar[c->iel].el, AsyncClientCron, c);
-        }
-        
+        }        
     }
 }
 
@@ -1787,6 +1773,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(id);
     UNUSED(clientData);
 
+    ProcessPendingAsyncWrites();    // This is really a bug, but for now catch any laggards that didn't clean up
+        
     /* Software watchdog: deliver the SIGALRM that will reach the signal
      * handler if we don't return here fast enough. */
     if (server.watchdog_period) watchdogScheduleSignal(server.watchdog_period);
@@ -1898,7 +1886,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* We need to do a few operations on clients asynchronously. */
-    clientsCron();
+    clientsCron(IDX_EVENT_LOOP_MAIN);
 
     /* Handle background operations on Redis databases. */
     databasesCron();
@@ -2055,7 +2043,13 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
 
     int iel = ielFromEventLoop(eventLoop);
     serverAssert(iel != IDX_EVENT_LOOP_MAIN);
+    
+    aeAcquireLock();
+    ProcessPendingAsyncWrites();    // A bug but leave for now, events should clean up after themselves
+    clientsCron(iel);
+
     freeClientsInAsyncFreeQueue(iel);
+    aeReleaseLock();
 
     return 1000/server.hz;
 }
@@ -2126,13 +2120,12 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
     int iel = ielFromEventLoop(eventLoop);
     
     /* Try to process pending commands for clients that were just unblocked. */
+    aeAcquireLock();
     if (listLength(server.rgthreadvar[iel].unblocked_clients)) {
-        aeAcquireLock();
         processUnblockedClients(iel);
-        aeReleaseLock();
     }
-    
-    
+    aeReleaseLock();
+
     /* Handle writes with pending output buffers. */
     handleClientsWithPendingWrites(iel);
 }
@@ -2752,9 +2745,18 @@ void resetServerStats(void) {
 static void initNetworkingThread(int iel, int fReusePort)
 {
     /* Open the TCP listening socket for the user commands. */
-    if (server.port != 0 &&
-        listenToPort(server.port,server.rgthreadvar[iel].ipfd,&server.rgthreadvar[iel].ipfd_count, fReusePort) == C_ERR)
-        exit(1);
+    if (fReusePort || (iel == IDX_EVENT_LOOP_MAIN))
+    {
+        if (server.port != 0 &&
+            listenToPort(server.port,server.rgthreadvar[iel].ipfd,&server.rgthreadvar[iel].ipfd_count, fReusePort) == C_ERR)
+            exit(1);
+    }
+    else
+    {
+        // We use the main threads file descriptors
+        memcpy(server.rgthreadvar[iel].ipfd, server.rgthreadvar[IDX_EVENT_LOOP_MAIN].ipfd, sizeof(int)*CONFIG_BINDADDR_MAX);
+        server.rgthreadvar[iel].ipfd_count = server.rgthreadvar[IDX_EVENT_LOOP_MAIN].ipfd_count;
+    }
 
     /* Create an event handler for accepting new connections in TCP */
     for (int j = 0; j < server.rgthreadvar[iel].ipfd_count; j++) {
@@ -3181,44 +3183,6 @@ void preventCommandReplication(client *c) {
     c->flags |= CLIENT_PREVENT_REPL_PROP;
 }
 
-void ProcessPendingAsyncWrites()
-{
-    while(listLength(serverTL->clients_pending_asyncwrite)) {
-        client *c = (client*)listNodeValue(listFirst(serverTL->clients_pending_asyncwrite));
-        listDelNode(serverTL->clients_pending_asyncwrite, listFirst(serverTL->clients_pending_asyncwrite));
-
-        serverAssert(c->flags & CLIENT_PENDING_ASYNCWRITE);
-        
-        // TODO: Append to end of reply block?
-
-        size_t size = c->bufposAsync;
-        clientReplyBlock *reply = (clientReplyBlock*)zmalloc(size + sizeof(clientReplyBlock), MALLOC_LOCAL);
-        /* take over the allocation's internal fragmentation */
-        reply->size = zmalloc_usable(reply) - sizeof(clientReplyBlock);
-        reply->used = c->bufposAsync;
-        memcpy(reply->buf, c->bufAsync, c->bufposAsync);
-        listAddNodeTail(c->listbufferDoneAsync, reply);
-        c->bufposAsync = 0;
-        c->flags &= ~CLIENT_PENDING_ASYNCWRITE;
-
-        // Now install the write event handler
-        int ae_flags = AE_WRITABLE;
-        /* For the fsync=always policy, we want that a given FD is never
-            * served for reading and writing in the same event loop iteration,
-            * so that in the middle of receiving the query, and serving it
-            * to the client, we'll call beforeSleep() that will do the
-            * actual fsync of AOF to disk. AE_BARRIER ensures that. */
-        if (server.aof_state == AOF_ON &&
-            server.aof_fsync == AOF_FSYNC_ALWAYS)
-        {
-            ae_flags |= AE_BARRIER;
-        }
-        
-        if (aeCreateRemoteFileEvent(server.rgthreadvar[c->iel].el, c->fd, ae_flags, sendReplyToClient, c, FALSE) == AE_ERR)
-            freeClientAsync(c);
-    }
-}
-
 /* Call() is the core of Redis execution of a command.
  *
  * The following flags can be passed:
@@ -3260,6 +3224,7 @@ void call(client *c, int flags) {
     long long dirty, start, duration;
     int client_old_flags = c->flags;
     struct redisCommand *real_cmd = c->cmd;
+    serverAssert(aeThreadOwnsLock());
 
     /* Sent the command to clients in MONITOR mode, only if the commands are
      * not generated from reading an AOF. */
@@ -3389,6 +3354,7 @@ void call(client *c, int flags) {
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c) {
+    serverAssert(aeThreadOwnsLock());
     /* The QUIT command is handled separately. Normal command procs will
      * go through checking for replication and QUIT will cause trouble
      * when FORCE_REPLICATION is enabled and would be implemented in
@@ -4517,6 +4483,7 @@ void infoCommand(client *c) {
 
 void monitorCommand(client *c) {
     /* ignore MONITOR if already slave or in monitor mode */
+    serverAssert(aeThreadOwnsLock());
     if (c->flags & CLIENT_SLAVE) return;
 
     c->flags |= (CLIENT_SLAVE|CLIENT_MONITOR);
@@ -4872,7 +4839,7 @@ void *workerThreadMain(void *parg)
 
     int isMainThread = (iel == IDX_EVENT_LOOP_MAIN);
     aeEventLoop *el = server.rgthreadvar[iel].el;
-    aeSetBeforeSleepProc(el, isMainThread ? beforeSleep : beforeSleepLite, isMainThread ? 0 : AE_SLEEP_THREADSAFE);
+    aeSetBeforeSleepProc(el, isMainThread ? beforeSleep : beforeSleepLite, /*isMainThread ? 0 : AE_SLEEP_THREADSAFE*/ 0);
     aeSetAfterSleepProc(el, isMainThread ? afterSleep : NULL, 0);
     aeMain(el);
     aeDeleteEventLoop(el);
@@ -4932,6 +4899,9 @@ int main(int argc, char **argv) {
     {
         initServerThread(server.rgthreadvar+iel, iel == IDX_EVENT_LOOP_MAIN);
     }
+    serverTL = &server.rgthreadvar[IDX_EVENT_LOOP_MAIN];
+    aeAcquireLock();    // We own the lock on boot
+
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */
     moduleInitModulesSystem();
@@ -5046,9 +5016,8 @@ int main(int argc, char **argv) {
 
     initServer();
 
-    server.cthreads = 1; //testing
-    initNetworking(1 /* fReusePort */);
-    serverTL = &server.rgthreadvar[IDX_EVENT_LOOP_MAIN];
+    server.cthreads = 4; //testing
+    initNetworking(0 /* fReusePort */);
 
     if (background || server.pidfile) createPidFile();
     redisSetProcTitle(argv[0]);
@@ -5088,6 +5057,8 @@ int main(int argc, char **argv) {
     if (server.maxmemory > 0 && server.maxmemory < 1024*1024) {
         serverLog(LL_WARNING,"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?", server.maxmemory);
     }
+
+    aeReleaseLock();    //Finally we can dump the lock
 
     serverAssert(server.cthreads > 0 && server.cthreads <= MAX_EVENT_LOOPS);
     pthread_t rgthread[MAX_EVENT_LOOPS];

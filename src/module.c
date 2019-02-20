@@ -484,6 +484,7 @@ void moduleFreeContext(RedisModuleCtx *ctx) {
  * details needed to correctly replicate commands. */
 void moduleHandlePropagationAfterCommandCallback(RedisModuleCtx *ctx) {
     client *c = ctx->client;
+    serverAssert(aeThreadOwnsLock());
 
     if (c->flags & CLIENT_LUA) return;
 
@@ -3623,6 +3624,7 @@ void RM_SetDisconnectCallback(RedisModuleBlockedClient *bc, RedisModuleDisconnec
 void moduleHandleBlockedClients(void) {
     listNode *ln;
     RedisModuleBlockedClient *bc;
+    serverAssert(aeThreadOwnsLock());
 
     pthread_mutex_lock(&moduleUnblockedClientsMutex);
     /* Here we unblock all the pending clients blocked in modules operations

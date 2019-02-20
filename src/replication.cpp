@@ -124,6 +124,7 @@ void freeReplicationBacklog(void) {
  * server.master_repl_offset, because there is no case where we want to feed
  * the backlog without incrementing the offset. */
 void feedReplicationBacklog(void *ptr, size_t len) {
+    serverAssert(aeThreadOwnsLock());
     unsigned char *p = (unsigned char*)ptr;
 
     server.master_repl_offset += len;
@@ -175,6 +176,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listIter li;
     int j, len;
     char llstr[LONG_STR_SIZE];
+    serverAssert(aeThreadOwnsLock());
 
     /* If the instance is not a top level master, return ASAP: we'll just proxy
      * the stream of data we receive from our master instead, in order to
@@ -310,6 +312,7 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
     sds cmdrepr = sdsnew("+");
     robj *cmdobj;
     struct timeval tv;
+    serverAssert(aeThreadOwnsLock());
 
     gettimeofday(&tv,NULL);
     cmdrepr = sdscatprintf(cmdrepr,"%ld.%06ld ",(long)tv.tv_sec,(long)tv.tv_usec);
@@ -717,6 +720,7 @@ void syncCommand(client *c) {
             slave = (client*)ln->value;
             if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END) break;
         }
+        
         /* To attach this slave, we check that it has at least all the
          * capabilities of the slave that triggered the current BGSAVE. */
         if (ln && ((c->slave_capa & slave->slave_capa) == slave->slave_capa)) {
@@ -883,6 +887,7 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
      * replication process. Currently the preamble is just the bulk count of
      * the file in the form "$<length>\r\n". */
     if (slave->replpreamble) {
+        serverAssert(slave->replpreamble[0] == '$');
         nwritten = write(fd,slave->replpreamble,sdslen(slave->replpreamble));
         if (nwritten == -1) {
             serverLog(LL_VERBOSE,"Write error sending RDB preamble to replica: %s",
@@ -942,13 +947,14 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
  * otherwise C_ERR is passed to the function.
  * The 'type' argument is the type of the child that terminated
  * (if it had a disk or socket target). */
-void updateSlavesWaitingBgsaveThread(int bgsaveerr, int type, int iel);
 void updateSlavesWaitingBgsave(int bgsaveerr, int type)
 {
     listNode *ln;
     listIter li;
     int startbgsave = 0;
     int mincapa = -1;
+    serverAssert(aeThreadOwnsLock());
+
     listRewind(server.slaves,&li);
     while((ln = listNext(&li))) {
         client *slave = (client*)ln->value;
@@ -957,34 +963,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
             startbgsave = 1;
             mincapa = (mincapa == -1) ? slave->slave_capa :
                         (mincapa & slave->slave_capa);
-        }
-    }
-
-    for (int iel = 0; iel < server.cthreads; ++iel)
-    {
-        if (iel == IDX_EVENT_LOOP_MAIN)
-            updateSlavesWaitingBgsaveThread(bgsaveerr, type, iel);
-        else
-            aePostFunction(server.rgthreadvar[iel].el, [=]{
-                updateSlavesWaitingBgsaveThread(bgsaveerr, type, iel);
-            });
-    }
-
-    if (startbgsave)
-        startBgsaveForReplication(mincapa);
-}
-
-void updateSlavesWaitingBgsaveThread(int bgsaveerr, int type, int iel) {
-    listNode *ln;
-    listIter li;
-
-    listRewind(server.slaves,&li);
-    while((ln = listNext(&li))) {
-        client *slave = (client*)ln->value;
-        if (slave->iel != iel)
-            continue;
-        
-        if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
+        } else if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
             struct redis_stat buf;
 
             /* If this was an RDB on disk save, we have to prepare to send
@@ -1006,13 +985,19 @@ void updateSlavesWaitingBgsaveThread(int bgsaveerr, int type, int iel) {
                 slave->repl_ack_time = server.unixtime; /* Timeout otherwise. */
             } else {
                 if (bgsaveerr != C_OK) {
-                    freeClient(slave);
+                    if (FCorrectThread(slave))
+                        freeClient(slave);
+                    else
+                        freeClientAsync(slave);
                     serverLog(LL_WARNING,"SYNC failed. BGSAVE child returned an error");
                     continue;
                 }
                 if ((slave->repldbfd = open(server.rdb_filename,O_RDONLY)) == -1 ||
                     redis_fstat(slave->repldbfd,&buf) == -1) {
-                    freeClient(slave);
+                    if (FCorrectThread(slave))
+                        freeClient(slave);
+                    else
+                        freeClientAsync(slave);
                     serverLog(LL_WARNING,"SYNC failed. Can't open/stat DB after BGSAVE: %s", strerror(errno));
                     continue;
                 }
@@ -1022,14 +1007,28 @@ void updateSlavesWaitingBgsaveThread(int bgsaveerr, int type, int iel) {
                 slave->replpreamble = sdscatprintf(sdsempty(),"$%lld\r\n",
                     (unsigned long long) slave->repldbsize);
 
-                aeDeleteFileEvent(server.rgthreadvar[slave->iel].el,slave->fd,AE_WRITABLE);
-                if (aeCreateFileEvent(server.rgthreadvar[slave->iel].el, slave->fd, AE_WRITABLE, sendBulkToSlave, slave) == AE_ERR) {
-                    freeClient(slave);
-                    continue;
+                if (FCorrectThread(slave))
+                {
+                    aeDeleteFileEvent(server.rgthreadvar[slave->iel].el,slave->fd,AE_WRITABLE);
+                    if (aeCreateFileEvent(server.rgthreadvar[slave->iel].el, slave->fd, AE_WRITABLE, sendBulkToSlave, slave) == AE_ERR) {
+                        freeClient(slave);
+                    }
+                }
+                else
+                {
+                    aePostFunction(server.rgthreadvar[slave->iel].el, [slave]{
+                        aeDeleteFileEvent(server.rgthreadvar[slave->iel].el,slave->fd,AE_WRITABLE);
+                        if (aeCreateFileEvent(server.rgthreadvar[slave->iel].el, slave->fd, AE_WRITABLE, sendBulkToSlave, slave) == AE_ERR) {
+                            freeClient(slave);
+                        }
+                    });
                 }
             }
         }
     }
+
+    if (startbgsave)
+        startBgsaveForReplication(mincapa);
 }
 
 /* Change the current instance replication ID with a new, random one.
@@ -1107,7 +1106,7 @@ void replicationEmptyDbCallback(void *privdata) {
  * performed, this function materializes the master client we store
  * at server.master, starting from the specified file descriptor. */
 void replicationCreateMasterClient(int fd, int dbid) {
-    server.master = createClient(fd, IDX_EVENT_LOOP_MAIN);
+    server.master = createClient(fd, serverTL - server.rgthreadvar);
     server.master->flags |= CLIENT_MASTER;
     server.master->authenticated = 1;
     server.master->reploff = server.master_initial_offset;
@@ -1143,6 +1142,8 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(el);
     UNUSED(privdata);
     UNUSED(mask);
+
+    serverAssert(aeThreadOwnsLock());
 
     /* Static vars used to hold the EOF mark, and the last bytes received
      * form the server: when they match, we reached the end of the transfer. */
@@ -2042,7 +2043,6 @@ void replicationHandleMasterDisconnection(void) {
      * the slaves only if we'll have to do a full resync with our master. */
 }
 
-void replicaofCommandCore(client *c);
 void replicaofCommand(client *c) {
     // Changing the master needs to be done on the main thread.
 
@@ -2052,23 +2052,6 @@ void replicaofCommand(client *c) {
         addReplyError(c,"REPLICAOF not allowed in cluster mode.");
         return;
     }
-
-    if ((serverTL - server.rgthreadvar) == IDX_EVENT_LOOP_MAIN)
-    {
-        replicaofCommandCore(c);
-    }
-    else
-    {
-        aeReleaseLock();
-        aePostFunction(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [=]{
-            replicaofCommandCore(c);
-        }, true /*fSync*/);
-        aeAcquireLock();
-    }
-}
-
-void replicaofCommandCore(client *c) {
-    
 
     /* The special host/port combination "NO" "ONE" turns the instance
      * into a master. Otherwise the new master address is set. */
@@ -2164,7 +2147,8 @@ void roleCommand(client *c) {
 /* Send a REPLCONF ACK command to the master to inform it about the current
  * processed offset. If we are not connected with a master, the command has
  * no effects. */
-void replicationSendAck(void) {
+void replicationSendAck(void) 
+{
     client *c = server.master;
 
     if (c != NULL) {
@@ -2200,6 +2184,7 @@ void replicationSendAck(void) {
 void replicationCacheMaster(client *c) {
     serverAssert(server.master != NULL && server.cached_master == NULL);
     serverLog(LL_NOTICE,"Caching the disconnected master state.");
+    AssertCorrectThread(c);
 
     /* Unlink the client from the server structures. */
     unlinkClient(c);
@@ -2288,9 +2273,13 @@ void replicationResurrectCachedMaster(int newfd) {
     server.repl_state = REPL_STATE_CONNECTED;
     server.repl_down_since = 0;
 
+    /* Normally changing the thread of a client is a BIG NONO,
+        but this client was unlinked so its OK here */
+    server.master->iel = serverTL - server.rgthreadvar; // martial to this thread
+
     /* Re-add to the list of clients. */
     linkClient(server.master);
-    if (aeCreateFileEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el, newfd, AE_READABLE|AE_READ_THREADSAFE,
+    if (aeCreateFileEvent(server.rgthreadvar[server.master->iel].el, newfd, AE_READABLE|AE_READ_THREADSAFE,
                           readQueryFromClient, server.master)) {
         serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the readable handler: %s", strerror(errno));
         freeClientAsync(server.master); /* Close ASAP. */
@@ -2299,7 +2288,7 @@ void replicationResurrectCachedMaster(int newfd) {
     /* We may also need to install the write handler as well if there is
      * pending data in the write buffers. */
     if (clientHasPendingReplies(server.master, TRUE)) {
-        if (aeCreateFileEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el, newfd, AE_WRITABLE,
+        if (aeCreateFileEvent(server.rgthreadvar[server.master->iel].el, newfd, AE_WRITABLE,
                           sendReplyToClient, server.master)) {
             serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the writable handler: %s", strerror(errno));
             freeClientAsync(server.master); /* Close ASAP. */
@@ -2535,7 +2524,7 @@ void processClientsWaitingReplicas(void) {
                            last_numreplicas > c->bpop.numreplicas)
         {
             unblockClient(c);
-            addReplyLongLong(c,last_numreplicas);
+            addReplyLongLongAsync(c,last_numreplicas);
         } else {
             int numreplicas = replicationCountAcksByOffset(c->bpop.reploffset);
 
@@ -2543,7 +2532,7 @@ void processClientsWaitingReplicas(void) {
                 last_offset = c->bpop.reploffset;
                 last_numreplicas = numreplicas;
                 unblockClient(c);
-                addReplyLongLong(c,numreplicas);
+                addReplyLongLongAsync(c,numreplicas);
             }
         }
     }
@@ -2680,7 +2669,7 @@ void replicationCron(void) {
             {
                 serverLog(LL_WARNING, "Disconnecting timedout replica: %s",
                     replicationGetSlaveName(slave));
-                freeClient(slave);
+                freeClientAsync(slave);
             }
         }
     }

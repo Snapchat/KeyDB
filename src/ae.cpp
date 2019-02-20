@@ -109,9 +109,8 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
         auto cb = read(fd, &cmd, sizeof(aeCommand));
         if (cb != sizeof(cmd))
         {
-            if (errno == EAGAIN)
-                break;
-            fprintf(stderr, "Failed to read pipe.\n");
+            AE_ASSERT(errno == EAGAIN);
+            break;
         }
         switch (cmd.op)
         {
@@ -167,6 +166,8 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
 {
     if (eventLoop == g_eventLoopThisThread)
         return aeCreateFileEvent(eventLoop, fd, mask, proc, clientData);
+
+    int ret = AE_OK;
     
     aeCommand cmd;
     cmd.op = AE_ASYNC_OP::CreateFileEvent;
@@ -182,14 +183,19 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
     if (fSynchronous)
         cmd.pctl->mutexcv.lock();
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
-    AE_ASSERT(size == sizeof(cmd));
-    int ret = AE_OK;
+    if (size != sizeof(cmd))
+    {
+        AE_ASSERT(errno == EAGAIN);
+        ret = AE_ERR;
+    }
+    
     if (fSynchronous)
     {
         cmd.pctl->cv.wait(ulock);
         ret = cmd.pctl->rval;
         delete cmd.pctl;
     }
+
     return ret;
 }
 
@@ -265,7 +271,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     if (pipe(rgfd) < 0)
         goto err;
     eventLoop->fdCmdRead = rgfd[0];
-    eventLoop->fdCmdWrite = rgfd[1];;
+    eventLoop->fdCmdWrite = rgfd[1];
     fcntl(eventLoop->fdCmdWrite, F_SETFL, O_NONBLOCK);
     fcntl(eventLoop->fdCmdRead, F_SETFL, O_NONBLOCK);
     eventLoop->cevents = 0;
@@ -389,6 +395,7 @@ extern "C" void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask)
 }
 
 extern "C" int aeGetFileEvents(aeEventLoop *eventLoop, int fd) {
+    //AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     if (fd >= eventLoop->setsize) return 0;
     aeFileEvent *fe = &eventLoop->events[fd];
 
@@ -468,6 +475,7 @@ extern "C" int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id)
  */
 static aeTimeEvent *aeSearchNearestTimer(aeEventLoop *eventLoop)
 {
+    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     aeTimeEvent *te = eventLoop->timeEventHead;
     aeTimeEvent *nearest = NULL;
 
@@ -629,6 +637,7 @@ extern "C" void ProcessEventCore(aeEventLoop *eventLoop, aeFileEvent *fe, int ma
  * The function returns the number of events processed. */
 int aeProcessEvents(aeEventLoop *eventLoop, int flags)
 {
+    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     int processed = 0, numevents;
 
     /* Nothing to do? return ASAP */

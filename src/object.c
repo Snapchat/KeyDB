@@ -394,7 +394,7 @@ robj *resetRefCount(robj *obj) {
 
 int checkType(client *c, robj *o, int type) {
     if (o->type != type) {
-        addReply(c,shared.wrongtypeerr);
+        addReplyAsync(c,shared.wrongtypeerr);
         return 1;
     }
     return 0;

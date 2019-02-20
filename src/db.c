@@ -99,6 +99,7 @@ robj *lookupKey(redisDb *db, robj *key, int flags) {
  * expiring our key via DELs in the replication link. */
 robj *lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
     robj *val;
+    serverAssert(aeThreadOwnsLock());
 
     if (expireIfNeeded(db,key) == 1) {
         /* Key expired. If we are in the context of a master, expireIfNeeded()
@@ -1072,6 +1073,7 @@ int removeExpire(redisDb *db, robj *key) {
  * after which the key will no longer be considered valid. */
 void setExpire(client *c, redisDb *db, robj *key, long long when) {
     dictEntry *kde, *de;
+    serverAssert(aeThreadOwnsLock());
 
     /* Reuse the sds from the main dict in the expire dict */
     kde = dictFind(db->pdict,ptrFromObj(key));

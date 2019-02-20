@@ -1205,6 +1205,7 @@ struct redisServer {
     int aof_pipe_read_data_from_parent;
     int aof_pipe_write_ack_to_parent;
     int aof_pipe_read_ack_from_child;
+    aeEventLoop *el_alf_pip_read_ack_from_child;
     int aof_pipe_write_ack_to_child;
     int aof_pipe_read_ack_from_parent;
     int aof_stop_sending_diff;     /* If true stop sending accumulated diffs
@@ -1640,6 +1641,7 @@ void setDeferredArrayLenAsync(client *c, void *node, long length);
 void addReplySdsAsync(client *c, sds s);
 void addReplyBulkSdsAsync(client *c, sds s);
 void addReplyPushLenAsync(client *c, long length);
+void addReplyLongLongAsync(client *c, long long ll);
 
 void ProcessPendingAsyncWrites(void);
 

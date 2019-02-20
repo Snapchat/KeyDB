@@ -961,6 +961,7 @@ void configSetCommand(client *c) {
 
         /* Try to check if the OS is capable of supporting so many FDs. */
         server.maxclients = ll;
+        serverAssert(FALSE);
         if (ll > orig_value) {
             adjustOpenFilesLimit();
             if (server.maxclients != ll) {

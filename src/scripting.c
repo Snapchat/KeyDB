@@ -370,6 +370,9 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     sds reply;
     
     // Ensure our client is on the right thread
+    serverAssert(!(c->flags & CLIENT_PENDING_WRITE));
+    serverAssert(!(c->flags & CLIENT_UNBLOCKED));
+    serverAssert(aeThreadOwnsLock());
     c->iel = serverTL - server.rgthreadvar;
 
     /* Cached across calls. */

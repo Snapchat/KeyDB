@@ -100,6 +100,7 @@ int getTimeoutFromObjectOrReply(client *c, robj *object, mstime_t *timeout, int 
  * flag is set client query buffer is not longer processed, but accumulated,
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
+    serverAssert(aeThreadOwnsLock());
     c->flags |= CLIENT_BLOCKED;
     c->btype = btype;
     server.blocked_clients++;
@@ -122,6 +123,7 @@ void processUnblockedClients(int iel) {
         serverAssert(ln != NULL);
         c = ln->value;
         listDelNode(unblocked_clients,ln);
+        AssertCorrectThread(c);
         c->flags &= ~CLIENT_UNBLOCKED;
 
         /* Process remaining data in the input buffer, unless the client
@@ -165,6 +167,7 @@ void queueClientForReprocessing(client *c) {
 /* Unblock a client calling the right function depending on the kind
  * of operation the client is blocking for. */
 void unblockClient(client *c) {
+    serverAssert(aeThreadOwnsLock());
     if (c->btype == BLOCKED_LIST ||
         c->btype == BLOCKED_ZSET ||
         c->btype == BLOCKED_STREAM) {
@@ -210,6 +213,7 @@ void replyToBlockedClientTimedOut(client *c) {
  * The semantics is to send an -UNBLOCKED error to the client, disconnecting
  * it at the same time. */
 void disconnectAllBlockedClients(void) {
+    serverAssert(aeThreadOwnsLock());
     listNode *ln;
     listIter li;
 

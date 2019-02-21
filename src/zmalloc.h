@@ -36,7 +36,6 @@
 #define __str(s) #s
 
 #include "storage.h"
-#define USE_MEMKIND 1
 #if defined(USE_MEMKIND)
     #define ZMALLOC_LIB ("memkind")
     #undef USE_JEMALLOC

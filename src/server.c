@@ -661,7 +661,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"lastsave",lastsaveCommand,1,
-     "read-only random fast @admin",
+     "read-only random fast @admin @dangerous",
      0,NULL,0,0,0,0,0,0},
 
     {"type",typeCommand,2,
@@ -2917,6 +2917,16 @@ void initServer(void) {
                 "blocked clients subsystem.");
     }
 
+
+    /* Register a readable event for the pipe used to awake the event loop
+     * when a blocked client in a module needs attention. */
+    if (aeCreateFileEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el, server.module_blocked_pipe[0], AE_READABLE,
+        moduleBlockedClientPipeReadable,NULL) == AE_ERR) {
+            serverPanic(
+                "Error registering the readable event for the module "
+                "blocked clients subsystem.");
+    }
+
     /* Open the AOF file if needed. */
     if (server.aof_state == AOF_ON) {
         server.aof_fd = open(server.aof_filename,
@@ -2998,10 +3008,10 @@ int populateCommandTableParseFlags(struct redisCommand *c, char *strflags) {
                 return C_ERR;
             }
         }
-
-        /* If it's not @fast is @slow in this binary world. */
-        if (!(c->flags & CMD_CATEGORY_FAST)) c->flags |= CMD_CATEGORY_SLOW;
     }
+    /* If it's not @fast is @slow in this binary world. */
+    if (!(c->flags & CMD_CATEGORY_FAST)) c->flags |= CMD_CATEGORY_SLOW;
+
     sdsfreesplitres(argv,argc);
     return C_OK;
 }
@@ -3390,14 +3400,17 @@ int processCommand(client *c) {
         return C_OK;
     }
 
-    /* Check if the user is authenticated */
-    if (!(DefaultUser->flags & USER_FLAG_NOPASS) &&
-        !c->authenticated &&
-        (c->cmd->proc != authCommand || c->cmd->proc == helloCommand))
-    {
-        flagTransaction(c);
-        addReply(c,shared.noautherr);
-        return C_OK;
+    /* Check if the user is authenticated. This check is skipped in case
+     * the default user is flagged as "nopass" and is active. */
+    int auth_required = !(DefaultUser->flags & USER_FLAG_NOPASS) &&
+                        !c->authenticated;
+    if (auth_required || DefaultUser->flags & USER_FLAG_DISABLED) {
+        /* AUTH and HELLO are valid even in non authenticated state. */
+        if (c->cmd->proc != authCommand || c->cmd->proc == helloCommand) {
+            flagTransaction(c);
+            addReply(c,shared.noautherr);
+            return C_OK;
+        }
     }
 
     /* Check if the user can run this command according to the current
@@ -3791,8 +3804,8 @@ void addReplyCommand(client *c, struct redisCommand *cmd) {
     if (!cmd) {
         addReplyNull(c);
     } else {
-        /* We are adding: command name, arg count, flags, first, last, offset */
-        addReplyArrayLen(c, 6);
+        /* We are adding: command name, arg count, flags, first, last, offset, categories */
+        addReplyArrayLen(c, 7);
         addReplyBulkCString(c, cmd->name);
         addReplyLongLong(c, cmd->arity);
 
@@ -3822,6 +3835,8 @@ void addReplyCommand(client *c, struct redisCommand *cmd) {
         addReplyLongLong(c, cmd->firstkey);
         addReplyLongLong(c, cmd->lastkey);
         addReplyLongLong(c, cmd->keystep);
+
+        addReplyCommandCategories(c,cmd);
     }
 }
 
@@ -5034,11 +5049,7 @@ int main(int argc, char **argv) {
         linuxMemoryWarnings();
     #endif
         moduleLoadFromQueue();
-        if (ACLLoadConfiguredUsers() == C_ERR) {
-            serverLog(LL_WARNING,
-                "Critical error while loading ACLs. Exiting.");
-            exit(1);
-        }
+        ACLLoadUsersAtStartup();
         loadDataFromDisk();
         if (server.cluster_enabled) {
             if (verifyClusterConfigWithData() == C_ERR) {

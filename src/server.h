@@ -1270,6 +1270,7 @@ struct redisServer {
     int repl_diskless_sync;         /* Send RDB to slaves sockets directly. */
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
     /* Replication (slave) */
+    char *masteruser;               /* AUTH with this user and masterauth with master */
     char *masterauth;               /* AUTH with this password with master */
     char *masterhost;               /* Hostname of master */
     int masterport;                 /* Port of master */
@@ -1820,6 +1821,8 @@ int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err);
 char *ACLSetUserStringError(void);
 int ACLLoadConfiguredUsers(void);
 sds ACLDescribeUser(user *u);
+void ACLLoadUsersAtStartup(void);
+void addReplyCommandCategories(client *c, struct redisCommand *cmd);
 
 /* Sorted sets data type */
 

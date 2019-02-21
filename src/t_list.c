@@ -630,6 +630,7 @@ int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb 
     robj *argv[3];
 
     if (dstkey == NULL) {
+        fastlock_lock(&receiver->lock);
         /* Propagate the [LR]POP operation. */
         argv[0] = (where == LIST_HEAD) ? shared.lpop :
                                           shared.rpop;
@@ -646,7 +647,9 @@ int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb 
         /* Notify event. */
         char *event = (where == LIST_HEAD) ? "lpop" : "rpop";
         notifyKeyspaceEvent(NOTIFY_LIST,event,key,receiver->db->id);
+        fastlock_unlock(&receiver->lock);
     } else {
+        fastlock_lock(&receiver->lock);
         /* BRPOPLPUSH */
         robj *dstobj =
             lookupKeyWrite(receiver->db,dstkey);
@@ -673,6 +676,7 @@ int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb 
 
             /* Notify event ("lpush" was notified by rpoplpushHandlePush). */
             notifyKeyspaceEvent(NOTIFY_LIST,"rpop",key,receiver->db->id);
+            fastlock_unlock(&receiver->lock);
         } else {
             /* BRPOPLPUSH failed because of wrong
              * destination type. */

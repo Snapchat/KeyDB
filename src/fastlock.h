@@ -18,7 +18,9 @@ void fastlock_free(struct fastlock *lock);
 
 struct fastlock
 {
-    volatile int m_lock;
+    volatile unsigned m_active;
+    volatile unsigned m_avail;
+
     volatile int m_pidOwner;
     volatile int m_depth;
 

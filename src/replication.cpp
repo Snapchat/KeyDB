@@ -186,6 +186,13 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
      * master replication history and has the same backlog and offsets). */
     if (server.masterhost != NULL) return;
 
+    /* If the instance is not a top level master, return ASAP: we'll just proxy
+     * the stream of data we receive from our master instead, in order to
+     * propagate *identical* replication stream. In this way this slave can
+     * advertise the same replication ID as the master (since it shares the
+     * master replication history and has the same backlog and offsets). */
+    if (server.masterhost != NULL) return;
+
     /* If there aren't slaves, and there is no backlog buffer to populate,
      * we can return ASAP. */
     if (server.repl_backlog == NULL && listLength(slaves) == 0) return;
@@ -1695,7 +1702,13 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     /* AUTH with the master if required. */
     if (server.repl_state == REPL_STATE_SEND_AUTH) {
-        if (server.masterauth) {
+        if (server.masteruser && server.masterauth) {
+            err = sendSynchronousCommand(SYNC_CMD_WRITE,fd,"AUTH",
+                                         server.masteruser,server.masterauth,NULL);
+            if (err) goto write_error;
+            server.repl_state = REPL_STATE_RECEIVE_AUTH;
+            return;
+        } else if (server.masterauth) {
             err = sendSynchronousCommand(SYNC_CMD_WRITE,fd,"AUTH",server.masterauth,NULL);
             if (err) goto write_error;
             server.repl_state = REPL_STATE_RECEIVE_AUTH;
@@ -2045,8 +2058,6 @@ void replicationHandleMasterDisconnection(void) {
 }
 
 void replicaofCommand(client *c) {
-    // Changing the master needs to be done on the main thread.
-
     /* SLAVEOF is not allowed in cluster mode as replication is automatically
      * configured using the current address of the master node. */
     if (server.cluster_enabled) {

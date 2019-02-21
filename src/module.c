@@ -3700,6 +3700,7 @@ void moduleHandleBlockedClients(void) {
                 !(c->flags & CLIENT_PENDING_WRITE))
             {
                 c->flags |= CLIENT_PENDING_WRITE;
+                AssertCorrectThread(c);
                 listAddNodeHead(server.rgthreadvar[c->iel].clients_pending_write,c);
             }
         }

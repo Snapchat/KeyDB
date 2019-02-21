@@ -31,15 +31,16 @@ extern "C" void fastlock_lock(struct fastlock *lock)
             return;
         }
 
+        int cloops = 1;
         while (!__sync_bool_compare_and_swap(&lock->m_lock, 0, 1))
         {
-            sched_yield();
+            if ((++cloops % 1024*1024) == 0)
+                sched_yield();
         }
     }
 
     lock->m_depth = 1;
     lock->m_pidOwner = gettid();
-    __sync_synchronize();
 }
 
 extern "C" void fastlock_unlock(struct fastlock *lock)

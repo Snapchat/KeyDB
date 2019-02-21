@@ -124,6 +124,8 @@ void processUnblockedClients(int iel) {
         c = ln->value;
         listDelNode(unblocked_clients,ln);
         AssertCorrectThread(c);
+        
+        fastlock_lock(&c->lock);
         c->flags &= ~CLIENT_UNBLOCKED;
 
         /* Process remaining data in the input buffer, unless the client
@@ -135,6 +137,7 @@ void processUnblockedClients(int iel) {
                 processInputBufferAndReplicate(c);
             }
         }
+        fastlock_unlock(&c->lock);
     }
 }
 

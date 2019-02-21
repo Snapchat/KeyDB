@@ -4839,7 +4839,7 @@ void *workerThreadMain(void *parg)
 
     int isMainThread = (iel == IDX_EVENT_LOOP_MAIN);
     aeEventLoop *el = server.rgthreadvar[iel].el;
-    aeSetBeforeSleepProc(el, isMainThread ? beforeSleep : beforeSleepLite, /*isMainThread ? 0 : AE_SLEEP_THREADSAFE*/ 0);
+    aeSetBeforeSleepProc(el, isMainThread ? beforeSleep : beforeSleepLite, isMainThread ? 0 : AE_SLEEP_THREADSAFE);
     aeSetAfterSleepProc(el, isMainThread ? afterSleep : NULL, 0);
     aeMain(el);
     aeDeleteEventLoop(el);
@@ -5017,7 +5017,7 @@ int main(int argc, char **argv) {
     initServer();
 
     server.cthreads = 4; //testing
-    initNetworking(0 /* fReusePort */);
+    initNetworking(1 /* fReusePort */);
 
     if (background || server.pidfile) createPidFile();
     redisSetProcTitle(argv[0]);

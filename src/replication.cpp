@@ -1,6 +1,7 @@
 /* Asynchronous replication implementation.
  *
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2019 John Sully <john at eqalpha dot com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

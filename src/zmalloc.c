@@ -63,14 +63,14 @@ void zlibc_free(void *ptr) {
 #define realloc(ptr, size, type) srealloc(ptr, size, type)
 #define free(ptr) sfree(ptr)
 #elif defined(USE_TCMALLOC)
-#define malloc(size) tc_malloc(size)
-#define calloc(count,size) tc_calloc(count,size)
-#define realloc(ptr,size) tc_realloc(ptr,size)
+#define malloc(size, type) tc_malloc(size)
+#define calloc(count,size, type) tc_calloc(count,size)
+#define realloc(ptr,size, type) tc_realloc(ptr,size)
 #define free(ptr) tc_free(ptr)
 #elif defined(USE_JEMALLOC)
-#define malloc(size) je_malloc(size)
-#define calloc(count,size) je_calloc(count,size)
-#define realloc(ptr,size) je_realloc(ptr,size)
+#define malloc(size, type) je_malloc(size)
+#define calloc(count,size,type) je_calloc(count,size)
+#define realloc(ptr,size,type) je_realloc(ptr,size)
 #define free(ptr) je_free(ptr)
 #define mallocx(size,flags) je_mallocx(size,flags)
 #define dallocx(ptr,flags) je_dallocx(ptr,flags)
@@ -101,12 +101,8 @@ static void zmalloc_default_oom(size_t size) {
 static void (*zmalloc_oom_handler)(size_t) = zmalloc_default_oom;
 
 void *zmalloc(size_t size, enum MALLOC_CLASS class) {
-#ifdef USE_MEMKIND
-    void *ptr = malloc(size+PREFIX_SIZE, class);
-#else
     (void)class;
-    void *ptr = malloc(size+PREFIX_SIZE);
-#endif
+    void *ptr = malloc(size+PREFIX_SIZE, class);
 
     if (!ptr) zmalloc_oom_handler(size);
 #ifdef HAVE_MALLOC_SIZE
@@ -138,12 +134,8 @@ void zfree_no_tcache(void *ptr) {
 #endif
 
 void *zcalloc(size_t size, enum MALLOC_CLASS class) {
-#ifdef USE_MEMKIND
+    (void)(class);
     void *ptr = calloc(1, size+PREFIX_SIZE, class);
-#else
-    (void)class;
-    void *ptr = calloc(1, size+PREFIX_SIZE);
-#endif
 
     if (!ptr) zmalloc_oom_handler(size);
 #ifdef HAVE_MALLOC_SIZE

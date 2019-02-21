@@ -821,7 +821,12 @@ void loadServerConfigFromString(char *config) {
                 if (err) goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"scratch-file-path")) {
+#ifdef USE_MEMKIND
             storage_init(argv[1], server.maxmemory);
+#else
+            err = "KeyDB not compliled with scratch-file support.";
+            goto loaderr;
+#endif
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }

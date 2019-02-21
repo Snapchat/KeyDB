@@ -4851,7 +4851,9 @@ int main(int argc, char **argv) {
     struct timeval tv;
     int j;
 
+#ifdef USE_MEMKIND
     storage_init(NULL, 0);
+#endif
 
 #ifdef REDIS_TEST
     if (argc == 3 && !strcasecmp(argv[1], "test")) {

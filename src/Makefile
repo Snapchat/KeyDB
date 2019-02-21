@@ -39,7 +39,7 @@ MALLOC=libc
 ifneq ($(uname_M),armv6l)
 ifneq ($(uname_M),armv7l)
 ifeq ($(uname_S),Linux)
-	MALLOC=memkind
+	MALLOC=jemalloc
 endif
 endif
 endif
@@ -134,23 +134,27 @@ FINAL_CXXFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src
 
 ifeq ($(MALLOC),tcmalloc)
 	FINAL_CFLAGS+= -DUSE_TCMALLOC
+	FINAL_CXXFLAGS+= -DUSE_TCMALLOC
 	FINAL_LIBS+= -ltcmalloc
 endif
 
 ifeq ($(MALLOC),tcmalloc_minimal)
 	FINAL_CFLAGS+= -DUSE_TCMALLOC
+	FINAL_CXXFLAGS+= -DUSE_TCMALLOC
 	FINAL_LIBS+= -ltcmalloc_minimal
 endif
 
 ifeq ($(MALLOC),jemalloc)
 	DEPENDENCY_TARGETS+= jemalloc
 	FINAL_CFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include
+	FINAL_CXXFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
 endif
 
 ifeq ($(MALLOC),memkind)
 	DEPENDENCY_TARGETS+= memkind
 	FINAL_CFLAGS+= -DUSE_MEMKIND -I../deps/memkind/src/include
+	FINAL_CXXFLAGS+= -DUSE_MEMKIND -I../deps/memkind/src/include
 	FINAL_LIBS := ../deps/memkind/src/.libs/libmemkind.a -lnuma $(FINAL_LIBS)
 endif
 

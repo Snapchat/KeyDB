@@ -53,8 +53,8 @@ static pid_t gettid()
 
 extern "C" void fastlock_init(struct fastlock *lock)
 {
-    lock->m_active = 0;
-    lock->m_avail = 0;
+    lock->m_ticket.m_active = 0;
+    lock->m_ticket.m_avail = 0;
     lock->m_depth = 0;
 }
 
@@ -66,12 +66,12 @@ extern "C" void fastlock_lock(struct fastlock *lock)
         return;
     }
 
-    unsigned myticket = __atomic_fetch_add(&lock->m_avail, 1, __ATOMIC_ACQ_REL);
+    unsigned myticket = __atomic_fetch_add(&lock->m_ticket.m_avail, 1, __ATOMIC_ACQ_REL);
 
-    if (__atomic_load_4(&lock->m_active, __ATOMIC_ACQUIRE) != myticket)
+    if (__atomic_load_2(&lock->m_ticket.m_active, __ATOMIC_ACQUIRE) != myticket)
     {
         int cloops = 1;
-        while (__atomic_load_4(&lock->m_active, __ATOMIC_ACQUIRE) != myticket)
+        while (__atomic_load_2(&lock->m_ticket.m_active, __ATOMIC_ACQUIRE) != myticket)
         {
             if ((++cloops % 1024*1024) == 0)
                 sched_yield();
@@ -83,6 +83,33 @@ extern "C" void fastlock_lock(struct fastlock *lock)
     __sync_synchronize();
 }
 
+extern "C" int fastlock_trylock(struct fastlock *lock)
+{
+    if ((int)__atomic_load_4(&lock->m_pidOwner, __ATOMIC_ACQUIRE) == gettid())
+    {
+        ++lock->m_depth;
+        return true;
+    }
+
+    // cheap test
+    if (lock->m_ticket.m_active != lock->m_ticket.m_avail)
+        return false;
+
+    uint16_t active = __atomic_load_2(&lock->m_ticket.m_active, __ATOMIC_ACQUIRE);
+    uint16_t next = active + 1;
+
+    struct ticket ticket_expect { active, active };
+    struct ticket ticket_setiflocked { active, next };
+    if (__atomic_compare_exchange(&lock->m_ticket, &ticket_expect, &ticket_setiflocked, true /*strong*/, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
+    {
+        lock->m_depth = 1;
+        __atomic_store_4(&lock->m_pidOwner, gettid(), __ATOMIC_RELEASE);
+        __sync_synchronize();
+        return true;
+    }
+    return false;
+}
+
 extern "C" void fastlock_unlock(struct fastlock *lock)
 {
     --lock->m_depth;
@@ -90,7 +117,7 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
     {
         lock->m_pidOwner = -1;
         __sync_synchronize();
-        __atomic_fetch_add(&lock->m_active, 1, __ATOMIC_ACQ_REL);
+        __atomic_fetch_add(&lock->m_ticket.m_active, 1, __ATOMIC_ACQ_REL);
     }
 }
 

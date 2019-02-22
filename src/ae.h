@@ -159,6 +159,7 @@ int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
 
 void aeAcquireLock();
+int aeTryAcquireLock();
 void aeReleaseLock();
 int aeThreadOwnsLock();
 

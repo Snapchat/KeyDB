@@ -774,6 +774,11 @@ void aeAcquireLock()
     g_lock.lock();
 }
 
+int aeTryAcquireLock()
+{
+    return g_lock.try_lock();
+}
+
 void aeReleaseLock()
 {
     g_lock.unlock();

@@ -45,15 +45,25 @@ class AeLocker
     bool m_fArmed = false;
 
 public:
-    AeLocker(bool fArm = false)
+    AeLocker()
     {
-        if (fArm)
-            arm();
     }
 
-    void arm()
+    void arm(client *c) // if a client is passed, then the client is already locked
     {
-        if (!m_fArmed)
+        if (c != nullptr)
+        {
+            serverAssert(!m_fArmed);
+            serverAssert(c->lock.fOwnLock());
+            while (!aeTryAcquireLock())
+            {
+                c->lock.unlock();
+                // give a chance for the global lock to progress if they were waiting on the client
+                c->lock.lock();
+            }
+            m_fArmed = true;
+        }
+        else if (!m_fArmed)
         {
             m_fArmed = true;
             aeAcquireLock();
@@ -204,9 +214,6 @@ client *createClient(int fd, int iel) {
     c->bufAsync = NULL;
     c->buflenAsync = 0;
     c->bufposAsync = 0;
-    c->listbufferDoneAsync = listCreate();
-    listSetFreeMethod(c->listbufferDoneAsync,freeClientReplyValue);
-    listSetDupMethod(c->listbufferDoneAsync,dupClientReplyValue);
 
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
@@ -276,6 +283,7 @@ void clientInstallAsyncWriteHandler(client *c) {
 int prepareClientToWrite(client *c, bool fAsync) {
     fAsync = fAsync && !FCorrectThread(c);  // Not async if we're on the right thread
     serverAssert(!fAsync || aeThreadOwnsLock());
+    serverAssert(c->lock.fOwnLock());
 
     /* If it's the Lua client we always return ok without installing any
      * handler since there is no socket at all. */
@@ -293,7 +301,7 @@ int prepareClientToWrite(client *c, bool fAsync) {
 
     /* Schedule the client to write the output buffers to the socket, unless
      * it should already be setup to do so (it has already pending data). */
-    if (!fAsync && !clientHasPendingReplies(c, FALSE)) clientInstallWriteHandler(c);
+    if (!fAsync && !clientHasPendingReplies(c)) clientInstallWriteHandler(c);
     if (fAsync && !(c->fPendingAsyncWrite)) clientInstallAsyncWriteHandler(c);
 
     /* Authorize the caller to queue in the output buffer of this client. */
@@ -1014,8 +1022,8 @@ void copyClientOutputBuffer(client *dst, client *src) {
 
 /* Return true if the specified client has pending reply buffers to write to
  * the socket. */
-int clientHasPendingReplies(client *c, int fIncludeAsync) {
-    return c->bufpos || listLength(c->reply) || (fIncludeAsync && listLength(c->listbufferDoneAsync));
+int clientHasPendingReplies(client *c) {
+    return c->bufpos || listLength(c->reply);
 }
 
 #define MAX_ACCEPTS_PER_CALL 1000
@@ -1149,6 +1157,7 @@ static void freeClientArgv(client *c) {
  * when we resync with our own master and want to force all our slaves to
  * resync with us as well. */
 void disconnectSlaves(void) {
+    serverAssert(aeThreadOwnsLock());
     std::vector<client*> vecfreeImmediate;
     listNode *ln;
     listIter li;
@@ -1327,7 +1336,6 @@ void freeClient(client *c) {
     /* Release other dynamically allocated client structure fields,
      * and finally release the client structure itself. */
     zfree(c->bufAsync);
-    listRelease(c->listbufferDoneAsync);
     if (c->name) decrRefCount(c->name);
     zfree(c->argv);
     freeClientMultiState(c);
@@ -1342,10 +1350,10 @@ void freeClient(client *c) {
  * should be valid for the continuation of the flow of the program. */
 void freeClientAsync(client *c) {
     if (c->flags & CLIENT_CLOSE_ASAP || c->flags & CLIENT_LUA) return;
-    aeAcquireLock();
+    AeLocker lock;
+    lock.arm(nullptr);
     c->flags |= CLIENT_CLOSE_ASAP;    
     listAddNodeTail(server.clients_to_close,c);
-    aeReleaseLock();
 }
 
 void freeClientsInAsyncFreeQueue(int iel) {
@@ -1381,48 +1389,10 @@ int writeToClient(int fd, client *c, int handler_installed) {
     clientReplyBlock *o;
     AssertCorrectThread(c);
 
-    // Decide up front if we are sending the done buffer.  This prevents us from completing
-    //  a transmission on another thread while transmitting the thread local buffer, resulting in us
-    //  overlapping messages
-    AeLocker locker(true);
-    std::lock_guard<decltype(c->lock)> lock(c->lock);   // To prevent deadlocks this must be after we acquire the global lock
-    int fSendAsyncBuffer = listLength(c->listbufferDoneAsync) && (c->sentlen == 0 || c->sentlenAsync > 0); 
-    if (!fSendAsyncBuffer)
-        locker.disarm();
+    std::unique_lock<decltype(c->lock)> lock(c->lock);
    
-    while(fSendAsyncBuffer || clientHasPendingReplies(c, FALSE)) {
-        if (fSendAsyncBuffer) {
-            o = (clientReplyBlock*)listNodeValue(listFirst(c->listbufferDoneAsync));
-            if (o->used == 0) {
-                listDelNode(c->listbufferDoneAsync,listFirst(c->listbufferDoneAsync));
-                if (listLength(c->listbufferDoneAsync) == 0)
-                {
-                    fSendAsyncBuffer = 0;
-                    locker.disarm();
-                }
-                continue;
-            }
-
-            nwritten = write(fd, o->buf() + c->sentlen, o->used - c->sentlen);
-            if (nwritten <= 0)
-                break;
-            c->sentlenAsync += nwritten;
-            totwritten += nwritten;
-            
-            /* If we fully sent the object on head go to the next one */
-            if (c->sentlenAsync == o->used) {
-                listDelNode(c->listbufferDoneAsync,listFirst(c->listbufferDoneAsync));
-                c->sentlenAsync = 0;
-                /* If there are no longer objects in the list, we expect
-                    * the count of reply bytes to be exactly zero. */
-                if (listLength(c->listbufferDoneAsync) == 0)
-                {
-                    fSendAsyncBuffer = 0;
-                    locker.disarm();
-                    continue;
-                }
-            }
-        } else if (c->bufpos > 0) {
+    while(clientHasPendingReplies(c)) {
+        if (c->bufpos > 0) {
             nwritten = write(fd,c->buf+c->sentlen,c->bufpos-c->sentlen);
 
             if (nwritten <= 0) break;
@@ -1486,9 +1456,17 @@ int writeToClient(int fd, client *c, int handler_installed) {
         } else {
             serverLog(LL_VERBOSE,
                 "Error writing to client: %s", strerror(errno));
-            aeAcquireLock();
-            freeClient(c);
-            aeReleaseLock();
+            if (aeTryAcquireLock())
+            {
+                freeClient(c);
+                aeReleaseLock();
+            }
+            else
+            {
+                lock.unlock();
+                freeClientAsync(c);
+            }
+            
             return C_ERR;
         }
     }
@@ -1499,15 +1477,22 @@ int writeToClient(int fd, client *c, int handler_installed) {
          * We just rely on data / pings received for timeout detection. */
         if (!(c->flags & CLIENT_MASTER)) c->lastinteraction = server.unixtime;
     }
-    if (!clientHasPendingReplies(c, TRUE)) {
+    if (!clientHasPendingReplies(c)) {
         c->sentlen = 0;
         if (handler_installed) aeDeleteFileEvent(server.rgthreadvar[c->iel].el,c->fd,AE_WRITABLE);
 
         /* Close connection after entire reply has been sent. */
         if (c->flags & CLIENT_CLOSE_AFTER_REPLY) {
-            aeAcquireLock();
-            freeClient(c);
-            aeReleaseLock();
+            if (aeTryAcquireLock())
+            {
+                freeClient(c);
+                aeReleaseLock();
+            }
+            else
+            {
+                lock.unlock();
+                freeClientAsync(c);
+            }
             return C_ERR;
         }
     }
@@ -1542,7 +1527,9 @@ void ProcessPendingAsyncWrites()
         reply->size = zmalloc_usable(reply) - sizeof(clientReplyBlock);
         reply->used = c->bufposAsync;
         memcpy(reply->buf(), c->bufAsync, c->bufposAsync);
-        listAddNodeTail(c->listbufferDoneAsync, reply);
+        listAddNodeTail(c->reply, reply);
+        c->reply_bytes += reply->size;
+
         c->bufposAsync = 0;
         c->buflenAsync = 0;
         zfree(c->bufAsync);
@@ -1566,6 +1553,7 @@ void ProcessPendingAsyncWrites()
          (c->replstate == SLAVE_STATE_ONLINE && !c->repl_put_online_on_ack))))
             continue;
 
+        asyncCloseClientOnOutputBufferLimitReached(c);
         if (aeCreateRemoteFileEvent(server.rgthreadvar[c->iel].el, c->fd, ae_flags, sendReplyToClient, c, FALSE) == AE_ERR)
             continue;   // We can retry later in the cron
     }
@@ -1601,7 +1589,7 @@ int handleClientsWithPendingWrites(int iel) {
 
         /* If after the synchronous writes above we still have data to
          * output to the client, we need to install the writable handler. */
-        if (clientHasPendingReplies(c, TRUE)) {
+        if (clientHasPendingReplies(c)) {
             int ae_flags = AE_WRITABLE|AE_WRITE_THREADSAFE;
             /* For the fsync=always policy, we want that a given FD is never
              * served for reading and writing in the same event loop iteration,
@@ -1619,7 +1607,8 @@ int handleClientsWithPendingWrites(int iel) {
         }
     }
 
-    AeLocker locker(true);
+    AeLocker locker;
+    locker.arm(nullptr);
     ProcessPendingAsyncWrites();
 
     return processed;
@@ -1675,7 +1664,7 @@ void unprotectClient(client *c) {
     if (c->flags & CLIENT_PROTECTED) {
         c->flags &= ~CLIENT_PROTECTED;
         aeCreateFileEvent(server.rgthreadvar[c->iel].el,c->fd,AE_READABLE|AE_READ_THREADSAFE,readQueryFromClient,c);
-        if (clientHasPendingReplies(c, TRUE)) clientInstallWriteHandler(c);
+        if (clientHasPendingReplies(c)) clientInstallWriteHandler(c);
     }
 }
 
@@ -1967,7 +1956,8 @@ void processInputBuffer(client *c) {
         } else {
             serverPanic("Unknown request type");
         }
-        AeLocker locker(true);
+        AeLocker locker;
+        locker.arm(c);
         server.current_client = c;
 
         /* Multibulk processing could see a <= 0 length. */
@@ -2033,9 +2023,12 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(mask);
     serverAssert(mask & AE_READ_THREADSAFE);
     serverAssert(c->iel == ielFromEventLoop(el));
-    AeLocker locker;
+    
+    AeLocker aelock;
     AssertCorrectThread(c);
-    std::lock_guard<decltype(c->lock)> lock(c->lock);
+    std::unique_lock<decltype(c->lock)> lock(c->lock, std::defer_lock);
+    if (!lock.try_lock())
+        return; // Process something else while we wait
 
     readlen = PROTO_IOBUF_LEN;
     /* If this is a multi bulk request, and we are processing a bulk reply
@@ -2065,16 +2058,14 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         } else {
             serverLog(LL_VERBOSE, "Reading from client: %s",strerror(errno));
-            aeAcquireLock();
+            aelock.arm(c);
             freeClient(c);
-            aeReleaseLock();
             return;
         }
     } else if (nread == 0) {
         serverLog(LL_VERBOSE, "Client closed connection");
-        aeAcquireLock();
+        aelock.arm(c);
         freeClient(c);
-        aeReleaseLock();
         return;
     } else if (c->flags & CLIENT_MASTER) {
         /* Append the query buffer to the pending (not applied) buffer
@@ -2095,9 +2086,8 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
         serverLog(LL_WARNING,"Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci, bytes);
         sdsfree(ci);
         sdsfree(bytes);
-        aeAcquireLock();
+        aelock.arm(c);
         freeClient(c);
-        aeReleaseLock();
         return;
     }
 
@@ -2108,9 +2098,8 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
      * corresponding part of the replication stream, will be propagated to
      * the sub-slaves and to the replication backlog. */
     processInputBufferAndReplicate(c);
-    aeAcquireLock();
+    aelock.arm(c);
     ProcessPendingAsyncWrites();
-    aeReleaseLock();
 }
 
 void getClientsMaxBuffers(unsigned long *longest_output_list,
@@ -2619,7 +2608,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
  * enforcing the client output length limits. */
 unsigned long getClientOutputBufferMemoryUsage(client *c) {
     unsigned long list_item_size = sizeof(listNode) + sizeof(clientReplyBlock);
-    return c->reply_bytes + (list_item_size*listLength(c->reply));
+    return c->reply_bytes + (list_item_size*listLength(c->reply)) + c->buflenAsync;
 }
 
 /* Get the class of a client, used in order to enforce limits to different
@@ -2727,6 +2716,7 @@ void asyncCloseClientOnOutputBufferLimitReached(client *c) {
  * This is also called by SHUTDOWN for a best-effort attempt to send
  * slaves the latest writes. */
 void flushSlavesOutputBuffers(void) {
+    serverAssert(aeThreadOwnsLock());
     listIter li;
     listNode *ln;
 
@@ -2747,7 +2737,7 @@ void flushSlavesOutputBuffers(void) {
         events = aeGetFileEvents(server.rgthreadvar[slave->iel].el,slave->fd);
         if (events & AE_WRITABLE &&
             slave->replstate == SLAVE_STATE_ONLINE &&
-            clientHasPendingReplies(slave, TRUE))
+            clientHasPendingReplies(slave))
         {
             writeToClient(slave->fd,slave,0);
         }
@@ -2820,8 +2810,7 @@ int processEventsWhileBlocked(int iel) {
     int iterations = 4; /* See the function top-comment. */
     int count = 0;
 
-    // BUGBUG - This function isn't fair - why should clients on this thread get to run, but not clients elsewhere?
-    //      We mix up replies when releasing the lock here so more work is needed to fix this
+    aeReleaseLock();
     while (iterations--) {
         int events = 0;
         events += aeProcessEvents(server.rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
@@ -2829,5 +2818,6 @@ int processEventsWhileBlocked(int iel) {
         if (!events) break;
         count += events;
     }
+    aeAcquireLock();
     return count;
 }

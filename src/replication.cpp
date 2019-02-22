@@ -37,6 +37,7 @@
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <mutex>
 
 void replicationDiscardCachedMaster(void);
 void replicationResurrectCachedMaster(int newfd);
@@ -115,6 +116,7 @@ void resizeReplicationBacklog(long long newsize) {
 }
 
 void freeReplicationBacklog(void) {
+    serverAssert(aeThreadOwnsLock());
     serverAssert(listLength(server.slaves) == 0);
     zfree(server.repl_backlog);
     server.repl_backlog = NULL;
@@ -200,6 +202,12 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     /* We can't have slaves attached and no backlog. */
     serverAssert(!(listLength(slaves) != 0 && server.repl_backlog == NULL));
 
+    /* Get the lock on all slaves */
+    listRewind(slaves,&li);
+    while((ln = listNext(&li))) {
+        ((client*)ln->value)->lock.lock();
+    }
+
     /* Send SELECT command to every slave if needed. */
     if (server.slaveseldb != dictid) {
         robj *selectcmd;
@@ -280,6 +288,12 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         for (j = 0; j < argc; j++)
             addReplyBulkAsync(slave,argv[j]);
     }
+
+    /* Release the lock on all slaves */
+    listRewind(slaves,&li);
+    while((ln = listNext(&li))) {
+        ((client*)ln->value)->lock.unlock();
+    }
 }
 
 /* This function is used in order to proxy what we receive from our master
@@ -303,6 +317,7 @@ void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t bufle
     listRewind(slaves,&li);
     while((ln = listNext(&li))) {
         client *slave = (client*)ln->value;
+        std::lock_guard<decltype(slave->lock)> ulock(slave->lock);
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
@@ -348,6 +363,7 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
     listRewind(monitors,&li);
     while((ln = listNext(&li))) {
         client *monitor = (client*)ln->value;
+        std::lock_guard<decltype(monitor->lock)> lock(monitor->lock);
         addReplyAsync(monitor,cmdobj);
     }
     decrRefCount(cmdobj);
@@ -459,6 +475,7 @@ int replicationSetupSlaveForFullResync(client *slave, long long offset) {
  * On success return C_OK, otherwise C_ERR is returned and we proceed
  * with the usual full resync. */
 int masterTryPartialResynchronization(client *c) {
+    serverAssert(aeThreadOwnsLock());
     long long psync_offset, psync_len;
     char *master_replid = (char*)ptrFromObj(c->argv[1]);
     char buf[128];
@@ -575,6 +592,7 @@ need_full_resync:
  *
  * Returns C_OK on success or C_ERR otherwise. */
 int startBgsaveForReplication(int mincapa) {
+    serverAssert(aeThreadOwnsLock());
     int retval;
     int socket_target = server.repl_diskless_sync && (mincapa & SLAVE_CAPA_EOF);
     listIter li;
@@ -653,7 +671,7 @@ void syncCommand(client *c) {
      * the client about already issued commands. We need a fresh reply
      * buffer registering the differences between the BGSAVE and the current
      * dataset, so that we can copy to other slaves if needed. */
-    if (clientHasPendingReplies(c, TRUE)) {
+    if (clientHasPendingReplies(c)) {
         addReplyError(c,"SYNC and PSYNC are invalid with pending output");
         return;
     }
@@ -1637,6 +1655,7 @@ int slaveTryPartialResynchronization(aeEventLoop *el, int fd, int read_reply) {
 /* This handler fires when the non blocking connect was able to
  * establish a connection with the master. */
 void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
+    serverAssert(aeThreadOwnsLock());
     char tmpfile[256], *err = NULL;
     int dfd = -1, maxtries = 5;
     int sockerr = 0, psync_result;
@@ -2211,7 +2230,6 @@ void replicationCacheMaster(client *c) {
     if (c->flags & CLIENT_MULTI) discardTransaction(c);
     listEmpty(c->reply);
     c->sentlen = 0;
-    listEmpty(c->listbufferDoneAsync);
     c->sentlenAsync = 0;
     c->reply_bytes = 0;
     c->bufpos = 0;
@@ -2299,7 +2317,7 @@ void replicationResurrectCachedMaster(int newfd) {
 
     /* We may also need to install the write handler as well if there is
      * pending data in the write buffers. */
-    if (clientHasPendingReplies(server.master, TRUE)) {
+    if (clientHasPendingReplies(server.master)) {
         if (aeCreateFileEvent(server.rgthreadvar[server.master->iel].el, newfd, AE_WRITABLE|AE_WRITE_THREADSAFE,
                           sendReplyToClient, server.master)) {
             serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the writable handler: %s", strerror(errno));
@@ -2527,6 +2545,7 @@ void processClientsWaitingReplicas(void) {
     listRewind(server.clients_waiting_acks,&li);
     while((ln = listNext(&li))) {
         client *c = (client*)ln->value;
+        fastlock_lock(&c->lock);
 
         /* Every time we find a client that is satisfied for a given
          * offset and number of replicas, we remember it so the next client
@@ -2547,6 +2566,7 @@ void processClientsWaitingReplicas(void) {
                 addReplyLongLongAsync(c,numreplicas);
             }
         }
+        fastlock_unlock(&c->lock);
     }
 }
 
@@ -2574,7 +2594,11 @@ long long replicationGetSlaveOffset(void) {
 
 /* Replication cron function, called 1 time per second. */
 void replicationCron(void) {
+    serverAssert(aeThreadOwnsLock());
     static long long replication_cron_loops = 0;
+    std::unique_lock<decltype(server.master->lock)> ulock;
+    if (server.master != nullptr)
+        ulock = decltype(ulock)(server.master->lock);
 
     /* Non blocking connection timeout? */
     if (server.masterhost &&

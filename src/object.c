@@ -940,6 +940,7 @@ void freeMemoryOverheadData(struct redisMemOverhead *mh) {
  * information used for the MEMORY OVERHEAD and INFO command. The returned
  * structure pointer should be freed calling freeMemoryOverheadData(). */
 struct redisMemOverhead *getMemoryOverheadData(void) {
+    serverAssert(aeThreadOwnsLock());
     int j;
     size_t mem_total = 0;
     size_t mem = 0;
@@ -1077,6 +1078,7 @@ void inputCatSds(void *result, const char *str) {
 /* This implements MEMORY DOCTOR. An human readable analysis of the Redis
  * memory condition. */
 sds getMemoryDoctorReport(void) {
+    serverAssert(aeThreadOwnsLock());
     int empty = 0;          /* Instance is empty or almost empty. */
     int big_peak = 0;       /* Memory peak is much larger than used mem. */
     int high_frag = 0;      /* High fragmentation. */

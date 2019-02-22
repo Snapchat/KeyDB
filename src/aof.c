@@ -655,6 +655,8 @@ struct client *createFakeClient(void) {
     c->puser = NULL;
     listSetFreeMethod(c->reply,freeClientReplyValue);
     listSetDupMethod(c->reply,dupClientReplyValue);
+    fastlock_init(&c->lock);
+    fastlock_lock(&c->lock);
     initClientMultiState(c);
     return c;
 }
@@ -672,6 +674,8 @@ void freeFakeClient(struct client *c) {
     listRelease(c->reply);
     listRelease(c->watched_keys);
     freeClientMultiState(c);
+    fastlock_unlock(&c->lock);
+    fastlock_free(&c->lock);
     zfree(c);
 }
 

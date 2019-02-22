@@ -49,7 +49,13 @@
 #include <pthread.h>
 #include <syslog.h>
 #include <netinet/in.h>
+#ifdef __cplusplus
+extern "C" {
 #include <lua.h>
+}
+#else
+#include <lua.h>
+#endif
 #include <signal.h>
 
 typedef long long mstime_t; /* millisecond time type. */
@@ -869,8 +875,6 @@ typedef struct client {
     int bufposAsync;
     int buflenAsync;
     char *bufAsync;
-    /* Async Done Buffer, moved after a thread is done async writing */
-    list *listbufferDoneAsync;
 
     int iel; /* the event loop index we're registered with */
     struct fastlock lock;
@@ -1621,7 +1625,7 @@ void pauseClients(mstime_t duration);
 int clientsArePaused(void);
 int processEventsWhileBlocked(int iel);
 int handleClientsWithPendingWrites(int iel);
-int clientHasPendingReplies(client *c, int fIncludeAsync);
+int clientHasPendingReplies(client *c);
 void unlinkClient(client *c);
 int writeToClient(int fd, client *c, int handler_installed);
 void linkClient(client *c);

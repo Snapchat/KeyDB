@@ -680,6 +680,7 @@ int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb 
         } else {
             /* BRPOPLPUSH failed because of wrong
              * destination type. */
+            fastlock_unlock(&receiver->lock);
             return C_ERR;
         }
     }

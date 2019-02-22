@@ -1110,6 +1110,7 @@ long long getExpire(redisDb *db, robj *key) {
  * will be consistent even if we allow write operations against expiring
  * keys. */
 void propagateExpire(redisDb *db, robj *key, int lazy) {
+    serverAssert(aeThreadOwnsLock());
     robj *argv[2];
 
     argv[0] = lazy ? shared.unlink : shared.del;

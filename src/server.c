@@ -1666,12 +1666,15 @@ void clientsCron(int iel) {
         c = listNodeValue(head);
         if (c->iel == iel)
         {
+            fastlock_lock(&c->lock);
             /* The following functions do different service checks on the client.
             * The protocol is that they return non-zero if the client was
             * terminated. */
-            if (clientsCronHandleTimeout(c,now)) continue;
-            if (clientsCronResizeQueryBuffer(c)) continue;
-            if (clientsCronTrackExpansiveClients(c)) continue;
+            if (clientsCronHandleTimeout(c,now)) goto LContinue;
+            if (clientsCronResizeQueryBuffer(c)) goto LContinue;
+            if (clientsCronTrackExpansiveClients(c)) goto LContinue;
+        LContinue:
+            fastlock_unlock(&c->lock);
         }        
     }
 }
@@ -3135,6 +3138,7 @@ struct redisCommand *lookupCommandOrOriginal(sds name) {
 void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                int flags)
 {
+    serverAssert(aeThreadOwnsLock());
     if (server.aof_state != AOF_OFF && flags & PROPAGATE_AOF)
         feedAppendOnlyFile(cmd,dbid,argv,argc);
     if (flags & PROPAGATE_REPL)
@@ -5034,7 +5038,7 @@ int main(int argc, char **argv) {
 
     initServer();
 
-    server.cthreads = 4; //testing
+    server.cthreads = 2; //testing
     initNetworking(1 /* fReusePort */);
 
     if (background || server.pidfile) createPidFile();

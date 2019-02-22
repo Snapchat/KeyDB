@@ -293,7 +293,9 @@ int pubsubPublishMessage(robj *channel, robj *message) {
         listRewind(list,&li);
         while ((ln = listNext(&li)) != NULL) {
             client *c = ln->value;
+            fastlock_lock(&c->lock);
             addReplyPubsubMessage(c,channel,message);
+            fastlock_unlock(&c->lock);
             receivers++;
         }
     }
@@ -309,8 +311,10 @@ int pubsubPublishMessage(robj *channel, robj *message) {
                                 (char*)ptrFromObj(channel),
                                 sdslen(ptrFromObj(channel)),0))
             {
+                fastlock_lock(&pat->pclient->lock);
                 addReplyPubsubPatMessage(pat->pclient,
                     pat->pattern,channel,message);
+                fastlock_unlock(&pat->pclient->lock);
                 receivers++;
             }
         }

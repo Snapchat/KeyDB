@@ -223,7 +223,8 @@ void disconnectAllBlockedClients(void) {
     listRewind(server.clients,&li);
     while((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
-
+        
+        fastlock_lock(&c->lock);
         if (c->flags & CLIENT_BLOCKED) {
             addReplySdsAsync(c,sdsnew(
                 "-UNBLOCKED force unblock from blocking operation, "
@@ -231,6 +232,7 @@ void disconnectAllBlockedClients(void) {
             unblockClient(c);
             c->flags |= CLIENT_CLOSE_AFTER_REPLY;
         }
+        fastlock_unlock(&c->lock);
     }
 }
 
@@ -309,6 +311,7 @@ void handleClientsBlockedOnKeys(void) {
                              * freed by the next unblockClient()
                              * call. */
                             if (dstkey) incrRefCount(dstkey);
+                            fastlock_lock(&receiver->lock);
                             unblockClient(receiver);
 
                             if (serveClientBlockedOnList(receiver,
@@ -321,6 +324,7 @@ void handleClientsBlockedOnKeys(void) {
                             }
 
                             if (dstkey) decrRefCount(dstkey);
+                            fastlock_unlock(&receiver->lock);
                             decrRefCount(value);
                         } else {
                             break;
@@ -360,6 +364,7 @@ void handleClientsBlockedOnKeys(void) {
                             continue;
                         }
 
+                        fastlock_lock(&receiver->lock);
                         int where = (receiver->lastcmd &&
                                      receiver->lastcmd->proc == bzpopminCommand)
                                      ? ZSET_MIN : ZSET_MAX;
@@ -377,6 +382,7 @@ void handleClientsBlockedOnKeys(void) {
                         incrRefCount(rl->key);
                         propagate(cmd,receiver->db->id,
                                   argv,2,PROPAGATE_AOF|PROPAGATE_REPL);
+                        fastlock_unlock(&receiver->lock);
                         decrRefCount(argv[0]);
                         decrRefCount(argv[1]);
                     }
@@ -419,10 +425,12 @@ void handleClientsBlockedOnKeys(void) {
                             /* If the group was not found, send an error
                              * to the consumer. */
                             if (!group) {
+                                fastlock_lock(&receiver->lock);
                                 addReplyErrorAsync(receiver,
                                     "-NOGROUP the consumer group this client "
                                     "was blocked on no longer exists");
                                 unblockClient(receiver);
+                                fastlock_unlock(&receiver->lock);
                                 continue;
                             } else {
                                 *gt = group->last_id;
@@ -443,6 +451,8 @@ void handleClientsBlockedOnKeys(void) {
                                            1);
                                 noack = receiver->bpop.xread_group_noack;
                             }
+
+                            fastlock_lock(&receiver->lock);
 
                             /* Emit the two elements sub-array consisting of
                              * the name of the stream and the data we
@@ -469,6 +479,7 @@ void handleClientsBlockedOnKeys(void) {
                              * valid, so we must do the setup above before
                              * this call. */
                             unblockClient(receiver);
+                            fastlock_unlock(&receiver->lock);
                         }
                     }
                 }

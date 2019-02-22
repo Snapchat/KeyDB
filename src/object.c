@@ -82,7 +82,10 @@ robj *createRawStringObject(const char *ptr, size_t len) {
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
 robj *createEmbeddedStringObject(const char *ptr, size_t len) {
-    robj *o = zmalloc(sizeof(robj)+sizeof(struct sdshdr8)+len+1-sizeof(o->m_ptr), MALLOC_SHARED);
+    size_t alloclen = len;
+    if (len < sizeof(void*))
+        alloclen = sizeof(void*);
+    robj *o = zmalloc(sizeof(robj)+sizeof(struct sdshdr8)+alloclen+1-sizeof(o->m_ptr), MALLOC_SHARED);
     struct sdshdr8 *sh = (void*)(&o->m_ptr);
 
     o->type = OBJ_STRING;

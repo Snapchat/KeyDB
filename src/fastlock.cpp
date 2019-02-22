@@ -66,21 +66,18 @@ extern "C" void fastlock_lock(struct fastlock *lock)
         return;
     }
 
-    unsigned myticket = __atomic_fetch_add(&lock->m_ticket.m_avail, 1, __ATOMIC_ACQ_REL);
+    unsigned myticket = __atomic_fetch_add(&lock->m_ticket.m_avail, 1, __ATOMIC_RELEASE);
 
-    if (__atomic_load_2(&lock->m_ticket.m_active, __ATOMIC_ACQUIRE) != myticket)
+    int cloops = 0;
+    while (__atomic_load_2(&lock->m_ticket.m_active, __ATOMIC_ACQUIRE) != myticket)
     {
-        int cloops = 1;
-        while (__atomic_load_2(&lock->m_ticket.m_active, __ATOMIC_ACQUIRE) != myticket)
-        {
-            if ((++cloops % 1024*1024) == 0)
-                sched_yield();
-        }
+        if ((++cloops % 1024*1024) == 0)
+            sched_yield();
     }
 
     lock->m_depth = 1;
     __atomic_store_4(&lock->m_pidOwner, gettid(), __ATOMIC_RELEASE);
-    __sync_synchronize();
+    std::atomic_thread_fence(std::memory_order_acquire);
 }
 
 extern "C" int fastlock_trylock(struct fastlock *lock)
@@ -95,7 +92,7 @@ extern "C" int fastlock_trylock(struct fastlock *lock)
     if (lock->m_ticket.m_active != lock->m_ticket.m_avail)
         return false;
 
-    uint16_t active = __atomic_load_2(&lock->m_ticket.m_active, __ATOMIC_ACQUIRE);
+    uint16_t active = __atomic_load_2(&lock->m_ticket.m_active, __ATOMIC_RELAXED);
     uint16_t next = active + 1;
 
     struct ticket ticket_expect { active, active };
@@ -104,7 +101,6 @@ extern "C" int fastlock_trylock(struct fastlock *lock)
     {
         lock->m_depth = 1;
         __atomic_store_4(&lock->m_pidOwner, gettid(), __ATOMIC_RELEASE);
-        __sync_synchronize();
         return true;
     }
     return false;
@@ -116,7 +112,7 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
     if (lock->m_depth == 0)
     {
         lock->m_pidOwner = -1;
-        __sync_synchronize();
+        std::atomic_thread_fence(std::memory_order_acquire);
         __atomic_fetch_add(&lock->m_ticket.m_active, 1, __ATOMIC_ACQ_REL);
     }
 }

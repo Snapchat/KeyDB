@@ -1,4 +1,5 @@
 #pragma once
+#include <inttypes.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -8,6 +9,7 @@ extern "C" {
 struct fastlock;
 void fastlock_init(struct fastlock *lock);
 void fastlock_lock(struct fastlock *lock);
+int fastlock_trylock(struct fastlock *lock);
 void fastlock_unlock(struct fastlock *lock);
 void fastlock_free(struct fastlock *lock);
 
@@ -16,10 +18,14 @@ void fastlock_free(struct fastlock *lock);
 }
 #endif
 
+struct ticket
+{
+    uint16_t m_active;
+    uint16_t m_avail;
+};
 struct fastlock
 {
-    volatile unsigned m_active;
-    volatile unsigned m_avail;
+    volatile struct ticket m_ticket;
 
     volatile int m_pidOwner;
     volatile int m_depth;
@@ -33,6 +39,11 @@ struct fastlock
     void lock()
     {
         fastlock_lock(this);
+    }
+
+    bool try_lock()
+    {
+        return !!fastlock_trylock(this);
     }
 
     void unlock()

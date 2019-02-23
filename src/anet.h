@@ -33,6 +33,10 @@
 
 #include <sys/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define ANET_OK 0
 #define ANET_ERR -1
 #define ANET_ERR_LEN 256
@@ -58,8 +62,8 @@ int anetUnixNonBlockConnect(char *err, char *path);
 int anetRead(int fd, char *buf, int count);
 int anetResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len);
 int anetResolveIP(char *err, char *host, char *ipbuf, size_t ipbuf_len);
-int anetTcpServer(char *err, int port, char *bindaddr, int backlog);
-int anetTcp6Server(char *err, int port, char *bindaddr, int backlog);
+int anetTcpServer(char *err, int port, char *bindaddr, int backlog, int fReusePort);
+int anetTcp6Server(char *err, int port, char *bindaddr, int backlog, int fReusePort);
 int anetUnixServer(char *err, char *path, mode_t perm, int backlog);
 int anetTcpAccept(char *err, int serversock, char *ip, size_t ip_len, int *port);
 int anetUnixAccept(char *err, int serversock);
@@ -76,5 +80,9 @@ int anetSockName(int fd, char *ip, size_t ip_len, int *port);
 int anetFormatAddr(char *fmt, size_t fmt_len, char *ip, int port);
 int anetFormatPeer(int fd, char *fmt, size_t fmt_len);
 int anetFormatSock(int fd, char *fmt, size_t fmt_len);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -3155,15 +3155,15 @@ void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey
 
     /* No candidate for zpopping, return empty. */
     if (!zobj) {
-        addReplyNull(c);
+        addReplyNullAsync(c);
         return;
     }
 
-    void *arraylen_ptr = addReplyDeferredLen(c);
+    void *arraylen_ptr = addReplyDeferredLenAsync(c);
     long arraylen = 0;
 
     /* We emit the key only for the blocking variant. */
-    if (emitkey) addReplyBulk(c,key);
+    if (emitkey) addReplyBulkAsync(c,key);
 
     /* Remove the element. */
     do {
@@ -3213,8 +3213,8 @@ void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey
             signalModifiedKey(c->db,key);
         }
 
-        addReplyBulkCBuffer(c,ele,sdslen(ele));
-        addReplyDouble(c,score);
+        addReplyBulkCBufferAsync(c,ele,sdslen(ele));
+        addReplyDoubleAsync(c,score);
         sdsfree(ele);
         arraylen += 2;
 
@@ -3226,7 +3226,7 @@ void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey
         }
     } while(--count);
 
-    setDeferredArrayLen(c,arraylen_ptr,arraylen + (emitkey != 0));
+    setDeferredArrayLenAsync(c,arraylen_ptr,arraylen + (emitkey != 0));
 }
 
 /* ZPOPMIN key [<count>] */

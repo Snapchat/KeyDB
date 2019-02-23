@@ -41,7 +41,9 @@
 typedef struct intset {
     uint32_t encoding;
     uint32_t length;
-    int8_t contents[ZERO_LENGTH_ARRAY_LENGTH];
+#ifndef __cplusplus
+    int8_t contents[];
+#endif
 } intset;
 
 intset *intsetNew(void);

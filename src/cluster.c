@@ -486,14 +486,14 @@ void clusterInit(void) {
     }
 
     if (listenToPort(server.port+CLUSTER_PORT_INCR,
-        server.cfd,&server.cfd_count) == C_ERR)
+        server.cfd,&server.cfd_count, 0 /*fReusePort*/) == C_ERR)
     {
         exit(1);
     } else {
         int j;
 
         for (j = 0; j < server.cfd_count; j++) {
-            if (aeCreateFileEvent(server.el, server.cfd[j], AE_READABLE,
+            if (aeCreateFileEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el, server.cfd[j], AE_READABLE,
                 clusterAcceptHandler, NULL) == AE_ERR)
                     serverPanic("Unrecoverable error creating Redis Cluster "
                                 "file event.");
@@ -601,7 +601,7 @@ clusterLink *createClusterLink(clusterNode *node) {
  * with this link will have the 'link' field set to NULL. */
 void freeClusterLink(clusterLink *link) {
     if (link->fd != -1) {
-        aeDeleteFileEvent(server.el, link->fd, AE_READABLE|AE_WRITABLE);
+        aeDeleteFileEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el, link->fd, AE_READABLE|AE_WRITABLE);
     }
     sdsfree(link->sndbuf);
     sdsfree(link->rcvbuf);
@@ -645,7 +645,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
          * node identity. */
         link = createClusterLink(NULL);
         link->fd = cfd;
-        aeCreateFileEvent(server.el,cfd,AE_READABLE,clusterReadHandler,link);
+        aeCreateFileEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,cfd,AE_READABLE,clusterReadHandler,link);
     }
 }
 
@@ -2132,7 +2132,7 @@ void clusterWriteHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
     sdsrange(link->sndbuf,nwritten,-1);
     if (sdslen(link->sndbuf) == 0)
-        aeDeleteFileEvent(server.el, link->fd, AE_WRITABLE);
+        aeDeleteFileEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el, link->fd, AE_WRITABLE);
 }
 
 /* Read data. Try to read the first field of the header first to check the
@@ -2208,7 +2208,7 @@ void clusterReadHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  * from event handlers that will do stuff with the same link later. */
 void clusterSendMessage(clusterLink *link, unsigned char *msg, size_t msglen) {
     if (sdslen(link->sndbuf) == 0 && msglen != 0)
-        aeCreateFileEvent(server.el,link->fd,AE_WRITABLE|AE_BARRIER,
+        aeCreateFileEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,link->fd,AE_WRITABLE|AE_BARRIER,
                     clusterWriteHandler,link);
 
     link->sndbuf = sdscatlen(link->sndbuf, msg, msglen);
@@ -3402,7 +3402,7 @@ void clusterCron(void) {
             link = createClusterLink(node);
             link->fd = fd;
             node->link = link;
-            aeCreateFileEvent(server.el,link->fd,AE_READABLE,
+            aeCreateFileEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,link->fd,AE_READABLE,
                     clusterReadHandler,link);
             /* Queue a PING in the new connection ASAP: this is crucial
              * to avoid false positives in failure detection.
@@ -5390,6 +5390,7 @@ socket_err:
  * the target instance. See the Redis Cluster specification for more
  * information. */
 void askingCommand(client *c) {
+    serverAssert(aeThreadOwnsLock());
     if (server.cluster_enabled == 0) {
         addReplyError(c,"This instance has cluster support disabled");
         return;
@@ -5402,6 +5403,7 @@ void askingCommand(client *c) {
  * In this mode slaves will not redirect clients as long as clients access
  * with read-only commands to keys that are served by the slave's master. */
 void readonlyCommand(client *c) {
+    serverAssert(aeThreadOwnsLock());
     if (server.cluster_enabled == 0) {
         addReplyError(c,"This instance has cluster support disabled");
         return;
@@ -5412,6 +5414,7 @@ void readonlyCommand(client *c) {
 
 /* The READWRITE command just clears the READONLY command state. */
 void readwriteCommand(client *c) {
+    serverAssert(aeThreadOwnsLock());
     c->flags &= ~CLIENT_READONLY;
     addReply(c,shared.ok);
 }
@@ -5455,6 +5458,11 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
     multiState *ms, _ms;
     multiCmd mc;
     int i, slot = 0, migrating_slot = 0, importing_slot = 0, missing_keys = 0;
+    serverAssert(aeThreadOwnsLock());
+
+    /* Allow any key to be set if a module disabled cluster redirections. */
+    if (server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_REDIRECTION)
+        return myself;
 
     /* Allow any key to be set if a module disabled cluster redirections. */
     if (server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_REDIRECTION)
@@ -5663,6 +5671,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
  * longer handles, the client is sent a redirection error, and the function
  * returns 1. Otherwise 0 is returned and no operation is performed. */
 int clusterRedirectBlockedClientIfNeeded(client *c) {
+    serverAssert(aeThreadOwnsLock());
     if (c->flags & CLIENT_BLOCKED &&
         (c->btype == BLOCKED_LIST ||
          c->btype == BLOCKED_ZSET ||

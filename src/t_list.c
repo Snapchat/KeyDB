@@ -547,7 +547,7 @@ void lremCommand(client *c) {
  * as well. This command was originally proposed by Ezra Zygmuntowicz.
  */
 
-void rpoplpushHandlePush(client *c, robj *dstkey, robj *dstobj, robj *value) {
+static void rpoplpushHandlePush(client *c, robj *dstkey, robj *dstobj, robj *value) {
     /* Create the list if the key does not exist */
     if (!dstobj) {
         dstobj = createQuicklistObject();
@@ -559,7 +559,7 @@ void rpoplpushHandlePush(client *c, robj *dstkey, robj *dstobj, robj *value) {
     listTypePush(dstobj,value,LIST_HEAD);
     notifyKeyspaceEvent(NOTIFY_LIST,"lpush",dstkey,c->db->id);
     /* Always send the pushed value to the client. */
-    addReplyBulk(c,value);
+    addReplyBulkAsync(c,value);
 }
 
 void rpoplpushCommand(client *c) {
@@ -630,6 +630,7 @@ int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb 
     robj *argv[3];
 
     if (dstkey == NULL) {
+        fastlock_lock(&receiver->lock);
         /* Propagate the [LR]POP operation. */
         argv[0] = (where == LIST_HEAD) ? shared.lpop :
                                           shared.rpop;
@@ -637,16 +638,18 @@ int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb 
         propagate((where == LIST_HEAD) ?
             server.lpopCommand : server.rpopCommand,
             db->id,argv,2,PROPAGATE_AOF|PROPAGATE_REPL);
-
+       
         /* BRPOP/BLPOP */
-        addReplyArrayLen(receiver,2);
-        addReplyBulk(receiver,key);
-        addReplyBulk(receiver,value);
+        addReplyArrayLenAsync(receiver,2);
+        addReplyBulkAsync(receiver,key);
+        addReplyBulkAsync(receiver,value);
 
         /* Notify event. */
         char *event = (where == LIST_HEAD) ? "lpop" : "rpop";
         notifyKeyspaceEvent(NOTIFY_LIST,event,key,receiver->db->id);
+        fastlock_unlock(&receiver->lock);
     } else {
+        fastlock_lock(&receiver->lock);
         /* BRPOPLPUSH */
         robj *dstobj =
             lookupKeyWrite(receiver->db,dstkey);
@@ -673,9 +676,11 @@ int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb 
 
             /* Notify event ("lpush" was notified by rpoplpushHandlePush). */
             notifyKeyspaceEvent(NOTIFY_LIST,"rpop",key,receiver->db->id);
+            fastlock_unlock(&receiver->lock);
         } else {
             /* BRPOPLPUSH failed because of wrong
              * destination type. */
+            fastlock_unlock(&receiver->lock);
             return C_ERR;
         }
     }

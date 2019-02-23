@@ -207,7 +207,7 @@ sds setTypeNextObject(setTypeIterator *si) {
  * used field with values which are easy to trap if misused. */
 int setTypeRandomElement(robj *setobj, sds *sdsele, int64_t *llele) {
     if (setobj->encoding == OBJ_ENCODING_HT) {
-        dictEntry *de = dictGetRandomKey(setobj->m_ptr);
+        dictEntry *de = dictGetFairRandomKey(setobj->m_ptr);
         *sdsele = dictGetKey(de);
         *llele = -123456789; /* Not needed. Defensive. */
     } else if (setobj->encoding == OBJ_ENCODING_INTSET) {

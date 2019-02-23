@@ -33,7 +33,11 @@
 #ifndef __AE_H__
 #define __AE_H__
 
+#ifdef __cplusplus
+#include <functional>
+#endif
 #include <time.h>
+#include "fastlock.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,7 +54,9 @@ extern "C" {
                            loop iteration. Useful when you want to persist
                            things to disk before sending replies, and want
                            to do that in a group fashion. */
-#define AE_THREADSAFE 8 /* Ok to run concurrently */
+#define AE_READ_THREADSAFE 8
+#define AE_WRITE_THREADSAFE 16
+#define AE_SLEEP_THREADSAFE 32
 
 #define AE_FILE_EVENTS 1
 #define AE_TIME_EVENTS 2
@@ -71,6 +77,7 @@ typedef void aeFileProc(struct aeEventLoop *eventLoop, int fd, void *clientData,
 typedef int aeTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData);
 typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientData);
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
+typedef void aePostFunctionProc(void *pvArgs);
 
 /* File event structure */
 typedef struct aeFileEvent {
@@ -110,16 +117,33 @@ typedef struct aeEventLoop {
     int stop;
     void *apidata; /* This is used for polling API specific data */
     aeBeforeSleepProc *beforesleep;
+    int beforesleepFlags;
     aeBeforeSleepProc *aftersleep;
+    int aftersleepFlags;
+    struct fastlock flock;
+    int fdCmdWrite;
+    int fdCmdRead;
+    int cevents;
 } aeEventLoop;
 
 /* Prototypes */
 aeEventLoop *aeCreateEventLoop(int setsize);
+int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg);
+#ifdef __cplusplus
+}   // EXTERN C
+int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynchronous = false);
+extern "C" {
+#endif
 void aeDeleteEventLoop(aeEventLoop *eventLoop);
 void aeStop(aeEventLoop *eventLoop);
 int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
         aeFileProc *proc, void *clientData);
+
+int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
+        aeFileProc *proc, void *clientData, int fSynchronous);
+
 void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask);
+void aeDeleteFileEventAsync(aeEventLoop *eventLoop, int fd, int mask);
 int aeGetFileEvents(aeEventLoop *eventLoop, int fd);
 long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds,
         aeTimeProc *proc, void *clientData,
@@ -129,10 +153,15 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags);
 int aeWait(int fd, int mask, long long milliseconds);
 void aeMain(aeEventLoop *eventLoop);
 const char *aeGetApiName(void);
-void aeSetBeforeSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *beforesleep);
-void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *aftersleep);
+void aeSetBeforeSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *beforesleep, int flags);
+void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *aftersleep, int flags);
 int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
+
+void aeAcquireLock();
+int aeTryAcquireLock();
+void aeReleaseLock();
+int aeThreadOwnsLock();
 
 #ifdef __cplusplus
 }

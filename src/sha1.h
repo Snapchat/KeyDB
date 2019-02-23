@@ -7,6 +7,10 @@ By Steve Reid <steve@edmweb.com>
 100% Public Domain
 */
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     uint32_t state[5];
     uint32_t count[2];
@@ -21,4 +25,9 @@ void SHA1Final(unsigned char digest[20], SHA1_CTX* context);
 #ifdef REDIS_TEST
 int sha1Test(int argc, char **argv);
 #endif
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

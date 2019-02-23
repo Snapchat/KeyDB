@@ -83,7 +83,11 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
     if (mask & AE_READABLE) ee.events |= EPOLLIN;
     if (mask & AE_WRITABLE) ee.events |= EPOLLOUT;
     ee.data.fd = fd;
-    if (epoll_ctl(state->epfd,op,fd,&ee) == -1) return -1;
+    if (epoll_ctl(state->epfd,op,fd,&ee) == -1)
+    {
+        perror("epoll_ctl failed");
+        return -1;
+    }
     return 0;
 }
 

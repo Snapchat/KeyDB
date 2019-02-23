@@ -1268,7 +1268,9 @@ sds ACLLoadFromFile(const char *filename) {
  * When C_ERR is returned a log is produced with hints about the issue. */
 int ACLSaveToFile(const char *filename) {
     sds acl = sdsempty();
-    int fd;
+    int fd = -1;
+    sds tmpfilename = NULL;
+    int retval = C_ERR;
 
     /* Let's generate an SDS string containing the new version of the
      * ACL file. */
@@ -1291,41 +1293,38 @@ int ACLSaveToFile(const char *filename) {
     raxStop(&ri);
 
     /* Create a temp file with the new content. */
-    sds tmpfilename = sdsnew(filename);
+    tmpfilename = sdsnew(filename);
     tmpfilename = sdscatfmt(tmpfilename,".tmp-%i-%I",
         (int)getpid(),(int)mstime());
     if ((fd = open(tmpfilename,O_WRONLY|O_CREAT,0644)) == -1) {
         serverLog(LL_WARNING,"Opening temp ACL file for ACL SAVE: %s",
             strerror(errno));
-        sdsfree(tmpfilename);
-        sdsfree(acl);
-        return C_ERR;
+        goto cleanup;
     }
 
     /* Write it. */
     if (write(fd,acl,sdslen(acl)) != (ssize_t)sdslen(acl)) {
         serverLog(LL_WARNING,"Writing ACL file for ACL SAVE: %s",
             strerror(errno));
-        close(fd);
-        unlink(tmpfilename);
-        sdsfree(tmpfilename);
-        sdsfree(acl);
-        return C_ERR;
+        goto cleanup;
     }
-    close(fd);
-    sdsfree(acl);
+    close(fd); fd = -1;
 
     /* Let's replace the new file with the old one. */
     if (rename(tmpfilename,filename) == -1) {
         serverLog(LL_WARNING,"Renaming ACL file for ACL SAVE: %s",
             strerror(errno));
-        unlink(tmpfilename);
-        sdsfree(tmpfilename);
-        return C_ERR;
+        goto cleanup;
     }
+    sdsfree(tmpfilename); tmpfilename = NULL;
+    retval = C_OK; /* If we reached this point, everything is fine. */
 
+cleanup:
+    if (fd != -1) close(fd);
+    if (tmpfilename) unlink(tmpfilename);
     sdsfree(tmpfilename);
-    return C_OK;
+    sdsfree(acl);
+    return retval;
 }
 
 /* This function is called once the server is already running, modules are
@@ -1372,7 +1371,7 @@ void ACLLoadUsersAtStartup(void) {
  * ACL USERS
  * ACL CAT [<category>]
  * ACL SETUSER <username> ... acl rules ...
- * ACL DELUSER <username>
+ * ACL DELUSER <username> [...]
  * ACL GETUSER <username>
  */
 void aclCommand(client *c) {
@@ -1400,6 +1399,10 @@ void aclCommand(client *c) {
                 addReplyError(c,"The 'default' user cannot be removed");
                 return;
             }
+        }
+
+        for (int j = 2; j < c->argc; j++) {
+            sds username = c->argv[j]->ptr;
             user *u;
             if (raxRemove(Users,(unsigned char*)username,
                           sdslen(username),
@@ -1546,7 +1549,7 @@ void aclCommand(client *c) {
 "USERS                             -- List all the registered usernames.",
 "SETUSER <username> [attribs ...]  -- Create or modify a user.",
 "GETUSER <username>                -- Get the user details.",
-"DELUSER <username>                -- Delete a user.",
+"DELUSER <username> [...]          -- Delete a list of users.",
 "CAT                               -- List available categories.",
 "CAT <category>                    -- List commands inside category.",
 "WHOAMI                            -- Return the current connection username.",

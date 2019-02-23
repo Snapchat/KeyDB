@@ -36,14 +36,10 @@
 #define __str(s) #s
 
 #include "storage.h"
-#define USE_MEMKIND 1
 #if defined(USE_MEMKIND)
     #define ZMALLOC_LIB ("memkind")
     #undef USE_JEMALLOC
     #define USE_MALLOC_CLASS 1
-    // Even though memkind supports malloc_usable_size we don't use it for performance reasons
-    //#define HAVE_MALLOC_SIZE 0
-    //#define zmalloc_size(p) salloc_usable_size(p)
 #elif defined(USE_TCMALLOC)
 #define ZMALLOC_LIB ("tcmalloc-" __xstr(TC_VERSION_MAJOR) "." __xstr(TC_VERSION_MINOR))
 #include <google/tcmalloc.h>
@@ -86,6 +82,10 @@
 #define HAVE_DEFRAG
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void *zmalloc(size_t size, enum MALLOC_CLASS mclass);
 void *zcalloc(size_t size, enum MALLOC_CLASS mclass);
 void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS mclass);
@@ -114,6 +114,10 @@ size_t zmalloc_usable(void *ptr);
 
 #ifdef REDIS_TEST
 int zmalloc_test(int argc, char **argv);
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif /* __ZMALLOC_H */

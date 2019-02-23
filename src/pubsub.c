@@ -38,12 +38,12 @@ int clientSubscriptionsCount(client *c);
 /* Send a pubsub message of type "message" to the client. */
 void addReplyPubsubMessage(client *c, robj *channel, robj *msg) {
     if (c->resp == 2)
-        addReply(c,shared.mbulkhdr[3]);
+        addReplyAsync(c,shared.mbulkhdr[3]);
     else
-        addReplyPushLen(c,3);
-    addReply(c,shared.messagebulk);
-    addReplyBulk(c,channel);
-    addReplyBulk(c,msg);
+        addReplyPushLenAsync(c,3);
+    addReplyAsync(c,shared.messagebulk);
+    addReplyBulkAsync(c,channel);
+    addReplyBulkAsync(c,msg);
 }
 
 /* Send a pubsub message of type "pmessage" to the client. The difference
@@ -51,13 +51,13 @@ void addReplyPubsubMessage(client *c, robj *channel, robj *msg) {
  * this message format also includes the pattern that matched the message. */
 void addReplyPubsubPatMessage(client *c, robj *pat, robj *channel, robj *msg) {
     if (c->resp == 2)
-        addReply(c,shared.mbulkhdr[4]);
+        addReplyAsync(c,shared.mbulkhdr[4]);
     else
-        addReplyPushLen(c,4);
-    addReply(c,shared.pmessagebulk);
-    addReplyBulk(c,pat);
-    addReplyBulk(c,channel);
-    addReplyBulk(c,msg);
+        addReplyPushLenAsync(c,4);
+    addReplyAsync(c,shared.pmessagebulk);
+    addReplyBulkAsync(c,pat);
+    addReplyBulkAsync(c,channel);
+    addReplyBulkAsync(c,msg);
 }
 
 /* Send the pubsub subscription notification to the client. */
@@ -293,7 +293,9 @@ int pubsubPublishMessage(robj *channel, robj *message) {
         listRewind(list,&li);
         while ((ln = listNext(&li)) != NULL) {
             client *c = ln->value;
+            fastlock_lock(&c->lock);
             addReplyPubsubMessage(c,channel,message);
+            fastlock_unlock(&c->lock);
             receivers++;
         }
     }
@@ -309,8 +311,10 @@ int pubsubPublishMessage(robj *channel, robj *message) {
                                 (char*)ptrFromObj(channel),
                                 sdslen(ptrFromObj(channel)),0))
             {
+                fastlock_lock(&pat->pclient->lock);
                 addReplyPubsubPatMessage(pat->pclient,
                     pat->pattern,channel,message);
+                fastlock_unlock(&pat->pclient->lock);
                 receivers++;
             }
         }
@@ -325,6 +329,7 @@ int pubsubPublishMessage(robj *channel, robj *message) {
 
 void subscribeCommand(client *c) {
     int j;
+    serverAssert(aeThreadOwnsLock());
 
     for (j = 1; j < c->argc; j++)
         pubsubSubscribeChannel(c,c->argv[j]);
@@ -345,6 +350,7 @@ void unsubscribeCommand(client *c) {
 
 void psubscribeCommand(client *c) {
     int j;
+    serverAssert(aeThreadOwnsLock());
 
     for (j = 1; j < c->argc; j++)
         pubsubSubscribePattern(c,c->argv[j]);

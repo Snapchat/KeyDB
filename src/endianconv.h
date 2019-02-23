@@ -36,6 +36,10 @@
 #include "config.h"
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void memrev16(void *p);
 void memrev32(void *p);
 void memrev64(void *p);
@@ -73,6 +77,10 @@ uint64_t intrev64(uint64_t v);
 
 #ifdef REDIS_TEST
 int endianconvTest(int argc, char *argv[]);
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif

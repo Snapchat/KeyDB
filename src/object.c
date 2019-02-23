@@ -82,7 +82,10 @@ robj *createRawStringObject(const char *ptr, size_t len) {
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
 robj *createEmbeddedStringObject(const char *ptr, size_t len) {
-    robj *o = zmalloc(sizeof(robj)+sizeof(struct sdshdr8)+len+1-sizeof(o->m_ptr), MALLOC_SHARED);
+    size_t allocsize = sizeof(struct sdshdr8)+len+1;
+    if (allocsize < sizeof(void*))
+        allocsize = sizeof(void*);
+    robj *o = zmalloc(sizeof(robj)+allocsize-sizeof(o->m_ptr), MALLOC_SHARED);
     struct sdshdr8 *sh = (void*)(&o->m_ptr);
 
     o->type = OBJ_STRING;
@@ -394,7 +397,7 @@ robj *resetRefCount(robj *obj) {
 
 int checkType(client *c, robj *o, int type) {
     if (o->type != type) {
-        addReply(c,shared.wrongtypeerr);
+        addReplyAsync(c,shared.wrongtypeerr);
         return 1;
     }
     return 0;
@@ -940,6 +943,7 @@ void freeMemoryOverheadData(struct redisMemOverhead *mh) {
  * information used for the MEMORY OVERHEAD and INFO command. The returned
  * structure pointer should be freed calling freeMemoryOverheadData(). */
 struct redisMemOverhead *getMemoryOverheadData(void) {
+    serverAssert(aeThreadOwnsLock());
     int j;
     size_t mem_total = 0;
     size_t mem = 0;
@@ -982,6 +986,8 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
         listRewind(server.slaves,&li);
         while((ln = listNext(&li))) {
             client *c = listNodeValue(ln);
+            if (c->flags & CLIENT_CLOSE_ASAP)
+                continue;
             mem += getClientOutputBufferMemoryUsage(c);
             mem += sdsAllocSize(c->querybuf);
             mem += sizeof(client);
@@ -1077,6 +1083,7 @@ void inputCatSds(void *result, const char *str) {
 /* This implements MEMORY DOCTOR. An human readable analysis of the Redis
  * memory condition. */
 sds getMemoryDoctorReport(void) {
+    serverAssert(aeThreadOwnsLock());
     int empty = 0;          /* Instance is empty or almost empty. */
     int big_peak = 0;       /* Memory peak is much larger than used mem. */
     int high_frag = 0;      /* High fragmentation. */

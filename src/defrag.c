@@ -116,17 +116,15 @@ robj *activeDefragStringOb(robj* ob, long *defragged) {
     /* try to defrag string object */
     if (ob->type == OBJ_STRING) {
         if(ob->encoding==OBJ_ENCODING_RAW) {
-            sds newsds = activeDefragSds((sds)ob->ptr);
+            sds newsds = activeDefragSds((sds)ptrFromObj(ob));
             if (newsds) {
-                ob->ptr = newsds;
+                ob->m_ptr = newsds;
                 (*defragged)++;
             }
         } else if (ob->encoding==OBJ_ENCODING_EMBSTR) {
             /* The sds is embedded in the object allocation, calculate the
              * offset and update the pointer in the new allocation. */
-            long ofs = (intptr_t)ob->ptr - (intptr_t)ob;
             if ((ret = activeDefragAlloc(ob))) {
-                ret->ptr = (void*)((intptr_t)ret + ofs);
                 (*defragged)++;
             }
         } else if (ob->encoding!=OBJ_ENCODING_INT) {
@@ -441,7 +439,7 @@ void defragLater(redisDb *db, dictEntry *kde) {
 }
 
 long scanLaterList(robj *ob) {
-    quicklist *ql = ob->ptr;
+    quicklist *ql = ptrFromObj(ob);
     if (ob->type != OBJ_LIST || ob->encoding != OBJ_ENCODING_QUICKLIST)
         return 0;
     server.stat_active_defrag_scanned+=ql->len;
@@ -463,7 +461,7 @@ void scanLaterZsetCallback(void *privdata, const dictEntry *_de) {
 long scanLaterZset(robj *ob, unsigned long *cursor) {
     if (ob->type != OBJ_ZSET || ob->encoding != OBJ_ENCODING_SKIPLIST)
         return 0;
-    zset *zs = (zset*)ob->ptr;
+    zset *zs = (zset*)ptrFromObj(ob);
     dict *d = zs->pdict;
     scanLaterZsetData data = {zs, 0};
     *cursor = dictScan(d, *cursor, scanLaterZsetCallback, defragDictBucketCallback, &data);
@@ -483,7 +481,7 @@ long scanLaterSet(robj *ob, unsigned long *cursor) {
     long defragged = 0;
     if (ob->type != OBJ_SET || ob->encoding != OBJ_ENCODING_HT)
         return 0;
-    dict *d = ob->ptr;
+    dict *d = ptrFromObj(ob);
     *cursor = dictScan(d, *cursor, scanLaterSetCallback, defragDictBucketCallback, &defragged);
     return defragged;
 }
@@ -504,7 +502,7 @@ long scanLaterHash(robj *ob, unsigned long *cursor) {
     long defragged = 0;
     if (ob->type != OBJ_HASH || ob->encoding != OBJ_ENCODING_HT)
         return 0;
-    dict *d = ob->ptr;
+    dict *d = ptrFromObj(ob);
     *cursor = dictScan(d, *cursor, scanLaterHashCallback, defragDictBucketCallback, &defragged);
     return defragged;
 }
@@ -512,10 +510,10 @@ long scanLaterHash(robj *ob, unsigned long *cursor) {
 long defragQuicklist(redisDb *db, dictEntry *kde) {
     robj *ob = dictGetVal(kde);
     long defragged = 0;
-    quicklist *ql = ob->ptr, *newql;
+    quicklist *ql = ptrFromObj(ob), *newql;
     serverAssert(ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST);
     if ((newql = activeDefragAlloc(ql)))
-        defragged++, ob->ptr = ql = newql;
+        defragged++, ob->m_ptr = ql = newql;
     if (ql->len > server.active_defrag_max_scan_fields)
         defragLater(db, kde);
     else
@@ -526,7 +524,7 @@ long defragQuicklist(redisDb *db, dictEntry *kde) {
 long defragZsetSkiplist(redisDb *db, dictEntry *kde) {
     robj *ob = dictGetVal(kde);
     long defragged = 0;
-    zset *zs = (zset*)ob->ptr;
+    zset *zs = (zset*)ptrFromObj(ob);
     zset *newzs;
     zskiplist *newzsl;
     dict *newdict;
@@ -534,7 +532,7 @@ long defragZsetSkiplist(redisDb *db, dictEntry *kde) {
     struct zskiplistNode *newheader;
     serverAssert(ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST);
     if ((newzs = activeDefragAlloc(zs)))
-        defragged++, ob->ptr = zs = newzs;
+        defragged++, ob->m_ptr = zs = newzs;
     if ((newzsl = activeDefragAlloc(zs->zsl)))
         defragged++, zs->zsl = newzsl;
     if ((newheader = activeDefragAlloc(zs->zsl->header)))
@@ -561,16 +559,16 @@ long defragHash(redisDb *db, dictEntry *kde) {
     robj *ob = dictGetVal(kde);
     dict *d, *newd;
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HT);
-    d = ob->ptr;
+    d = ptrFromObj(ob);
     if (dictSize(d) > server.active_defrag_max_scan_fields)
         defragLater(db, kde);
     else
         defragged += activeDefragSdsDict(d, DEFRAG_SDS_DICT_VAL_IS_SDS);
     /* handle the dict struct */
-    if ((newd = activeDefragAlloc(ob->ptr)))
-        defragged++, ob->ptr = newd;
+    if ((newd = activeDefragAlloc(ptrFromObj(ob))))
+        defragged++, ob->m_ptr = newd;
     /* defrag the dict tables */
-    defragged += dictDefragTables(ob->ptr);
+    defragged += dictDefragTables(ptrFromObj(ob));
     return defragged;
 }
 
@@ -579,16 +577,16 @@ long defragSet(redisDb *db, dictEntry *kde) {
     robj *ob = dictGetVal(kde);
     dict *d, *newd;
     serverAssert(ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HT);
-    d = ob->ptr;
+    d = ptrFromObj(ob);
     if (dictSize(d) > server.active_defrag_max_scan_fields)
         defragLater(db, kde);
     else
         defragged += activeDefragSdsDict(d, DEFRAG_SDS_DICT_NO_VAL);
     /* handle the dict struct */
-    if ((newd = activeDefragAlloc(ob->ptr)))
-        defragged++, ob->ptr = newd;
+    if ((newd = activeDefragAlloc(ptrFromObj(ob))))
+        defragged++, ob->m_ptr = newd;
     /* defrag the dict tables */
-    defragged += dictDefragTables(ob->ptr);
+    defragged += dictDefragTables(ptrFromObj(ob));
     return defragged;
 }
 
@@ -613,11 +611,11 @@ int scanLaterStraemListpacks(robj *ob, unsigned long *cursor, long long endtime,
         return 0;
     }
 
-    stream *s = ob->ptr;
-    raxStart(&ri,s->rax);
+    stream *s = ptrFromObj(ob);
+    raxStart(&ri,s->prax);
     if (*cursor == 0) {
         /* if cursor is 0, we start new iteration */
-        defragRaxNode(&s->rax->head);
+        defragRaxNode(&s->prax->head);
         /* assign the iterator node callback before the seek, so that the
          * initial nodes that are processed till the first item are covered */
         ri.node_cb = defragRaxNode;
@@ -738,19 +736,19 @@ long defragStream(redisDb *db, dictEntry *kde) {
     long defragged = 0;
     robj *ob = dictGetVal(kde);
     serverAssert(ob->type == OBJ_STREAM && ob->encoding == OBJ_ENCODING_STREAM);
-    stream *s = ob->ptr, *news;
+    stream *s = ptrFromObj(ob), *news;
 
     /* handle the main struct */
     if ((news = activeDefragAlloc(s)))
-        defragged++, ob->ptr = s = news;
+        defragged++, ob->m_ptr = s = news;
 
-    if (raxSize(s->rax) > server.active_defrag_max_scan_fields) {
-        rax *newrax = activeDefragAlloc(s->rax);
+    if (raxSize(s->prax) > server.active_defrag_max_scan_fields) {
+        rax *newrax = activeDefragAlloc(s->prax);
         if (newrax)
-            defragged++, s->rax = newrax;
+            defragged++, s->prax = newrax;
         defragLater(db, kde);
     } else
-        defragged += defragRadixTree(&s->rax, 1, NULL, NULL);
+        defragged += defragRadixTree(&s->prax, 1, NULL, NULL);
 
     if (s->cgroups)
         defragged += defragRadixTree(&s->cgroups, 1, defragStreamConsumerGroup, NULL);
@@ -792,8 +790,8 @@ long defragKey(redisDb *db, dictEntry *de) {
         if (ob->encoding == OBJ_ENCODING_QUICKLIST) {
             defragged += defragQuicklist(db, de);
         } else if (ob->encoding == OBJ_ENCODING_ZIPLIST) {
-            if ((newzl = activeDefragAlloc(ob->ptr)))
-                defragged++, ob->ptr = newzl;
+            if ((newzl = activeDefragAlloc(ptrFromObj(ob))))
+                defragged++, ob->m_ptr = newzl;
         } else {
             serverPanic("Unknown list encoding");
         }
@@ -801,16 +799,16 @@ long defragKey(redisDb *db, dictEntry *de) {
         if (ob->encoding == OBJ_ENCODING_HT) {
             defragged += defragSet(db, de);
         } else if (ob->encoding == OBJ_ENCODING_INTSET) {
-            intset *newis, *is = ob->ptr;
+            intset *newis, *is = ptrFromObj(ob);
             if ((newis = activeDefragAlloc(is)))
-                defragged++, ob->ptr = newis;
+                defragged++, ob->m_ptr = newis;
         } else {
             serverPanic("Unknown set encoding");
         }
     } else if (ob->type == OBJ_ZSET) {
         if (ob->encoding == OBJ_ENCODING_ZIPLIST) {
-            if ((newzl = activeDefragAlloc(ob->ptr)))
-                defragged++, ob->ptr = newzl;
+            if ((newzl = activeDefragAlloc(ptrFromObj(ob))))
+                defragged++, ob->m_ptr = newzl;
         } else if (ob->encoding == OBJ_ENCODING_SKIPLIST) {
             defragged += defragZsetSkiplist(db, de);
         } else {
@@ -818,8 +816,8 @@ long defragKey(redisDb *db, dictEntry *de) {
         }
     } else if (ob->type == OBJ_HASH) {
         if (ob->encoding == OBJ_ENCODING_ZIPLIST) {
-            if ((newzl = activeDefragAlloc(ob->ptr)))
-                defragged++, ob->ptr = newzl;
+            if ((newzl = activeDefragAlloc(ptrFromObj(ob))))
+                defragged++, ob->m_ptr = newzl;
         } else if (ob->encoding == OBJ_ENCODING_HT) {
             defragged += defragHash(db, de);
         } else {

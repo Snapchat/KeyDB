@@ -1,4 +1,5 @@
 .*.swp
+core
 *.o
 *.log
 dump.rdb

@@ -19,6 +19,7 @@ start_server {tags {"lazyfree"}} {
     }
 
     test "FLUSHDB ASYNC can reclaim memory in background" {
+        after 500   # Sometimes Redis is busy with a prior operation
         set orig_mem [s used_memory]
         set args {}
         for {set i 0} {$i < 100000} {incr i} {

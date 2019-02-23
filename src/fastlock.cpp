@@ -33,6 +33,7 @@
 #include <sys/types.h>
 #include <sched.h>
 #include <atomic>
+#include <assert.h>
 
 /****************************************************
  *
@@ -56,6 +57,7 @@ extern "C" void fastlock_init(struct fastlock *lock)
     lock->m_ticket.m_active = 0;
     lock->m_ticket.m_avail = 0;
     lock->m_depth = 0;
+    lock->m_pidOwner = -1;
 }
 
 extern "C" void fastlock_lock(struct fastlock *lock)
@@ -111,6 +113,7 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
     --lock->m_depth;
     if (lock->m_depth == 0)
     {
+        assert((int)__atomic_load_4(&lock->m_pidOwner, __ATOMIC_RELAXED) >= 0);  // unlock after free
         lock->m_pidOwner = -1;
         std::atomic_thread_fence(std::memory_order_acquire);
         __atomic_fetch_add(&lock->m_ticket.m_active, 1, __ATOMIC_ACQ_REL);
@@ -120,7 +123,9 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
 extern "C" void fastlock_free(struct fastlock *lock)
 {
     // NOP
-    (void)lock;
+    assert((lock->m_ticket.m_active == lock->m_ticket.m_avail)                                        // Asser the lock is unlocked
+        || (lock->m_pidOwner == gettid() && (lock->m_ticket.m_active == lock->m_ticket.m_avail-1)));  // OR we own the lock and nobody else is waiting
+    lock->m_pidOwner = -2;  // sentinal value indicating free
 }
 
 

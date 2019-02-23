@@ -188,13 +188,6 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
      * master replication history and has the same backlog and offsets). */
     if (server.masterhost != NULL) return;
 
-    /* If the instance is not a top level master, return ASAP: we'll just proxy
-     * the stream of data we receive from our master instead, in order to
-     * propagate *identical* replication stream. In this way this slave can
-     * advertise the same replication ID as the master (since it shares the
-     * master replication history and has the same backlog and offsets). */
-    if (server.masterhost != NULL) return;
-
     /* If there aren't slaves, and there is no backlog buffer to populate,
      * we can return ASAP. */
     if (server.repl_backlog == NULL && listLength(slaves) == 0) return;
@@ -889,7 +882,7 @@ void putSlaveOnline(client *slave) {
     slave->replstate = SLAVE_STATE_ONLINE;
     slave->repl_put_online_on_ack = 0;
     slave->repl_ack_time = server.unixtime; /* Prevent false timeout. */
-    //AssertCorrectThread(slave);
+    AssertCorrectThread(slave);
     if (aeCreateFileEvent(server.rgthreadvar[slave->iel].el, slave->fd, AE_WRITABLE|AE_WRITE_THREADSAFE,
         sendReplyToClient, slave) == AE_ERR) {
         serverLog(LL_WARNING,"Unable to register writable event for replica bulk transfer: %s", strerror(errno));
@@ -2042,7 +2035,12 @@ void replicationUnsetMaster(void) {
      * used as secondary ID up to the current offset, and a new replication
      * ID is created to continue with a new replication history. */
     shiftReplicationId();
-    if (server.master) freeClientAsync(server.master);
+    if (server.master) {
+        if (FCorrectThread(server.master))
+            freeClient(server.master);
+        else
+            freeClientAsync(server.master);
+    }
     replicationDiscardCachedMaster();
     cancelReplicationHandshake();
     /* Disconnecting all the slaves is required: we need to inform slaves
@@ -2216,6 +2214,7 @@ void replicationCacheMaster(client *c) {
     serverAssert(server.master != NULL && server.cached_master == NULL);
     serverLog(LL_NOTICE,"Caching the disconnected master state.");
     AssertCorrectThread(c);
+    std::lock_guard<decltype(c->lock)> clientlock(c->lock);
 
     /* Unlink the client from the server structures. */
     unlinkClient(c);
@@ -2265,6 +2264,7 @@ void replicationCacheMasterUsingMyself(void) {
      * the new master will start its replication stream with SELECT. */
     server.master_initial_offset = server.master_repl_offset;
     replicationCreateMasterClient(-1,-1);
+    std::lock_guard<decltype(server.master->lock)> lock(server.master->lock);
 
     /* Use our own ID / offset. */
     memcpy(server.master->replid, server.replid, sizeof(server.replid));
@@ -2283,7 +2283,10 @@ void replicationDiscardCachedMaster(void) {
 
     serverLog(LL_NOTICE,"Discarding previously cached master state.");
     server.cached_master->flags &= ~CLIENT_MASTER;
-    freeClientAsync(server.cached_master);
+    if (FCorrectThread(server.cached_master))
+        freeClient(server.cached_master);
+    else
+        freeClientAsync(server.cached_master);
     server.cached_master = NULL;
 }
 
@@ -2705,7 +2708,10 @@ void replicationCron(void) {
             {
                 serverLog(LL_WARNING, "Disconnecting timedout replica: %s",
                     replicationGetSlaveName(slave));
-                freeClientAsync(slave);
+                if (FCorrectThread(slave))
+                    freeClient(slave);
+                else
+                    freeClientAsync(slave);
             }
         }
     }

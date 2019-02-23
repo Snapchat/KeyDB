@@ -40,9 +40,6 @@
     #define ZMALLOC_LIB ("memkind")
     #undef USE_JEMALLOC
     #define USE_MALLOC_CLASS 1
-    // Even though memkind supports malloc_usable_size we don't use it for performance reasons
-    //#define HAVE_MALLOC_SIZE 0
-    //#define zmalloc_size(p) salloc_usable_size(p)
 #elif defined(USE_TCMALLOC)
 #define ZMALLOC_LIB ("tcmalloc-" __xstr(TC_VERSION_MAJOR) "." __xstr(TC_VERSION_MINOR))
 #include <google/tcmalloc.h>

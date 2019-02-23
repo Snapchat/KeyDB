@@ -11,6 +11,13 @@ Why fork Redis?
 The Redis maintainers have continually reiterated that they do not plan to support multithreading.  While we have great respect for the redis team, we feel the analysis justifying this decision is incorrect.  In addition we are dismayed that features we believe belong in the core Redis engine are ending up in closed source modules.   We feel a fork is the best way to accelerate development in the areas of most interest to us.
 
 We plan to track the Redis repo closely and hope our projects can learn from each other.
+
+Benchmarking KeyDB
+------------------
+
+Please note keydb-benchmark and redis-benchmark are currently single threaded and too slow to properly benchmark KeyDB.  We recommend using a redis cluster benchmark tool such as [memtier](https://github.com/RedisLabs/memtier_benchmark).  Please ensure your machine has enough cores for both KeyDB and memteir if testing locally.  KeyDB expects exclusive use of any cores assigned to it.
+
+If you find a scenario where performance is not as expected please open an Issue, we take performance extremely seriously.
     
 New Configuration Options
 -------------------------
@@ -23,7 +30,7 @@ The number of threads used to serve requests.  This should be related to the num
 
 **scratch-file-path** *path*
 
-If you would like to use the FLASH backed storage this option configures the directory for KeyDB's temporary files.  This feature relies on snapshotting to work so must be used on a BTRFS filesystem.  ZFS may also work but is untested.  With this feature KeyDB will use RAM as a cache and page to disk as necessary.
+If you would like to use the FLASH backed storage this option configures the directory for KeyDB's temporary files.  This feature relies on snapshotting to work so must be used on a BTRFS filesystem.  ZFS may also work but is untested.  With this feature KeyDB will use RAM as a cache and page to disk as necessary.  NOTE: This requires special compilation options, see Building KeyDB below.
     
 **db-s3-object** *path*
 

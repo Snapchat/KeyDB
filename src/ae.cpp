@@ -51,7 +51,39 @@ extern "C" {
 #include "config.h"
 }
 
+#ifdef USE_MUTEX
+thread_local int cOwnLock = 0;
+class mutex_wrapper
+{
+    std::recursive_mutex m_mutex;
+public:
+    void lock() {
+        m_mutex.lock();
+        cOwnLock++;
+    }
+
+    void unlock() {
+        cOwnLock--;
+        m_mutex.unlock();
+    }
+
+    bool try_lock() {
+        if (m_mutex.try_lock()) {
+            cOwnLock++;
+            return true;
+        }
+        return false;
+    }
+
+    bool fOwnLock() {
+        return cOwnLock > 0;
+    }
+};
+mutex_wrapper g_lock;
+
+#else
 fastlock g_lock;
+#endif
 thread_local aeEventLoop *g_eventLoopThisThread = NULL;
 
 #define AE_ASSERT(x) if (!(x)) do { fprintf(stderr, "AE_ASSER FAILURE\n"); *((volatile int*)0) = 1; } while(0)

@@ -18,13 +18,18 @@ New Configuration Options
 With new features comes new options:
 
 **server-threads** *N*
-    The number of threads used to serve requests.  This should be related to the number of queues available in your network hardware, *not* the number of cores on your machine.  Because KeyDB uses spinlocks to reduce latency; making this too high will reduce performance.  We recommend using 4 here.
+
+The number of threads used to serve requests.  This should be related to the number of queues available in your network hardware, *not* the number of cores on your machine.  Because KeyDB uses spinlocks to reduce latency; making this too high will reduce performance.  We recommend using 4 here.  By default this is set to two.
 
 **scratch-file-path** *path*
-    If you would like to use the FLASH backed storage this option configures the directory for KeyDB's temporary files.  This feature relies on snapshotting to work so must be used on a BTRFS filesystem.  ZFS may also work but is untested.  With this feature KeyDB will use RAM as a cache and page to disk as necessary.
+
+If you would like to use the FLASH backed storage this option configures the directory for KeyDB's temporary files.  This feature relies on snapshotting to work so must be used on a BTRFS filesystem.  ZFS may also work but is untested.  With this feature KeyDB will use RAM as a cache and page to disk as necessary.
     
 **db-s3-object** *path*
-    If you would like KeyDB to dump directly to AWS S3 this option specifies the bucket.  Using this option with the traditional RDB options will result in KeyDB backing up twice to both locations.  This requires the AWS CLI tools to be installed and configured which are used under the hood to transfer the data.
+
+If you would like KeyDB to dump directly to AWS S3 this option specifies the bucket.  Using this option with the traditional RDB options will result in KeyDB backing up twice to both locations.  This requires the AWS CLI tools to be installed and configured which are used under the hood to transfer the data.
+
+All other configuration options behave as you'd expect.  Your existing configuration files should continue to work unchanged.
 
 Building KeyDB
 --------------

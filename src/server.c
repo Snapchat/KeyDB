@@ -4533,7 +4533,7 @@ void linuxMemoryWarnings(void) {
         serverLog(LL_WARNING,"WARNING overcommit_memory is set to 0! Background save may fail under low memory condition. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.");
     }
     if (THPIsEnabled()) {
-        serverLog(LL_WARNING,"WARNING you have Transparent Huge Pages (THP) support enabled in your kernel. This will create latency and memory usage issues with Redis. To fix this issue run the command 'echo never > /sys/kernel/mm/transparent_hugepage/enabled' as root, and add it to your /etc/rc.local in order to retain the setting after a reboot. Redis must be restarted after THP is disabled.");
+        serverLog(LL_WARNING,"WARNING you have Transparent Huge Pages (THP) support enabled in your kernel. This will create latency and memory usage issues with KeyDB. To fix this issue run the command 'echo never > /sys/kernel/mm/transparent_hugepage/enabled' as root, and add it to your /etc/rc.local in order to retain the setting after a reboot. KeyDB must be restarted after THP is disabled.");
     }
 }
 #endif /* __linux__ */
@@ -5037,9 +5037,7 @@ int main(int argc, char **argv) {
     if (background) daemonize();
 
     initServer();
-
-    server.cthreads = 1; //testing
-    initNetworking(0 /* fReusePort */);
+    initNetworking(server.cthreads > 1 /* fReusePort */);
 
     if (background || server.pidfile) createPidFile();
     redisSetProcTitle(argv[0]);
@@ -5069,6 +5067,10 @@ int main(int argc, char **argv) {
             serverLog(LL_NOTICE,"The server is now ready to accept connections at %s", server.unixsocket);
     } else {
         sentinelIsRunning();
+    }
+
+    if (server.cthreads > 4) {
+        serverLog(LL_WARNING, "Warning: server-threads is set to %d.  This is above the maximum recommend value of 4, please ensure you've verified this is actually faster on your machine.", server.cthreads);
     }
 
     /* Warning the user about suspicious maxmemory setting. */

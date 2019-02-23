@@ -246,6 +246,16 @@ static int anetSetReuseAddr(char *err, int fd) {
     return ANET_OK;
 }
 
+static int anetSetReusePort(char *err, int fd) {
+    int yes = 1;
+    /* Let us load balance listen()s from multiple threads */
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(yes)) == -1) {
+        anetSetError(err, "setsockopt SO_REUSEPORT: %s", strerror(errno));
+        return ANET_ERR;
+    }
+    return ANET_OK;
+}
+
 static int anetCreateSocket(char *err, int domain) {
     int s;
     if ((s = socket(domain, SOCK_STREAM, 0)) == -1) {
@@ -265,6 +275,7 @@ static int anetCreateSocket(char *err, int domain) {
 #define ANET_CONNECT_NONE 0
 #define ANET_CONNECT_NONBLOCK 1
 #define ANET_CONNECT_BE_BINDING 2 /* Best effort binding. */
+#define ANET_CONNECT_REUSEPORT 4
 static int anetTcpGenericConnect(char *err, char *addr, int port,
                                  char *source_addr, int flags)
 {
@@ -287,7 +298,10 @@ static int anetTcpGenericConnect(char *err, char *addr, int port,
          * the next entry in servinfo. */
         if ((s = socket(p->ai_family,p->ai_socktype,p->ai_protocol)) == -1)
             continue;
-        if (anetSetReuseAddr(err,s) == ANET_ERR) goto error;
+        if (anetSetReuseAddr(err,s) == ANET_ERR) 
+            goto error;
+        if (flags & ANET_CONNECT_REUSEPORT && anetSetReusePort(err, s) != ANET_OK)
+            goto error;
         if (flags & ANET_CONNECT_NONBLOCK && anetNonBlock(err,s) != ANET_OK)
             goto error;
         if (source_addr) {
@@ -462,7 +476,7 @@ static int anetV6Only(char *err, int s) {
     return ANET_OK;
 }
 
-static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backlog)
+static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backlog, int fReusePort)
 {
     int s = -1, rv;
     char _port[6];  /* strlen("65535") */
@@ -484,6 +498,7 @@ static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backl
 
         if (af == AF_INET6 && anetV6Only(err,s) == ANET_ERR) goto error;
         if (anetSetReuseAddr(err,s) == ANET_ERR) goto error;
+        if (fReusePort && anetSetReusePort(err,s) == ANET_ERR) goto error;
         if (anetListen(err,s,p->ai_addr,p->ai_addrlen,backlog) == ANET_ERR) s = ANET_ERR;
         goto end;
     }
@@ -500,14 +515,14 @@ end:
     return s;
 }
 
-int anetTcpServer(char *err, int port, char *bindaddr, int backlog)
+int anetTcpServer(char *err, int port, char *bindaddr, int backlog, int fReusePort)
 {
-    return _anetTcpServer(err, port, bindaddr, AF_INET, backlog);
+    return _anetTcpServer(err, port, bindaddr, AF_INET, backlog, fReusePort);
 }
 
-int anetTcp6Server(char *err, int port, char *bindaddr, int backlog)
+int anetTcp6Server(char *err, int port, char *bindaddr, int backlog, int fReusePort)
 {
-    return _anetTcpServer(err, port, bindaddr, AF_INET6, backlog);
+    return _anetTcpServer(err, port, bindaddr, AF_INET6, backlog, fReusePort);
 }
 
 int anetUnixServer(char *err, char *path, mode_t perm, int backlog)

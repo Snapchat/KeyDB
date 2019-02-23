@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include <fcntl.h>
 
 /* =============================================================================
  * Global state for ACLs
@@ -90,6 +91,7 @@ struct ACLUserFlag {
 
 void ACLResetSubcommandsForCommand(user *u, unsigned long id);
 void ACLResetSubcommands(user *u);
+void ACLAddAllowedSubcommand(user *u, unsigned long id, const char *sub);
 
 /* =============================================================================
  * Helper functions for the rest of the ACL implementation
@@ -163,6 +165,11 @@ void ACLListFreeSds(void *item) {
     sdsfree(item);
 }
 
+/* Method to duplicate list elements from ACL users password/ptterns lists. */
+void *ACLListDupSds(void *item) {
+    return sdsdup(item);
+}
+
 /* Create a new user with the specified name, store it in the list
  * of users (the Users global radix tree), and returns a reference to
  * the structure representing the user.
@@ -178,11 +185,30 @@ user *ACLCreateUser(const char *name, size_t namelen) {
     u->patterns = listCreate();
     listSetMatchMethod(u->passwords,ACLListMatchSds);
     listSetFreeMethod(u->passwords,ACLListFreeSds);
+    listSetDupMethod(u->passwords,ACLListDupSds);
     listSetMatchMethod(u->patterns,ACLListMatchSds);
     listSetFreeMethod(u->patterns,ACLListFreeSds);
+    listSetDupMethod(u->patterns,ACLListDupSds);
     memset(u->allowed_commands,0,sizeof(u->allowed_commands));
     raxInsert(Users,(unsigned char*)name,namelen,u,NULL);
     return u;
+}
+
+/* This function should be called when we need an unlinked "fake" user
+ * we can use in order to validate ACL rules or for other similar reasons.
+ * The user will not get linked to the Users radix tree. The returned
+ * user should be released with ACLFreeUser() as usually. */
+user *ACLCreateUnlinkedUser(void) {
+    char username[64];
+    for (int j = 0; ; j++) {
+        snprintf(username,sizeof(username),"__fakeuser:%d__",j);
+        user *fakeuser = ACLCreateUser(username,strlen(username));
+        if (fakeuser == NULL) continue;
+        int retval = raxRemove(Users,(unsigned char*) username,
+                               strlen(username),NULL);
+        serverAssert(retval != 0);
+        return fakeuser;
+    }
 }
 
 /* Release the memory used by the user structure. Note that this function
@@ -193,6 +219,62 @@ void ACLFreeUser(user *u) {
     listRelease(u->patterns);
     ACLResetSubcommands(u);
     zfree(u);
+}
+
+/* When a user is deleted we need to cycle the active
+ * connections in order to kill all the pending ones that
+ * are authenticated with such user. */
+void ACLFreeUserAndKillClients(user *u) {
+    listIter li;
+    listNode *ln;
+    listRewind(server.clients,&li);
+    while ((ln = listNext(&li)) != NULL) {
+        client *c = listNodeValue(ln);
+        if (c->puser == u) {
+            /* We'll free the conenction asynchronously, so
+             * in theory to set a different user is not needed.
+             * However if there are bugs in Redis, soon or later
+             * this may result in some security hole: it's much
+             * more defensive to set the default user and put
+             * it in non authenticated mode. */
+            c->puser = DefaultUser;
+            c->authenticated = 0;
+            freeClientAsync(c);
+        }
+    }
+    ACLFreeUser(u);
+}
+
+/* Copy the user ACL rules from the source user 'src' to the destination
+ * user 'dst' so that at the end of the process they'll have exactly the
+ * same rules (but the names will continue to be the original ones). */
+void ACLCopyUser(user *dst, user *src) {
+    listRelease(dst->passwords);
+    listRelease(dst->patterns);
+    dst->passwords = listDup(src->passwords);
+    dst->patterns = listDup(src->patterns);
+    memcpy(dst->allowed_commands,src->allowed_commands,
+           sizeof(dst->allowed_commands));
+    dst->flags = src->flags;
+    ACLResetSubcommands(dst);
+    /* Copy the allowed subcommands array of array of SDS strings. */
+    if (src->allowed_subcommands) {
+        for (int j = 0; j < USER_COMMAND_BITS_COUNT; j++) {
+            if (src->allowed_subcommands[j]) {
+                for (int i = 0; src->allowed_subcommands[j][i]; i++)
+                {
+                    ACLAddAllowedSubcommand(dst, j,
+                        src->allowed_subcommands[j][i]);
+                }
+            }
+        }
+    }
+}
+
+/* Free all the users registered in the radix tree 'users' and free the
+ * radix tree itself. */
+void ACLFreeUsersSet(rax *users) {
+    raxFreeWithCallback(users,(void(*)(void*))ACLFreeUserAndKillClients);
 }
 
 /* Given a command ID, this function set by reference 'word' and 'bit'
@@ -256,6 +338,7 @@ int ACLSetUserCommandBitsForCategory(user *u, const char *category, int value) {
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         struct redisCommand *cmd = dictGetVal(de);
+        if (cmd->flags & CMD_MODULE) continue; /* Ignore modules commands. */
         if (cmd->flags & cflag) {
             ACLSetUserCommandBit(u,cmd->id,value);
             ACLResetSubcommandsForCommand(u,cmd->id);
@@ -579,6 +662,7 @@ void ACLAddAllowedSubcommand(user *u, unsigned long id, const char *sub) {
  *         fully added.
  * EEXIST: You are adding a key pattern after "*" was already added. This is
  *         almost surely an error on the user side.
+ * ENODEV: The password you are trying to remove from the user does not exist.
  */
 int ACLSetUser(user *u, const char *op, ssize_t oplen) {
     if (oplen == -1) oplen = strlen(op);
@@ -623,8 +707,13 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
     } else if (op[0] == '<') {
         sds delpass = sdsnewlen(op+1,oplen-1);
         listNode *ln = listSearchKey(u->passwords,delpass);
-        if (ln) listDelNode(u->passwords,ln);
         sdsfree(delpass);
+        if (ln) {
+            listDelNode(u->passwords,ln);
+        } else {
+            errno = ENODEV;
+            return C_ERR;
+        }
     } else if (op[0] == '~') {
         if (u->flags & USER_FLAG_ALLKEYS) {
             errno = EEXIST;
@@ -728,6 +817,9 @@ char *ACLSetUserStringError(void) {
                  "'allkeys' flag) is not valid and does not have any "
                  "effect. Try 'resetkeys' to start with an empty "
                  "list of patterns";
+    else if (errno == ENODEV)
+        errmsg = "The password you are trying to remove from the user does "
+                 "not exist";
     return errmsg;
 }
 
@@ -741,15 +833,21 @@ sds ACLDefaultUserFirstPassword(void) {
     return listNodeValue(first);
 }
 
-/* Initialization of the ACL subsystem. */
-void ACLInit(void) {
-    Users = raxNew();
-    UsersToLoad = listCreate();
+/* Initialize the default user, that will always exist for all the process
+ * lifetime. */
+void ACLInitDefaultUser(void) {
     DefaultUser = ACLCreateUser("default",7);
     ACLSetUser(DefaultUser,"+@all",-1);
     ACLSetUser(DefaultUser,"~*",-1);
     ACLSetUser(DefaultUser,"on",-1);
     ACLSetUser(DefaultUser,"nopass",-1);
+}
+
+/* Initialization of the ACL subsystem. */
+void ACLInit(void) {
+    Users = raxNew();
+    UsersToLoad = listCreate();
+    ACLInitDefaultUser();
 }
 
 /* Check the username and password pair and return C_OK if they are valid,
@@ -944,11 +1042,7 @@ int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err) {
 
     /* Try to apply the user rules in a fake user to see if they
      * are actually valid. */
-    char *funame = "__fakeuser__";
-    user *fakeuser = ACLCreateUser(funame,strlen(funame));
-    serverAssert(fakeuser != NULL);
-    int retval = raxRemove(Users,(unsigned char*) funame,strlen(funame),NULL);
-    serverAssert(retval != 0);
+    user *fakeuser = ACLCreateUnlinkedUser();
 
     for (int j = 2; j < argc; j++) {
         if (ACLSetUser(fakeuser,argv[j],sdslen(argv[j])) == C_ERR) {
@@ -1009,15 +1103,275 @@ int ACLLoadConfiguredUsers(void) {
     return C_OK;
 }
 
+/* This function loads the ACL from the specified filename: every line
+ * is validated and shold be either empty or in the format used to specify
+ * users in the redis.conf configuration or in the ACL file, that is:
+ *
+ *  user <username> ... rules ...
+ *
+ * Note that this function considers comments starting with '#' as errors
+ * because the ACL file is meant to be rewritten, and comments would be
+ * lost after the rewrite. Yet empty lines are allowed to avoid being too
+ * strict.
+ *
+ * One important part of implementing ACL LOAD, that uses this function, is
+ * to avoid ending with broken rules if the ACL file is invalid for some
+ * reason, so the function will attempt to validate the rules before loading
+ * each user. For every line that will be found broken the function will
+ * collect an error message.
+ *
+ * IMPORTANT: If there is at least a single error, nothing will be loaded
+ * and the rules will remain exactly as they were.
+ *
+ * At the end of the process, if no errors were found in the whole file then
+ * NULL is returned. Otherwise an SDS string describing in a single line
+ * a description of all the issues found is returned. */
+sds ACLLoadFromFile(const char *filename) {
+    FILE *fp;
+    char buf[1024];
+
+    /* Open the ACL file. */
+    if ((fp = fopen(filename,"r")) == NULL) {
+        sds errors = sdscatprintf(sdsempty(),
+            "Error loading ACLs, opening file '%s': %s",
+            filename, strerror(errno));
+        return errors;
+    }
+
+    /* Load the whole file as a single string in memory. */
+    sds acls = sdsempty();
+    while(fgets(buf,sizeof(buf),fp) != NULL)
+        acls = sdscat(acls,buf);
+    fclose(fp);
+
+    /* Split the file into lines and attempt to load each line. */
+    int totlines;
+    sds *lines, errors = sdsempty();
+    lines = sdssplitlen(acls,strlen(acls),"\n",1,&totlines);
+    sdsfree(acls);
+
+    /* We need a fake user to validate the rules before making changes
+     * to the real user mentioned in the ACL line. */
+    user *fakeuser = ACLCreateUnlinkedUser();
+
+    /* We do all the loading in a fresh insteance of the Users radix tree,
+     * so if there are errors loading the ACL file we can rollback to the
+     * old version. */
+    rax *old_users = Users;
+    user *old_default_user = DefaultUser;
+    Users = raxNew();
+    ACLInitDefaultUser();
+
+    /* Load each line of the file. */
+    for (int i = 0; i < totlines; i++) {
+        sds *argv;
+        int argc;
+        int linenum = i+1;
+
+        lines[i] = sdstrim(lines[i]," \t\r\n");
+
+        /* Skip blank lines */
+        if (lines[i][0] == '\0') continue;
+
+        /* Split into arguments */
+        argv = sdssplitargs(lines[i],&argc);
+        if (argv == NULL) {
+            errors = sdscatprintf(errors,
+                     "%s:%d: unbalanced quotes in acl line. ",
+                     server.acl_filename, linenum);
+            continue;
+        }
+
+        /* Skip this line if the resulting command vector is empty. */
+        if (argc == 0) {
+            sdsfreesplitres(argv,argc);
+            continue;
+        }
+
+        /* The line should start with the "user" keyword. */
+        if (strcmp(argv[0],"user") || argc < 2) {
+            errors = sdscatprintf(errors,
+                     "%s:%d should start with user keyword followed "
+                     "by the username. ", server.acl_filename,
+                     linenum);
+            sdsfreesplitres(argv,argc);
+            continue;
+        }
+
+        /* Try to process the line using the fake user to validate iif
+         * the rules are able to apply cleanly. */
+        ACLSetUser(fakeuser,"reset",-1);
+        int j;
+        for (j = 2; j < argc; j++) {
+            if (ACLSetUser(fakeuser,argv[j],sdslen(argv[j])) != C_OK) {
+                char *errmsg = ACLSetUserStringError();
+                errors = sdscatprintf(errors,
+                         "%s:%d: %s. ",
+                         server.acl_filename, linenum, errmsg);
+                continue;
+            }
+        }
+
+        /* Apply the rule to the new users set only if so far there
+         * are no errors, otherwise it's useless since we are going
+         * to discard the new users set anyway. */
+        if (sdslen(errors) != 0) {
+            sdsfreesplitres(argv,argc);
+            continue;
+        }
+
+        /* We can finally lookup the user and apply the rule. If the
+         * user already exists we always reset it to start. */
+        user *u = ACLCreateUser(argv[1],sdslen(argv[1]));
+        if (!u) {
+            u = ACLGetUserByName(argv[1],sdslen(argv[1]));
+            serverAssert(u != NULL);
+            ACLSetUser(u,"reset",-1);
+        }
+
+        /* Note that the same rules already applied to the fake user, so
+         * we just assert that everything goess well: it should. */
+        for (j = 2; j < argc; j++)
+            serverAssert(ACLSetUser(u,argv[j],sdslen(argv[j])) == C_OK);
+
+        sdsfreesplitres(argv,argc);
+    }
+
+    ACLFreeUser(fakeuser);
+    sdsfreesplitres(lines,totlines);
+    DefaultUser = old_default_user; /* This pointer must never change. */
+
+    /* Check if we found errors and react accordingly. */
+    if (sdslen(errors) == 0) {
+        /* The default user pointer is referenced in different places: instead
+         * of replacing such occurrences it is much simpler to copy the new
+         * default user configuration in the old one. */
+        user *new = ACLGetUserByName("default",7);
+        serverAssert(new != NULL);
+        ACLCopyUser(DefaultUser,new);
+        ACLFreeUser(new);
+        raxInsert(Users,(unsigned char*)"default",7,DefaultUser,NULL);
+        raxRemove(old_users,(unsigned char*)"default",7,NULL);
+        ACLFreeUsersSet(old_users);
+        sdsfree(errors);
+        return NULL;
+    } else {
+        ACLFreeUsersSet(Users);
+        Users = old_users;
+        errors = sdscat(errors,"WARNING: ACL errors detected, no change to the previously active ACL rules was performed");
+        return errors;
+    }
+}
+
+/* Generate a copy of the ACLs currently in memory in the specified filename.
+ * Returns C_OK on success or C_ERR if there was an error during the I/O.
+ * When C_ERR is returned a log is produced with hints about the issue. */
+int ACLSaveToFile(const char *filename) {
+    sds acl = sdsempty();
+    int fd = -1;
+    sds tmpfilename = NULL;
+    int retval = C_ERR;
+
+    /* Let's generate an SDS string containing the new version of the
+     * ACL file. */
+    raxIterator ri;
+    raxStart(&ri,Users);
+    raxSeek(&ri,"^",NULL,0);
+    while(raxNext(&ri)) {
+        user *u = ri.data;
+        /* Return information in the configuration file format. */
+        sds user = sdsnew("user ");
+        user = sdscatsds(user,u->name);
+        user = sdscatlen(user," ",1);
+        sds descr = ACLDescribeUser(u);
+        user = sdscatsds(user,descr);
+        sdsfree(descr);
+        acl = sdscatsds(acl,user);
+        acl = sdscatlen(acl,"\n",1);
+        sdsfree(user);
+    }
+    raxStop(&ri);
+
+    /* Create a temp file with the new content. */
+    tmpfilename = sdsnew(filename);
+    tmpfilename = sdscatfmt(tmpfilename,".tmp-%i-%I",
+        (int)getpid(),(int)mstime());
+    if ((fd = open(tmpfilename,O_WRONLY|O_CREAT,0644)) == -1) {
+        serverLog(LL_WARNING,"Opening temp ACL file for ACL SAVE: %s",
+            strerror(errno));
+        goto cleanup;
+    }
+
+    /* Write it. */
+    if (write(fd,acl,sdslen(acl)) != (ssize_t)sdslen(acl)) {
+        serverLog(LL_WARNING,"Writing ACL file for ACL SAVE: %s",
+            strerror(errno));
+        goto cleanup;
+    }
+    close(fd); fd = -1;
+
+    /* Let's replace the new file with the old one. */
+    if (rename(tmpfilename,filename) == -1) {
+        serverLog(LL_WARNING,"Renaming ACL file for ACL SAVE: %s",
+            strerror(errno));
+        goto cleanup;
+    }
+    sdsfree(tmpfilename); tmpfilename = NULL;
+    retval = C_OK; /* If we reached this point, everything is fine. */
+
+cleanup:
+    if (fd != -1) close(fd);
+    if (tmpfilename) unlink(tmpfilename);
+    sdsfree(tmpfilename);
+    sdsfree(acl);
+    return retval;
+}
+
+/* This function is called once the server is already running, modules are
+ * loaded, and we are ready to start, in order to load the ACLs either from
+ * the pending list of users defined in redis.conf, or from the ACL file.
+ * The function will just exit with an error if the user is trying to mix
+ * both the loading methods. */
+void ACLLoadUsersAtStartup(void) {
+    if (server.acl_filename[0] != '\0' && listLength(UsersToLoad) != 0) {
+        serverLog(LL_WARNING,
+            "Configuring Redis with users defined in redis.conf and at "
+            "the same setting an ACL file path is invalid. This setup "
+            "is very likely to lead to configuration errors and security "
+            "holes, please define either an ACL file or declare users "
+            "directly in your redis.conf, but not both.");
+        exit(1);
+    }
+
+    if (ACLLoadConfiguredUsers() == C_ERR) {
+        serverLog(LL_WARNING,
+            "Critical error while loading ACLs. Exiting.");
+        exit(1);
+    }
+
+    if (server.acl_filename[0] != '\0') {
+        sds errors = ACLLoadFromFile(server.acl_filename);
+        if (errors) {
+            serverLog(LL_WARNING,
+                "Aborting Redis startup because of ACL errors: %s", errors);
+            sdsfree(errors);
+            exit(1);
+        }
+    }
+}
+
 /* =============================================================================
  * ACL related commands
  * ==========================================================================*/
 
 /* ACL -- show and modify the configuration of ACL users.
  * ACL HELP
+ * ACL LOAD
  * ACL LIST
- * ACL SETUSER <username> ... user attribs ...
- * ACL DELUSER <username>
+ * ACL USERS
+ * ACL CAT [<category>]
+ * ACL SETUSER <username> ... acl rules ...
+ * ACL DELUSER <username> [...]
  * ACL GETUSER <username>
  */
 void aclCommand(client *c) {
@@ -1045,32 +1399,16 @@ void aclCommand(client *c) {
                 addReplyError(c,"The 'default' user cannot be removed");
                 return;
             }
+        }
+
+        for (int j = 2; j < c->argc; j++) {
+            sds username = ptrFromObj(c->argv[j]);
             user *u;
             if (raxRemove(Users,(unsigned char*)username,
                           sdslen(username),
                           (void**)&u))
             {
-                /* When a user is deleted we need to cycle the active
-                 * connections in order to kill all the pending ones that
-                 * are authenticated with such user. */
-                ACLFreeUser(u);
-                listIter li;
-                listNode *ln;
-                listRewind(server.clients,&li);
-                while ((ln = listNext(&li)) != NULL) {
-                    client *c = listNodeValue(ln);
-                    if (c->puser == u) {
-                        /* We'll free the conenction asynchronously, so
-                         * in theory to set a different user is not needed.
-                         * However if there are bugs in Redis, soon or later
-                         * this may result in some security hole: it's much
-                         * more defensive to set the default user and put
-                         * it in non authenticated mode. */
-                        c->puser = DefaultUser;
-                        c->authenticated = 0;
-                        freeClientAsync(c);
-                    }
-                }
+                ACLFreeUserAndKillClients(u);
                 deleted++;
             }
         }
@@ -1151,19 +1489,69 @@ void aclCommand(client *c) {
             }
         }
         raxStop(&ri);
-    } else if (!strcasecmp(sub,"whoami")) {
+    } else if (!strcasecmp(sub,"whoami") && c->argc == 2) {
         if (c->puser != NULL) {
             addReplyBulkCBuffer(c,c->puser->name,sdslen(c->puser->name));
         } else {
             addReplyNull(c);
         }
+    } else if (server.acl_filename[0] == '\0' &&
+               (!strcasecmp(sub,"load") || !strcasecmp(sub,"save")))
+    {
+        addReplyError(c,"This Redis instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a Redis configuration file set) in order to store users in the Redis configuration.");
+        return;
+    } else if (!strcasecmp(sub,"load") && c->argc == 2) {
+        sds errors = ACLLoadFromFile(server.acl_filename);
+        if (errors == NULL) {
+            addReply(c,shared.ok);
+        } else {
+            addReplyError(c,errors);
+            sdsfree(errors);
+        }
+    } else if (!strcasecmp(sub,"save") && c->argc == 2) {
+        if (ACLSaveToFile(server.acl_filename) == C_OK) {
+            addReply(c,shared.ok);
+        } else {
+            addReplyError(c,"There was an error trying to save the ACLs. "
+                            "Please check the server logs for more "
+                            "information");
+        }
+    } else if (!strcasecmp(sub,"cat") && c->argc == 2) {
+        void *dl = addReplyDeferredLen(c);
+        int j;
+        for (j = 0; ACLCommandCategories[j].flag != 0; j++)
+            addReplyBulkCString(c,ACLCommandCategories[j].name);
+        setDeferredArrayLen(c,dl,j);
+    } else if (!strcasecmp(sub,"cat") && c->argc == 3) {
+        uint64_t cflag = ACLGetCommandCategoryFlagByName(ptrFromObj(c->argv[2]));
+        if (cflag == 0) {
+            addReplyErrorFormat(c, "Unknown category '%s'", (char*)ptrFromObj(c->argv[2]));
+            return;
+        }
+        int arraylen = 0;
+        void *dl = addReplyDeferredLen(c);
+        dictIterator *di = dictGetIterator(server.orig_commands);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            struct redisCommand *cmd = dictGetVal(de);
+            if (cmd->flags & CMD_MODULE) continue;
+            if (cmd->flags & cflag) {
+                addReplyBulkCString(c,cmd->name);
+                arraylen++;
+            }
+        }
+        dictReleaseIterator(di);
+        setDeferredArrayLen(c,dl,arraylen);
     } else if (!strcasecmp(sub,"help")) {
         const char *help[] = {
+"LOAD                              -- Reload users from the ACL file.",
 "LIST                              -- Show user details in config file format.",
 "USERS                             -- List all the registered usernames.",
 "SETUSER <username> [attribs ...]  -- Create or modify a user.",
 "GETUSER <username>                -- Get the user details.",
-"DELUSER <username>                -- Delete a user.",
+"DELUSER <username> [...]          -- Delete a list of users.",
+"CAT                               -- List available categories.",
+"CAT <category>                    -- List commands inside category.",
 "WHOAMI                            -- Return the current connection username.",
 NULL
         };
@@ -1171,4 +1559,16 @@ NULL
     } else {
         addReplySubcommandSyntaxError(c);
     }
+}
+
+void addReplyCommandCategories(client *c, struct redisCommand *cmd) {
+    int flagcount = 0;
+    void *flaglen = addReplyDeferredLen(c);
+    for (int j = 0; ACLCommandCategories[j].flag != 0; j++) {
+        if (cmd->flags & ACLCommandCategories[j].flag) {
+            addReplyStatusFormat(c, "@%s", ACLCommandCategories[j].name);
+            flagcount++;
+        }
+    }
+    setDeferredSetLen(c, flaglen, flagcount);
 }

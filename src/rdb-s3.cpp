@@ -1,7 +1,7 @@
 extern "C" {
 #include "rio.h"
-#include "server.h"
 }
+#include "server.h"
 #include <unistd.h>
 #include <sys/wait.h>
 

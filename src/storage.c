@@ -1,5 +1,7 @@
 #include "server.h"
 
+#ifdef USE_MEMKIND
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <memkind.h>
@@ -265,3 +267,5 @@ void handle_postfork_child()
     memkind_pmem_remapfd(mkdisk, fdNew);
     close(fdOriginal);
 }
+
+#endif // USE_MEMKIND

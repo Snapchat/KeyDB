@@ -484,6 +484,7 @@ void moduleFreeContext(RedisModuleCtx *ctx) {
  * details needed to correctly replicate commands. */
 void moduleHandlePropagationAfterCommandCallback(RedisModuleCtx *ctx) {
     client *c = ctx->client;
+    serverAssert(aeThreadOwnsLock());
 
     if (c->flags & CLIENT_LUA) return;
 
@@ -2696,7 +2697,7 @@ RedisModuleCallReply *RM_Call(RedisModuleCtx *ctx, const char *cmdname, const ch
 
     /* Create the client and dispatch the command. */
     va_start(ap, fmt);
-    c = createClient(-1);
+    c = createClient(-1, IDX_EVENT_LOOP_MAIN);
     c->puser = NULL; /* Root user. */
     argv = moduleCreateArgvFromUserFormat(cmdname,fmt,&argc,&flags,ap);
     replicate = flags & REDISMODULE_ARGV_REPLICATE;
@@ -3546,7 +3547,7 @@ RedisModuleBlockedClient *RM_BlockClient(RedisModuleCtx *ctx, RedisModuleCmdFunc
     bc->disconnect_callback = NULL; /* Set by RM_SetDisconnectCallback() */
     bc->free_privdata = free_privdata;
     bc->privdata = NULL;
-    bc->reply_client = createClient(-1);
+    bc->reply_client = createClient(-1, IDX_EVENT_LOOP_MAIN);
     bc->reply_client->flags |= CLIENT_MODULE;
     bc->dbid = c->db->id;
     c->bpop.timeout = timeout_ms ? (mstime()+timeout_ms) : 0;
@@ -3623,6 +3624,7 @@ void RM_SetDisconnectCallback(RedisModuleBlockedClient *bc, RedisModuleDisconnec
 void moduleHandleBlockedClients(void) {
     listNode *ln;
     RedisModuleBlockedClient *bc;
+    serverAssert(aeThreadOwnsLock());
 
     pthread_mutex_lock(&moduleUnblockedClientsMutex);
     /* Here we unblock all the pending clients blocked in modules operations
@@ -3633,8 +3635,15 @@ void moduleHandleBlockedClients(void) {
         ln = listFirst(moduleUnblockedClients);
         bc = ln->value;
         client *c = bc->client;
+        serverAssert(c->iel == IDX_EVENT_LOOP_MAIN);
         listDelNode(moduleUnblockedClients,ln);
         pthread_mutex_unlock(&moduleUnblockedClientsMutex);
+
+        if (c)
+        {
+            AssertCorrectThread(c);
+            fastlock_lock(&c->lock);
+        }
 
         /* Release the lock during the loop, as long as we don't
          * touch the shared list. */
@@ -3692,13 +3701,15 @@ void moduleHandleBlockedClients(void) {
                 !(c->flags & CLIENT_PENDING_WRITE))
             {
                 c->flags |= CLIENT_PENDING_WRITE;
-                listAddNodeHead(server.clients_pending_write,c);
+                AssertCorrectThread(c);
+                listAddNodeHead(server.rgthreadvar[c->iel].clients_pending_write,c);
             }
         }
 
         /* Free 'bc' only after unblocking the client, since it is
          * referenced in the client blocking context, and must be valid
          * when calling unblockClient(). */
+        fastlock_unlock(&c->lock);
         zfree(bc);
 
         /* Lock again before to iterate the loop. */
@@ -3794,7 +3805,7 @@ RedisModuleCtx *RM_GetThreadSafeContext(RedisModuleBlockedClient *bc) {
      * access it safely from another thread, so we create a fake client here
      * in order to keep things like the currently selected database and similar
      * things. */
-    ctx->client = createClient(-1);
+    ctx->client = createClient(-1, IDX_EVENT_LOOP_MAIN);
     if (bc) selectDb(ctx->client,bc->dbid);
     return ctx;
 }
@@ -4300,7 +4311,7 @@ RedisModuleTimerID RM_CreateTimer(RedisModuleCtx *ctx, mstime_t period, RedisMod
         if (memcmp(ri.key,&key,sizeof(key)) == 0) {
             /* This is the first key, we need to re-install the timer according
              * to the just added event. */
-            aeDeleteTimeEvent(server.el,aeTimer);
+            aeDeleteTimeEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,aeTimer);
             aeTimer = -1;
         }
         raxStop(&ri);
@@ -4309,7 +4320,7 @@ RedisModuleTimerID RM_CreateTimer(RedisModuleCtx *ctx, mstime_t period, RedisMod
     /* If we have no main timer (the old one was invalidated, or this is the
      * first module timer we have), install one. */
     if (aeTimer == -1)
-        aeTimer = aeCreateTimeEvent(server.el,period,moduleTimerHandler,NULL,NULL);
+        aeTimer = aeCreateTimeEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,period,moduleTimerHandler,NULL,NULL);
 
     return key;
 }
@@ -4659,7 +4670,7 @@ void moduleInitModulesSystem(void) {
 
     /* Set up the keyspace notification susbscriber list and static client */
     moduleKeyspaceSubscribers = listCreate();
-    moduleFreeContextReusedClient = createClient(-1);
+    moduleFreeContextReusedClient = createClient(-1, IDX_EVENT_LOOP_MAIN);
     moduleFreeContextReusedClient->flags |= CLIENT_MODULE;
     moduleFreeContextReusedClient->puser = NULL; /* root user. */
 

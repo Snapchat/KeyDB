@@ -100,6 +100,7 @@ int getTimeoutFromObjectOrReply(client *c, robj *object, mstime_t *timeout, int 
  * flag is set client query buffer is not longer processed, but accumulated,
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
+    serverAssert(aeThreadOwnsLock());
     c->flags |= CLIENT_BLOCKED;
     c->btype = btype;
     server.blocked_clients++;
@@ -109,15 +110,22 @@ void blockClient(client *c, int btype) {
 /* This function is called in the beforeSleep() function of the event loop
  * in order to process the pending input buffer of clients that were
  * unblocked after a blocking operation. */
-void processUnblockedClients(void) {
+void processUnblockedClients(int iel) {
+    serverAssert(aeThreadOwnsLock());
+
     listNode *ln;
     client *c;
+    list *unblocked_clients = server.rgthreadvar[iel].unblocked_clients;
+    serverAssert(iel == (serverTL - server.rgthreadvar));
 
-    while (listLength(server.unblocked_clients)) {
-        ln = listFirst(server.unblocked_clients);
+    while (listLength(unblocked_clients)) {
+        ln = listFirst(unblocked_clients);
         serverAssert(ln != NULL);
         c = ln->value;
-        listDelNode(server.unblocked_clients,ln);
+        listDelNode(unblocked_clients,ln);
+        AssertCorrectThread(c);
+        
+        fastlock_lock(&c->lock);
         c->flags &= ~CLIENT_UNBLOCKED;
 
         /* Process remaining data in the input buffer, unless the client
@@ -129,6 +137,7 @@ void processUnblockedClients(void) {
                 processInputBufferAndReplicate(c);
             }
         }
+        fastlock_unlock(&c->lock);
     }
 }
 
@@ -151,15 +160,19 @@ void processUnblockedClients(void) {
 void queueClientForReprocessing(client *c) {
     /* The client may already be into the unblocked list because of a previous
      * blocking operation, don't add back it into the list multiple times. */
+    serverAssert(aeThreadOwnsLock());
+    fastlock_lock(&c->lock);
     if (!(c->flags & CLIENT_UNBLOCKED)) {
         c->flags |= CLIENT_UNBLOCKED;
-        listAddNodeTail(server.unblocked_clients,c);
+        listAddNodeTail(server.rgthreadvar[c->iel].unblocked_clients,c);
     }
+    fastlock_unlock(&c->lock);
 }
 
 /* Unblock a client calling the right function depending on the kind
  * of operation the client is blocking for. */
 void unblockClient(client *c) {
+    serverAssert(aeThreadOwnsLock());
     if (c->btype == BLOCKED_LIST ||
         c->btype == BLOCKED_ZSET ||
         c->btype == BLOCKED_STREAM) {
@@ -205,20 +218,23 @@ void replyToBlockedClientTimedOut(client *c) {
  * The semantics is to send an -UNBLOCKED error to the client, disconnecting
  * it at the same time. */
 void disconnectAllBlockedClients(void) {
+    serverAssert(aeThreadOwnsLock());
     listNode *ln;
     listIter li;
 
     listRewind(server.clients,&li);
     while((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
-
+        
+        fastlock_lock(&c->lock);
         if (c->flags & CLIENT_BLOCKED) {
-            addReplySds(c,sdsnew(
+            addReplySdsAsync(c,sdsnew(
                 "-UNBLOCKED force unblock from blocking operation, "
                 "instance state changed (master -> replica?)\r\n"));
             unblockClient(c);
             c->flags |= CLIENT_CLOSE_AFTER_REPLY;
         }
+        fastlock_unlock(&c->lock);
     }
 }
 
@@ -244,6 +260,7 @@ void disconnectAllBlockedClients(void) {
  * be used only for a single type, like virtually any Redis application will
  * do, the function is already fair. */
 void handleClientsBlockedOnKeys(void) {
+    serverAssert(aeThreadOwnsLock());
     while(listLength(server.ready_keys) != 0) {
         list *l;
 
@@ -297,6 +314,7 @@ void handleClientsBlockedOnKeys(void) {
                              * freed by the next unblockClient()
                              * call. */
                             if (dstkey) incrRefCount(dstkey);
+                            fastlock_lock(&receiver->lock);
                             unblockClient(receiver);
 
                             if (serveClientBlockedOnList(receiver,
@@ -309,6 +327,7 @@ void handleClientsBlockedOnKeys(void) {
                             }
 
                             if (dstkey) decrRefCount(dstkey);
+                            fastlock_unlock(&receiver->lock);
                             decrRefCount(value);
                         } else {
                             break;
@@ -348,6 +367,7 @@ void handleClientsBlockedOnKeys(void) {
                             continue;
                         }
 
+                        fastlock_lock(&receiver->lock);
                         int where = (receiver->lastcmd &&
                                      receiver->lastcmd->proc == bzpopminCommand)
                                      ? ZSET_MIN : ZSET_MAX;
@@ -365,6 +385,7 @@ void handleClientsBlockedOnKeys(void) {
                         incrRefCount(rl->key);
                         propagate(cmd,receiver->db->id,
                                   argv,2,PROPAGATE_AOF|PROPAGATE_REPL);
+                        fastlock_unlock(&receiver->lock);
                         decrRefCount(argv[0]);
                         decrRefCount(argv[1]);
                     }
@@ -407,10 +428,12 @@ void handleClientsBlockedOnKeys(void) {
                             /* If the group was not found, send an error
                              * to the consumer. */
                             if (!group) {
-                                addReplyError(receiver,
+                                fastlock_lock(&receiver->lock);
+                                addReplyErrorAsync(receiver,
                                     "-NOGROUP the consumer group this client "
                                     "was blocked on no longer exists");
                                 unblockClient(receiver);
+                                fastlock_unlock(&receiver->lock);
                                 continue;
                             } else {
                                 *gt = group->last_id;
@@ -432,17 +455,19 @@ void handleClientsBlockedOnKeys(void) {
                                 noack = receiver->bpop.xread_group_noack;
                             }
 
+                            fastlock_lock(&receiver->lock);
+
                             /* Emit the two elements sub-array consisting of
                              * the name of the stream and the data we
                              * extracted from it. Wrapped in a single-item
                              * array, since we have just one key. */
                             if (receiver->resp == 2) {
-                                addReplyArrayLen(receiver,1);
-                                addReplyArrayLen(receiver,2);
+                                addReplyArrayLenAsync(receiver,1);
+                                addReplyArrayLenAsync(receiver,2);
                             } else {
-                                addReplyMapLen(receiver,1);
+                                addReplyMapLenAsync(receiver,1);
                             }
-                            addReplyBulk(receiver,rl->key);
+                            addReplyBulkAsync(receiver,rl->key);
 
                             streamPropInfo pi = {
                                 rl->key,
@@ -457,6 +482,7 @@ void handleClientsBlockedOnKeys(void) {
                              * valid, so we must do the setup above before
                              * this call. */
                             unblockClient(receiver);
+                            fastlock_unlock(&receiver->lock);
                         }
                     }
                 }

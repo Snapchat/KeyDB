@@ -1,6 +1,7 @@
 /* Asynchronous replication implementation.
  *
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2019 John Sully <john at eqalpha dot com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -36,6 +37,7 @@
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <mutex>
 
 void replicationDiscardCachedMaster(void);
 void replicationResurrectCachedMaster(int newfd);
@@ -76,7 +78,7 @@ char *replicationGetSlaveName(client *c) {
 
 void createReplicationBacklog(void) {
     serverAssert(server.repl_backlog == NULL);
-    server.repl_backlog = zmalloc(server.repl_backlog_size, MALLOC_LOCAL);
+    server.repl_backlog = (char*)zmalloc(server.repl_backlog_size, MALLOC_LOCAL);
     server.repl_backlog_histlen = 0;
     server.repl_backlog_idx = 0;
 
@@ -105,7 +107,7 @@ void resizeReplicationBacklog(long long newsize) {
          * worse often we need to alloc additional space before freeing the
          * old buffer. */
         zfree(server.repl_backlog);
-        server.repl_backlog = zmalloc(server.repl_backlog_size, MALLOC_LOCAL);
+        server.repl_backlog = (char*)zmalloc(server.repl_backlog_size, MALLOC_LOCAL);
         server.repl_backlog_histlen = 0;
         server.repl_backlog_idx = 0;
         /* Next byte we have is... the next since the buffer is empty. */
@@ -114,6 +116,7 @@ void resizeReplicationBacklog(long long newsize) {
 }
 
 void freeReplicationBacklog(void) {
+    serverAssert(aeThreadOwnsLock());
     serverAssert(listLength(server.slaves) == 0);
     zfree(server.repl_backlog);
     server.repl_backlog = NULL;
@@ -124,7 +127,8 @@ void freeReplicationBacklog(void) {
  * server.master_repl_offset, because there is no case where we want to feed
  * the backlog without incrementing the offset. */
 void feedReplicationBacklog(void *ptr, size_t len) {
-    unsigned char *p = ptr;
+    serverAssert(aeThreadOwnsLock());
+    unsigned char *p = (unsigned char*)ptr;
 
     server.master_repl_offset += len;
 
@@ -159,7 +163,7 @@ void feedReplicationBacklogWithObject(robj *o) {
         len = ll2string(llstr,sizeof(llstr),(long)ptrFromObj(o));
         p = llstr;
     } else {
-        len = sdslen(ptrFromObj(o));
+        len = sdslen((sds)ptrFromObj(o));
         p = ptrFromObj(o);
     }
     feedReplicationBacklog(p,len);
@@ -175,6 +179,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listIter li;
     int j, len;
     char llstr[LONG_STR_SIZE];
+    serverAssert(aeThreadOwnsLock());
 
     /* If the instance is not a top level master, return ASAP: we'll just proxy
      * the stream of data we receive from our master instead, in order to
@@ -189,6 +194,12 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
     /* We can't have slaves attached and no backlog. */
     serverAssert(!(listLength(slaves) != 0 && server.repl_backlog == NULL));
+
+    /* Get the lock on all slaves */
+    listRewind(slaves,&li);
+    while((ln = listNext(&li))) {
+        ((client*)ln->value)->lock.lock();
+    }
 
     /* Send SELECT command to every slave if needed. */
     if (server.slaveseldb != dictid) {
@@ -213,9 +224,9 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         /* Send it to slaves. */
         listRewind(slaves,&li);
         while((ln = listNext(&li))) {
-            client *slave = ln->value;
+            client *slave = (client*)ln->value;
             if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
-            addReply(slave,selectcmd);
+            addReplyAsync(slave,selectcmd);
         }
 
         if (dictid < 0 || dictid >= PROTO_SHARED_SELECT_CMDS)
@@ -253,7 +264,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     /* Write the command to every slave. */
     listRewind(slaves,&li);
     while((ln = listNext(&li))) {
-        client *slave = ln->value;
+        client *slave = (client*)ln->value;
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
@@ -263,12 +274,18 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
          * or are already in sync with the master. */
 
         /* Add the multi bulk length. */
-        addReplyArrayLen(slave,argc);
+        addReplyArrayLenAsync(slave,argc);
 
         /* Finally any additional argument that was not stored inside the
          * static buffer if any (from j to argc). */
         for (j = 0; j < argc; j++)
-            addReplyBulk(slave,argv[j]);
+            addReplyBulkAsync(slave,argv[j]);
+    }
+
+    /* Release the lock on all slaves */
+    listRewind(slaves,&li);
+    while((ln = listNext(&li))) {
+        ((client*)ln->value)->lock.unlock();
     }
 }
 
@@ -292,12 +309,16 @@ void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t bufle
     if (server.repl_backlog) feedReplicationBacklog(buf,buflen);
     listRewind(slaves,&li);
     while((ln = listNext(&li))) {
-        client *slave = ln->value;
+        client *slave = (client*)ln->value;
+        std::lock_guard<decltype(slave->lock)> ulock(slave->lock);
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
-        addReplyProto(slave,buf,buflen);
+        addReplyProtoAsync(slave,buf,buflen);
     }
+    
+    if (listLength(slaves))
+        ProcessPendingAsyncWrites();    // flush them to their respective threads
 }
 
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc) {
@@ -307,6 +328,7 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
     sds cmdrepr = sdsnew("+");
     robj *cmdobj;
     struct timeval tv;
+    serverAssert(aeThreadOwnsLock());
 
     gettimeofday(&tv,NULL);
     cmdrepr = sdscatprintf(cmdrepr,"%ld.%06ld ",(long)tv.tv_sec,(long)tv.tv_usec);
@@ -323,7 +345,7 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
             cmdrepr = sdscatprintf(cmdrepr, "\"%ld\"", (long)ptrFromObj(argv[j]));
         } else {
             cmdrepr = sdscatrepr(cmdrepr,(char*)ptrFromObj(argv[j]),
-                        sdslen(ptrFromObj(argv[j])));
+                        sdslen((sds)ptrFromObj(argv[j])));
         }
         if (j != argc-1)
             cmdrepr = sdscatlen(cmdrepr," ",1);
@@ -333,8 +355,9 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
 
     listRewind(monitors,&li);
     while((ln = listNext(&li))) {
-        client *monitor = ln->value;
-        addReply(monitor,cmdobj);
+        client *monitor = (client*)ln->value;
+        std::lock_guard<decltype(monitor->lock)> lock(monitor->lock);
+        addReplyAsync(monitor,cmdobj);
     }
     decrRefCount(cmdobj);
 }
@@ -445,8 +468,9 @@ int replicationSetupSlaveForFullResync(client *slave, long long offset) {
  * On success return C_OK, otherwise C_ERR is returned and we proceed
  * with the usual full resync. */
 int masterTryPartialResynchronization(client *c) {
+    serverAssert(aeThreadOwnsLock());
     long long psync_offset, psync_len;
-    char *master_replid = ptrFromObj(c->argv[1]);
+    char *master_replid = (char*)ptrFromObj(c->argv[1]);
     char buf[128];
     int buflen;
 
@@ -519,7 +543,10 @@ int masterTryPartialResynchronization(client *c) {
         buflen = snprintf(buf,sizeof(buf),"+CONTINUE\r\n");
     }
     if (write(c->fd,buf,buflen) != buflen) {
-        freeClientAsync(c);
+        if (FCorrectThread(c))
+            freeClient(c);
+        else
+            freeClientAsync(c);
         return C_OK;
     }
     psync_len = addReplyReplicationBacklog(c,psync_offset);
@@ -561,6 +588,7 @@ need_full_resync:
  *
  * Returns C_OK on success or C_ERR otherwise. */
 int startBgsaveForReplication(int mincapa) {
+    serverAssert(aeThreadOwnsLock());
     int retval;
     int socket_target = server.repl_diskless_sync && (mincapa & SLAVE_CAPA_EOF);
     listIter li;
@@ -590,7 +618,7 @@ int startBgsaveForReplication(int mincapa) {
         serverLog(LL_WARNING,"BGSAVE for replication failed");
         listRewind(server.slaves,&li);
         while((ln = listNext(&li))) {
-            client *slave = ln->value;
+            client *slave = (client*)ln->value;
 
             if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
                 slave->flags &= ~CLIENT_SLAVE;
@@ -608,7 +636,7 @@ int startBgsaveForReplication(int mincapa) {
     if (!socket_target) {
         listRewind(server.slaves,&li);
         while((ln = listNext(&li))) {
-            client *slave = ln->value;
+            client *slave = (client*)ln->value;
 
             if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
                     replicationSetupSlaveForFullResync(slave,
@@ -656,12 +684,12 @@ void syncCommand(client *c) {
      *
      * So the slave knows the new replid and offset to try a PSYNC later
      * if the connection with the master is lost. */
-    if (!strcasecmp(ptrFromObj(c->argv[0]),"psync")) {
+    if (!strcasecmp((const char*)ptrFromObj(c->argv[0]),"psync")) {
         if (masterTryPartialResynchronization(c) == C_OK) {
             server.stat_sync_partial_ok++;
             return; /* No full resync needed, return. */
         } else {
-            char *master_replid = ptrFromObj(c->argv[1]);
+            char *master_replid = (char*)ptrFromObj(c->argv[1]);
 
             /* Increment stats for failed PSYNCs, but only if the
              * replid is not "?", as this is used by slaves to force a full
@@ -711,9 +739,10 @@ void syncCommand(client *c) {
 
         listRewind(server.slaves,&li);
         while((ln = listNext(&li))) {
-            slave = ln->value;
+            slave = (client*)ln->value;
             if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END) break;
         }
+        
         /* To attach this slave, we check that it has at least all the
          * capabilities of the slave that triggered the current BGSAVE. */
         if (ln && ((c->slave_capa & slave->slave_capa) == slave->slave_capa)) {
@@ -785,15 +814,15 @@ void replconfCommand(client *c) {
 
     /* Process every option-value pair. */
     for (j = 1; j < c->argc; j+=2) {
-        if (!strcasecmp(ptrFromObj(c->argv[j]),"listening-port")) {
+        if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"listening-port")) {
             long port;
 
             if ((getLongFromObjectOrReply(c,c->argv[j+1],
                     &port,NULL) != C_OK))
                 return;
             c->slave_listening_port = port;
-        } else if (!strcasecmp(ptrFromObj(c->argv[j]),"ip-address")) {
-            sds ip = ptrFromObj(c->argv[j+1]);
+        } else if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"ip-address")) {
+            sds ip = (sds)ptrFromObj(c->argv[j+1]);
             if (sdslen(ip) < sizeof(c->slave_ip)) {
                 memcpy(c->slave_ip,ip,sdslen(ip)+1);
             } else {
@@ -801,13 +830,13 @@ void replconfCommand(client *c) {
                     "replica instance is too long: %zd bytes", sdslen(ip));
                 return;
             }
-        } else if (!strcasecmp(ptrFromObj(c->argv[j]),"capa")) {
+        } else if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"capa")) {
             /* Ignore capabilities not understood by this master. */
-            if (!strcasecmp(ptrFromObj(c->argv[j+1]),"eof"))
+            if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]),"eof"))
                 c->slave_capa |= SLAVE_CAPA_EOF;
-            else if (!strcasecmp(ptrFromObj(c->argv[j+1]),"psync2"))
+            else if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]),"psync2"))
                 c->slave_capa |= SLAVE_CAPA_PSYNC2;
-        } else if (!strcasecmp(ptrFromObj(c->argv[j]),"ack")) {
+        } else if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"ack")) {
             /* REPLCONF ACK is used by slave to inform the master the amount
              * of replication stream that it processed so far. It is an
              * internal only command that normal clients should never use. */
@@ -826,7 +855,7 @@ void replconfCommand(client *c) {
                 putSlaveOnline(c);
             /* Note: this command does not reply anything! */
             return;
-        } else if (!strcasecmp(ptrFromObj(c->argv[j]),"getack")) {
+        } else if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"getack")) {
             /* REPLCONF GETACK is used in order to request an ACK ASAP
              * to the slave. */
             if (server.masterhost && server.master) replicationSendAck();
@@ -856,7 +885,8 @@ void putSlaveOnline(client *slave) {
     slave->replstate = SLAVE_STATE_ONLINE;
     slave->repl_put_online_on_ack = 0;
     slave->repl_ack_time = server.unixtime; /* Prevent false timeout. */
-    if (aeCreateFileEvent(server.el, slave->fd, AE_WRITABLE,
+    AssertCorrectThread(slave);
+    if (aeCreateFileEvent(server.rgthreadvar[slave->iel].el, slave->fd, AE_WRITABLE|AE_WRITE_THREADSAFE,
         sendReplyToClient, slave) == AE_ERR) {
         serverLog(LL_WARNING,"Unable to register writable event for replica bulk transfer: %s", strerror(errno));
         freeClient(slave);
@@ -868,9 +898,10 @@ void putSlaveOnline(client *slave) {
 }
 
 void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
-    client *slave = privdata;
+    client *slave = (client*)privdata;
     UNUSED(el);
     UNUSED(mask);
+    serverAssert(ielFromEventLoop(el) == slave->iel);
     char buf[PROTO_IOBUF_LEN];
     ssize_t nwritten, buflen;
 
@@ -878,6 +909,7 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
      * replication process. Currently the preamble is just the bulk count of
      * the file in the form "$<length>\r\n". */
     if (slave->replpreamble) {
+        serverAssert(slave->replpreamble[0] == '$');
         nwritten = write(fd,slave->replpreamble,sdslen(slave->replpreamble));
         if (nwritten == -1) {
             serverLog(LL_VERBOSE,"Write error sending RDB preamble to replica: %s",
@@ -918,7 +950,7 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
     if (slave->repldboff == slave->repldbsize) {
         close(slave->repldbfd);
         slave->repldbfd = -1;
-        aeDeleteFileEvent(server.el,slave->fd,AE_WRITABLE);
+        aeDeleteFileEvent(el,slave->fd,AE_WRITABLE);
         putSlaveOnline(slave);
     }
 }
@@ -937,20 +969,22 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
  * otherwise C_ERR is passed to the function.
  * The 'type' argument is the type of the child that terminated
  * (if it had a disk or socket target). */
-void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
+void updateSlavesWaitingBgsave(int bgsaveerr, int type)
+{
     listNode *ln;
+    listIter li;
     int startbgsave = 0;
     int mincapa = -1;
-    listIter li;
+    serverAssert(aeThreadOwnsLock());
 
     listRewind(server.slaves,&li);
     while((ln = listNext(&li))) {
-        client *slave = ln->value;
+        client *slave = (client*)ln->value;
 
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
             startbgsave = 1;
             mincapa = (mincapa == -1) ? slave->slave_capa :
-                                        (mincapa & slave->slave_capa);
+                        (mincapa & slave->slave_capa);
         } else if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
             struct redis_stat buf;
 
@@ -973,13 +1007,19 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
                 slave->repl_ack_time = server.unixtime; /* Timeout otherwise. */
             } else {
                 if (bgsaveerr != C_OK) {
-                    freeClient(slave);
+                    if (FCorrectThread(slave))
+                        freeClient(slave);
+                    else
+                        freeClientAsync(slave);
                     serverLog(LL_WARNING,"SYNC failed. BGSAVE child returned an error");
                     continue;
                 }
                 if ((slave->repldbfd = open(server.rdb_filename,O_RDONLY)) == -1 ||
                     redis_fstat(slave->repldbfd,&buf) == -1) {
-                    freeClient(slave);
+                    if (FCorrectThread(slave))
+                        freeClient(slave);
+                    else
+                        freeClientAsync(slave);
                     serverLog(LL_WARNING,"SYNC failed. Can't open/stat DB after BGSAVE: %s", strerror(errno));
                     continue;
                 }
@@ -989,15 +1029,28 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
                 slave->replpreamble = sdscatprintf(sdsempty(),"$%lld\r\n",
                     (unsigned long long) slave->repldbsize);
 
-                aeDeleteFileEvent(server.el,slave->fd,AE_WRITABLE);
-                if (aeCreateFileEvent(server.el, slave->fd, AE_WRITABLE, sendBulkToSlave, slave) == AE_ERR) {
-                    freeClient(slave);
-                    continue;
+                if (FCorrectThread(slave))
+                {
+                    aeDeleteFileEvent(server.rgthreadvar[slave->iel].el,slave->fd,AE_WRITABLE);
+                    if (aeCreateFileEvent(server.rgthreadvar[slave->iel].el, slave->fd, AE_WRITABLE, sendBulkToSlave, slave) == AE_ERR) {
+                        freeClient(slave);
+                    }
+                }
+                else
+                {
+                    aePostFunction(server.rgthreadvar[slave->iel].el, [slave]{
+                        aeDeleteFileEvent(server.rgthreadvar[slave->iel].el,slave->fd,AE_WRITABLE);
+                        if (aeCreateFileEvent(server.rgthreadvar[slave->iel].el, slave->fd, AE_WRITABLE, sendBulkToSlave, slave) == AE_ERR) {
+                            freeClient(slave);
+                        }
+                    });
                 }
             }
         }
     }
-    if (startbgsave) startBgsaveForReplication(mincapa);
+
+    if (startbgsave)
+        startBgsaveForReplication(mincapa);
 }
 
 /* Change the current instance replication ID with a new, random one.
@@ -1075,7 +1128,7 @@ void replicationEmptyDbCallback(void *privdata) {
  * performed, this function materializes the master client we store
  * at server.master, starting from the specified file descriptor. */
 void replicationCreateMasterClient(int fd, int dbid) {
-    server.master = createClient(fd);
+    server.master = createClient(fd, serverTL - server.rgthreadvar);
     server.master->flags |= CLIENT_MASTER;
     server.master->authenticated = 1;
     server.master->reploff = server.master_initial_offset;
@@ -1112,11 +1165,17 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(privdata);
     UNUSED(mask);
 
+    serverAssert(aeThreadOwnsLock());
+
     /* Static vars used to hold the EOF mark, and the last bytes received
      * form the server: when they match, we reached the end of the transfer. */
     static char eofmark[CONFIG_RUN_ID_SIZE];
     static char lastbytes[CONFIG_RUN_ID_SIZE];
     static int usemark = 0;
+
+    /* When a mark is used, we want to detect EOF asap in order to avoid
+     * writing the EOF mark into the file... */
+    int eof_reached = 0;
 
     /* If repl_transfer_size == -1 we still have to read the bulk length
      * from the master reply. */
@@ -1189,10 +1248,6 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
         return;
     }
     server.stat_net_input_bytes += nread;
-
-    /* When a mark is used, we want to detect EOF asap in order to avoid
-     * writing the EOF mark into the file... */
-    int eof_reached = 0;
 
     if (usemark) {
         /* Update the last bytes array, and check if it matches our delimiter.*/
@@ -1276,7 +1331,7 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
          * handler, otherwise it will get called recursively since
          * rdbLoad() will call the event loop to process events from time to
          * time for non blocking loading. */
-        aeDeleteFileEvent(server.el,server.repl_transfer_s,AE_READABLE);
+        aeDeleteFileEvent(el,server.repl_transfer_s,AE_READABLE);
         serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Loading DB in memory");
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
         if (rdbLoad(server.rdb_filename,&rsi) != C_OK) {
@@ -1435,8 +1490,8 @@ char *sendSynchronousCommand(int flags, int fd, ...) {
 #define PSYNC_FULLRESYNC 3
 #define PSYNC_NOT_SUPPORTED 4
 #define PSYNC_TRY_LATER 5
-int slaveTryPartialResynchronization(int fd, int read_reply) {
-    char *psync_replid;
+int slaveTryPartialResynchronization(aeEventLoop *el, int fd, int read_reply) {
+    const char *psync_replid;
     char psync_offset[32];
     sds reply;
 
@@ -1464,7 +1519,7 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
         if (reply != NULL) {
             serverLog(LL_WARNING,"Unable to send PSYNC to master: %s",reply);
             sdsfree(reply);
-            aeDeleteFileEvent(server.el,fd,AE_READABLE);
+            aeDeleteFileEvent(el,fd,AE_READABLE);
             return PSYNC_WRITE_ERROR;
         }
         return PSYNC_WAIT_REPLY;
@@ -1479,7 +1534,7 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
         return PSYNC_WAIT_REPLY;
     }
 
-    aeDeleteFileEvent(server.el,fd,AE_READABLE);
+    aeDeleteFileEvent(el,fd,AE_READABLE);
 
     if (!strncmp(reply,"+FULLRESYNC",11)) {
         char *replid = NULL, *offset = NULL;
@@ -1528,13 +1583,13 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
         char *end = reply+9;
         while(end[0] != '\r' && end[0] != '\n' && end[0] != '\0') end++;
         if (end-start == CONFIG_RUN_ID_SIZE) {
-            char new[CONFIG_RUN_ID_SIZE+1];
-            memcpy(new,start,CONFIG_RUN_ID_SIZE);
-            new[CONFIG_RUN_ID_SIZE] = '\0';
+            char sznew[CONFIG_RUN_ID_SIZE+1];
+            memcpy(sznew,start,CONFIG_RUN_ID_SIZE);
+            sznew[CONFIG_RUN_ID_SIZE] = '\0';
 
-            if (strcmp(new,server.cached_master->replid)) {
+            if (strcmp(sznew,server.cached_master->replid)) {
                 /* Master ID changed. */
-                serverLog(LL_WARNING,"Master replication ID changed to %s",new);
+                serverLog(LL_WARNING,"Master replication ID changed to %s",sznew);
 
                 /* Set the old ID as our ID2, up to the current offset+1. */
                 memcpy(server.replid2,server.cached_master->replid,
@@ -1543,8 +1598,8 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
 
                 /* Update the cached master ID and our own primary ID to the
                  * new one. */
-                memcpy(server.replid,new,sizeof(server.replid));
-                memcpy(server.cached_master->replid,new,sizeof(server.replid));
+                memcpy(server.replid,sznew,sizeof(server.replid));
+                memcpy(server.cached_master->replid,sznew,sizeof(server.replid));
 
                 /* Disconnect all the sub-slaves: they need to be notified. */
                 disconnectSlaves();
@@ -1596,6 +1651,7 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
 /* This handler fires when the non blocking connect was able to
  * establish a connection with the master. */
 void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
+    serverAssert(aeThreadOwnsLock());
     char tmpfile[256], *err = NULL;
     int dfd = -1, maxtries = 5;
     int sockerr = 0, psync_result;
@@ -1626,7 +1682,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         serverLog(LL_NOTICE,"Non blocking connect for SYNC fired the event.");
         /* Delete the writable event so that the readable event remains
          * registered and we can wait for the PONG reply. */
-        aeDeleteFileEvent(server.el,fd,AE_WRITABLE);
+        aeDeleteFileEvent(el,fd,AE_WRITABLE);
         server.repl_state = REPL_STATE_RECEIVE_PONG;
         /* Send the PING, don't check for errors at all, we have the timeout
          * that will take care about this. */
@@ -1661,7 +1717,13 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     /* AUTH with the master if required. */
     if (server.repl_state == REPL_STATE_SEND_AUTH) {
-        if (server.masterauth) {
+        if (server.masteruser && server.masterauth) {
+            err = sendSynchronousCommand(SYNC_CMD_WRITE,fd,"AUTH",
+                                         server.masteruser,server.masterauth,NULL);
+            if (err) goto write_error;
+            server.repl_state = REPL_STATE_RECEIVE_AUTH;
+            return;
+        } else if (server.masterauth) {
             err = sendSynchronousCommand(SYNC_CMD_WRITE,fd,"AUTH",server.masterauth,NULL);
             if (err) goto write_error;
             server.repl_state = REPL_STATE_RECEIVE_AUTH;
@@ -1775,7 +1837,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
      * and the global offset, to try a partial resync at the next
      * reconnection attempt. */
     if (server.repl_state == REPL_STATE_SEND_PSYNC) {
-        if (slaveTryPartialResynchronization(fd,0) == PSYNC_WRITE_ERROR) {
+        if (slaveTryPartialResynchronization(el,fd,0) == PSYNC_WRITE_ERROR) {
             err = sdsnew("Write error sending the PSYNC command.");
             goto write_error;
         }
@@ -1791,7 +1853,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         goto error;
     }
 
-    psync_result = slaveTryPartialResynchronization(fd,1);
+    psync_result = slaveTryPartialResynchronization(el,fd,1);
     if (psync_result == PSYNC_WAIT_REPLY) return; /* Try again later... */
 
     /* If the master is in an transient error, we should try to PSYNC
@@ -1841,7 +1903,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 
     /* Setup the non blocking download of the bulk file. */
-    if (aeCreateFileEvent(server.el,fd, AE_READABLE,readSyncBulkPayload,NULL)
+    if (aeCreateFileEvent(el,fd, AE_READABLE,readSyncBulkPayload,NULL)
             == AE_ERR)
     {
         serverLog(LL_WARNING,
@@ -1860,7 +1922,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
     return;
 
 error:
-    aeDeleteFileEvent(server.el,fd,AE_READABLE|AE_WRITABLE);
+    aeDeleteFileEvent(el,fd,AE_READABLE|AE_WRITABLE);
     if (dfd != -1) close(dfd);
     close(fd);
     server.repl_transfer_s = -1;
@@ -1884,7 +1946,7 @@ int connectWithMaster(void) {
         return C_ERR;
     }
 
-    if (aeCreateFileEvent(server.el,fd,AE_READABLE|AE_WRITABLE,syncWithMaster,NULL) ==
+    if (aeCreateFileEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,fd,AE_READABLE|AE_WRITABLE,syncWithMaster,NULL) ==
             AE_ERR)
     {
         close(fd);
@@ -1905,7 +1967,7 @@ int connectWithMaster(void) {
 void undoConnectWithMaster(void) {
     int fd = server.repl_transfer_s;
 
-    aeDeleteFileEvent(server.el,fd,AE_READABLE|AE_WRITABLE);
+    aeDeleteFileEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,fd,AE_READABLE|AE_WRITABLE);
     close(fd);
     server.repl_transfer_s = -1;
 }
@@ -1952,7 +2014,10 @@ void replicationSetMaster(char *ip, int port) {
     server.masterhost = sdsnew(ip);
     server.masterport = port;
     if (server.master) {
-        freeClient(server.master);
+        if (FCorrectThread(server.master))
+            freeClient(server.master);
+        else
+            freeClientAsync(server.master);
     }
     disconnectAllBlockedClients(); /* Clients blocked in master, now slave. */
 
@@ -1976,7 +2041,12 @@ void replicationUnsetMaster(void) {
      * used as secondary ID up to the current offset, and a new replication
      * ID is created to continue with a new replication history. */
     shiftReplicationId();
-    if (server.master) freeClient(server.master);
+    if (server.master) {
+        if (FCorrectThread(server.master))
+            freeClient(server.master);
+        else
+            freeClientAsync(server.master);
+    }
     replicationDiscardCachedMaster();
     cancelReplicationHandshake();
     /* Disconnecting all the slaves is required: we need to inform slaves
@@ -2020,8 +2090,8 @@ void replicaofCommand(client *c) {
 
     /* The special host/port combination "NO" "ONE" turns the instance
      * into a master. Otherwise the new master address is set. */
-    if (!strcasecmp(ptrFromObj(c->argv[1]),"no") &&
-        !strcasecmp(ptrFromObj(c->argv[2]),"one")) {
+    if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"no") &&
+        !strcasecmp((const char*)ptrFromObj(c->argv[2]),"one")) {
         if (server.masterhost) {
             replicationUnsetMaster();
             sds client = catClientInfoString(sdsempty(),c);
@@ -2036,21 +2106,21 @@ void replicaofCommand(client *c) {
             return;
 
         /* Check if we are already attached to the specified slave */
-        if (server.masterhost && !strcasecmp(server.masterhost,ptrFromObj(c->argv[1]))
+        if (server.masterhost && !strcasecmp(server.masterhost,(const char*)ptrFromObj(c->argv[1]))
             && server.masterport == port) {
             serverLog(LL_NOTICE,"REPLICAOF would result into synchronization with the master we are already connected with. No operation performed.");
-            addReplySds(c,sdsnew("+OK Already connected to specified master\r\n"));
+            addReplySdsAsync(c,sdsnew("+OK Already connected to specified master\r\n"));
             return;
         }
         /* There was no previous master or the user specified a different one,
          * we can continue. */
-        replicationSetMaster(ptrFromObj(c->argv[1]), port);
+        replicationSetMaster((char*)ptrFromObj(c->argv[1]), port);
         sds client = catClientInfoString(sdsempty(),c);
         serverLog(LL_NOTICE,"REPLICAOF %s:%d enabled (user request from '%s')",
             server.masterhost, server.masterport, client);
         sdsfree(client);
     }
-    addReply(c,shared.ok);
+    addReplyAsync(c,shared.ok);
 }
 
 /* ROLE command: provide information about the role of the instance
@@ -2069,7 +2139,7 @@ void roleCommand(client *c) {
         mbcount = addReplyDeferredLen(c);
         listRewind(server.slaves,&li);
         while((ln = listNext(&li))) {
-            client *slave = ln->value;
+            client *slave = (client*)ln->value;
             char ip[NET_IP_STR_LEN], *slaveip = slave->slave_ip;
 
             if (slaveip[0] == '\0') {
@@ -2086,7 +2156,7 @@ void roleCommand(client *c) {
         }
         setDeferredArrayLen(c,mbcount,slaves);
     } else {
-        char *slavestate = NULL;
+        const char *slavestate = NULL;
 
         addReplyArrayLen(c,5);
         addReplyBulkCBuffer(c,"slave",5);
@@ -2112,7 +2182,8 @@ void roleCommand(client *c) {
 /* Send a REPLCONF ACK command to the master to inform it about the current
  * processed offset. If we are not connected with a master, the command has
  * no effects. */
-void replicationSendAck(void) {
+void replicationSendAck(void) 
+{
     client *c = server.master;
 
     if (c != NULL) {
@@ -2148,6 +2219,8 @@ void replicationSendAck(void) {
 void replicationCacheMaster(client *c) {
     serverAssert(server.master != NULL && server.cached_master == NULL);
     serverLog(LL_NOTICE,"Caching the disconnected master state.");
+    AssertCorrectThread(c);
+    std::lock_guard<decltype(c->lock)> clientlock(c->lock);
 
     /* Unlink the client from the server structures. */
     unlinkClient(c);
@@ -2162,6 +2235,7 @@ void replicationCacheMaster(client *c) {
     if (c->flags & CLIENT_MULTI) discardTransaction(c);
     listEmpty(c->reply);
     c->sentlen = 0;
+    c->sentlenAsync = 0;
     c->reply_bytes = 0;
     c->bufpos = 0;
     resetClient(c);
@@ -2196,6 +2270,7 @@ void replicationCacheMasterUsingMyself(void) {
      * the new master will start its replication stream with SELECT. */
     server.master_initial_offset = server.master_repl_offset;
     replicationCreateMasterClient(-1,-1);
+    std::lock_guard<decltype(server.master->lock)> lock(server.master->lock);
 
     /* Use our own ID / offset. */
     memcpy(server.master->replid, server.replid, sizeof(server.replid));
@@ -2214,7 +2289,10 @@ void replicationDiscardCachedMaster(void) {
 
     serverLog(LL_NOTICE,"Discarding previously cached master state.");
     server.cached_master->flags &= ~CLIENT_MASTER;
-    freeClient(server.cached_master);
+    if (FCorrectThread(server.cached_master))
+        freeClient(server.cached_master);
+    else
+        freeClientAsync(server.cached_master);
     server.cached_master = NULL;
 }
 
@@ -2234,9 +2312,13 @@ void replicationResurrectCachedMaster(int newfd) {
     server.repl_state = REPL_STATE_CONNECTED;
     server.repl_down_since = 0;
 
+    /* Normally changing the thread of a client is a BIG NONO,
+        but this client was unlinked so its OK here */
+    server.master->iel = serverTL - server.rgthreadvar; // martial to this thread
+
     /* Re-add to the list of clients. */
     linkClient(server.master);
-    if (aeCreateFileEvent(server.el, newfd, AE_READABLE,
+    if (aeCreateFileEvent(server.rgthreadvar[server.master->iel].el, newfd, AE_READABLE|AE_READ_THREADSAFE,
                           readQueryFromClient, server.master)) {
         serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the readable handler: %s", strerror(errno));
         freeClientAsync(server.master); /* Close ASAP. */
@@ -2245,7 +2327,7 @@ void replicationResurrectCachedMaster(int newfd) {
     /* We may also need to install the write handler as well if there is
      * pending data in the write buffers. */
     if (clientHasPendingReplies(server.master)) {
-        if (aeCreateFileEvent(server.el, newfd, AE_WRITABLE,
+        if (aeCreateFileEvent(server.rgthreadvar[server.master->iel].el, newfd, AE_WRITABLE|AE_WRITE_THREADSAFE,
                           sendReplyToClient, server.master)) {
             serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the writable handler: %s", strerror(errno));
             freeClientAsync(server.master); /* Close ASAP. */
@@ -2268,7 +2350,7 @@ void refreshGoodSlavesCount(void) {
 
     listRewind(server.slaves,&li);
     while((ln = listNext(&li))) {
-        client *slave = ln->value;
+        client *slave = (client*)ln->value;
         time_t lag = server.unixtime - slave->repl_ack_time;
 
         if (slave->replstate == SLAVE_STATE_ONLINE &&
@@ -2342,7 +2424,7 @@ void replicationScriptCacheAdd(sds sha1) {
     if (listLength(server.repl_scriptcache_fifo) == server.repl_scriptcache_size)
     {
         listNode *ln = listLast(server.repl_scriptcache_fifo);
-        sds oldest = listNodeValue(ln);
+        sds oldest = (sds)listNodeValue(ln);
 
         retval = dictDelete(server.repl_scriptcache_dict,oldest);
         serverAssert(retval == DICT_OK);
@@ -2404,7 +2486,7 @@ int replicationCountAcksByOffset(long long offset) {
 
     listRewind(server.slaves,&li);
     while((ln = listNext(&li))) {
-        client *slave = ln->value;
+        client *slave = (client*)ln->value;
 
         if (slave->replstate != SLAVE_STATE_ONLINE) continue;
         if (slave->repl_ack_off >= offset) count++;
@@ -2471,7 +2553,8 @@ void processClientsWaitingReplicas(void) {
 
     listRewind(server.clients_waiting_acks,&li);
     while((ln = listNext(&li))) {
-        client *c = ln->value;
+        client *c = (client*)ln->value;
+        fastlock_lock(&c->lock);
 
         /* Every time we find a client that is satisfied for a given
          * offset and number of replicas, we remember it so the next client
@@ -2481,7 +2564,7 @@ void processClientsWaitingReplicas(void) {
                            last_numreplicas > c->bpop.numreplicas)
         {
             unblockClient(c);
-            addReplyLongLong(c,last_numreplicas);
+            addReplyLongLongAsync(c,last_numreplicas);
         } else {
             int numreplicas = replicationCountAcksByOffset(c->bpop.reploffset);
 
@@ -2489,9 +2572,10 @@ void processClientsWaitingReplicas(void) {
                 last_offset = c->bpop.reploffset;
                 last_numreplicas = numreplicas;
                 unblockClient(c);
-                addReplyLongLong(c,numreplicas);
+                addReplyLongLongAsync(c,numreplicas);
             }
         }
+        fastlock_unlock(&c->lock);
     }
 }
 
@@ -2519,7 +2603,11 @@ long long replicationGetSlaveOffset(void) {
 
 /* Replication cron function, called 1 time per second. */
 void replicationCron(void) {
+    serverAssert(aeThreadOwnsLock());
     static long long replication_cron_loops = 0;
+    std::unique_lock<decltype(server.master->lock)> ulock;
+    if (server.master != nullptr)
+        ulock = decltype(ulock)(server.master->lock);
 
     /* Non blocking connection timeout? */
     if (server.masterhost &&
@@ -2544,7 +2632,10 @@ void replicationCron(void) {
         (time(NULL)-server.master->lastinteraction) > server.repl_timeout)
     {
         serverLog(LL_WARNING,"MASTER timeout: no data nor PING received...");
-        freeClient(server.master);
+        if (FCorrectThread(server.master))
+            freeClient(server.master);
+        else
+            freeClientAsync(server.master);
     }
 
     /* Check if we should connect to a MASTER */
@@ -2597,7 +2688,7 @@ void replicationCron(void) {
      * timeouts are set at a few seconds (example: PSYNC response). */
     listRewind(server.slaves,&li);
     while((ln = listNext(&li))) {
-        client *slave = ln->value;
+        client *slave = (client*)ln->value;
 
         int is_presync =
             (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START ||
@@ -2618,7 +2709,7 @@ void replicationCron(void) {
 
         listRewind(server.slaves,&li);
         while((ln = listNext(&li))) {
-            client *slave = ln->value;
+            client *slave = (client*)ln->value;
 
             if (slave->replstate != SLAVE_STATE_ONLINE) continue;
             if (slave->flags & CLIENT_PRE_PSYNC) continue;
@@ -2626,7 +2717,10 @@ void replicationCron(void) {
             {
                 serverLog(LL_WARNING, "Disconnecting timedout replica: %s",
                     replicationGetSlaveName(slave));
-                freeClient(slave);
+                if (FCorrectThread(slave))
+                    freeClient(slave);
+                else
+                    freeClientAsync(slave);
             }
         }
     }
@@ -2693,7 +2787,7 @@ void replicationCron(void) {
 
         listRewind(server.slaves,&li);
         while((ln = listNext(&li))) {
-            client *slave = ln->value;
+            client *slave = (client*)ln->value;
             if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
                 idle = server.unixtime - slave->lastinteraction;
                 if (idle > max_idle) max_idle = idle;

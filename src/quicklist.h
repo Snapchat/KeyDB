@@ -67,7 +67,9 @@ typedef struct quicklistNode {
  * When quicklistNode->zl is compressed, node->zl points to a quicklistLZF */
 typedef struct quicklistLZF {
     unsigned int sz; /* LZF size in bytes*/
-    char compressed[ZERO_LENGTH_ARRAY_LENGTH];
+#ifndef __cplusplus
+    char compressed[];
+#endif
 } quicklistLZF;
 
 /* quicklist is a 40 byte struct (on 64-bit systems) describing a quicklist.

@@ -33,6 +33,10 @@
 #include <stdint.h>
 #include "sds.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* The maximum number of characters needed to represent a long double
  * as a string (long double has a huge range).
  * This should be the size of the buffer given to ld2string */
@@ -56,6 +60,10 @@ int pathIsBaseName(char *path);
 
 #ifdef REDIS_TEST
 int utilTest(int argc, char **argv);
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif

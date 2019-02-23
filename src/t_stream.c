@@ -776,9 +776,14 @@ int streamDeleteItem(stream *s, streamID *id) {
 /* Emit a reply in the client output buffer by formatting a Stream ID
  * in the standard <ms>-<seq> format, using the simple string protocol
  * of REPL. */
-void addReplyStreamID(client *c, streamID *id) {
+static void addReplyStreamID(client *c, streamID *id) {
     sds replyid = sdscatfmt(sdsempty(),"%U-%U",id->ms,id->seq);
     addReplyBulkSds(c,replyid);
+}
+
+static void addReplyStreamIDAsync(client *c, streamID *id) {
+    sds replyid = sdscatfmt(sdsempty(),"%U-%U",id->ms,id->seq);
+    addReplyBulkSdsAsync(c,replyid);
 }
 
 /* Similar to the above function, but just creates an object, usually useful
@@ -914,7 +919,7 @@ size_t streamReplyWithRange(client *c, stream *s, streamID *start, streamID *end
     }
 
     if (!(flags & STREAM_RWR_RAWENTRIES))
-        arraylen_ptr = addReplyDeferredLen(c);
+        arraylen_ptr = addReplyDeferredLenAsync(c);
     streamIteratorStart(&si,s,start,end,rev);
     while(streamIteratorGetID(&si,&id,&numfields)) {
         /* Update the group last_id if needed. */
@@ -925,18 +930,18 @@ size_t streamReplyWithRange(client *c, stream *s, streamID *start, streamID *end
 
         /* Emit a two elements array for each item. The first is
          * the ID, the second is an array of field-value pairs. */
-        addReplyArrayLen(c,2);
-        addReplyStreamID(c,&id);
+        addReplyArrayLenAsync(c,2);
+        addReplyStreamIDAsync(c,&id);
 
-        addReplyMapLen(c,numfields);
+        addReplyMapLenAsync(c,numfields);
 
         /* Emit the field-value pairs. */
         while(numfields--) {
             unsigned char *key, *value;
             int64_t key_len, value_len;
             streamIteratorGetField(&si,&key,&value,&key_len,&value_len);
-            addReplyBulkCBuffer(c,key,key_len);
-            addReplyBulkCBuffer(c,value,value_len);
+            addReplyBulkCBufferAsync(c,key,key_len);
+            addReplyBulkCBufferAsync(c,value,value_len);
         }
 
         /* If a group is passed, we need to create an entry in the
@@ -994,7 +999,7 @@ size_t streamReplyWithRange(client *c, stream *s, streamID *start, streamID *end
         if (count && count == arraylen) break;
     }
     streamIteratorStop(&si);
-    if (arraylen_ptr) setDeferredArrayLen(c,arraylen_ptr,arraylen);
+    if (arraylen_ptr) setDeferredArrayLenAsync(c,arraylen_ptr,arraylen);
     return arraylen;
 }
 

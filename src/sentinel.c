@@ -2013,7 +2013,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
             link->pending_commands = 0;
             link->cc_conn_time = mstime();
             link->cc->data = link;
-            redisAeAttach(server.el,link->cc);
+            redisAeAttach(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,link->cc);
             redisAsyncSetConnectCallback(link->cc,
                     sentinelLinkEstablishedCallback);
             redisAsyncSetDisconnectCallback(link->cc,
@@ -2037,7 +2037,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
 
             link->pc_conn_time = mstime();
             link->pc->data = link;
-            redisAeAttach(server.el,link->pc);
+            redisAeAttach(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,link->pc);
             redisAsyncSetConnectCallback(link->pc,
                     sentinelLinkEstablishedCallback);
             redisAsyncSetDisconnectCallback(link->pc,
@@ -3976,6 +3976,7 @@ int sentinelSendSlaveOf(sentinelRedisInstance *ri, char *host, int port) {
 
 /* Setup the master state to start a failover. */
 void sentinelStartFailover(sentinelRedisInstance *master) {
+    serverAssert(aeThreadOwnsLock());
     serverAssert(master->flags & SRI_MASTER);
 
     master->failover_state = SENTINEL_FAILOVER_STATE_WAIT_START;
@@ -4168,6 +4169,7 @@ void sentinelFailoverWaitStart(sentinelRedisInstance *ri) {
 }
 
 void sentinelFailoverSelectSlave(sentinelRedisInstance *ri) {
+    serverAssert(aeThreadOwnsLock());
     sentinelRedisInstance *slave = sentinelSelectSlave(ri);
 
     /* We don't handle the timeout in this state as the function aborts
@@ -4292,6 +4294,7 @@ void sentinelFailoverReconfNextSlave(sentinelRedisInstance *master) {
     dictIterator *di;
     dictEntry *de;
     int in_progress = 0;
+    serverAssert(aeThreadOwnsLock());
 
     di = dictGetIterator(master->slaves);
     while((de = dictNext(di)) != NULL) {

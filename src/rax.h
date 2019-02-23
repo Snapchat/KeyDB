@@ -39,6 +39,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Representation of a radix tree as implemented in this file, that contains
  * the strings "foo", "foobar" and "footer" after the insertion of each
  * word. When the node represents a key inside the radix tree, we write it
@@ -133,7 +137,9 @@ typedef struct raxNode {
      * children, an additional value pointer is present (as you can see
      * in the representation above as "value-ptr" field).
      */
-    unsigned char data[ZERO_LENGTH_ARRAY_LENGTH];
+#ifndef __cplusplus
+    unsigned char data[];
+#endif
 } raxNode;
 
 typedef struct rax {
@@ -218,5 +224,9 @@ void raxSetDebugMsg(int onoff);
 /* Internal API. May be used by the node callback in order to access rax nodes
  * in a low level way, so this function is exported as well. */
 void raxSetData(raxNode *n, void *data);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

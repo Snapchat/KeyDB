@@ -124,9 +124,7 @@ robj *activeDefragStringOb(robj* ob, long *defragged) {
         } else if (ob->encoding==OBJ_ENCODING_EMBSTR) {
             /* The sds is embedded in the object allocation, calculate the
              * offset and update the pointer in the new allocation. */
-            long ofs = (intptr_t)ptrFromObj(ob) - (intptr_t)ob;
             if ((ret = activeDefragAlloc(ob))) {
-                ret->m_ptr = (void*)((intptr_t)ret + ofs);
                 (*defragged)++;
             }
         } else if (ob->encoding!=OBJ_ENCODING_INT) {

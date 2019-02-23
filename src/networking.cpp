@@ -1155,24 +1155,19 @@ static void freeClientArgv(client *c) {
  * resync with us as well. */
 void disconnectSlaves(void) {
     serverAssert(aeThreadOwnsLock());
-    std::vector<client*> vecfreeImmediate;
-    listNode *ln;
     listIter li;
+    listNode *ln;
+
     listRewind(server.slaves, &li);
     while ((ln = listNext(&li))) {
-        client *c = (client*)ln->value;
-        if (c->iel == serverTL - server.rgthreadvar)
-        {
-            vecfreeImmediate.push_back(c);
+        client *c = (client*)listNodeValue(ln);
+        if (FCorrectThread(c)) {
+            freeClient(c);
         }
-        else
-        {
+        else {
             freeClientAsync(c);
         }
     }
-
-    for (client *c : vecfreeImmediate)
-        freeClient(c);
 }
 
 /* Remove the specified client from global lists where the client could

@@ -543,7 +543,10 @@ int masterTryPartialResynchronization(client *c) {
         buflen = snprintf(buf,sizeof(buf),"+CONTINUE\r\n");
     }
     if (write(c->fd,buf,buflen) != buflen) {
-        freeClientAsync(c);
+        if (FCorrectThread(c))
+            freeClient(c);
+        else
+            freeClientAsync(c);
         return C_OK;
     }
     psync_len = addReplyReplicationBacklog(c,psync_offset);
@@ -2011,7 +2014,10 @@ void replicationSetMaster(char *ip, int port) {
     server.masterhost = sdsnew(ip);
     server.masterport = port;
     if (server.master) {
-        freeClientAsync(server.master);
+        if (FCorrectThread(server.master))
+            freeClient(server.master);
+        else
+            freeClientAsync(server.master);
     }
     disconnectAllBlockedClients(); /* Clients blocked in master, now slave. */
 
@@ -2626,7 +2632,10 @@ void replicationCron(void) {
         (time(NULL)-server.master->lastinteraction) > server.repl_timeout)
     {
         serverLog(LL_WARNING,"MASTER timeout: no data nor PING received...");
-        freeClientAsync(server.master);
+        if (FCorrectThread(server.master))
+            freeClient(server.master);
+        else
+            freeClientAsync(server.master);
     }
 
     /* Check if we should connect to a MASTER */

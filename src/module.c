@@ -3642,6 +3642,7 @@ void moduleHandleBlockedClients(void) {
         if (c)
         {
             AssertCorrectThread(c);
+            fastlock_lock(&c->lock);
         }
 
         /* Release the lock during the loop, as long as we don't
@@ -3708,6 +3709,7 @@ void moduleHandleBlockedClients(void) {
         /* Free 'bc' only after unblocking the client, since it is
          * referenced in the client blocking context, and must be valid
          * when calling unblockClient(). */
+        fastlock_unlock(&c->lock);
         zfree(bc);
 
         /* Lock again before to iterate the loop. */

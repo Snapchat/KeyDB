@@ -161,10 +161,12 @@ void queueClientForReprocessing(client *c) {
     /* The client may already be into the unblocked list because of a previous
      * blocking operation, don't add back it into the list multiple times. */
     serverAssert(aeThreadOwnsLock());
+    fastlock_lock(&c->lock);
     if (!(c->flags & CLIENT_UNBLOCKED)) {
         c->flags |= CLIENT_UNBLOCKED;
         listAddNodeTail(server.rgthreadvar[c->iel].unblocked_clients,c);
     }
+    fastlock_unlock(&c->lock);
 }
 
 /* Unblock a client calling the right function depending on the kind
@@ -258,6 +260,7 @@ void disconnectAllBlockedClients(void) {
  * be used only for a single type, like virtually any Redis application will
  * do, the function is already fair. */
 void handleClientsBlockedOnKeys(void) {
+    serverAssert(aeThreadOwnsLock());
     while(listLength(server.ready_keys) != 0) {
         list *l;
 

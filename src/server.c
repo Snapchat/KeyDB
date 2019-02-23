@@ -2109,9 +2109,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     flushAppendOnlyFile(0);
 
     /* Handle writes with pending output buffers. */
-    aeReleaseLock();
     handleClientsWithPendingWrites(IDX_EVENT_LOOP_MAIN);
-    aeAcquireLock();
 
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
@@ -2128,10 +2126,10 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
     if (listLength(server.rgthreadvar[iel].unblocked_clients)) {
         processUnblockedClients(iel);
     }
-    aeReleaseLock();
 
     /* Handle writes with pending output buffers. */
     handleClientsWithPendingWrites(iel);
+    aeReleaseLock();
 }
 
 /* This function is called immadiately after the event loop multiplexing
@@ -4065,6 +4063,7 @@ sds genRedisInfoString(char *section) {
         bytesToHuman(maxmemory_hmem,server.maxmemory);
 
         if (sections++) info = sdscat(info,"\r\n");
+        serverLog(LL_WARNING, "OOM max sent used_memory: %zu", zmalloc_used);
         info = sdscatprintf(info,
             "# Memory\r\n"
             "used_memory:%zu\r\n"
@@ -4499,6 +4498,7 @@ void infoCommand(client *c) {
         return;
     }
     addReplyBulkSds(c, genRedisInfoString(section));
+    serverLog(LL_WARNING, "OOM max info command %zu", zmalloc_used_memory());
 }
 
 void monitorCommand(client *c) {
@@ -5038,8 +5038,8 @@ int main(int argc, char **argv) {
 
     initServer();
 
-    server.cthreads = 2; //testing
-    initNetworking(1 /* fReusePort */);
+    server.cthreads = 1; //testing
+    initNetworking(0 /* fReusePort */);
 
     if (background || server.pidfile) createPidFile();
     redisSetProcTitle(argv[0]);
@@ -5080,12 +5080,11 @@ int main(int argc, char **argv) {
 
     serverAssert(server.cthreads > 0 && server.cthreads <= MAX_EVENT_LOOPS);
     pthread_t rgthread[MAX_EVENT_LOOPS];
-    for (int iel = 0; iel < server.cthreads; ++iel)
+    for (int iel = 1; iel < server.cthreads; ++iel)
     {
         pthread_create(rgthread + iel, NULL, workerThreadMain, (void*)((int64_t)iel));
     }
-    void *pretT;
-    pthread_join(rgthread[IDX_EVENT_LOOP_MAIN], &pretT);
+    workerThreadMain((void*)((int64_t)IDX_EVENT_LOOP_MAIN));
     return 0;
 }
 

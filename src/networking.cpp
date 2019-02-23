@@ -1926,6 +1926,7 @@ int processMultibulkBuffer(client *c) {
  * pending query buffer, already representing a full command, to process. */
 void processInputBuffer(client *c) {
     AssertCorrectThread(c);
+    bool fFreed = false;
     
     /* Keep processing while there is something in the input buffer */
     while(c->qb_pos < sdslen(c->querybuf)) {
@@ -1990,13 +1991,16 @@ void processInputBuffer(client *c) {
             /* freeMemoryIfNeeded may flush slave output buffers. This may
              * result into a slave, that may be the active client, to be
              * freed. */
-            if (server.current_client == NULL) break;
+            if (server.current_client == NULL) {
+                fFreed = true;
+                break;
+            }
             server.current_client = NULL;
         }
     }
 
     /* Trim to pos */
-    if (server.current_client != NULL && c->qb_pos) {
+    if (!fFreed && c->qb_pos) {
         sdsrange(c->querybuf,c->qb_pos,-1);
         c->qb_pos = 0;
     }

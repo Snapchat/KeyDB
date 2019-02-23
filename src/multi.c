@@ -72,6 +72,7 @@ void queueMultiCommand(client *c) {
 }
 
 void discardTransaction(client *c) {
+    serverAssert(aeThreadOwnsLock());
     freeClientMultiState(c);
     initClientMultiState(c);
     c->flags &= ~(CLIENT_MULTI|CLIENT_DIRTY_CAS|CLIENT_DIRTY_EXEC);
@@ -81,11 +82,13 @@ void discardTransaction(client *c) {
 /* Flag the transacation as DIRTY_EXEC so that EXEC will fail.
  * Should be called every time there is an error while queueing a command. */
 void flagTransaction(client *c) {
+    serverAssert(aeThreadOwnsLock());
     if (c->flags & CLIENT_MULTI)
         c->flags |= CLIENT_DIRTY_EXEC;
 }
 
 void multiCommand(client *c) {
+    serverAssert(aeThreadOwnsLock());
     if (c->flags & CLIENT_MULTI) {
         addReplyError(c,"MULTI calls can not be nested");
         return;
@@ -291,6 +294,7 @@ void unwatchAllKeys(client *c) {
 /* "Touch" a key, so that if this key is being WATCHed by some client the
  * next EXEC will fail. */
 void touchWatchedKey(redisDb *db, robj *key) {
+    serverAssert(aeThreadOwnsLock());
     list *clients;
     listIter li;
     listNode *ln;
@@ -316,6 +320,7 @@ void touchWatchedKey(redisDb *db, robj *key) {
 void touchWatchedKeysOnFlush(int dbid) {
     listIter li1, li2;
     listNode *ln;
+    serverAssert(aeThreadOwnsLock());
 
     /* For every client, check all the waited keys */
     listRewind(server.clients,&li1);
@@ -350,6 +355,7 @@ void watchCommand(client *c) {
 
 void unwatchCommand(client *c) {
     unwatchAllKeys(c);
+    serverAssert(aeThreadOwnsLock());
     c->flags &= (~CLIENT_DIRTY_CAS);
     addReply(c,shared.ok);
 }

@@ -395,6 +395,9 @@ void loadServerConfigFromString(char *config) {
                 err = "repl-backlog-ttl can't be negative ";
                 goto loaderr;
             }
+        } else if (!strcasecmp(argv[0],"masteruser") && argc == 2) {
+            zfree(server.masteruser);
+            server.masteruser = argv[1][0] ? zstrdup(argv[1]) : NULL;
         } else if (!strcasecmp(argv[0],"masterauth") && argc == 2) {
             zfree(server.masterauth);
             server.masterauth = argv[1][0] ? zstrdup(argv[1]) : NULL;
@@ -821,7 +824,18 @@ void loadServerConfigFromString(char *config) {
                 if (err) goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"scratch-file-path")) {
+#ifdef USE_MEMKIND
             storage_init(argv[1], server.maxmemory);
+#else
+            err = "KeyDB not compliled with scratch-file support.";
+            goto loaderr;
+#endif
+        } else if (!strcasecmp(argv[0],"server-threads") && argc == 2) {
+            server.cthreads = atoi(argv[1]);
+            if (server.cthreads <= 0 || server.cthreads > MAX_EVENT_LOOPS) {
+                err = "Invalid number of threads specified";
+                goto loaderr;
+            }
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -948,6 +962,9 @@ void configSetCommand(client *c) {
         sds aclop = sdscatprintf(sdsempty(),">%s",(char*)ptrFromObj(o));
         ACLSetUser(DefaultUser,aclop,sdslen(aclop));
         sdsfree(aclop);
+    } config_set_special_field("masteruser") {
+        zfree(server.masteruser);
+        server.masteruser = ((char*)ptrFromObj(o))[0] ? zstrdup(ptrFromObj(o)) : NULL;
     } config_set_special_field("masterauth") {
         zfree(server.masterauth);
         server.masterauth = ((char*)ptrFromObj(o))[0] ? zstrdup(ptrFromObj(o)) : NULL;
@@ -961,6 +978,7 @@ void configSetCommand(client *c) {
 
         /* Try to check if the OS is capable of supporting so many FDs. */
         server.maxclients = ll;
+        serverAssert(FALSE);
         if (ll > orig_value) {
             adjustOpenFilesLimit();
             if (server.maxclients != ll) {
@@ -968,15 +986,18 @@ void configSetCommand(client *c) {
                 server.maxclients = orig_value;
                 return;
             }
-            if ((unsigned int) aeGetSetSize(server.el) <
+            if ((unsigned int) aeGetSetSize(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el) <
                 server.maxclients + CONFIG_FDSET_INCR)
             {
-                if (aeResizeSetSize(server.el,
-                    server.maxclients + CONFIG_FDSET_INCR) == AE_ERR)
+                for (int iel = 0; iel < server.cthreads; ++iel)
                 {
-                    addReplyError(c,"The event loop API used by Redis is not able to handle the specified number of clients");
-                    server.maxclients = orig_value;
-                    return;
+                    if (aeResizeSetSize(server.rgthreadvar[iel].el,
+                        server.maxclients + CONFIG_FDSET_INCR) == AE_ERR)
+                    {
+                        addReplyError(c,"The event loop API used by Redis is not able to handle the specified number of clients");
+                        server.maxclients = orig_value;
+                        return;
+                    }
                 }
             }
         }
@@ -1359,6 +1380,7 @@ void configGetCommand(client *c) {
 
     /* String values */
     config_get_string_field("dbfilename",server.rdb_filename);
+    config_get_string_field("masteruser",server.masteruser);
     config_get_string_field("masterauth",server.masterauth);
     config_get_string_field("cluster-announce-ip",server.cluster_announce_ip);
     config_get_string_field("unixsocket",server.unixsocket);
@@ -2019,7 +2041,7 @@ void rewriteConfigClientoutputbufferlimitOption(struct rewriteConfigState *state
         rewriteConfigFormatMemory(soft,sizeof(soft),
                 server.client_obuf_limits[j].soft_limit_bytes);
 
-        char *typename = getClientTypeName(j);
+        const char *typename = getClientTypeName(j);
         if (!strcmp(typename,"slave")) typename = "replica";
         line = sdscatprintf(sdsempty(),"%s %s %s %s %ld",
                 option, typename, hard, soft,
@@ -2237,6 +2259,7 @@ int rewriteConfig(char *path) {
     rewriteConfigDirOption(state);
     rewriteConfigSlaveofOption(state,"replicaof");
     rewriteConfigStringOption(state,"replica-announce-ip",server.slave_announce_ip,CONFIG_DEFAULT_SLAVE_ANNOUNCE_IP);
+    rewriteConfigStringOption(state,"masteruser",server.masteruser,NULL);
     rewriteConfigStringOption(state,"masterauth",server.masterauth,NULL);
     rewriteConfigStringOption(state,"cluster-announce-ip",server.cluster_announce_ip,NULL);
     rewriteConfigYesNoOption(state,"replica-serve-stale-data",server.repl_serve_stale_data,CONFIG_DEFAULT_SLAVE_SERVE_STALE_DATA);

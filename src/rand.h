@@ -30,8 +30,16 @@
 #ifndef REDIS_RANDOM_H
 #define REDIS_RANDOM_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 int32_t redisLrand48();
 void redisSrand48(int32_t seedval);
+
+#ifdef __cplusplus
+}
+#endif
 
 #define REDIS_LRAND48_MAX INT32_MAX
 

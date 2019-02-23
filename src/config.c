@@ -830,6 +830,12 @@ void loadServerConfigFromString(char *config) {
             err = "KeyDB not compliled with scratch-file support.";
             goto loaderr;
 #endif
+        } else if (!strcasecmp(argv[0],"server-threads") && argc == 2) {
+            server.cthreads = atoi(argv[1]);
+            if (server.cthreads <= 0 || server.cthreads > MAX_EVENT_LOOPS) {
+                err = "Invalid number of threads specified";
+                goto loaderr;
+            }
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }

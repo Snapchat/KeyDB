@@ -1402,7 +1402,7 @@ void aclCommand(client *c) {
         }
 
         for (int j = 2; j < c->argc; j++) {
-            sds username = c->argv[j]->ptr;
+            sds username = ptrFromObj(c->argv[j]);
             user *u;
             if (raxRemove(Users,(unsigned char*)username,
                           sdslen(username),

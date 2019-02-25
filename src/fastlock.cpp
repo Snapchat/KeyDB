@@ -44,7 +44,7 @@
 
 static_assert(sizeof(pid_t) <= sizeof(fastlock::m_pidOwner), "fastlock::m_pidOwner not large enough");
 
-static pid_t gettid()
+extern "C" pid_t gettid()
 {
     static thread_local int pidCache = -1;
     if (pidCache == -1)
@@ -60,6 +60,7 @@ extern "C" void fastlock_init(struct fastlock *lock)
     lock->m_pidOwner = -1;
 }
 
+#ifndef ASM_SPINLOCK
 extern "C" void fastlock_lock(struct fastlock *lock)
 {
     if ((int)__atomic_load_4(&lock->m_pidOwner, __ATOMIC_ACQUIRE) == gettid())
@@ -75,6 +76,9 @@ extern "C" void fastlock_lock(struct fastlock *lock)
     {
         if ((++cloops % 1024*1024) == 0)
             sched_yield();
+#if defined(__i386__) || defined(__amd64__)
+        __asm__ ("pause");
+#endif
     }
 
     lock->m_depth = 1;
@@ -107,6 +111,7 @@ extern "C" int fastlock_trylock(struct fastlock *lock)
     }
     return false;
 }
+#endif
 
 extern "C" void fastlock_unlock(struct fastlock *lock)
 {

@@ -44,6 +44,15 @@ endif
 endif
 endif
 
+# Do we use our assembly spinlock?
+ifeq ($(uname_S),Linux)
+ifneq ($(@@),32bit)
+	ASM_OBJ+= fastlock_x64.o
+	CFLAGS+= -DASM_SPINLOCK
+	CXXFLAGS+= -DASM_SPINLOCK
+endif
+endif
+
 # To get ARM stack traces if Redis crashes we need a special C flag.
 ifneq (,$(filter aarch64 armv,$(uname_M)))
         CFLAGS+=-funwind-tables
@@ -160,6 +169,7 @@ endif
 
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
 REDIS_CXX=$(QUIET_CC)$(CC) $(FINAL_CXXFLAGS)
+REDIS_NASM=$(QUIET_CC)nasm -felf64 
 REDIS_LD=$(QUIET_LINK)$(CXX) $(FINAL_LDFLAGS)
 REDIS_INSTALL=$(QUIET_INSTALL)$(INSTALL)
 
@@ -178,11 +188,11 @@ endif
 
 REDIS_SERVER_NAME=keydb-server
 REDIS_SENTINEL_NAME=keydb-sentinel
-REDIS_SERVER_OBJ=adlist.o quicklist.o ae.o anet.o dict.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o crc16.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o acl.o storage.o rdb-s3.o fastlock.o
+REDIS_SERVER_OBJ=adlist.o quicklist.o ae.o anet.o dict.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o crc16.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o acl.o storage.o rdb-s3.o fastlock.o $(ASM_OBJ)
 REDIS_CLI_NAME=keydb-cli
-REDIS_CLI_OBJ=anet.o adlist.o dict.o redis-cli.o zmalloc.o release.o anet.o ae.o crc64.o siphash.o crc16.o storage-lite.o fastlock.o
+REDIS_CLI_OBJ=anet.o adlist.o dict.o redis-cli.o zmalloc.o release.o anet.o ae.o crc64.o siphash.o crc16.o storage-lite.o fastlock.o $(ASM_OBJ)
 REDIS_BENCHMARK_NAME=keydb-benchmark
-REDIS_BENCHMARK_OBJ=ae.o anet.o redis-benchmark.o adlist.o zmalloc.o redis-benchmark.o storage-lite.o fastlock.o
+REDIS_BENCHMARK_OBJ=ae.o anet.o redis-benchmark.o adlist.o zmalloc.o redis-benchmark.o storage-lite.o fastlock.o $(ASM_OBJ)
 REDIS_CHECK_RDB_NAME=keydb-check-rdb
 REDIS_CHECK_AOF_NAME=keydb-check-aof
 
@@ -263,6 +273,9 @@ dict-benchmark: dict.c zmalloc.c sds.c siphash.c
 
 %.o: %.cpp .make-prerequisites
 	$(REDIS_CXX) -c $<
+
+%.o: %.asm .make-prerequisites
+	$(REDIS_NASM) $<
 
 clean:
 	rm -rf $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) *.o *.gcda *.gcno *.gcov redis.info lcov-html Makefile.dep dict-benchmark

@@ -258,6 +258,7 @@ void clientInstallWriteHandler(client *c) {
          * a system call. We'll only really install the write handler if
          * we'll not be able to write the whole reply at once. */
         c->flags |= CLIENT_PENDING_WRITE;
+        std::unique_lock<fastlock> lockf(server.rgthreadvar[c->iel].lockPendingWrite);
         listAddNodeHead(server.rgthreadvar[c->iel].clients_pending_write,c);
     }
 }
@@ -1203,6 +1204,7 @@ void unlinkClient(client *c) {
 
     /* Remove from the list of pending writes if needed. */
     if (c->flags & CLIENT_PENDING_WRITE) {
+        std::unique_lock<fastlock> lockf(server.rgthreadvar[c->iel].lockPendingWrite);
         ln = listSearchKey(server.rgthreadvar[c->iel].clients_pending_write,c);
         serverAssert(ln != NULL);
         listDelNode(server.rgthreadvar[c->iel].clients_pending_write,ln);
@@ -1462,7 +1464,6 @@ int writeToClient(int fd, client *c, int handler_installed) {
             }
             else
             {
-                lock.unlock();
                 freeClientAsync(c);
             }
             
@@ -1567,6 +1568,7 @@ int handleClientsWithPendingWrites(int iel) {
     listIter li;
     listNode *ln;
 
+    std::unique_lock<fastlock> lockf(server.rgthreadvar[iel].lockPendingWrite);
     list *list = server.rgthreadvar[iel].clients_pending_write;
     int processed = listLength(list);
     serverAssert(iel == (serverTL - server.rgthreadvar));

@@ -3,12 +3,12 @@ What is KeyDB?
 
 KeyDB is a high performance fork of Redis focussing on multithreading, memory efficiency, and high throughput.  In addition to multithreading KeyDB also has features only available in Redis Enterprise such as FLASH storage support, and some not available at all such as direct backup to AWS S3.
 
-On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency.  Our work here is not complete and we expect substantially better results as we move more code away from the global lock.
+On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency.
 
 Why fork Redis?
 ---------------
 
-The Redis maintainers have continually reiterated that they do not plan to support multithreading.  While we have great respect for the redis team, we feel the analysis justifying this decision is incorrect.  In addition we are dismayed that features we believe belong in the core Redis engine are ending up in closed source modules.   We feel a fork is the best way to accelerate development in the areas of most interest to us.
+The Redis maintainers have continually reiterated that they do not plan to support multithreading.  While we have great respect for the redis team, we feel the analysis justifying this decision is incorrect.  In addition we wanted open source implementations of features currently only available in proprietary modules.   We feel a fork is the best way to accelerate development in the areas of most interest to us.
 
 We plan to track the Redis repo closely and hope our projects can learn from each other.
 
@@ -17,11 +17,7 @@ Benchmarking KeyDB
 
 Please note keydb-benchmark and redis-benchmark are currently single threaded and too slow to properly benchmark KeyDB.  We recommend using a redis cluster benchmark tool such as [memtier](https://github.com/RedisLabs/memtier_benchmark).  Please ensure your machine has enough cores for both KeyDB and memteir if testing locally.  KeyDB expects exclusive use of any cores assigned to it.
 
-We do most of our benchmarks on AWS m5.metal boxes to reduce VM noise.  To get started quickly try the following command
-
-    ./memtier_benchmark --key-pattern=S:S --ratio=3:2
-
-KeyDB is currently very sensitive to core affinity and the CPU your network interrupts arrive on.  This should improve over time as we gain flexibility on which cores clients can execute on.  /proc/interrupts will show you which cores are handling NIC interrupts. For best performance KeyDB should not share cores with NIC interrupts.  Use taskset to fine tune CPU affinity.
+For more details on how we benchmarked KeyDB along with performance numbers check out our blog post: [Redis Should Be Multithreaded](https://medium.com/@john_63123/redis-should-be-multi-threaded-e28319cab744?source=friends_link&sk=7ce8e9fe3ec8224a4d27ef075d085457)
 
 New Configuration Options
 -------------------------

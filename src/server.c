@@ -2460,6 +2460,7 @@ void initServerConfig(void) {
 
     /* Multithreading */
     server.cthreads = CONFIG_DEFAULT_THREADS;
+    server.fThreadAffinity = CONFIG_DEFAULT_THREAD_AFFINITY;
 }
 
 extern char **environ;
@@ -5086,11 +5087,22 @@ int main(int argc, char **argv) {
 
     serverAssert(server.cthreads > 0 && server.cthreads <= MAX_EVENT_LOOPS);
     pthread_t rgthread[MAX_EVENT_LOOPS];
-    for (int iel = 1; iel < server.cthreads; ++iel)
+    for (int iel = 0; iel < server.cthreads; ++iel)
     {
         pthread_create(rgthread + iel, NULL, workerThreadMain, (void*)((int64_t)iel));
+        if (server.fThreadAffinity)
+        {
+            cpu_set_t cpuset;
+            CPU_ZERO(&cpuset);
+            CPU_SET(iel, &cpuset);
+            if (pthread_setaffinity_np(rgthread[iel], sizeof(cpu_set_t), &cpuset) == 0)
+            {
+                serverLog(LOG_INFO, "Binding thread %d to cpu %d", iel, iel);
+            }
+        }
     }
-    workerThreadMain((void*)((int64_t)IDX_EVENT_LOOP_MAIN));
+    void *pvRet;
+    pthread_join(rgthread[IDX_EVENT_LOOP_MAIN], &pvRet);
     return 0;
 }
 

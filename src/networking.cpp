@@ -1034,6 +1034,17 @@ static void acceptCommonHandler(int fd, int flags, char *ip, int iel) {
         close(fd); /* May be already closed, just ignore errors */
         return;
     }
+
+    // Set thread affinity
+    if (server.fThreadAffinity)
+    {
+        int cpu = iel;
+        if (setsockopt(fd, SOL_SOCKET, SO_INCOMING_CPU, &cpu, sizeof(iel)) != 0)
+        {
+            serverLog(LL_WARNING, "Failed to set socket affinity");
+        }
+    }
+
     /* If maxclient directive is set and this is one client more... close the
      * connection. Note that we create the client instead to check before
      * for this condition, since now the socket is already set in non-blocking

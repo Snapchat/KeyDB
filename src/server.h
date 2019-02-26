@@ -1051,6 +1051,7 @@ struct redisServerThreadVars {
     list *clients_pending_write; /* There is to write or install handler. */
     list *unblocked_clients;     /* list of clients to unblock before next loop NOT THREADSAFE */
     list *clients_pending_asyncwrite;
+    struct fastlock lockPendingWrite;
 };
 
 struct redisServer {

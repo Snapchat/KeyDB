@@ -2109,7 +2109,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     flushAppendOnlyFile(0);
 
     /* Handle writes with pending output buffers. */
+    aeReleaseLock();
     handleClientsWithPendingWrites(IDX_EVENT_LOOP_MAIN);
+    aeAcquireLock();
 
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
@@ -2126,10 +2128,10 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
     if (listLength(server.rgthreadvar[iel].unblocked_clients)) {
         processUnblockedClients(iel);
     }
+    aeReleaseLock();
 
     /* Handle writes with pending output buffers. */
     handleClientsWithPendingWrites(iel);
-    aeReleaseLock();
 }
 
 /* This function is called immadiately after the event loop multiplexing
@@ -2812,6 +2814,8 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
             strerror(errno));
         exit(1);
     }
+
+    fastlock_init(&pvar->lockPendingWrite);
 
     if (!fMain)
     {
@@ -5036,6 +5040,7 @@ int main(int argc, char **argv) {
     int background = server.daemonize && !server.supervised;
     if (background) daemonize();
 
+    server.cthreads = 2;
     initServer();
     initNetworking(server.cthreads > 1 /* fReusePort */);
 

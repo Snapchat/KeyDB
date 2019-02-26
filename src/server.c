@@ -5040,7 +5040,6 @@ int main(int argc, char **argv) {
     int background = server.daemonize && !server.supervised;
     if (background) daemonize();
 
-    server.cthreads = 2;
     initServer();
     initNetworking(server.cthreads > 1 /* fReusePort */);
 

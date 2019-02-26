@@ -25,6 +25,7 @@ New Configuration Options
 With new features comes new options:
 
     server-threads N
+    server-thread-affinity [true/false]
 
 The number of threads used to serve requests.  This should be related to the number of queues available in your network hardware, *not* the number of cores on your machine.  Because KeyDB uses spinlocks to reduce latency; making this too high will reduce performance.  We recommend using 4 here.  By default this is set to one.
 

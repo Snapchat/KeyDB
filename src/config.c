@@ -836,6 +836,15 @@ void loadServerConfigFromString(char *config) {
                 err = "Invalid number of threads specified";
                 goto loaderr;
             }
+        } else if (!strcasecmp(argv[0],"server-thread-affinity") && argc == 2) {
+            if (strcasecmp(argv[1], "true") == 0) {
+                server.fThreadAffinity = TRUE;
+            } else if (strcasecmp(argv[1], "false") == 0) {
+                server.fThreadAffinity = FALSE;
+            } else {
+                err = "Unknown argument: server-thread-affinity expects either true or false";
+                goto loaderr;
+            }
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }

@@ -183,6 +183,7 @@ extern "C" {
 #define CONFIG_DEFAULT_PROTO_MAX_BULK_LEN (512ll*1024*1024) /* Bulk request max size */
 
 #define CONFIG_DEFAULT_THREADS 1
+#define CONFIG_DEFAULT_THREAD_AFFINITY 0
 
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
@@ -1070,6 +1071,7 @@ struct redisServer {
     dict *orig_commands;        /* Command table before command renaming. */
 
     int cthreads;               /* Number of main worker threads */
+    int fThreadAffinity;        /* Should we pin threads to cores? */
     struct redisServerThreadVars rgthreadvar[MAX_EVENT_LOOPS];
 
     unsigned int lruclock;      /* Clock for LRU eviction */

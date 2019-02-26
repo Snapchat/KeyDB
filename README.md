@@ -17,11 +17,11 @@ Benchmarking KeyDB
 
 Please note keydb-benchmark and redis-benchmark are currently single threaded and too slow to properly benchmark KeyDB.  We recommend using a redis cluster benchmark tool such as [memtier](https://github.com/RedisLabs/memtier_benchmark).  Please ensure your machine has enough cores for both KeyDB and memteir if testing locally.  KeyDB expects exclusive use of any cores assigned to it.
 
-We do most of our benchmarks on AWS m5.metal boxes with the following command
+We do most of our benchmarks on AWS m5.metal boxes to reduce VM noise.  To get started quickly try the following command
 
     ./memtier_benchmark --key-pattern=S:S --ratio=3:2
 
-KeyDB is currently very sensitive to core affinity and the CPU your network interrupts arrive on.  This should improve over time as we gain flexibility on which cores clients can execute on.
+KeyDB is currently very sensitive to core affinity and the CPU your network interrupts arrive on.  This should improve over time as we gain flexibility on which cores clients can execute on.  /proc/interrupts will show you which cores are handling NIC interrupts. For best performance KeyDB should not share cores with NIC interrupts.  Use taskset to fine tune CPU affinity.
 
 New Configuration Options
 -------------------------

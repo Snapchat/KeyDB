@@ -44,12 +44,15 @@ endif
 endif
 endif
 
+USEASM?=true
 # Do we use our assembly spinlock?
 ifeq ($(uname_S),Linux)
 ifneq ($(@@),32bit)
+ifeq ($(USEASM),true)
 	ASM_OBJ+= fastlock_x64.o
 	CFLAGS+= -DASM_SPINLOCK
 	CXXFLAGS+= -DASM_SPINLOCK
+endif
 endif
 endif
 

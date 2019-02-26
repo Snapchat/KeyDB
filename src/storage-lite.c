@@ -1,6 +1,5 @@
 #include <stdlib.h>
 #include <stdio.h>
-#include <memkind.h>
 #include <sys/ioctl.h>
 #include <linux/fs.h>
 #include <unistd.h>

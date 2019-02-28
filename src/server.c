@@ -4068,7 +4068,6 @@ sds genRedisInfoString(char *section) {
         bytesToHuman(maxmemory_hmem,server.maxmemory);
 
         if (sections++) info = sdscat(info,"\r\n");
-        serverLog(LL_WARNING, "OOM max sent used_memory: %zu", zmalloc_used);
         info = sdscatprintf(info,
             "# Memory\r\n"
             "used_memory:%zu\r\n"
@@ -4503,7 +4502,6 @@ void infoCommand(client *c) {
         return;
     }
     addReplyBulkSds(c, genRedisInfoString(section));
-    serverLog(LL_WARNING, "OOM max info command %zu", zmalloc_used_memory());
 }
 
 void monitorCommand(client *c) {

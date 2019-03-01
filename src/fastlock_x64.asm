@@ -19,50 +19,45 @@ fastlock_lock:
 	;	int32_t m_depth
 	
 	; First get our TID and put it in ecx
-	push rdi				; we need our struct pointer (also balance the stack for the call)
-	call gettid				; get our thread ID (TLS is nasty in ASM so don't bother inlining)
-	mov esi, eax			; back it up in esi
-	mov rdi, [rsp]			; get our pointer back
+	push rdi                ; we need our struct pointer (also balance the stack for the call)
+	call gettid             ; get our thread ID (TLS is nasty in ASM so don't bother inlining)
+	mov esi, eax            ; back it up in esi
+	mov rdi, [rsp]          ; get our pointer back
 
-	cmp [rdi+4], esi		; Is the TID we got back the owner of the lock?
-	je .LRecursive			; Don't spin in that case
+	cmp [rdi+4], esi        ; Is the TID we got back the owner of the lock?
+	je .LLocked             ; Don't spin in that case
 
-	xor eax, eax			; eliminate partial register dependency
-	mov ax, 1				; we want to add one
-	lock xadd [rdi+2], ax	; do the xadd, ax contains the value before the addition
+	xor eax, eax            ; eliminate partial register dependency
+	inc eax                 ; we want to add one
+	lock xadd [rdi+2], ax   ; do the xadd, ax contains the value before the addition
 	; eax now contains the ticket
 	xor ecx, ecx
 ALIGN 16
-.Loop:
-	cmp [rdi], ax			; is our ticket up?
-	je .LDone				; leave the loop
-	add ecx, 1000h			; Have we been waiting a long time? (oflow if we have)
-							;	1000h is set so we overflow on the 1024*1024'th iteration (like the C code)
-	jc .LYield				; If so, give up our timeslice to someone who's doing real work
-	pause					; be nice to other hyperthreads
-	jmp .Loop				; maybe next time we'll get our turn
-.LDone:
-	mov [rdi+4], esi		; lock->m_pidOwner = gettid()
-	mov dword [rdi+8], 1	; lock->m_depth = 1
-	add rsp, 8				; fix stack
-	ret
-.LYield:
+.LLoop:
+	cmp [rdi], ax           ; is our ticket up?
+	je .LLocked             ; leave the loop
+	pause
+	add ecx, 1000h          ; Have we been waiting a long time? (oflow if we have)
+	                        ;	1000h is set so we overflow on the 1024*1024'th iteration (like the C code)
+	jnc .LLoop              ; If so, give up our timeslice to someone who's doing real work
 	; Like the compiler, you're probably thinking: "Hey! I should take these pushs out of the loop"
 	;	But the compiler doesn't know that we rarely hit this, and when we do we know the lock is
 	;	taking a long time to be released anyways.  We optimize for the common case of short
 	;	lock intervals.  That's why we're using a spinlock in the first place
 	push rsi
 	push rax
-	mov rax, 24				; sys_sched_yield
-	syscall					; give up our timeslice we'll be here a while
+	mov rax, 24             ; sys_sched_yield
+	syscall                 ; give up our timeslice we'll be here a while
 	pop rax
 	pop rsi
-	mov rdi, [rsp]			; our struct pointer is on the stack already
-	xor ecx, ecx			; Reset our loop counter
-	jmp .Loop				; Get back in the game
-.LRecursive:
-	add dword [rdi+8], 1	; increment the depth counter
-	add rsp, 8				; fix the stack
+	mov rdi, [rsp]          ; our struct pointer is on the stack already
+	xor ecx, ecx            ; Reset our loop counter
+	jmp .LLoop              ; Get back in the game
+ALIGN 16
+.LLocked:
+	mov [rdi+4], esi        ; lock->m_pidOwner = gettid()
+	inc dword [rdi+8]       ; lock->m_depth++
+	add rsp, 8              ; fix stack
 	ret
 
 ALIGN 16
@@ -75,32 +70,36 @@ fastlock_trylock:
 	;	int32_t m_depth
 	
 	; First get our TID and put it in ecx
-	push rdi				; we need our struct pointer (also balance the stack for the call)
-	call gettid				; get our thread ID (TLS is nasty in ASM so don't bother inlining)
-	mov esi, eax			; back it up in esi
-	pop rdi					; get our pointer back
+	push rdi                ; we need our struct pointer (also balance the stack for the call)
+	call gettid             ; get our thread ID (TLS is nasty in ASM so don't bother inlining)
+	mov esi, eax            ; back it up in esi
+	pop rdi                 ; get our pointer back
 
-	cmp [rdi+4], esi		; Is the TID we got back the owner of the lock?
-	je .LRecursive			; Don't spin in that case
+	cmp [rdi+4], esi        ; Is the TID we got back the owner of the lock?
+	je .LRecursive          ; Don't spin in that case
 
-	mov eax, [rdi]			; get both active and avail counters
-	mov ecx, eax			; duplicate in ecx
-	ror ecx, 16				; swap upper and lower 16-bits
-	cmp eax, ecx			; are the upper and lower 16-bits the same?
-	jnz .LAlreadyLocked		;	If not return failure
+	mov eax, [rdi]          ; get both active and avail counters
+	mov ecx, eax            ; duplicate in ecx
+	ror ecx, 16             ; swap upper and lower 16-bits
+	cmp eax, ecx            ; are the upper and lower 16-bits the same?
+	jnz .LAlreadyLocked     ;	If not return failure
 
 	; at this point we know eax+ecx have [avail][active] and they are both the same
-	add ecx, 10000h			; increment avail, ecx is now our wanted value
-	lock cmpxchg [rdi], ecx	;	If rdi still contains the value in eax, put in ecx (inc avail)
-	jnz .LAlreadyLocked		; If Z is not set then someone locked it while we were preparing
-	mov eax, 1				; return SUCCESS!
-	mov [rdi+4], esi		; lock->m_pidOwner = gettid()
-	mov dword [rdi+8], eax	; lock->m_depth = 1
+	add ecx, 10000h         ; increment avail, ecx is now our wanted value
+	lock cmpxchg [rdi], ecx ;	If rdi still contains the value in eax, put in ecx (inc avail)
+	jnz .LAlreadyLocked     ; If Z is not set then someone locked it while we were preparing
+	xor eax, eax
+	inc eax                 ; return SUCCESS! (eax=1)
+	mov [rdi+4], esi        ; lock->m_pidOwner = gettid()
+	mov dword [rdi+8], eax  ; lock->m_depth = 1
 	ret
-.LAlreadyLocked:
-	xor eax, eax			; return 0 for failure
-	ret
+ALIGN 16
 .LRecursive:
-	add dword [rdi+8], 1	; increment the depth counter
-	mov eax, 1				; we successfully got the lock
+	xor eax, eax
+	inc eax                 ; return SUCCESS! (eax=1)
+	inc dword [rdi+8]       ; lock->m_depth++
+	ret
+ALIGN 16
+.LAlreadyLocked:
+	xor eax, eax            ; return 0;
 	ret

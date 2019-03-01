@@ -35,6 +35,26 @@
 #include <ctype.h>
 #include <vector>
 #include <mutex>
+#include <sys/syscall.h>
+#include <linux/aio_abi.h>
+
+inline int io_setup(unsigned nr, aio_context_t *ctxp) {
+	return syscall(__NR_io_setup, nr, ctxp);
+}
+
+inline int io_destroy(aio_context_t ctx) {
+	return syscall(__NR_io_destroy, ctx);
+}
+
+inline int io_submit(aio_context_t ctx, long nr, struct iocb **iocbpp) {
+	return syscall(__NR_io_submit, ctx, nr, iocbpp);
+}
+
+inline int io_getevents(aio_context_t ctx, long min_nr, long max_nr,
+		struct io_event *events, struct timespec *timeout) {
+	return syscall(__NR_io_getevents, ctx, min_nr, max_nr, events, timeout);
+}
+
 
 static void setProtocolError(const char *errstr, client *c);
 void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool fAsync);
@@ -1393,6 +1413,28 @@ client *lookupClientByID(uint64_t id) {
     return (c == raxNotFound) ? NULL : c;
 }
 
+bool FSentTooMuch(client *c, ssize_t totwritten)
+{
+    /* Note that we avoid to send more than NET_MAX_WRITES_PER_EVENT
+    * bytes, in a single threaded server it's a good idea to serve
+    * other clients as well, even if a very large request comes from
+    * super fast link that is always able to accept data (in real world
+    * scenario think about 'KEYS *' against the loopback interface).
+    *
+    * However if we are over the maxmemory limit we ignore that and
+    * just deliver as much data as it is possible to deliver.
+    *
+    * Moreover, we also send as much as possible if the client is
+    * a slave (otherwise, on high-speed traffic, the replication
+    * buffer will grow indefinitely) */
+    if (totwritten > NET_MAX_WRITES_PER_EVENT &&
+        (server.maxmemory == 0 ||
+            zmalloc_used_memory() < server.maxmemory) &&
+        !(c->flags & CLIENT_SLAVE)) return true;
+    
+    return false;
+}
+
 /* Write data in output buffers to client. Return C_OK if the client
  * is still valid after the call, C_ERR if it was freed. */
 int writeToClient(int fd, client *c, int handler_installed) {
@@ -1442,22 +1484,8 @@ int writeToClient(int fd, client *c, int handler_installed) {
                     serverAssert(c->reply_bytes == 0);
             }
         }
-        /* Note that we avoid to send more than NET_MAX_WRITES_PER_EVENT
-         * bytes, in a single threaded server it's a good idea to serve
-         * other clients as well, even if a very large request comes from
-         * super fast link that is always able to accept data (in real world
-         * scenario think about 'KEYS *' against the loopback interface).
-         *
-         * However if we are over the maxmemory limit we ignore that and
-         * just deliver as much data as it is possible to deliver.
-         *
-         * Moreover, we also send as much as possible if the client is
-         * a slave (otherwise, on high-speed traffic, the replication
-         * buffer will grow indefinitely) */
-        if (totwritten > NET_MAX_WRITES_PER_EVENT &&
-            (server.maxmemory == 0 ||
-             zmalloc_used_memory() < server.maxmemory) &&
-            !(c->flags & CLIENT_SLAVE)) break;
+        if (FSentTooMuch(c, totwritten))
+            break;
     }
     
     __atomic_fetch_add(&server.stat_net_output_bytes, totwritten, __ATOMIC_RELAXED);
@@ -1509,6 +1537,278 @@ int writeToClient(int fd, client *c, int handler_installed) {
         }
     }
     return C_OK;
+}
+
+int aioQueueWrites(client *c, std::vector<iocb> &veciocb)
+{
+    size_t sentlen = 0;
+    ssize_t cbSent = 0;
+    int cevt = 0;
+
+    AssertCorrectThread(c);
+    std::unique_lock<decltype(c->lock)> lock(c->lock);
+
+    int fd = c->fd;
+    
+    if (c->bufpos > 0)
+    {
+        struct iocb cb = {0};
+        cb.aio_fildes = fd;
+        cb.aio_lio_opcode = IOCB_CMD_PWRITE;
+        cb.aio_buf = (uint64_t)(c->buf+sentlen);
+        cb.aio_nbytes = c->bufpos-sentlen;
+        veciocb.push_back(cb);
+
+        cbSent += cb.aio_nbytes;
+        sentlen = 0;
+        ++cevt;
+        
+        if (FSentTooMuch(c, cbSent))
+            return cevt;
+    }
+
+    listIter li;
+    listNode *ln;
+    listRewind(c->reply, &li);
+    // Ensure we only write one reply block, because if a write fails aio will happily write the next
+    //  reply block and it will appear out of order to the client
+    while ((cevt == 0) && (ln = listNext(&li))) 
+    {
+        clientReplyBlock* o = (clientReplyBlock*)listNodeValue(listFirst(c->reply));
+        if (o->used == 0)
+        {
+            c->reply_bytes -= o->size;
+            listDelNode(c->reply,ln);
+            continue;
+        }
+
+        struct iocb cb = {0};
+        cb.aio_fildes = fd;
+        cb.aio_lio_opcode = IOCB_CMD_PWRITE;
+        cb.aio_buf = (uint64_t)(o->buf()+sentlen);
+        cb.aio_nbytes = o->size-sentlen;
+        veciocb.push_back(cb);
+
+        cbSent += cb.aio_nbytes;
+        sentlen = 0;
+        ++cevt;
+
+        if (FSentTooMuch(c, cbSent))
+            break;
+    }
+
+    return cevt;
+}
+
+int aioProcessQueuedWrites(client *c, io_event *rgevt, const int cevtIn, bool handler_installed)
+{
+    int cevt = 0;
+    bool fError = false;
+    ssize_t totwritten = 0;
+    int errnoT = 0;
+    serverAssert(cevtIn > 0);
+
+    std::unique_lock<decltype(c->lock)> lock(c->lock);
+
+    if (c->bufpos > 0)
+    {
+        if (rgevt->res <= 0)
+        {
+            fError = true;
+            errnoT = rgevt->res2;
+        }
+        else
+        {
+            c->sentlen += rgevt->res;
+            totwritten += rgevt->res;
+
+            /* If the buffer was sent, set bufpos to zero to continue with
+             * the remainder of the reply. */
+            if ((int)c->sentlen == c->bufpos) {
+                c->bufpos = 0;
+                c->sentlen = 0;
+            }
+        }
+        ++rgevt;
+        ++cevt;
+    }
+
+    while (listLength(c->reply) && cevt < cevtIn)
+    {
+        clientReplyBlock *o = (clientReplyBlock*)listNodeValue(listFirst(c->reply));
+        if (rgevt->res <= 0)
+        {
+            fError = true;
+            errnoT = rgevt->res2;
+        }
+        else
+        {
+            serverAssert(!fError);  // this means we sent data out of order
+            c->sentlen += rgevt->res;
+            totwritten += rgevt->res;
+            
+            /* If we fully sent the object on head go to the next one */
+            if (c->sentlen == o->used) {
+                c->reply_bytes -= o->size;
+                listDelNode(c->reply,listFirst(c->reply));
+                c->sentlen = 0;
+                /* If there are no longer objects in the list, we expect
+                    * the count of reply bytes to be exactly zero. */
+                if (listLength(c->reply) == 0)
+                    serverAssert(c->reply_bytes == 0);
+            }
+        }
+        ++rgevt;
+        ++cevt;
+    }
+
+    __atomic_fetch_add(&server.stat_net_output_bytes, totwritten, __ATOMIC_RELAXED);
+    if (fError && errnoT != EAGAIN) {
+        serverLog(LL_VERBOSE,
+            "Error writing to client: %s", strerror(errno));
+        lock.unlock();
+        if (aeTryAcquireLock())
+        {
+            freeClient(c);
+            aeReleaseLock();
+        }
+        else
+        {
+            freeClientAsync(c);
+        }
+        
+        return C_ERR;
+    }
+
+    if (totwritten > 0) {
+        /* For clients representing masters we don't count sending data
+         * as an interaction, since we always send REPLCONF ACK commands
+         * that take some time to just fill the socket output buffer.
+         * We just rely on data / pings received for timeout detection. */
+        if (!(c->flags & CLIENT_MASTER)) c->lastinteraction = server.unixtime;
+    }
+    if (!clientHasPendingReplies(c)) {
+        c->sentlen = 0;
+        if (handler_installed) aeDeleteFileEvent(server.rgthreadvar[c->iel].el,c->fd,AE_WRITABLE);
+
+        /* Close connection after entire reply has been sent. */
+        if (c->flags & CLIENT_CLOSE_AFTER_REPLY) {
+            lock.unlock();
+            if (aeTryAcquireLock())
+            {
+                freeClient(c);
+                aeReleaseLock();
+            }
+            else
+            {
+                lock.unlock();
+                freeClientAsync(c);
+            }
+            return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
+int aioProcessWrites(int iel)
+{
+    thread_local aio_context_t ctxt = {0};
+    if (ctxt == 0 && io_setup(512, &ctxt) != 0)
+    {
+        return C_ERR;
+    }
+
+    std::vector<iocb> veciocb;
+    std::vector<int> veccevt;
+    std::vector<io_event> vecevt;
+    listIter li;
+    listNode *ln;
+
+    std::unique_lock<fastlock> lockf(server.rgthreadvar[iel].lockPendingWrite);
+    list *list = server.rgthreadvar[iel].clients_pending_write;
+    serverAssert(iel == (serverTL - server.rgthreadvar));
+
+    /* Gather up a list of events to send to iosubmit */
+    listRewind(list,&li);
+    while((ln = listNext(&li)))
+    {
+        client *c = (client*)listNodeValue(ln);
+        int cevtT = aioQueueWrites(c, veciocb);
+        veccevt.push_back(cevtT);
+    }
+
+    /* Make an array of pointers because that's what io_submit wants */
+    iocb **rgpiocb = (iocb**)alloca(sizeof(iocb*)*veciocb.size());
+    for (size_t iocb = 0; iocb < veciocb.size(); ++iocb)
+    {
+        rgpiocb[iocb] = veciocb.data() + iocb;
+    }
+
+    /* Do the submit and wait, may have to do this many times */
+    int ciocbTx = 0;
+    vecevt.resize(veciocb.size());
+    while (ciocbTx < (int)veciocb.size())
+    {
+        int cevtWait = veciocb.size() - ciocbTx;
+        int ciocbTxT = io_submit(ctxt, cevtWait, rgpiocb + ciocbTx);
+        if (ciocbTxT <= 0)
+            break; 
+
+        int cevt = 0;
+        while (cevt < ciocbTxT)
+        {
+            int offset = ciocbTx + cevt;
+            int cwant = ciocbTxT - cevt;
+            cevt += io_getevents(ctxt, cwant, cwant, vecevt.data() + offset, nullptr);
+        }
+        ciocbTx += ciocbTxT;
+    }
+
+
+    /* Finally Inform The Clients */
+    listRewind(list,&li);
+    int iclient = 0;
+    int cevtOffset = 0;
+    while((ln = listNext(&li)))
+    {
+        client *c = (client*)listNodeValue(ln);
+        std::unique_lock<decltype(c->lock)> lock(c->lock);
+
+        c->flags &= ~CLIENT_PENDING_WRITE;
+        listDelNode(list,ln);
+
+        if (cevtOffset < ciocbTx)
+        {
+            if (aioProcessQueuedWrites(c, vecevt.data() + cevtOffset, std::min(ciocbTx - cevtOffset, veccevt[iclient]), false) == C_ERR)
+            {
+                lock.release(); // client is free'd
+                continue;
+            }
+        }
+
+        /* If after the synchronous writes above we still have data to
+         * output to the client, we need to install the writable handler. */
+        if (clientHasPendingReplies(c)) {
+            int ae_flags = AE_WRITABLE|AE_WRITE_THREADSAFE;
+            /* For the fsync=always policy, we want that a given FD is never
+             * served for reading and writing in the same event loop iteration,
+             * so that in the middle of receiving the query, and serving it
+             * to the client, we'll call beforeSleep() that will do the
+             * actual fsync of AOF to disk. AE_BARRIER ensures that. */
+            if (server.aof_state == AOF_ON &&
+                server.aof_fsync == AOF_FSYNC_ALWAYS)
+            {
+                ae_flags |= AE_BARRIER;
+            }
+            
+            if (aeCreateFileEvent(server.rgthreadvar[c->iel].el, c->fd, ae_flags, sendReplyToClient, c) == AE_ERR)
+                freeClientAsync(c);
+        }
+        cevtOffset += veccevt[iclient];
+        ++iclient;
+    }
+
+    return iclient;
 }
 
 /* Write event handler. Just send data to the client. */
@@ -1571,11 +1871,9 @@ void ProcessPendingAsyncWrites()
     }
 }
 
-/* This function is called just before entering the event loop, in the hope
- * we can just write the replies to the client output buffer without any
- * need to use a syscall in order to install the writable event handler,
- * get it called, and so forth. */
-int handleClientsWithPendingWrites(int iel) {
+/* the slow version does multiple write() calls, vs io_submit for the fast path */
+int handleClientsWithPendingWritesSlow(int iel)
+{
     listIter li;
     listNode *ln;
 
@@ -1622,6 +1920,19 @@ int handleClientsWithPendingWrites(int iel) {
                 freeClientAsync(c);
         }
     }
+    return processed;
+}
+
+/* This function is called just before entering the event loop, in the hope
+ * we can just write the replies to the client output buffer without any
+ * need to use a syscall in order to install the writable event handler,
+ * get it called, and so forth. */
+int handleClientsWithPendingWrites(int iel) {
+    int processed;
+    if (listLength(server.rgthreadvar[iel].clients_pending_write) < 10)
+        processed = handleClientsWithPendingWritesSlow(iel);
+    else
+        processed = aioProcessWrites(iel);
 
     AeLocker locker;
     locker.arm(nullptr);

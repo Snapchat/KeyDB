@@ -131,6 +131,8 @@
 #define CLUSTER_MANAGER_LOG_LVL_ERR     3
 #define CLUSTER_MANAGER_LOG_LVL_SUCCESS 4
 
+#define CLUSTER_JOIN_CHECK_AFTER        20
+
 #define LOG_COLOR_BOLD      "29;1m"
 #define LOG_COLOR_RED       "31;1m"
 #define LOG_COLOR_GREEN     "32;1m"
@@ -176,6 +178,7 @@ typedef struct clusterManagerCommand {
     int timeout;
     int pipeline;
     float threshold;
+    char *backup_dir;
 } clusterManagerCommand;
 
 static void createClusterManagerCommand(char *cmdname, int argc, char **argv);
@@ -1975,6 +1978,15 @@ typedef struct clusterManagerReshardTableItem {
     int slot;
 } clusterManagerReshardTableItem;
 
+/* Info about a cluster internal link. */
+
+typedef struct clusterManagerLink {
+    sds node_name;
+    sds node_addr;
+    int connected;
+    int handshaking;
+} clusterManagerLink;
+
 static dictType clusterManagerDictType = {
     dictSdsHash,               /* hash function */
     NULL,                      /* key dup */
@@ -1982,6 +1994,15 @@ static dictType clusterManagerDictType = {
     dictSdsKeyCompare,         /* key compare */
     NULL,                      /* key destructor */
     dictSdsDestructor          /* val destructor */
+};
+
+static dictType clusterManagerLinkDictType = {
+    dictSdsHash,               /* hash function */
+    NULL,                      /* key dup */
+    NULL,                      /* val dup */
+    dictSdsKeyCompare,         /* key compare */
+    dictSdsDestructor,         /* key destructor */
+    dictListDestructor         /* val destructor */
 };
 
 typedef int clusterManagerCommandProc(int argc, char **argv);
@@ -2013,6 +2034,7 @@ static void clusterManagerWaitForClusterJoin(void);
 static int clusterManagerCheckCluster(int quiet);
 static void clusterManagerLog(int level, const char* fmt, ...);
 static int clusterManagerIsConfigConsistent(void);
+static dict *clusterManagerGetLinkStatus(void);
 static void clusterManagerOnError(sds err);
 static void clusterManagerNodeArrayInit(clusterManagerNodeArray *array,
                                         int len);
@@ -2036,6 +2058,7 @@ static int clusterManagerCommandSetTimeout(int argc, char **argv);
 static int clusterManagerCommandImport(int argc, char **argv);
 static int clusterManagerCommandCall(int argc, char **argv);
 static int clusterManagerCommandHelp(int argc, char **argv);
+static int clusterManagerCommandBackup(int argc, char **argv);
 
 typedef struct clusterManagerCommandDef {
     char *name;
@@ -2068,9 +2091,12 @@ clusterManagerCommandDef clusterManagerCommands[] = {
      "host:port milliseconds", NULL},
     {"import", clusterManagerCommandImport, 1, "host:port",
      "from <arg>,copy,replace"},
+    {"backup", clusterManagerCommandBackup, 2,  "host:port backup_directory",
+     NULL},
     {"help", clusterManagerCommandHelp, 0, NULL, NULL}
 };
 
+static void getRDB(clusterManagerNode *node);
 
 static void createClusterManagerCommand(char *cmdname, int argc, char **argv) {
     clusterManagerCommand *cmd = &config.cluster_manager_command;
@@ -2103,6 +2129,24 @@ static clusterManagerCommandProc *validateClusterManagerCommand(void) {
     return proc;
 }
 
+static int parseClusterNodeAddress(char *addr, char **ip_ptr, int *port_ptr,
+                                   int *bus_port_ptr)
+{
+    char *c = strrchr(addr, '@');
+    if (c != NULL) {
+        *c = '\0';
+        if (bus_port_ptr != NULL)
+            *bus_port_ptr = atoi(c + 1);
+    }
+    c = strrchr(addr, ':');
+    if (c != NULL) {
+        *c = '\0';
+        *ip_ptr = addr;
+        *port_ptr = atoi(++c);
+    } else return 0;
+    return 1;
+}
+
 /* Get host ip and port from command arguments. If only one argument has
  * been provided it must be in the form of 'ip:port', elsewhere
  * the first argument must be the ip and the second one the port.
@@ -2115,14 +2159,7 @@ static int getClusterHostFromCmdArgs(int argc, char **argv,
     char *ip = NULL;
     if (argc == 1) {
         char *addr = argv[0];
-        char *c = strrchr(addr, '@');
-        if (c != NULL) *c = '\0';
-        c = strrchr(addr, ':');
-        if (c != NULL) {
-            *c = '\0';
-            ip = addr;
-            port = atoi(++c);
-        } else return 0;
+        if (!parseClusterNodeAddress(addr, &ip, &port, NULL)) return 0;
     } else {
         ip = argv[0];
         port = atoi(argv[1]);
@@ -2227,6 +2264,16 @@ static clusterManagerNode *clusterManagerNewNode(char *ip, int port) {
     node->balance = 0;
     clusterManagerNodeResetSlots(node);
     return node;
+}
+
+static sds clusterManagerGetNodeRDBFilename(clusterManagerNode *node) {
+    assert(config.cluster_manager_command.backup_dir);
+    sds filename = sdsnew(config.cluster_manager_command.backup_dir);
+    if (filename[sdslen(filename)] - 1 != '/')
+        filename = sdscat(filename, "/");
+    filename = sdscatprintf(filename, "redis-node-%s-%d-%s.rdb", node->ip,
+                            node->port, node->name);
+    return filename;
 }
 
 /* Check whether reply is NULL or its type is REDIS_REPLY_ERROR. In the
@@ -2648,6 +2695,51 @@ static sds clusterManagerNodeSlotsString(clusterManagerNode *node) {
     }
     return slots;
 }
+
+static sds clusterManagerNodeGetJSON(clusterManagerNode *node,
+                                     unsigned long error_count)
+{
+    sds json = sdsempty();
+    sds replicate = sdsempty();
+    if (node->replicate)
+        replicate = sdscatprintf(replicate, "\"%s\"", node->replicate);
+    else
+        replicate = sdscat(replicate, "null");
+    sds slots = clusterManagerNodeSlotsString(node);
+    sds flags = clusterManagerNodeFlagString(node);
+    char *p = slots;
+    while ((p = strchr(p, '-')) != NULL)
+        *(p++) = ',';
+    json = sdscatprintf(json,
+        "  {\n"
+        "    \"name\": \"%s\",\n"
+        "    \"host\": \"%s\",\n"
+        "    \"port\": %d,\n"
+        "    \"replicate\": %s,\n"
+        "    \"slots\": [%s],\n"
+        "    \"slots_count\": %d,\n"
+        "    \"flags\": \"%s\",\n"
+        "    \"current_epoch\": %llu",
+        node->name,
+        node->ip,
+        node->port,
+        replicate,
+        slots,
+        node->slots_count,
+        flags,
+        (unsigned long long)node->current_epoch
+    );
+    if (error_count > 0) {
+        json = sdscatprintf(json, ",\n    \"cluster_errors\": %lu",
+                            error_count);
+    }
+    json = sdscat(json, "\n  }");
+    sdsfree(replicate);
+    sdsfree(slots);
+    sdsfree(flags);
+    return json;
+}
+
 
 /* -----------------------------------------------------------------------------
  * Key space handling
@@ -3382,10 +3474,55 @@ cleanup:
 /* Wait until the cluster configuration is consistent. */
 static void clusterManagerWaitForClusterJoin(void) {
     printf("Waiting for the cluster to join\n");
+    int counter = 0,
+        check_after = CLUSTER_JOIN_CHECK_AFTER +
+                      (int)(listLength(cluster_manager.nodes) * 0.15f);
     while(!clusterManagerIsConfigConsistent()) {
         printf(".");
         fflush(stdout);
         sleep(1);
+        if (++counter > check_after) {
+            dict *status = clusterManagerGetLinkStatus();
+            dictIterator *iter = NULL;
+            if (status != NULL && dictSize(status) > 0) {
+                printf("\n");
+                clusterManagerLogErr("Warning: %d node(s) may "
+                                     "be unreachable\n", dictSize(status));
+                iter = dictGetIterator(status);
+                dictEntry *entry;
+                while ((entry = dictNext(iter)) != NULL) {
+                    sds nodeaddr = (sds) dictGetKey(entry);
+                    char *node_ip = NULL;
+                    int node_port = 0, node_bus_port = 0;
+                    list *from = (list *) dictGetVal(entry);
+                    if (parseClusterNodeAddress(nodeaddr, &node_ip,
+                        &node_port, &node_bus_port) && node_bus_port) {
+                        clusterManagerLogErr(" - The port %d of node %s may "
+                                             "be unreachable from:\n",
+                                             node_bus_port, node_ip);
+                    } else {
+                        clusterManagerLogErr(" - Node %s may be unreachable "
+                                             "from:\n", nodeaddr);
+                    }
+                    listIter li;
+                    listNode *ln;
+                    listRewind(from, &li);
+                    while ((ln = listNext(&li)) != NULL) {
+                        sds from_addr = ln->value;
+                        clusterManagerLogErr("   %s\n", from_addr);
+                        sdsfree(from_addr);
+                    }
+                    clusterManagerLogErr("Cluster bus ports must be reachable "
+                                         "by every node.\nRemember that "
+                                         "cluster bus ports are different "
+                                         "from standard instance ports.\n");
+                    listEmpty(from);
+                }
+            }
+            if (iter != NULL) dictReleaseIterator(iter);
+            if (status != NULL) dictRelease(status);
+            counter = 0;
+        }
     }
     printf("\n");
 }
@@ -3787,6 +3924,88 @@ static int clusterManagerIsConfigConsistent(void) {
     }
     if (first_cfg != NULL) sdsfree(first_cfg);
     return consistent;
+}
+
+static list *clusterManagerGetDisconnectedLinks(clusterManagerNode *node) {
+    list *links = NULL;
+    redisReply *reply = CLUSTER_MANAGER_COMMAND(node, "CLUSTER NODES");
+    if (!clusterManagerCheckRedisReply(node, reply, NULL)) goto cleanup;
+    links = listCreate();
+    char *lines = reply->str, *p, *line;
+    while ((p = strstr(lines, "\n")) != NULL) {
+        int i = 0;
+        *p = '\0';
+        line = lines;
+        lines = p + 1;
+        char *nodename = NULL, *addr = NULL, *flags = NULL, *link_status = NULL;
+        while ((p = strchr(line, ' ')) != NULL) {
+            *p = '\0';
+            char *token = line;
+            line = p + 1;
+            if (i == 0) nodename = token;
+            else if (i == 1) addr = token;
+            else if (i == 2) flags = token;
+            else if (i == 7) link_status = token;
+            else if (i == 8) break;
+            i++;
+        }
+        if (i == 7) link_status = line;
+        if (nodename == NULL || addr == NULL || flags == NULL ||
+            link_status == NULL) continue;
+        if (strstr(flags, "myself") != NULL) continue;
+        int disconnected = ((strstr(flags, "disconnected") != NULL) ||
+                            (strstr(link_status, "disconnected")));
+        int handshaking = (strstr(flags, "handshake") != NULL);
+        if (disconnected || handshaking) {
+            clusterManagerLink *link = zmalloc(sizeof(*link), MALLOC_LOCAL);
+            link->node_name = sdsnew(nodename);
+            link->node_addr = sdsnew(addr);
+            link->connected = 0;
+            link->handshaking = handshaking;
+            listAddNodeTail(links, link);
+        }
+    }
+cleanup:
+    if (reply != NULL) freeReplyObject(reply);
+    return links;
+}
+
+/* Check for disconnected cluster links. It returns a dict whose keys
+ * are the unreachable node addresses and the values are lists of
+ * node addresses that cannot reach the unreachable node. */
+static dict *clusterManagerGetLinkStatus(void) {
+    if (cluster_manager.nodes == NULL) return NULL;
+    dict *status = dictCreate(&clusterManagerLinkDictType, NULL);
+    listIter li;
+    listNode *ln;
+    listRewind(cluster_manager.nodes, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        clusterManagerNode *node = ln->value;
+        list *links = clusterManagerGetDisconnectedLinks(node);
+        if (links) {
+            listIter lli;
+            listNode *lln;
+            listRewind(links, &lli);
+            while ((lln = listNext(&lli)) != NULL) {
+                clusterManagerLink *link = lln->value;
+                list *from = NULL;
+                dictEntry *entry = dictFind(status, link->node_addr);
+                if (entry) from = dictGetVal(entry);
+                else {
+                    from = listCreate();
+                    dictAdd(status, sdsdup(link->node_addr), from);
+                }
+                sds myaddr = sdsempty();
+                myaddr = sdscatfmt(myaddr, "%s:%u", node->ip, node->port);
+                listAddNodeTail(from, myaddr);
+                sdsfree(link->node_name);
+                sdsfree(link->node_addr);
+                zfree(link);
+            }
+            listRelease(links);
+        }
+    }
+    return status;
 }
 
 /* Add the error string to cluster_manager.errors and print it. */
@@ -5895,6 +6114,70 @@ invalid_args:
     return 0;
 }
 
+static int clusterManagerCommandBackup(int argc, char **argv) {
+    UNUSED(argc);
+    int success = 1, port = 0;
+    char *ip = NULL;
+    if (!getClusterHostFromCmdArgs(1, argv, &ip, &port)) goto invalid_args;
+    clusterManagerNode *refnode = clusterManagerNewNode(ip, port);
+    if (!clusterManagerLoadInfoFromNode(refnode, 0)) return 0;
+    int no_issues = clusterManagerCheckCluster(0);
+    int cluster_errors_count = (no_issues ? 0 :
+                                listLength(cluster_manager.errors));
+    config.cluster_manager_command.backup_dir = argv[1];
+    /* TODO: check if backup_dir is a valid directory. */
+    sds json = sdsnew("[\n");
+    int first_node = 0;
+    listIter li;
+    listNode *ln;
+    listRewind(cluster_manager.nodes, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        if (!first_node) first_node = 1;
+        else json = sdscat(json, ",\n");
+        clusterManagerNode *node = ln->value;
+        sds node_json = clusterManagerNodeGetJSON(node, cluster_errors_count);
+        json = sdscat(json, node_json);
+        sdsfree(node_json);
+        if (node->replicate)
+            continue;
+        clusterManagerLogInfo(">>> Node %s:%d -> Saving RDB...\n",
+                              node->ip, node->port);
+        fflush(stdout);
+        getRDB(node);
+    }
+    json = sdscat(json, "\n]");
+    sds jsonpath = sdsnew(config.cluster_manager_command.backup_dir);
+    if (jsonpath[sdslen(jsonpath) - 1] != '/')
+        jsonpath = sdscat(jsonpath, "/");
+    jsonpath = sdscat(jsonpath, "nodes.json");
+    fflush(stdout);
+    clusterManagerLogInfo("Saving cluster configuration to: %s\n", jsonpath);
+    FILE *out = fopen(jsonpath, "w+");
+    if (!out) {
+        clusterManagerLogErr("Could not save nodes to: %s\n", jsonpath);
+        success = 0;
+        goto cleanup;
+    }
+    fputs(json, out);
+    fclose(out);
+cleanup:
+    sdsfree(json);
+    sdsfree(jsonpath);
+    if (success) {
+        if (!no_issues) {
+            clusterManagerLogWarn("*** Cluster seems to have some problems, "
+                                  "please be aware of it if you're going "
+                                  "to restore this backup.\n");
+        }
+        clusterManagerLogOk("[OK] Backup created into: %s\n",
+                            config.cluster_manager_command.backup_dir);
+    } else clusterManagerLogOk("[ERR] Failed to back cluster!\n");
+    return success;
+invalid_args:
+    fprintf(stderr, CLUSTER_MANAGER_INVALID_HOST_ARG);
+    return 0;
+}
+
 static int clusterManagerCommandHelp(int argc, char **argv) {
     UNUSED(argc);
     UNUSED(argv);
@@ -6287,9 +6570,17 @@ static void slaveMode(void) {
 
 /* This function implements --rdb, so it uses the replication protocol in order
  * to fetch the RDB file from a remote server. */
-static void getRDB(void) {
-    int s = context->fd;
-    int fd;
+static void getRDB(clusterManagerNode *node) {
+    int s, fd;
+    char *filename;
+    if (node != NULL) {
+        assert(node->context);
+        s = node->context->fd;
+        filename = clusterManagerGetNodeRDBFilename(node);
+    } else {
+        s = context->fd;
+        filename = config.rdb_filename;
+    }
     static char eofmark[RDB_EOF_MARK_SIZE];
     static char lastbytes[RDB_EOF_MARK_SIZE];
     static int usemark = 0;
@@ -6300,20 +6591,20 @@ static void getRDB(void) {
         payload = ULLONG_MAX;
         memset(lastbytes,0,RDB_EOF_MARK_SIZE);
         usemark = 1;
-        fprintf(stderr,"SYNC sent to master, writing bytes of bulk transfer until EOF marker to '%s'\n",
-            config.rdb_filename);
+        fprintf(stderr,"SYNC sent to master, writing bytes of bulk transfer "
+                "until EOF marker to '%s'\n", filename);
     } else {
         fprintf(stderr,"SYNC sent to master, writing %llu bytes to '%s'\n",
-            payload, config.rdb_filename);
+            payload, filename);
     }
 
     /* Write to file. */
-    if (!strcmp(config.rdb_filename,"-")) {
+    if (!strcmp(filename,"-")) {
         fd = STDOUT_FILENO;
     } else {
-        fd = open(config.rdb_filename, O_CREAT|O_WRONLY, 0644);
+        fd = open(filename, O_CREAT|O_WRONLY, 0644);
         if (fd == -1) {
-            fprintf(stderr, "Error opening '%s': %s\n", config.rdb_filename,
+            fprintf(stderr, "Error opening '%s': %s\n", filename,
                 strerror(errno));
             exit(1);
         }
@@ -6359,6 +6650,11 @@ static void getRDB(void) {
     close(s); /* Close the file descriptor ASAP as fsync() may take time. */
     fsync(fd);
     close(fd);
+    fprintf(stderr,"Transfer finished with success.\n");
+    if (node) {
+        sdsfree(filename);
+        return;
+    }
     exit(0);
 }
 
@@ -7369,6 +7665,7 @@ int main(int argc, char **argv) {
     config.cluster_manager_command.pipeline = CLUSTER_MANAGER_MIGRATE_PIPELINE;
     config.cluster_manager_command.threshold =
         CLUSTER_MANAGER_REBALANCE_THRESHOLD;
+    config.cluster_manager_command.backup_dir = NULL;
     pref.hints = 1;
 
     spectrum_palette = spectrum_palette_color;
@@ -7420,7 +7717,7 @@ int main(int argc, char **argv) {
     if (config.getrdb_mode) {
         if (cliConnect(0) == REDIS_ERR) exit(1);
         sendCapa();
-        getRDB();
+        getRDB(NULL);
     }
 
     /* Pipe mode */

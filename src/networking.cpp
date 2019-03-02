@@ -1968,6 +1968,17 @@ void processInputBuffer(client *c) {
 
         if (c->reqtype == PROTO_REQ_INLINE) {
             if (processInlineBuffer(c) != C_OK) break;
+            /* If the Gopher mode and we got zero or one argument, process
+             * the request in Gopher mode. */
+            if (server.gopher_enabled &&
+                ((c->argc == 1 && ((char*)(ptrFromObj(c->argv[0])))[0] == '/') ||
+                  c->argc == 0))
+            {
+                processGopherRequest(c);
+                resetClient(c);
+                c->flags |= CLIENT_CLOSE_AFTER_REPLY;
+                break;
+            }
         } else if (c->reqtype == PROTO_REQ_MULTIBULK) {
             if (processMultibulkBuffer(c) != C_OK) break;
         } else {
@@ -2248,6 +2259,45 @@ sds getAllClientsInfoString(int type) {
     return o;
 }
 
+/* This function implements CLIENT SETNAME, including replying to the
+ * user with an error if the charset is wrong (in that case C_ERR is
+ * returned). If the function succeeeded C_OK is returned, and it's up
+ * to the caller to send a reply if needed.
+ *
+ * Setting an empty string as name has the effect of unsetting the
+ * currently set name: the client will remain unnamed.
+ *
+ * This function is also used to implement the HELLO SETNAME option. */
+int clientSetNameOrReply(client *c, robj *name) {
+    int len = sdslen((sds)ptrFromObj(name));
+    char *p = (char*)ptrFromObj(name);
+
+    /* Setting the client name to an empty string actually removes
+     * the current name. */
+    if (len == 0) {
+        if (c->name) decrRefCount(c->name);
+        c->name = NULL;
+        addReply(c,shared.ok);
+        return C_OK;
+    }
+
+    /* Otherwise check if the charset is ok. We need to do this otherwise
+     * CLIENT LIST format will break. You should always be able to
+     * split by space to get the different fields. */
+    for (int j = 0; j < len; j++) {
+        if (p[j] < '!' || p[j] > '~') { /* ASCII is assumed. */
+            addReplyError(c,
+                "Client names cannot contain spaces, "
+                "newlines or special characters.");
+            return C_ERR;
+        }
+    }
+    if (c->name) decrRefCount(c->name);
+    c->name = name;
+    incrRefCount(name);
+    return C_OK;
+}
+
 void clientCommand(client *c) {
     listNode *ln;
     listIter li;
@@ -2424,33 +2474,8 @@ NULL
             addReply(c,shared.czero);
         }
     } else if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"setname") && c->argc == 3) {
-        int j, len = sdslen((sds)ptrFromObj(c->argv[2]));
-        char *p = (char*)ptrFromObj(c->argv[2]);
-
-        /* Setting the client name to an empty string actually removes
-         * the current name. */
-        if (len == 0) {
-            if (c->name) decrRefCount(c->name);
-            c->name = NULL;
+        if (clientSetNameOrReply(c,c->argv[2]) == C_OK)
             addReply(c,shared.ok);
-            return;
-        }
-
-        /* Otherwise check if the charset is ok. We need to do this otherwise
-         * CLIENT LIST format will break. You should always be able to
-         * split by space to get the different fields. */
-        for (j = 0; j < len; j++) {
-            if (p[j] < '!' || p[j] > '~') { /* ASCII is assumed. */
-                addReplyError(c,
-                    "Client names cannot contain spaces, "
-                    "newlines or special characters.");
-                return;
-            }
-        }
-        if (c->name) decrRefCount(c->name);
-        c->name = c->argv[2];
-        incrRefCount(c->name);
-        addReply(c,shared.ok);
     } else if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"getname") && c->argc == 2) {
         if (c->name)
             addReplyBulk(c,c->name);
@@ -2468,7 +2493,7 @@ NULL
     }
 }
 
-/* HELLO <protocol-version> [AUTH <user> <password>] */
+/* HELLO <protocol-version> [AUTH <user> <password>] [SETNAME <name>] */
 void helloCommand(client *c) {
     long long ver;
 
@@ -2479,11 +2504,22 @@ void helloCommand(client *c) {
         return;
     }
 
-    /* Switching to protocol v2 is not allowed. But we send a specific
-     * error message in this case. */
-    if (ver == 2) {
-        addReplyError(c,"Switching to RESP version 2 is not allowed.");
-        return;
+    for (int j = 2; j < c->argc; j++) {
+        int moreargs = (c->argc-1) - j;
+        const char *opt = (const char*)ptrFromObj(c->argv[j]);
+        if (!strcasecmp(opt,"AUTH") && moreargs >= 2) {
+            if (ACLAuthenticateUser(c, c->argv[j+1], c->argv[j+2]) == C_ERR) {
+                addReplyError(c,"-WRONGPASS invalid username-password pair");
+                return;
+            }
+            j += 2;
+        } else if (!strcasecmp(opt,"SETNAME") && moreargs) {
+            if (clientSetNameOrReply(c, c->argv[j+1]) == C_ERR) return;
+            j++;
+        } else {
+            addReplyErrorFormat(c,"Syntax error in HELLO option '%s'",opt);
+            return;
+        }
     }
 
     /* At this point we need to be authenticated to continue. */
@@ -2495,8 +2531,8 @@ void helloCommand(client *c) {
         return;
     }
 
-    /* Let's switch to RESP3 mode. */
-    c->resp = 3;
+    /* Let's switch to the specified RESP mode. */
+    c->resp = ver;
     addReplyMapLen(c,7);
 
     addReplyBulkCString(c,"server");

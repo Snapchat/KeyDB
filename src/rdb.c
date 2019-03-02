@@ -1893,7 +1893,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
     long long lru_clock = LRU_CLOCK();
-    
+
     while(1) {
         robj *key, *val;
 
@@ -1984,6 +1984,23 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
                         "Can't load Lua script from RDB file! "
                         "BODY: %s", ptrFromObj(auxval));
                 }
+            } else if (!strcasecmp(ptrFromObj(auxkey),"redis-ver")) {
+                serverLog(LL_NOTICE,"Loading RDB produced by version %s",
+                    (const char*)ptrFromObj(auxval));
+            } else if (!strcasecmp(ptrFromObj(auxkey),"ctime")) {
+                time_t age = time(NULL)-strtol(ptrFromObj(auxval),NULL,10);
+                if (age < 0) age = 0;
+                serverLog(LL_NOTICE,"RDB age %ld seconds",
+                    (unsigned long) age);
+            } else if (!strcasecmp(ptrFromObj(auxkey),"used-mem")) {
+                long long usedmem = strtoll(ptrFromObj(auxval),NULL,10);
+                serverLog(LL_NOTICE,"RDB memory usage when created %.2f Mb",
+                    (double) usedmem / (1024*1024));
+            } else if (!strcasecmp(ptrFromObj(auxkey),"aof-preamble")) {
+                long long haspreamble = strtoll(ptrFromObj(auxval),NULL,10);
+                if (haspreamble) serverLog(LL_NOTICE,"RDB has an AOF tail");
+            } else if (!strcasecmp(ptrFromObj(auxkey),"redis-bits")) {
+                /* Just ignored. */
             } else {
                 /* We ignore fields we don't understand, as by AUX field
                  * contract. */
@@ -2042,7 +2059,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
 
             /* Set the expire time if needed */
             if (expiretime != -1) setExpire(NULL,db,key,expiretime);
-            
+
             /* Set usage information (for eviction). */
             objectSetLRUOrLFU(val,lfu_freq,lru_idle,lru_clock);
 

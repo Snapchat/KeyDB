@@ -111,7 +111,6 @@ extern "C" int fastlock_trylock(struct fastlock *lock)
     }
     return false;
 }
-#endif
 
 extern "C" void fastlock_unlock(struct fastlock *lock)
 {
@@ -121,9 +120,10 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
         assert((int)__atomic_load_4(&lock->m_pidOwner, __ATOMIC_RELAXED) >= 0);  // unlock after free
         lock->m_pidOwner = -1;
         std::atomic_thread_fence(std::memory_order_acquire);
-        __atomic_fetch_add(&lock->m_ticket.m_active, 1, __ATOMIC_ACQ_REL);
+        __atomic_fetch_add(&lock->m_ticket.m_active, 1, __ATOMIC_ACQ_REL);  // on x86 the atomic is not required here, but ASM handles that case
     }
 }
+#endif
 
 extern "C" void fastlock_free(struct fastlock *lock)
 {

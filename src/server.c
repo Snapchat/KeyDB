@@ -2272,6 +2272,7 @@ void initServerConfig(void) {
     server.unixsocketperm = CONFIG_DEFAULT_UNIX_SOCKET_PERM;
     server.sofd = -1;
     server.protected_mode = CONFIG_DEFAULT_PROTECTED_MODE;
+    server.gopher_enabled = CONFIG_DEFAULT_GOPHER_ENABLED;
     server.dbnum = CONFIG_DEFAULT_DBNUM;
     server.verbosity = CONFIG_DEFAULT_VERBOSITY;
     server.maxidletime = CONFIG_DEFAULT_CLIENT_TIMEOUT;
@@ -2665,7 +2666,7 @@ int listenToPort(int port, int *fds, int *count, int fReusePort) {
                 (*count)++;
             } else if (errno == EAFNOSUPPORT) {
                 unsupported++;
-                serverLog(LL_WARNING,"Not listening to IPv6: unsupproted");
+                serverLog(LL_WARNING,"Not listening to IPv6: unsupported");
             }
 
             if (*count == 1 || unsupported) {
@@ -2677,7 +2678,7 @@ int listenToPort(int port, int *fds, int *count, int fReusePort) {
                     (*count)++;
                 } else if (errno == EAFNOSUPPORT) {
                     unsupported++;
-                    serverLog(LL_WARNING,"Not listening to IPv4: unsupproted");
+                    serverLog(LL_WARNING,"Not listening to IPv4: unsupported");
                 }
             }
             /* Exit the loop if we were able to bind * on IPv4 and IPv6,
@@ -3712,51 +3713,6 @@ int writeCommandsDeniedByDiskError(void) {
     }
 }
 
-/* AUTH <passowrd>
- * AUTH <username> <password> (Redis >= 6.0 form)
- *
- * When the user is omitted it means that we are trying to authenticate
- * against the default user. */
-void authCommand(client *c) {
-    /* Only two or three argument forms are allowed. */
-    if (c->argc > 3) {
-        addReply(c,shared.syntaxerr);
-        return;
-    }
-
-    /* Handle the two different forms here. The form with two arguments
-     * will just use "default" as username. */
-    robj *username, *password;
-    if (c->argc == 2) {
-        /* Mimic the old behavior of giving an error for the two commands
-         * from if no password is configured. */
-        if (DefaultUser->flags & USER_FLAG_NOPASS) {
-            addReplyError(c,"AUTH <password> called without any password "
-                            "configured for the default user. Are you sure "
-                            "your configuration is correct?");
-            return;
-        }
-
-        username = createStringObject("default",7);
-        password = c->argv[1];
-    } else {
-        username = c->argv[1];
-        password = c->argv[2];
-    }
-
-    if (ACLCheckUserCredentials(username,password) == C_OK) {
-        c->authenticated = 1;
-        c->puser = ACLGetUserByName(ptrFromObj(username),sdslen(ptrFromObj(username)));
-        addReply(c,shared.ok);
-    } else {
-        addReplyError(c,"-WRONGPASS invalid username-password pair");
-    }
-
-    /* Free the "default" string object we created for the two
-     * arguments form. */
-    if (c->argc == 2) decrRefCount(username);
-}
-
 /* The PING command. It works in a different way if the client is in
  * in Pub/Sub mode. */
 void pingCommand(client *c) {
@@ -4714,7 +4670,7 @@ void loadDataFromDisk(void) {
                 (float)(ustime()-start)/1000000);
 
             /* Restore the replication ID / offset from the RDB file. */
-            if (server.masterhost &&
+            if ((server.masterhost || (server.cluster_enabled && nodeIsSlave(server.cluster->myself)))&&
                 rsi.repl_id_is_set &&
                 rsi.repl_offset != -1 &&
                 /* Note that older implementations may save a repl_stream_db

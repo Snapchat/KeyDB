@@ -6,8 +6,7 @@ extern sched_yield
 ;	This is the first use of assembly in this codebase, a valid question is WHY?
 ;	The spinlock we implement here is performance critical, and simply put GCC
 ;	emits awful code.  The original C code is left in fastlock.cpp for reference
-;	and x-plat.  The code generated for the unlock case is reasonable and left in
-;	C++.
+;	and x-plat.
 
 ALIGN 16
 global fastlock_lock
@@ -102,4 +101,19 @@ ALIGN 16
 ALIGN 16
 .LAlreadyLocked:
 	xor eax, eax            ; return 0;
+	ret
+
+ALIGN 16
+global fastlock_unlock
+fastlock_unlock:
+	; RDI points to the struct:
+	;	uint16_t active
+	;	uint16_t avail
+	;	int32_t m_pidOwner
+	;	int32_t m_depth
+	sub dword [rdi+8], 1         ; decrement m_depth, don't use dec because it partially writes the flag register and we don't know its state
+	jnz .LDone                   ; if depth is non-zero this is a recursive unlock, and we still hold it
+	mov dword [rdi+4], -1        ; pidOwner = -1 (we don't own it anymore)
+	inc word [rdi]               ; give up our ticket (note: lock is not required here because the spinlock itself guards this variable)
+.LDone:
 	ret

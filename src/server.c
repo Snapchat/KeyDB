@@ -2250,9 +2250,9 @@ void createSharedObjects(void) {
 void initServerConfig(void) {
     int j;
 
-    pthread_mutex_init(&server.next_client_id_mutex,NULL);
-    pthread_mutex_init(&server.lruclock_mutex,NULL);
-    pthread_mutex_init(&server.unixtime_mutex,NULL);
+    serverAssert(pthread_mutex_init(&server.next_client_id_mutex,NULL) == 0);
+    serverAssert(pthread_mutex_init(&server.lruclock_mutex,NULL) == 0);
+    serverAssert(pthread_mutex_init(&server.unixtime_mutex,NULL) == 0);
 
     updateCachedTime();
     getRandomHexChars(server.runid,CONFIG_RUN_ID_SIZE);

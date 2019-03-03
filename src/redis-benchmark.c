@@ -1534,13 +1534,19 @@ int main(int argc, const char **argv) {
     }
 
     if (config.num_threads > 0) {
-        pthread_mutex_init(&(config.requests_issued_mutex), NULL);
-        pthread_mutex_init(&(config.requests_finished_mutex), NULL);
-        pthread_mutex_init(&(config.liveclients_mutex), NULL);
-        pthread_mutex_init(&(config.is_fetching_slots_mutex), NULL);
-        pthread_mutex_init(&(config.is_updating_slots_mutex), NULL);
-        pthread_mutex_init(&(config.updating_slots_mutex), NULL);
-        pthread_mutex_init(&(config.slots_last_update_mutex), NULL);
+        int err = 0;
+        err |= pthread_mutex_init(&(config.requests_issued_mutex), NULL);
+        err |= pthread_mutex_init(&(config.requests_finished_mutex), NULL);
+        err |= pthread_mutex_init(&(config.liveclients_mutex), NULL);
+        err |= pthread_mutex_init(&(config.is_fetching_slots_mutex), NULL);
+        err |= pthread_mutex_init(&(config.is_updating_slots_mutex), NULL);
+        err |= pthread_mutex_init(&(config.updating_slots_mutex), NULL);
+        err |= pthread_mutex_init(&(config.slots_last_update_mutex), NULL);
+        if (err != 0)
+        {
+            perror("Failed to initialize mutex");
+            exit(EXIT_FAILURE);
+        }
     }
 
     if (config.keepalive == 0) {

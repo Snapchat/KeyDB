@@ -101,9 +101,9 @@ void bioInit(void) {
 
     /* Initialization of state vars and objects */
     for (j = 0; j < BIO_NUM_OPS; j++) {
-        pthread_mutex_init(&bio_mutex[j],NULL);
-        pthread_cond_init(&bio_newjob_cond[j],NULL);
-        pthread_cond_init(&bio_step_cond[j],NULL);
+        serverAssert(pthread_mutex_init(&bio_mutex[j],NULL) == 0);
+        serverAssert(pthread_cond_init(&bio_newjob_cond[j],NULL) == 0);
+        serverAssert(pthread_cond_init(&bio_step_cond[j],NULL) == 0);
         bio_jobs[j] = listCreate();
         bio_pending[j] = 0;
     }

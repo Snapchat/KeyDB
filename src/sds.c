@@ -227,7 +227,9 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
     if (type == SDS_TYPE_5) type = SDS_TYPE_8;
 
     hdrlen = sdsHdrSize(type);
-    if (oldtype==type) {
+    if (oldtype==type && (len+1024) >= avail) {
+        // note: if we have a lot of free space don't use this as we don't want s_realloc copying
+        //  uninitialized data
         newsh = s_realloc(sh, hdrlen+newlen+1, MALLOC_SHARED);
         if (newsh == NULL) return NULL;
         s = (char*)newsh+hdrlen;

@@ -2832,6 +2832,7 @@ int clientsArePaused(void) {
     if (server.clients_paused &&
         server.clients_pause_end_time < server.mstime)
     {
+        aeAcquireLock();
         listNode *ln;
         listIter li;
         client *c;
@@ -2849,6 +2850,7 @@ int clientsArePaused(void) {
             if (c->flags & (CLIENT_SLAVE|CLIENT_BLOCKED)) continue;
             queueClientForReprocessing(c);
         }
+        aeReleaseLock();
     }
     return server.clients_paused;
 }

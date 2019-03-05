@@ -1173,12 +1173,7 @@ void disconnectSlaves(void) {
     listRewind(server.slaves, &li);
     while ((ln = listNext(&li))) {
         client *c = (client*)listNodeValue(ln);
-        if (FCorrectThread(c)) {
-            freeClient(c);
-        }
-        else {
-            freeClientAsync(c);
-        }
+        freeClientAsync(c);
     }
 }
 

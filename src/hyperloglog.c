@@ -1059,7 +1059,7 @@ int hllAdd(robj *o, unsigned char *ele, size_t elesize) {
  *
  * If the HyperLogLog is sparse and is found to be invalid, C_ERR
  * is returned, otherwise the function always succeeds. */
-int hllMerge(uint8_t *max, robj *hll) {
+int hllMerge(uint8_t *max, size_t cmax, robj *hll) {
     struct hllhdr *hdr = ptrFromObj(hll);
     int i;
 
@@ -1089,6 +1089,8 @@ int hllMerge(uint8_t *max, robj *hll) {
                 runlen = HLL_SPARSE_VAL_LEN(p);
                 regval = HLL_SPARSE_VAL_VALUE(p);
                 while(runlen--) {
+                    if (i < 0 || (size_t)i >= cmax)
+                        return C_ERR;
                     if (regval > max[i]) max[i] = regval;
                     i++;
                 }
@@ -1237,7 +1239,7 @@ void pfcountCommand(client *c) {
 
             /* Merge with this HLL with our 'max' HHL by setting max[i]
              * to MAX(max[i],hll[i]). */
-            if (hllMerge(registers,o) == C_ERR) {
+            if (hllMerge(registers,sizeof(max),o) == C_ERR) {
                 addReplySds(c,sdsnew(invalid_hll_err));
                 return;
             }
@@ -1324,7 +1326,7 @@ void pfmergeCommand(client *c) {
 
         /* Merge with this HLL with our 'max' HHL by setting max[i]
          * to MAX(max[i],hll[i]). */
-        if (hllMerge(max,o) == C_ERR) {
+        if (hllMerge(max,sizeof(max),o) == C_ERR) {
             addReplySds(c,sdsnew(invalid_hll_err));
             return;
         }

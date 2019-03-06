@@ -30,6 +30,10 @@
 #define SLOWLOG_ENTRY_MAX_ARGC 32
 #define SLOWLOG_ENTRY_MAX_STRING 128
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* This structure defines an entry inside the slow log list */
 typedef struct slowlogEntry {
     robj **argv;
@@ -47,3 +51,7 @@ void slowlogPushEntryIfNeeded(client *c, robj **argv, int argc, long long durati
 
 /* Exported commands */
 void slowlogCommand(client *c);
+
+#ifdef __cplusplus
+}
+#endif

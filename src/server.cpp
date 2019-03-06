@@ -35,7 +35,7 @@
 #include "latency.h"
 #include "atomicvar.h"
 #include "storage.h"
-
+#include <thread>
 #include <time.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -4986,9 +4986,15 @@ int main(int argc, char **argv) {
             (int)getpid());
 
     if (argc == 1) {
-        serverLog(LL_WARNING, "Warning: no config file specified, using the default config. In order to specify a config file use %s /path/to/%s.conf", argv[0], server.sentinel_mode ? "sentinel" : "redis");
+        serverLog(LL_WARNING, "WARNING: no config file specified, using the default config. In order to specify a config file use %s /path/to/%s.conf", argv[0], server.sentinel_mode ? "sentinel" : "redis");
     } else {
         serverLog(LL_WARNING, "Configuration loaded");
+    }
+
+    if (server.cthreads > (int)std::thread::hardware_concurrency()) {
+        serverLog(LL_WARNING, "WARNING: server-threads is greater than this machine's core count.  Truncating to %u threads", std::thread::hardware_concurrency());
+	server.cthreads = (int)std::thread::hardware_concurrency();
+	server.cthreads = std::max(server.cthreads, 1);	// in case of any weird sign overflows
     }
 
     server.supervised = redisIsSupervised(server.supervised_mode);

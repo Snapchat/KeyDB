@@ -35,7 +35,7 @@
 #include "latency.h"
 #include "atomicvar.h"
 #include "storage.h"
-
+#include <thread>
 #include <time.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -1008,7 +1008,7 @@ struct redisCommand redisCommandTable[] = {
 
 /* We use a private localtime implementation which is fork-safe. The logging
  * function of Redis may be called from other threads. */
-void nolocks_localtime(struct tm *tmp, time_t t, time_t tz, int dst);
+extern "C" void nolocks_localtime(struct tm *tmp, time_t t, time_t tz, int dst);
 
 /* Low level logging. To use only for very big messages, otherwise
  * serverLog() is to prefer. */
@@ -1133,13 +1133,13 @@ void exitFromChild(int retcode) {
  * keys and redis objects as values (objects can hold SDS strings,
  * lists, sets). */
 
-void dictVanillaFree(void *privdata, void *val)
+extern "C" void dictVanillaFree(void *privdata, void *val)
 {
     DICT_NOTUSED(privdata);
     zfree(val);
 }
 
-void dictListDestructor(void *privdata, void *val)
+extern "C" void dictListDestructor(void *privdata, void *val)
 {
     DICT_NOTUSED(privdata);
     listRelease((list*)val);
@@ -1159,12 +1159,12 @@ int dictSdsKeyCompare(void *privdata, const void *key1,
 
 /* A case insensitive version used for the command lookup table and other
  * places where case insensitive non binary-safe comparison is needed. */
-int dictSdsKeyCaseCompare(void *privdata, const void *key1,
+extern "C" int dictSdsKeyCaseCompare(void *privdata, const void *key1,
         const void *key2)
 {
     DICT_NOTUSED(privdata);
 
-    return strcasecmp(key1, key2) == 0;
+    return strcasecmp((const char*)key1, (const char*)key2) == 0;
 }
 
 void dictObjectDestructor(void *privdata, void *val)
@@ -1172,25 +1172,25 @@ void dictObjectDestructor(void *privdata, void *val)
     DICT_NOTUSED(privdata);
 
     if (val == NULL) return; /* Lazy freeing will set value to NULL. */
-    decrRefCount(val);
+    decrRefCount((robj*)val);
 }
 
 void dictSdsDestructor(void *privdata, void *val)
 {
     DICT_NOTUSED(privdata);
 
-    sdsfree(val);
+    sdsfree((sds)val);
 }
 
 int dictObjKeyCompare(void *privdata, const void *key1,
         const void *key2)
 {
-    const robj *o1 = key1, *o2 = key2;
+    const robj *o1 = (const robj*)key1, *o2 = (const robj*)key2;
     return dictSdsKeyCompare(privdata,ptrFromObj(o1),ptrFromObj(o2));
 }
 
 uint64_t dictObjHash(const void *key) {
-    const robj *o = key;
+    const robj *o = (const robj*)key;
     void *ptr = ptrFromObj(o);
     return dictGenHashFunction(ptr, sdslen((sds)ptr));
 }
@@ -1199,7 +1199,7 @@ uint64_t dictSdsHash(const void *key) {
     return dictGenHashFunction((unsigned char*)key, sdslen((char*)key));
 }
 
-uint64_t dictSdsCaseHash(const void *key) {
+extern "C" uint64_t dictSdsCaseHash(const void *key) {
     return dictGenCaseHashFunction((unsigned char*)key, sdslen((char*)key));
 }
 
@@ -1662,8 +1662,8 @@ void clientsCron(int iel) {
          * This way if the client must be removed from the list it's the
          * first element and we don't incur into O(N) computation. */
         listRotate(server.clients);
-        head = listFirst(server.clients);
-        c = listNodeValue(head);
+        head = (listNode*)listFirst(server.clients);
+        c = (client*)listNodeValue(head);
         if (c->iel == iel)
         {
             fastlock_lock(&c->lock);
@@ -2144,7 +2144,7 @@ void afterSleep(struct aeEventLoop *eventLoop) {
 
 /* =========================== Server initialization ======================== */
 
-void createSharedObjects(void) {
+extern "C" void createSharedObjects(void) {
     int j;
 
     shared.crlf = createObject(OBJ_STRING,sdsnew("\r\n"));
@@ -2858,7 +2858,7 @@ void initServer(void) {
     createSharedObjects();
     adjustOpenFilesLimit();
 
-    server.db = zmalloc(sizeof(redisDb)*server.dbnum, MALLOC_LOCAL);
+    server.db = (redisDb*)zmalloc(sizeof(redisDb)*server.dbnum, MALLOC_LOCAL);
 
     /* Create the Redis databases, and initialize other internal state. */
     for (int j = 0; j < server.dbnum; j++) {
@@ -2967,7 +2967,7 @@ void initServer(void) {
 /* Parse the flags string description 'strflags' and set them to the
  * command 'c'. If the flags are all valid C_OK is returned, otherwise
  * C_ERR is returned (yet the recognized flags are set in the command). */
-int populateCommandTableParseFlags(struct redisCommand *c, char *strflags) {
+int populateCommandTableParseFlags(struct redisCommand *c, const char *strflags) {
     int argc;
     sds *argv;
 
@@ -3074,7 +3074,7 @@ int redisOpArrayAppend(redisOpArray *oa, struct redisCommand *cmd, int dbid,
 {
     redisOp *op;
 
-    oa->ops = zrealloc(oa->ops,sizeof(redisOp)*(oa->numops+1), MALLOC_LOCAL);
+    oa->ops = (redisOp*)zrealloc(oa->ops,sizeof(redisOp)*(oa->numops+1), MALLOC_LOCAL);
     op = oa->ops+oa->numops;
     op->cmd = cmd;
     op->dbid = dbid;
@@ -3101,15 +3101,15 @@ void redisOpArrayFree(redisOpArray *oa) {
 
 /* ====================== Commands lookup and execution ===================== */
 
-struct redisCommand *lookupCommand(sds name) {
-    return dictFetchValue(server.commands, name);
+extern "C" struct redisCommand *lookupCommand(sds name) {
+    return (struct redisCommand*)dictFetchValue(server.commands, name);
 }
 
-struct redisCommand *lookupCommandByCString(char *s) {
+struct redisCommand *lookupCommandByCString(const char *s) {
     struct redisCommand *cmd;
     sds name = sdsnew(s);
 
-    cmd = dictFetchValue(server.commands, name);
+    cmd = (struct redisCommand*)dictFetchValue(server.commands, name);
     sdsfree(name);
     return cmd;
 }
@@ -3122,9 +3122,9 @@ struct redisCommand *lookupCommandByCString(char *s) {
  * rewriteClientCommandVector() in order to set client->cmd pointer
  * correctly even if the command was renamed. */
 struct redisCommand *lookupCommandOrOriginal(sds name) {
-    struct redisCommand *cmd = dictFetchValue(server.commands, name);
+    struct redisCommand *cmd = (struct redisCommand*)dictFetchValue(server.commands, name);
 
-    if (!cmd) cmd = dictFetchValue(server.orig_commands,name);
+    if (!cmd) cmd = (struct redisCommand*)dictFetchValue(server.orig_commands,name);
     return cmd;
 }
 
@@ -3169,7 +3169,7 @@ void alsoPropagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
 
     if (server.loading) return; /* No propagation during loading. */
 
-    argvcopy = zmalloc(sizeof(robj*)*argc, MALLOC_LOCAL);
+    argvcopy = (robj**)zmalloc(sizeof(robj*)*argc, MALLOC_LOCAL);
     for (j = 0; j < argc; j++) {
         argvcopy[j] = argv[j];
         incrRefCount(argv[j]);
@@ -3286,7 +3286,7 @@ void call(client *c, int flags) {
     /* Log the command into the Slow log if needed, and populate the
      * per-command statistics that we show in INFO commandstats. */
     if (flags & CMD_CALL_SLOWLOG && c->cmd->proc != execCommand) {
-        char *latency_event = (c->cmd->flags & CMD_FAST) ?
+        const char *latency_event = (c->cmd->flags & CMD_FAST) ?
                               "fast-command" : "command";
         latencyAddSampleIfNeeded(latency_event,duration/1000);
         slowlogPushEntryIfNeeded(c,c->argv,c->argc,duration);
@@ -3378,7 +3378,7 @@ int processCommand(client *c) {
      * go through checking for replication and QUIT will cause trouble
      * when FORCE_REPLICATION is enabled and would be implemented in
      * a regular command proc. */
-    if (!strcasecmp(ptrFromObj(c->argv[0]),"quit")) {
+    if (!strcasecmp((const char*)ptrFromObj(c->argv[0]),"quit")) {
         addReply(c,shared.ok);
         c->flags |= CLIENT_CLOSE_AFTER_REPLY;
         return C_ERR;
@@ -3389,7 +3389,7 @@ int processCommand(client *c) {
 
     /* Now lookup the command and check ASAP about trivial error conditions
      * such as wrong arity, bad command name and so forth. */
-    c->cmd = c->lastcmd = lookupCommand(ptrFromObj(c->argv[0]));
+    c->cmd = c->lastcmd = lookupCommand((sds)ptrFromObj(c->argv[0]));
     if (!c->cmd) {
         flagTransaction(c);
         sds args = sdsempty();
@@ -3754,7 +3754,7 @@ void timeCommand(client *c) {
 }
 
 /* Helper function for addReplyCommand() to output flags. */
-int addReplyCommandFlag(client *c, struct redisCommand *cmd, int f, char *reply) {
+int addReplyCommandFlag(client *c, struct redisCommand *cmd, int f, const char *reply) {
     if (cmd->flags & f) {
         addReplyStatus(c, reply);
         return 1;
@@ -3808,7 +3808,7 @@ void commandCommand(client *c) {
     dictIterator *di;
     dictEntry *de;
 
-    if (c->argc == 2 && !strcasecmp(ptrFromObj(c->argv[1]),"help")) {
+    if (c->argc == 2 && !strcasecmp((const char*)ptrFromObj(c->argv[1]),"help")) {
         const char *help[] = {
 "(no subcommand) -- Return details about all Redis commands.",
 "COUNT -- Return the total number of commands in this Redis server.",
@@ -3821,19 +3821,19 @@ NULL
         addReplyArrayLen(c, dictSize(server.commands));
         di = dictGetIterator(server.commands);
         while ((de = dictNext(di)) != NULL) {
-            addReplyCommand(c, dictGetVal(de));
+            addReplyCommand(c, (redisCommand*)dictGetVal(de));
         }
         dictReleaseIterator(di);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]), "info")) {
+    } else if (!strcasecmp((const char*)ptrFromObj(c->argv[1]), "info")) {
         int i;
         addReplyArrayLen(c, c->argc-2);
         for (i = 2; i < c->argc; i++) {
-            addReplyCommand(c, dictFetchValue(server.commands, ptrFromObj(c->argv[i])));
+            addReplyCommand(c, (redisCommand*)dictFetchValue(server.commands, ptrFromObj(c->argv[i])));
         }
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]), "count") && c->argc == 2) {
+    } else if (!strcasecmp((const char*)ptrFromObj(c->argv[1]), "count") && c->argc == 2) {
         addReplyLongLong(c, dictSize(server.commands));
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"getkeys") && c->argc >= 3) {
-        struct redisCommand *cmd = lookupCommand(ptrFromObj(c->argv[2]));
+    } else if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"getkeys") && c->argc >= 3) {
+        struct redisCommand *cmd = (redisCommand*)lookupCommand((sds)ptrFromObj(c->argv[2]));
         int *keys, numkeys, j;
 
         if (!cmd) {
@@ -3894,7 +3894,7 @@ void bytesToHuman(char *s, unsigned long long n) {
 /* Create the string returned by the INFO command. This is decoupled
  * by the INFO command itself as we need to report the same information
  * on memory corruption problems. */
-sds genRedisInfoString(char *section) {
+extern "C" sds genRedisInfoString(const char *section) {
     sds info = sdsempty();
     time_t uptime = server.unixtime-server.stat_starttime;
     int j;
@@ -3913,7 +3913,7 @@ sds genRedisInfoString(char *section) {
     if (allsections || defsections || !strcasecmp(section,"server")) {
         static int call_uname = 1;
         static struct utsname name;
-        char *mode;
+        const char *mode;
 
         if (server.cluster_enabled) mode = "cluster";
         else if (server.sentinel_mode) mode = "sentinel";
@@ -4333,8 +4333,8 @@ sds genRedisInfoString(char *section) {
 
             listRewind(server.slaves,&li);
             while((ln = listNext(&li))) {
-                client *slave = listNodeValue(ln);
-                char *state = NULL;
+                client *slave = (client*)listNodeValue(ln);
+                const char *state = NULL;
                 char ip[NET_IP_STR_LEN], *slaveip = slave->slave_ip;
                 int port;
                 long lag = 0;
@@ -4451,7 +4451,7 @@ sds genRedisInfoString(char *section) {
 }
 
 void infoCommand(client *c) {
-    char *section = c->argc == 2 ? ptrFromObj(c->argv[1]) : "default";
+    const char *section = c->argc == 2 ? (const char*)ptrFromObj(c->argv[1]) : "default";
 
     if (c->argc > 2) {
         addReply(c,shared.syntaxerr);
@@ -4557,8 +4557,8 @@ void usage(void) {
 
 void redisAsciiArt(void) {
 #include "asciilogo.h"
-    char *buf = zmalloc(1024*16, MALLOC_LOCAL);
-    char *mode;
+    char *buf = (char*)zmalloc(1024*16, MALLOC_LOCAL);
+    const char *mode;
 
     if (server.cluster_enabled) mode = "cluster";
     else if (server.sentinel_mode) mode = "sentinel";
@@ -4592,7 +4592,7 @@ void redisAsciiArt(void) {
 }
 
 static void sigShutdownHandler(int sig) {
-    char *msg;
+    const char *msg;
 
     switch (sig) {
     case SIGINT:
@@ -4644,7 +4644,7 @@ void setupSignalHandlers(void) {
     return;
 }
 
-void memtest(size_t megabytes, int passes);
+extern "C" void memtest(size_t megabytes, int passes);
 
 /* Returns 1 if there is --sentinel among the arguments or if
  * argv[0] contains "keydb-sentinel". */
@@ -4701,7 +4701,7 @@ void redisOutOfMemoryHandler(size_t allocation_size) {
 
 void redisSetProcTitle(char *title) {
 #ifdef USE_SETPROCTITLE
-    char *server_mode = "";
+    const char *server_mode = "";
     if (server.cluster_enabled) server_mode = " [cluster]";
     else if (server.sentinel_mode) server_mode = " [sentinel]";
 
@@ -4768,7 +4768,7 @@ int redisSupervisedSystemd(void) {
         su.sun_path[0] = '\0';
 
     memset(&iov, 0, sizeof(iov));
-    iov.iov_base = "READY=1";
+    iov.iov_base = (void*)"READY=1";
     iov.iov_len = strlen("READY=1");
 
     memset(&hdr, 0, sizeof(hdr));
@@ -4890,7 +4890,7 @@ int main(int argc, char **argv) {
     /* Store the executable path and arguments in a safe place in order
      * to be able to restart the server later. */
     server.executable = getAbsolutePath(argv[0]);
-    server.exec_argv = zmalloc(sizeof(char*)*(argc+1), MALLOC_LOCAL);
+    server.exec_argv = (char**)zmalloc(sizeof(char*)*(argc+1), MALLOC_LOCAL);
     server.exec_argv[argc] = NULL;
     for (j = 0; j < argc; j++) server.exec_argv[j] = zstrdup(argv[j]);
 
@@ -4986,9 +4986,15 @@ int main(int argc, char **argv) {
             (int)getpid());
 
     if (argc == 1) {
-        serverLog(LL_WARNING, "Warning: no config file specified, using the default config. In order to specify a config file use %s /path/to/%s.conf", argv[0], server.sentinel_mode ? "sentinel" : "redis");
+        serverLog(LL_WARNING, "WARNING: no config file specified, using the default config. In order to specify a config file use %s /path/to/%s.conf", argv[0], server.sentinel_mode ? "sentinel" : "redis");
     } else {
         serverLog(LL_WARNING, "Configuration loaded");
+    }
+
+    if (server.cthreads > (int)std::thread::hardware_concurrency()) {
+        serverLog(LL_WARNING, "WARNING: server-threads is greater than this machine's core count.  Truncating to %u threads", std::thread::hardware_concurrency());
+	server.cthreads = (int)std::thread::hardware_concurrency();
+	server.cthreads = std::max(server.cthreads, 1);	// in case of any weird sign overflows
     }
 
     server.supervised = redisIsSupervised(server.supervised_mode);

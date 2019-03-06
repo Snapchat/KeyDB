@@ -4739,7 +4739,7 @@ void moduleUnregisterCommands(struct RedisModule *module) {
         if (cmd->proc == RedisModuleCommandDispatcher) {
             RedisModuleCommandProxy *cp =
                 (void*)(unsigned long)cmd->getkeys_proc;
-            sds cmdname = cp->rediscmd->name;
+            sds cmdname = (sds)cp->rediscmd->name;
             if (cp->module == module) {
                 dictDelete(server.commands,cmdname);
                 dictDelete(server.orig_commands,cmdname);

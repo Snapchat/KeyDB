@@ -27,7 +27,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-char *ascii_logo =
+const char *ascii_logo =
 "                                                                     \n"
 "                                                                     \n"
 "                                        KeyDB %s (%s/%d) %s bit\n"

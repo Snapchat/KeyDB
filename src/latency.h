@@ -34,6 +34,10 @@
 #ifndef __LATENCY_H
 #define __LATENCY_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define LATENCY_TS_LEN 160 /* History length for every monitored event. */
 
 /* Representation of a latency sample: the sampling time and the latency
@@ -62,7 +66,7 @@ struct latencyStats {
 };
 
 void latencyMonitorInit(void);
-void latencyAddSample(char *event, mstime_t latency);
+void latencyAddSample(const char *event, mstime_t latency);
 int THPIsEnabled(void);
 
 /* Latency monitoring macros. */
@@ -90,4 +94,9 @@ int THPIsEnabled(void);
 #define latencyRemoveNestedEvent(event_var,nested_var) \
     event_var += nested_var;
 
+#ifdef __cplusplus
+}
+#endif
+
 #endif /* __LATENCY_H */
+

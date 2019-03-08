@@ -116,7 +116,7 @@ void resizeReplicationBacklog(long long newsize) {
 }
 
 void freeReplicationBacklog(void) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     serverAssert(listLength(server.slaves) == 0);
     zfree(server.repl_backlog);
     server.repl_backlog = NULL;
@@ -127,7 +127,7 @@ void freeReplicationBacklog(void) {
  * server.master_repl_offset, because there is no case where we want to feed
  * the backlog without incrementing the offset. */
 void feedReplicationBacklog(void *ptr, size_t len) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     unsigned char *p = (unsigned char*)ptr;
 
     server.master_repl_offset += len;
@@ -179,7 +179,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listIter li;
     int j, len;
     char llstr[LONG_STR_SIZE];
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
 
     /* If the instance is not a top level master, return ASAP: we'll just proxy
      * the stream of data we receive from our master instead, in order to
@@ -328,7 +328,7 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
     sds cmdrepr = sdsnew("+");
     robj *cmdobj;
     struct timeval tv;
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
 
     gettimeofday(&tv,NULL);
     cmdrepr = sdscatprintf(cmdrepr,"%ld.%06ld ",(long)tv.tv_sec,(long)tv.tv_usec);
@@ -468,7 +468,7 @@ int replicationSetupSlaveForFullResync(client *slave, long long offset) {
  * On success return C_OK, otherwise C_ERR is returned and we proceed
  * with the usual full resync. */
 int masterTryPartialResynchronization(client *c) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     long long psync_offset, psync_len;
     char *master_replid = (char*)ptrFromObj(c->argv[1]);
     char buf[128];
@@ -588,7 +588,7 @@ need_full_resync:
  *
  * Returns C_OK on success or C_ERR otherwise. */
 int startBgsaveForReplication(int mincapa) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     int retval;
     int socket_target = server.repl_diskless_sync && (mincapa & SLAVE_CAPA_EOF);
     listIter li;
@@ -975,7 +975,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
     listIter li;
     int startbgsave = 0;
     int mincapa = -1;
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
 
     listRewind(server.slaves,&li);
     while((ln = listNext(&li))) {
@@ -1165,7 +1165,7 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(privdata);
     UNUSED(mask);
 
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
 
     /* Static vars used to hold the EOF mark, and the last bytes received
      * form the server: when they match, we reached the end of the transfer. */
@@ -1651,7 +1651,7 @@ int slaveTryPartialResynchronization(aeEventLoop *el, int fd, int read_reply) {
 /* This handler fires when the non blocking connect was able to
  * establish a connection with the master. */
 void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     char tmpfile[256], *err = NULL;
     int dfd = -1, maxtries = 5;
     int sockerr = 0, psync_result;
@@ -2603,7 +2603,7 @@ long long replicationGetSlaveOffset(void) {
 
 /* Replication cron function, called 1 time per second. */
 void replicationCron(void) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     static long long replication_cron_loops = 0;
     std::unique_lock<decltype(server.master->lock)> ulock;
     if (server.master != nullptr)

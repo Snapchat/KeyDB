@@ -264,7 +264,7 @@ void clientInstallWriteHandler(client *c) {
 }
 
 void clientInstallAsyncWriteHandler(client *c) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     if (!(c->fPendingAsyncWrite)) {
         c->fPendingAsyncWrite = TRUE;
         listAddNodeHead(serverTL->clients_pending_asyncwrite,c);
@@ -295,8 +295,8 @@ void clientInstallAsyncWriteHandler(client *c) {
  * data should be appended to the output buffers. */
 int prepareClientToWrite(client *c, bool fAsync) {
     fAsync = fAsync && !FCorrectThread(c);  // Not async if we're on the right thread
-    serverAssert(!fAsync || aeThreadOwnsLock());
-    serverAssert(c->lock.fOwnLock());
+    serverAssert(!fAsync || GlobalLocksAcquired());
+    serverAssert(c->fd <= 0 || c->lock.fOwnLock());
 
     /* If it's the Lua client we always return ok without installing any
      * handler since there is no socket at all. */
@@ -331,7 +331,7 @@ int _addReplyToBuffer(client *c, const char *s, size_t len, bool fAsync) {
     fAsync = fAsync && !FCorrectThread(c);  // Not async if we're on the right thread
     if (fAsync)
     {
-        serverAssert(aeThreadOwnsLock());
+        serverAssert(GlobalLocksAcquired());
         if ((c->buflenAsync - c->bufposAsync) < (int)len)
         {
             int minsize = len + c->bufposAsync;
@@ -1166,7 +1166,7 @@ static void freeClientArgv(client *c) {
  * when we resync with our own master and want to force all our slaves to
  * resync with us as well. */
 void disconnectSlaves(void) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     listIter li;
     listNode *ln;
 
@@ -1183,8 +1183,8 @@ void disconnectSlaves(void) {
 void unlinkClient(client *c) {
     listNode *ln;
     AssertCorrectThread(c);
-    serverAssert(aeThreadOwnsLock());
-    serverAssert(c->lock.fOwnLock());
+    serverAssert(c->fd == -1 || GlobalLocksAcquired());
+    serverAssert(c->fd == -1 || c->lock.fOwnLock());
 
     /* If this is marked as current client unset it. */
     if (server.current_client == c) server.current_client = NULL;
@@ -1245,7 +1245,7 @@ void unlinkClient(client *c) {
 
 void freeClient(client *c) {
     listNode *ln;
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(c->fd == -1 || GlobalLocksAcquired());
     AssertCorrectThread(c);
     std::unique_lock<decltype(c->lock)> ulock(c->lock);
 
@@ -1517,7 +1517,10 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
 
 void ProcessPendingAsyncWrites()
 {
-    serverAssert(aeThreadOwnsLock());
+    if (serverTL == nullptr)
+        return; // module fake call
+
+    serverAssert(GlobalLocksAcquired());
 
     while(listLength(serverTL->clients_pending_asyncwrite)) {
         client *c = (client*)listNodeValue(listFirst(serverTL->clients_pending_asyncwrite));
@@ -2770,7 +2773,7 @@ void asyncCloseClientOnOutputBufferLimitReached(client *c) {
  * This is also called by SHUTDOWN for a best-effort attempt to send
  * slaves the latest writes. */
 void flushSlavesOutputBuffers(void) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     listIter li;
     listNode *ln;
 

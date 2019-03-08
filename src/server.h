@@ -1546,10 +1546,9 @@ void moduleHandleBlockedClients(void);
 void moduleBlockedClientTimedOut(client *c);
 void moduleBlockedClientPipeReadable(aeEventLoop *el, int fd, void *privdata, int mask);
 size_t moduleCount(void);
-void moduleAcquireGIL(void);
-void moduleReleaseGIL(void);
+void moduleAcquireGIL(int fServerThread);
+void moduleReleaseGIL(int fServerThread);
 void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid);
-
 
 /* Utils */
 long long ustime(void);
@@ -2352,6 +2351,12 @@ void mixDigest(unsigned char *digest, void *ptr, size_t len);
 void xorDigest(unsigned char *digest, void *ptr, size_t len);
 int populateCommandTableParseFlags(struct redisCommand *c, char *strflags);
 
+int moduleGILAcquiredByModule(void);
+static inline int GlobalLocksAcquired(void)  // Used in asserts to verify all global locks are correctly acquired for a server-thread to operate
+{
+    return aeThreadOwnsLock() || moduleGILAcquiredByModule();
+}
+
 inline int ielFromEventLoop(const aeEventLoop *eventLoop)
 {
     int iel = 0;
@@ -2366,7 +2371,9 @@ inline int ielFromEventLoop(const aeEventLoop *eventLoop)
 
 inline int FCorrectThread(client *c)
 {
-    return server.rgthreadvar[c->iel].el == serverTL->el;
+    return (serverTL != NULL && (server.rgthreadvar[c->iel].el == serverTL->el))
+        || (c->iel == IDX_EVENT_LOOP_MAIN && moduleGILAcquiredByModule())
+        || (c->fd == -1);
 }
 #define AssertCorrectThread(c) serverAssert(FCorrectThread(c))
 

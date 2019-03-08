@@ -219,8 +219,8 @@ static list *moduleUnblockedClients;
 
 /* We need a mutex that is unlocked / relocked in beforeSleep() in order to
  * allow thread safe contexts to execute commands at a safe moment. */
-static pthread_mutex_t moduleGIL = PTHREAD_MUTEX_INITIALIZER;
-
+static pthread_rwlock_t moduleGIL = PTHREAD_RWLOCK_INITIALIZER;
+int fModuleGILWlocked = FALSE;
 
 /* Function pointer type for keyspace event notification subscriptions from modules. */
 typedef int (*RedisModuleNotificationFunc) (RedisModuleCtx *ctx, int type, const char *event, RedisModuleString *key);
@@ -484,7 +484,7 @@ void moduleFreeContext(RedisModuleCtx *ctx) {
  * details needed to correctly replicate commands. */
 void moduleHandlePropagationAfterCommandCallback(RedisModuleCtx *ctx) {
     client *c = ctx->client;
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
 
     if (c->flags & CLIENT_LUA) return;
 
@@ -3624,7 +3624,7 @@ void RM_SetDisconnectCallback(RedisModuleBlockedClient *bc, RedisModuleDisconnec
 void moduleHandleBlockedClients(void) {
     listNode *ln;
     RedisModuleBlockedClient *bc;
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
 
     pthread_mutex_lock(&moduleUnblockedClientsMutex);
     /* Here we unblock all the pending clients blocked in modules operations
@@ -3824,21 +3824,37 @@ void RM_FreeThreadSafeContext(RedisModuleCtx *ctx) {
  * a blocked client connected to the thread safe context. */
 void RM_ThreadSafeContextLock(RedisModuleCtx *ctx) {
     UNUSED(ctx);
-    moduleAcquireGIL();
+    moduleAcquireGIL(FALSE /*fServerThread*/);
 }
 
 /* Release the server lock after a thread safe API call was executed. */
 void RM_ThreadSafeContextUnlock(RedisModuleCtx *ctx) {
     UNUSED(ctx);
-    moduleReleaseGIL();
+    moduleReleaseGIL(FALSE /*fServerThread*/);
 }
 
-void moduleAcquireGIL(void) {
-    pthread_mutex_lock(&moduleGIL);
+void moduleAcquireGIL(int fServerThread) {
+    if (fServerThread)
+    {
+        pthread_rwlock_rdlock(&moduleGIL);
+    }
+    else
+    {
+        pthread_rwlock_wrlock(&moduleGIL);
+        fModuleGILWlocked = TRUE;
+    }
 }
 
-void moduleReleaseGIL(void) {
-    pthread_mutex_unlock(&moduleGIL);
+void moduleReleaseGIL(int fServerThread) {
+    pthread_rwlock_unlock(&moduleGIL);
+    if (!fServerThread)
+    {
+        fModuleGILWlocked = FALSE;
+    }
+}
+
+int moduleGILAcquiredByModule(void) {
+    return fModuleGILWlocked;
 }
 
 
@@ -4694,7 +4710,8 @@ void moduleInitModulesSystem(void) {
 
     /* Our thread-safe contexts GIL must start with already locked:
      * it is just unlocked when it's safe. */
-    pthread_mutex_lock(&moduleGIL);
+    pthread_rwlock_init(&moduleGIL, NULL);
+    pthread_rwlock_rdlock(&moduleGIL);
 }
 
 /* Load all the modules in the server.loadmodule_queue list, which is

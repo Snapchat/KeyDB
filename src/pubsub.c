@@ -329,7 +329,7 @@ int pubsubPublishMessage(robj *channel, robj *message) {
 
 void subscribeCommand(client *c) {
     int j;
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
 
     for (j = 1; j < c->argc; j++)
         pubsubSubscribeChannel(c,c->argv[j]);
@@ -350,7 +350,7 @@ void unsubscribeCommand(client *c) {
 
 void psubscribeCommand(client *c) {
     int j;
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
 
     for (j = 1; j < c->argc; j++)
         pubsubSubscribePattern(c,c->argv[j]);

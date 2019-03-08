@@ -2116,7 +2116,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
      * time. */
-    if (moduleCount()) moduleReleaseGIL();
+    if (moduleCount()) moduleReleaseGIL(TRUE /*fServerThread*/);
 }
 
 void beforeSleepLite(struct aeEventLoop *eventLoop)
@@ -2132,6 +2132,11 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
 
     /* Handle writes with pending output buffers. */
     handleClientsWithPendingWrites(iel);
+
+    /* Before we are going to sleep, let the threads access the dataset by
+     * releasing the GIL. Redis main thread will not touch anything at this
+     * time. */
+    if (moduleCount()) moduleReleaseGIL(TRUE /*fServerThread*/);
 }
 
 /* This function is called immadiately after the event loop multiplexing
@@ -2139,7 +2144,7 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
  * the different events callbacks. */
 void afterSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
-    if (moduleCount()) moduleAcquireGIL();
+    if (moduleCount()) moduleAcquireGIL(TRUE /*fServerThread*/);
 }
 
 /* =========================== Server initialization ======================== */
@@ -3142,7 +3147,7 @@ struct redisCommand *lookupCommandOrOriginal(sds name) {
 void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                int flags)
 {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     if (server.aof_state != AOF_OFF && flags & PROPAGATE_AOF)
         feedAppendOnlyFile(cmd,dbid,argv,argc);
     if (flags & PROPAGATE_REPL)
@@ -3243,7 +3248,7 @@ void call(client *c, int flags) {
     long long dirty, start, duration;
     int client_old_flags = c->flags;
     struct redisCommand *real_cmd = c->cmd;
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
 
     /* Sent the command to clients in MONITOR mode, only if the commands are
      * not generated from reading an AOF. */
@@ -3373,7 +3378,7 @@ void call(client *c, int flags) {
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     /* The QUIT command is handled separately. Normal command procs will
      * go through checking for replication and QUIT will cause trouble
      * when FORCE_REPLICATION is enabled and would be implemented in
@@ -3385,7 +3390,7 @@ int processCommand(client *c) {
     }
 
     AssertCorrectThread(c);
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
 
     /* Now lookup the command and check ASAP about trivial error conditions
      * such as wrong arity, bad command name and so forth. */
@@ -4462,7 +4467,7 @@ void infoCommand(client *c) {
 
 void monitorCommand(client *c) {
     /* ignore MONITOR if already slave or in monitor mode */
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     if (c->flags & CLIENT_SLAVE) return;
 
     c->flags |= (CLIENT_SLAVE|CLIENT_MONITOR);
@@ -4819,7 +4824,7 @@ void *workerThreadMain(void *parg)
     int isMainThread = (iel == IDX_EVENT_LOOP_MAIN);
     aeEventLoop *el = server.rgthreadvar[iel].el;
     aeSetBeforeSleepProc(el, isMainThread ? beforeSleep : beforeSleepLite, isMainThread ? 0 : AE_SLEEP_THREADSAFE);
-    aeSetAfterSleepProc(el, isMainThread ? afterSleep : NULL, 0);
+    aeSetAfterSleepProc(el, afterSleep, AE_SLEEP_THREADSAFE);
     aeMain(el);
     aeDeleteEventLoop(el);
     return NULL;

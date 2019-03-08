@@ -96,7 +96,7 @@ void aofChildWriteDiffData(aeEventLoop *el, int fd, void *privdata, int mask) {
     listNode *ln;
     aofrwblock *block;
     ssize_t nwritten;
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
 
     UNUSED(el);
     UNUSED(fd);

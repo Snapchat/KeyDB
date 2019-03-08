@@ -5390,7 +5390,7 @@ socket_err:
  * the target instance. See the Redis Cluster specification for more
  * information. */
 void askingCommand(client *c) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     if (server.cluster_enabled == 0) {
         addReplyError(c,"This instance has cluster support disabled");
         return;
@@ -5403,7 +5403,7 @@ void askingCommand(client *c) {
  * In this mode slaves will not redirect clients as long as clients access
  * with read-only commands to keys that are served by the slave's master. */
 void readonlyCommand(client *c) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     if (server.cluster_enabled == 0) {
         addReplyError(c,"This instance has cluster support disabled");
         return;
@@ -5414,7 +5414,7 @@ void readonlyCommand(client *c) {
 
 /* The READWRITE command just clears the READONLY command state. */
 void readwriteCommand(client *c) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     c->flags &= ~CLIENT_READONLY;
     addReply(c,shared.ok);
 }
@@ -5458,7 +5458,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
     multiState *ms, _ms;
     multiCmd mc;
     int i, slot = 0, migrating_slot = 0, importing_slot = 0, missing_keys = 0;
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
 
     /* Allow any key to be set if a module disabled cluster redirections. */
     if (server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_REDIRECTION)
@@ -5671,7 +5671,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
  * longer handles, the client is sent a redirection error, and the function
  * returns 1. Otherwise 0 is returned and no operation is performed. */
 int clusterRedirectBlockedClientIfNeeded(client *c) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     if (c->flags & CLIENT_BLOCKED &&
         (c->btype == BLOCKED_LIST ||
          c->btype == BLOCKED_ZSET ||

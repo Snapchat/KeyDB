@@ -2157,7 +2157,7 @@ void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal) {
  * This function covers the case of RDB -> Salves socket transfers for
  * diskless replication. */
 void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     uint64_t *ok_slaves;
 
     if (!bysignal && exitcode == 0) {
@@ -2277,7 +2277,7 @@ void killRDBChild(void) {
 /* Spawn an RDB child that writes the RDB to the sockets of the slaves
  * that are currently in SLAVE_STATE_WAIT_BGSAVE_START state. */
 int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     int *fds;
     uint64_t *clientids;
     int numfds;

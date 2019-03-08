@@ -725,7 +725,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         /* After sleep callback. */
         if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP) {
             std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
-            if (!(eventLoop->beforesleepFlags & AE_SLEEP_THREADSAFE))
+            if (!(eventLoop->aftersleepFlags & AE_SLEEP_THREADSAFE))
                 ulock.lock();
             eventLoop->aftersleep(eventLoop);
         }

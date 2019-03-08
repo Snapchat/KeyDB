@@ -100,7 +100,7 @@ int getTimeoutFromObjectOrReply(client *c, robj *object, mstime_t *timeout, int 
  * flag is set client query buffer is not longer processed, but accumulated,
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     c->flags |= CLIENT_BLOCKED;
     c->btype = btype;
     server.blocked_clients++;
@@ -111,7 +111,7 @@ void blockClient(client *c, int btype) {
  * in order to process the pending input buffer of clients that were
  * unblocked after a blocking operation. */
 void processUnblockedClients(int iel) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
 
     listNode *ln;
     client *c;
@@ -160,7 +160,7 @@ void processUnblockedClients(int iel) {
 void queueClientForReprocessing(client *c) {
     /* The client may already be into the unblocked list because of a previous
      * blocking operation, don't add back it into the list multiple times. */
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     fastlock_lock(&c->lock);
     if (!(c->flags & CLIENT_UNBLOCKED)) {
         c->flags |= CLIENT_UNBLOCKED;
@@ -172,7 +172,7 @@ void queueClientForReprocessing(client *c) {
 /* Unblock a client calling the right function depending on the kind
  * of operation the client is blocking for. */
 void unblockClient(client *c) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     if (c->btype == BLOCKED_LIST ||
         c->btype == BLOCKED_ZSET ||
         c->btype == BLOCKED_STREAM) {
@@ -218,7 +218,7 @@ void replyToBlockedClientTimedOut(client *c) {
  * The semantics is to send an -UNBLOCKED error to the client, disconnecting
  * it at the same time. */
 void disconnectAllBlockedClients(void) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     listNode *ln;
     listIter li;
 
@@ -260,7 +260,7 @@ void disconnectAllBlockedClients(void) {
  * be used only for a single type, like virtually any Redis application will
  * do, the function is already fair. */
 void handleClientsBlockedOnKeys(void) {
-    serverAssert(aeThreadOwnsLock());
+    serverAssert(GlobalLocksAcquired());
     while(listLength(server.ready_keys) != 0) {
         list *l;
 

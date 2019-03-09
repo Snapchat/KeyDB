@@ -3,6 +3,10 @@
 
 #define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 44   // Note: also defined in object.c - should always match
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 enum MALLOC_CLASS
 {
     MALLOC_LOCAL,
@@ -21,5 +25,9 @@ struct redisObject *salloc_objembstr();
 void sfree_objembstr(struct redisObject *obj);
 struct redisObject *salloc_obj();
 void sfree_obj(struct redisObject *obj);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

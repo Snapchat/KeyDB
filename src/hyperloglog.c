@@ -1239,7 +1239,7 @@ void pfcountCommand(client *c) {
 
             /* Merge with this HLL with our 'max' HHL by setting max[i]
              * to MAX(max[i],hll[i]). */
-            if (hllMerge(registers,sizeof(max),o) == C_ERR) {
+            if (hllMerge(registers,HLL_REGISTERS,o) == C_ERR) {
                 addReplySds(c,sdsnew(invalid_hll_err));
                 return;
             }

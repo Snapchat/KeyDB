@@ -5,6 +5,8 @@ KeyDB is a high performance fork of Redis focussing on multithreading, memory ef
 
 On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency.
 
+KeyDB has full compatibility with the Redis protocol, modules, and scripts.  This includes full support for transactions, and atomic execution of scripts.
+
 Why fork Redis?
 ---------------
 

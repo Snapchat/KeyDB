@@ -17,6 +17,8 @@ We plan to track the Redis repo closely and hope our projects can learn from eac
 Benchmarking KeyDB
 ------------------
 
+<img src=https://cdn-images-1.medium.com/max/1400/1*s7mTb7Qb0kxc951mz8bdgA.png width=420 height=300/><img src=https://cdn-images-1.medium.com/max/1400/1*R00A5U4AFGohGOYHMfT6fA.png height=300/>
+
 Please note keydb-benchmark and redis-benchmark are currently single threaded and too slow to properly benchmark KeyDB.  We recommend using a redis cluster benchmark tool such as [memtier](https://github.com/RedisLabs/memtier_benchmark).  Please ensure your machine has enough cores for both KeyDB and memteir if testing locally.  KeyDB expects exclusive use of any cores assigned to it.
 
 For more details on how we benchmarked KeyDB along with performance numbers check out our blog post: [Redis Should Be Multithreaded](https://medium.com/@john_63123/redis-should-be-multi-threaded-e28319cab744?source=friends_link&sk=7ce8e9fe3ec8224a4d27ef075d085457)

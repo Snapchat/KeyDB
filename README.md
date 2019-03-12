@@ -7,6 +7,8 @@ On the same hardware KeyDB can perform twice as many queries per second as Redis
 
 KeyDB has full compatibility with the Redis protocol, modules, and scripts.  This includes full support for transactions, and atomic execution of scripts.  For more information see our architecture section below.
 
+Try our docker container: https://hub.docker.com/r/eqalpha/keydb
+
 Why fork Redis?
 ---------------
 

@@ -5,7 +5,7 @@ KeyDB is a high performance fork of Redis focussing on multithreading, memory ef
 
 On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency.
 
-KeyDB has full compatibility with the Redis protocol, modules, and scripts.  This includes full support for transactions, and atomic execution of scripts.
+KeyDB has full compatibility with the Redis protocol, modules, and scripts.  This includes full support for transactions, and atomic execution of scripts.  For more information see our architecture section below.
 
 Why fork Redis?
 ---------------
@@ -183,6 +183,17 @@ system reboots.
 
 You'll be able to stop and start KeyDB using the script named
 `/etc/init.d/keydb_<portnumber>`, for instance `/etc/init.d/keydb_6379`.
+
+Multithreading Architecture
+---------------------------
+
+KeyDB works by running the normal Redis event loop on multiple threads.  Network IO, and query parsing are done concurrently.  Each connection is assigned a thread on accept().  Access to the core hash table is guarded by spinlock.  Because the hashtable access is extremely fast this lock has low contention.  Transactions hold the lock for the duration of the EXEC command.  Modules work in concert with the GIL which is only acquired when all server threads are paused.  This maintains the atomicity gurantees modules expect.
+
+Unlike most databases the core data structure is the fastest part of the system.  Most of the query time comes from parsing the REPL protocol and copying data to/from the network.
+
+Future work:
+ - Allow rebalancing of connections to different threads after the connection
+ - Allow multiple readers access to the hashtable concurrently
 
 Code contributions
 -----------------

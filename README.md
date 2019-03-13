@@ -41,7 +41,7 @@ If you would like to use the FLASH backed storage this option configures the dir
     
     db-s3-object /path/to/bucket
 
-If you would like KeyDB to dump directly to AWS S3 this option specifies the bucket.  Using this option with the traditional RDB options will result in KeyDB backing up twice to both locations.  This requires the AWS CLI tools to be installed and configured which are used under the hood to transfer the data.
+If you would like KeyDB to dump and load directly to AWS S3 this option specifies the bucket.  Using this option with the traditional RDB options will result in KeyDB backing up twice to both locations.  If both are specified KeyDB will first attempt to load from the local dump file and if that fails load from S3.  This requires the AWS CLI tools to be installed and configured which are used under the hood to transfer the data.
 
 All other configuration options behave as you'd expect.  Your existing configuration files should continue to work unchanged.
 

@@ -2097,6 +2097,19 @@ eoferr: /* unexpected end of file is handled here with a fatal exit */
     return C_ERR; /* Just to avoid warning */
 }
 
+int rdbLoadFile(char *filename, rdbSaveInfo *rsi);
+int rdbLoad(rdbSaveInfo *rsi)
+{
+    int err = C_ERR;
+    if (server.rdb_filename != NULL)
+        err = rdbLoadFile(server.rdb_filename, rsi);
+
+    if ((err == C_ERR) && server.rdb_s3bucketpath != NULL)
+        err = rdbLoadS3(server.rdb_s3bucketpath, rsi);
+
+    return err;
+}
+
 /* Like rdbLoadRio() but takes a filename instead of a rio stream. The
  * filename is open for reading and a rio stream object created in order
  * to do the actual loading. Moreover the ETA displayed in the INFO
@@ -2104,7 +2117,7 @@ eoferr: /* unexpected end of file is handled here with a fatal exit */
  *
  * If you pass an 'rsi' structure initialied with RDB_SAVE_OPTION_INIT, the
  * loading code will fiil the information fields in the structure. */
-int rdbLoad(char *filename, rdbSaveInfo *rsi) {
+int rdbLoadFile(char *filename, rdbSaveInfo *rsi) {
     FILE *fp;
     rio rdb;
     int retval;

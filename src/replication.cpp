@@ -1334,7 +1334,7 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
         aeDeleteFileEvent(el,server.repl_transfer_s,AE_READABLE);
         serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Loading DB in memory");
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
-        if (rdbLoad(server.rdb_filename,&rsi) != C_OK) {
+        if (rdbLoad(&rsi) != C_OK) {
             serverLog(LL_WARNING,"Failed trying to load the MASTER synchronization DB from disk");
             cancelReplicationHandshake();
             /* Re-enable the AOF if we disabled it earlier, in order to restore
@@ -2102,14 +2102,26 @@ void replicaofCommand(client *c) {
     } else {
         long port;
 
+        if (c->flags & CLIENT_SLAVE)
+        {
+            /* If a client is already a replica they cannot run this command,
+             * because it involves flushing all replicas (including this
+             * client) */
+            addReplyError(c, "Command is not valid when client is a replica.");
+            return;
+        }
+
         if ((getLongFromObjectOrReply(c, c->argv[2], &port, NULL) != C_OK))
             return;
 
         /* Check if we are already attached to the specified slave */
         if (server.masterhost && !strcasecmp(server.masterhost,(const char*)ptrFromObj(c->argv[1]))
             && server.masterport == port) {
-            serverLog(LL_NOTICE,"REPLICAOF would result into synchronization with the master we are already connected with. No operation performed.");
-            addReplySdsAsync(c,sdsnew("+OK Already connected to specified master\r\n"));
+            serverLog(LL_NOTICE,"REPLICAOF would result into synchronization "
+                                "with the master we are already connected "
+                                "with. No operation performed.");
+            addReplySds(c,sdsnew("+OK Already connected to specified "
+                                 "master\r\n"));
             return;
         }
         /* There was no previous master or the user specified a different one,

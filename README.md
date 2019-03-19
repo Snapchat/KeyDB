@@ -1,11 +1,13 @@
 What is KeyDB?
 --------------
 
-KeyDB is a high performance fork of Redis focussing on multithreading, memory efficiency, and high throughput.  In addition to multithreading KeyDB also has features only available in Redis Enterprise such as FLASH storage support, and some not available at all such as direct backup to AWS S3.
+KeyDB is a high performance fork of Redis focusing on multithreading, memory efficiency, and high throughput.  In addition to multithreading KeyDB also has features only available in Redis Enterprise such as FLASH storage support, and some not available at all such as direct backup to AWS S3.
 
 On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency.
 
 KeyDB has full compatibility with the Redis protocol, modules, and scripts.  This includes full support for transactions, and atomic execution of scripts.  For more information see our architecture section below.
+
+Try our docker container: https://hub.docker.com/r/eqalpha/keydb
 
 Why fork Redis?
 ---------------
@@ -39,7 +41,7 @@ If you would like to use the FLASH backed storage this option configures the dir
     
     db-s3-object /path/to/bucket
 
-If you would like KeyDB to dump directly to AWS S3 this option specifies the bucket.  Using this option with the traditional RDB options will result in KeyDB backing up twice to both locations.  This requires the AWS CLI tools to be installed and configured which are used under the hood to transfer the data.
+If you would like KeyDB to dump and load directly to AWS S3 this option specifies the bucket.  Using this option with the traditional RDB options will result in KeyDB backing up twice to both locations.  If both are specified KeyDB will first attempt to load from the local dump file and if that fails load from S3.  This requires the AWS CLI tools to be installed and configured which are used under the hood to transfer the data.
 
 All other configuration options behave as you'd expect.  Your existing configuration files should continue to work unchanged.
 
@@ -179,6 +181,8 @@ for Ubuntu and Debian systems:
     % cd utils
     % ./install_server.sh
 
+_Note_: `install_server.sh` will not work on Mac OSX; it is built for Linux only.
+
 The script will ask you a few questions and will setup everything you need
 to run KeyDB properly as a background daemon that will start again on
 system reboots.
@@ -189,7 +193,7 @@ You'll be able to stop and start KeyDB using the script named
 Multithreading Architecture
 ---------------------------
 
-KeyDB works by running the normal Redis event loop on multiple threads.  Network IO, and query parsing are done concurrently.  Each connection is assigned a thread on accept().  Access to the core hash table is guarded by spinlock.  Because the hashtable access is extremely fast this lock has low contention.  Transactions hold the lock for the duration of the EXEC command.  Modules work in concert with the GIL which is only acquired when all server threads are paused.  This maintains the atomicity gurantees modules expect.
+KeyDB works by running the normal Redis event loop on multiple threads.  Network IO, and query parsing are done concurrently.  Each connection is assigned a thread on accept().  Access to the core hash table is guarded by spinlock.  Because the hashtable access is extremely fast this lock has low contention.  Transactions hold the lock for the duration of the EXEC command.  Modules work in concert with the GIL which is only acquired when all server threads are paused.  This maintains the atomicity guarantees modules expect.
 
 Unlike most databases the core data structure is the fastest part of the system.  Most of the query time comes from parsing the REPL protocol and copying data to/from the network.
 

@@ -2117,8 +2117,11 @@ void replicaofCommand(client *c) {
         /* Check if we are already attached to the specified slave */
         if (server.masterhost && !strcasecmp(server.masterhost,(const char*)ptrFromObj(c->argv[1]))
             && server.masterport == port) {
-            serverLog(LL_NOTICE,"REPLICAOF would result into synchronization with the master we are already connected with. No operation performed.");
-            addReplySdsAsync(c,sdsnew("+OK Already connected to specified master\r\n"));
+            serverLog(LL_NOTICE,"REPLICAOF would result into synchronization "
+                                "with the master we are already connected "
+                                "with. No operation performed.");
+            addReplySds(c,sdsnew("+OK Already connected to specified "
+                                 "master\r\n"));
             return;
         }
         /* There was no previous master or the user specified a different one,

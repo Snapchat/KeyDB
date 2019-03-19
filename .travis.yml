@@ -1,5 +1,6 @@
 language: generic
 os: osx
+scipt: make
 matrix:
   include:
     - os: linux

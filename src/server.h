@@ -2330,10 +2330,12 @@ void lolwutCommand(client *c);
 void aclCommand(client *c);
 
 #if defined(__GNUC__)
+#ifndef __cplusplus
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));
 void free(void *ptr) __attribute__ ((deprecated));
 void *malloc(size_t size) __attribute__ ((deprecated));
 void *realloc(void *ptr, size_t size) __attribute__ ((deprecated));
+#endif
 #endif
 
 /* Debugging stuff */

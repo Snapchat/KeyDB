@@ -57,6 +57,7 @@
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
+#include <algorithm>
 
 /* Our shared "common" objects */
 

@@ -35,7 +35,12 @@
 #if defined(__linux__)
 #define _GNU_SOURCE 1
 #define _DEFAULT_SOURCE 1
+
+#include <linux/version.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,19,0)
+#define HAVE_SO_INCOMING_CPU 1
 #endif
+#endif  // __linux__
 
 #if defined(_AIX)
 #define _ALL_SOURCE

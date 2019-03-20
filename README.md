@@ -1,3 +1,4 @@
+![Current Release](https://img.shields.io/github/release/JohnSully/KeyDB.svg)
 [![Build Status](https://travis-ci.org/JohnSully/KeyDB.svg?branch=unstable)](https://travis-ci.org/JohnSully/KeyDB)
 
 What is KeyDB?

@@ -138,6 +138,7 @@ void linkClient(client *c) {
      * this way removing the client in unlinkClient() will not require
      * a linear scan, but just a constant time operation. */
     c->client_list_node = listLast(server.clients);
+    if (c->fd != -1) atomicIncr(server.rgthreadvar[c->iel].cclients, 1);
     uint64_t id = htonu64(c->id);
     raxInsert(server.clients_index,(unsigned char*)&id,sizeof(id),c,NULL);
 }
@@ -1208,6 +1209,8 @@ void unlinkClient(client *c) {
         aeDeleteFileEvent(server.rgthreadvar[c->iel].el,c->fd,AE_WRITABLE);
         close(c->fd);
         c->fd = -1;
+
+        atomicDecr(server.rgthreadvar[c->iel].cclients, 1);
     }
 
     /* Remove from the list of pending writes if needed. */

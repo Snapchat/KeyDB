@@ -13,6 +13,8 @@ int fastlock_trylock(struct fastlock *lock);
 void fastlock_unlock(struct fastlock *lock);
 void fastlock_free(struct fastlock *lock);
 
+uint64_t fastlock_getlongwaitcount();   // this is a global value
+
 /* End C API */
 #ifdef __cplusplus
 }

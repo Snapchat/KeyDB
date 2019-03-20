@@ -43,6 +43,13 @@
  ****************************************************/
 
 static_assert(sizeof(pid_t) <= sizeof(fastlock::m_pidOwner), "fastlock::m_pidOwner not large enough");
+uint64_t g_longwaits = 0;
+
+uint64_t fastlock_getlongwaitcount()
+{
+    return g_longwaits;
+}
+
 
 extern "C" pid_t gettid()
 {
@@ -75,7 +82,10 @@ extern "C" void fastlock_lock(struct fastlock *lock)
     while (__atomic_load_2(&lock->m_ticket.m_active, __ATOMIC_ACQUIRE) != myticket)
     {
         if ((++cloops % 1024*1024) == 0)
+        {
             sched_yield();
+            ++g_longwaits;
+        }
 #if defined(__i386__) || defined(__amd64__)
         __asm__ ("pause");
 #endif

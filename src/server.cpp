@@ -2815,6 +2815,7 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     pvar->unblocked_clients = listCreate();
     pvar->clients_pending_asyncwrite = listCreate();
     pvar->ipfd_count = 0;
+    pvar->cclients = 0;
     pvar->el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
     if (pvar->el == NULL) {
         serverLog(LL_WARNING,
@@ -3997,6 +3998,12 @@ extern "C" sds genRedisInfoString(const char *section) {
             listLength(server.clients)-listLength(server.slaves),
             maxin, maxout,
             server.blocked_clients);
+        for (int ithread = 0; ithread < server.cthreads; ++ithread)
+        {
+            info = sdscatprintf(info,
+                "thread_%d_clients:%d\r\n",
+                ithread, server.rgthreadvar[ithread].cclients);
+        }
     }
 
     /* Memory */
@@ -4401,11 +4408,15 @@ extern "C" sds genRedisInfoString(const char *section) {
         "used_cpu_sys:%ld.%06ld\r\n"
         "used_cpu_user:%ld.%06ld\r\n"
         "used_cpu_sys_children:%ld.%06ld\r\n"
-        "used_cpu_user_children:%ld.%06ld\r\n",
+        "used_cpu_user_children:%ld.%06ld\r\n"
+        "server_threads:%d\r\n"
+        "long_lock_waits:%" PRIu64 "\r\n",
         (long)self_ru.ru_stime.tv_sec, (long)self_ru.ru_stime.tv_usec,
         (long)self_ru.ru_utime.tv_sec, (long)self_ru.ru_utime.tv_usec,
         (long)c_ru.ru_stime.tv_sec, (long)c_ru.ru_stime.tv_usec,
-        (long)c_ru.ru_utime.tv_sec, (long)c_ru.ru_utime.tv_usec);
+        (long)c_ru.ru_utime.tv_sec, (long)c_ru.ru_utime.tv_usec,
+        server.cthreads,
+        fastlock_getlongwaitcount());
     }
 
     /* Command statistics */

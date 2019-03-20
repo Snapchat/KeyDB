@@ -22,4 +22,5 @@ matrix:
             - libc++-dev
             - libc++abi-dev
             - nasm
+            - libjemalloc-dev
           sources: *sources

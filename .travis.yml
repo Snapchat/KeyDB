@@ -1,9 +1,9 @@
 language: generic
 os: osx
-script: make
 matrix:
   include:
     - os: linux
+      script: make
       env: COMPILER_NAME=gcc CXX=g++-5 CC=gcc-5
       addons:
         apt:
@@ -14,6 +14,7 @@ matrix:
             - llvm-toolchain-precise-3.8
             - ubuntu-toolchain-r-test
     - os: linux
+      script: make MALLOC=libc
       env: COMPILER_NAME=clang CXX=clang++-3.8 CC=clang-3.8 CXXFLAGS="-stdlib=libc++" LDFLAGS="-stlib=libc++"
       addons:
         apt:
@@ -22,5 +23,4 @@ matrix:
             - libc++-dev
             - libc++abi-dev
             - nasm
-            - libjemalloc-dev
           sources: *sources

@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/JohnSully/KeyDB.svg?branch=unstable)](https://travis-ci.org/JohnSully/KeyDB)
+
 What is KeyDB?
 --------------
 

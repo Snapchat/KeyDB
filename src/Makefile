@@ -233,17 +233,15 @@ persist-settings: distclean
 .PHONY: persist-settings
 
 # Prerequisites target
-.make-prerequisites:
-	@touch $@
-
 # Clean everything, persist settings and build dependencies if anything changed
 ifneq ($(strip $(PREV_FINAL_CFLAGS)), $(strip $(FINAL_CFLAGS)))
 .make-prerequisites: persist-settings
-endif
-
-ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
+else ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
 .make-prerequisites: persist-settings
+else
+.make-prerequisites:
 endif
+	@touch $@
 
 # keydb-server
 $(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ)

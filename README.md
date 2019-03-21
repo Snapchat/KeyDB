@@ -204,6 +204,26 @@ Future work:
  - Allow rebalancing of connections to different threads after the connection
  - Allow multiple readers access to the hashtable concurrently
 
+Docker Build
+------------
+
+Run the following commands for a full source download and build:
+
+```
+git clone git@github.com:JohnSully/KeyDB.git
+docker run -it --rm `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make
+```
+
+Then you have fresh binaries built, you can also pass any other options to the make command above after the word make. E.g.
+
+```docker run -it --rm `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make MAllOC=memkind```
+
+The above commands will build you binaries in the src directory. Standard `make install` without Docker command will work after if you wish to install
+
+If you'd prefer you can build the Dockerfile in the repo instead of pulling the above container for use:
+
+`docker build -t KeyDB .`
+
 Code contributions
 -----------------
 

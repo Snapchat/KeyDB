@@ -113,7 +113,7 @@ extern "C" int fastlock_trylock(struct fastlock *lock)
 
     struct ticket ticket_expect { active, active };
     struct ticket ticket_setiflocked { active, next };
-    if (__atomic_compare_exchange(&lock->m_ticket, &ticket_expect, &ticket_setiflocked, true /*strong*/, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
+    if (__atomic_compare_exchange(&lock->m_ticket, &ticket_expect, &ticket_setiflocked, false /*weak*/, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
     {
         lock->m_depth = 1;
         __atomic_store_4(&lock->m_pidOwner, gettid(), __ATOMIC_RELEASE);

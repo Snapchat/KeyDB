@@ -39,7 +39,7 @@ typedef struct aeApiState {
 } aeApiState;
 
 static int aeApiCreate(aeEventLoop *eventLoop) {
-    aeApiState *state = zmalloc(sizeof(aeApiState));
+    aeApiState *state = zmalloc(sizeof(aeApiState), MALLOC_LOCAL);
 
     if (!state) return -1;
     state->events = zmalloc(sizeof(struct kevent)*eventLoop->setsize, MALLOC_LOCAL);

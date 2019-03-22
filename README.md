@@ -1,5 +1,5 @@
 ![Current Release](https://img.shields.io/github/release/JohnSully/KeyDB.svg)
-[![Build Status](https://travis-ci.org/JohnSully/KeyDB.svg?branch=unstable)](https://travis-ci.org/JohnSully/KeyDB)
+[![Build Status](https://travis-ci.org/JohnSully/KeyDB.svg?branch=unstable)](https://travis-ci.org/JohnSully/KeyDB) [![Join the chat at https://gitter.im/KeyDB/community](https://badges.gitter.im/KeyDB/community.svg)](https://gitter.im/KeyDB/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 What is KeyDB?
 --------------
@@ -11,6 +11,8 @@ On the same hardware KeyDB can perform twice as many queries per second as Redis
 KeyDB has full compatibility with the Redis protocol, modules, and scripts.  This includes full support for transactions, and atomic execution of scripts.  For more information see our architecture section below.
 
 Try our docker container: https://hub.docker.com/r/eqalpha/keydb
+
+Talk on Gitter: https://gitter.im/KeyDB
 
 Why fork Redis?
 ---------------

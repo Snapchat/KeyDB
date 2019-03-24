@@ -849,6 +849,16 @@ void loadServerConfigFromString(char *config) {
                 err = "Unknown argument: server-thread-affinity expects either true or false";
                 goto loaderr;
             }
+        } else if (!strcasecmp(argv[0], "active-replica") && argc == 2) {
+            server.fActiveReplica = yesnotoi(argv[1]);
+            if (server.repl_slave_ro) {
+                server.repl_slave_ro = FALSE;
+                serverLog(LL_NOTICE, "Notice: \"active-replica yes\" implies \"replica-read-only no\"");
+            }
+            if (server.fActiveReplica == -1) {
+                server.fActiveReplica = CONFIG_DEFAULT_ACTIVE_REPLICA;
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -2350,6 +2360,7 @@ int rewriteConfig(char *path) {
     rewriteConfigYesNoOption(state,"lazyfree-lazy-server-del",server.lazyfree_lazy_server_del,CONFIG_DEFAULT_LAZYFREE_LAZY_SERVER_DEL);
     rewriteConfigYesNoOption(state,"replica-lazy-flush",server.repl_slave_lazy_flush,CONFIG_DEFAULT_SLAVE_LAZY_FLUSH);
     rewriteConfigYesNoOption(state,"dynamic-hz",server.dynamic_hz,CONFIG_DEFAULT_DYNAMIC_HZ);
+    rewriteConfigYesNoOption(state,"active-replica",server.fActiveReplica,CONFIG_DEFAULT_ACTIVE_REPLICA);
 
     /* Rewrite Sentinel config if in Sentinel mode. */
     if (server.sentinel_mode) rewriteConfigSentinelOption(state);

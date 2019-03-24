@@ -38,6 +38,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <mutex>
+#include <uuid/uuid.h>
 
 void replicationDiscardCachedMaster(void);
 void replicationResurrectCachedMaster(int newfd);
@@ -72,6 +73,21 @@ char *replicationGetSlaveName(client *c) {
             (unsigned long long) c->id);
     }
     return buf;
+}
+
+static bool FSameHost(client *clientA, client *clientB)
+{
+    const unsigned char *a = clientA->uuid;
+    const unsigned char *b = clientB->uuid;
+
+    unsigned char zeroCheck = 0;
+    for (int i = 0; i < UUID_BINARY_LEN; ++i)
+    {
+        if (a[i] != b[i])
+            return false;
+        zeroCheck |= a[i];
+    }
+    return (zeroCheck != 0);    // if the UUID is nil then it is never equal
 }
 
 /* ---------------------------------- MASTER -------------------------------- */
@@ -117,7 +133,13 @@ void resizeReplicationBacklog(long long newsize) {
 
 void freeReplicationBacklog(void) {
     serverAssert(GlobalLocksAcquired());
-    serverAssert(listLength(server.slaves) == 0);
+    listIter li;
+    listNode *ln;
+    listRewind(server.slaves, &li);
+    while ((ln = listNext(&li))) {
+        // server.slaves should be empty, or filled with clients pending close
+        serverAssert(((client*)listNodeValue(ln))->flags & CLIENT_CLOSE_ASAP);
+    }
     zfree(server.repl_backlog);
     server.repl_backlog = NULL;
 }
@@ -186,7 +208,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
      * propagate *identical* replication stream. In this way this slave can
      * advertise the same replication ID as the master (since it shares the
      * master replication history and has the same backlog and offsets). */
-    if (server.masterhost != NULL) return;
+    if (!server.fActiveReplica && server.masterhost != NULL) return;
 
     /* If there aren't slaves, and there is no backlog buffer to populate,
      * we can return ASAP. */
@@ -226,6 +248,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         while((ln = listNext(&li))) {
             client *slave = (client*)ln->value;
             if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
+            if (server.current_client && FSameHost(server.current_client, slave)) continue;
             addReplyAsync(slave,selectcmd);
         }
 
@@ -268,6 +291,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
+        if (server.current_client && FSameHost(server.current_client, slave)) continue;
 
         /* Feed slaves that are waiting for the initial SYNC (so these commands
          * are queued in the output buffer until the initial SYNC completes),
@@ -282,10 +306,10 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
             addReplyBulkAsync(slave,argv[j]);
     }
 
-    /* Release the lock on all slaves */
     listRewind(slaves,&li);
     while((ln = listNext(&li))) {
-        ((client*)ln->value)->lock.unlock();
+        client *slave = (client*)ln->value;
+        slave->lock.unlock();
     }
 }
 
@@ -311,6 +335,8 @@ void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t bufle
     while((ln = listNext(&li))) {
         client *slave = (client*)ln->value;
         std::lock_guard<decltype(slave->lock)> ulock(slave->lock);
+        if (FSameHost(slave, server.master))
+            continue;   // Active Active case, don't feed back
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
@@ -658,9 +684,11 @@ void syncCommand(client *c) {
 
     /* Refuse SYNC requests if we are a slave but the link with our master
      * is not ok... */
-    if (server.masterhost && server.repl_state != REPL_STATE_CONNECTED) {
-        addReplySds(c,sdsnew("-NOMASTERLINK Can't SYNC while not connected with my master\r\n"));
-        return;
+    if (!server.fActiveReplica) {
+        if (server.masterhost && server.repl_state != REPL_STATE_CONNECTED) {
+            addReplySds(c,sdsnew("-NOMASTERLINK Can't SYNC while not connected with my master\r\n"));
+            return;
+        }
     }
 
     /* SYNC can't be issued when the server has pending data to send to
@@ -790,6 +818,33 @@ void syncCommand(client *c) {
     return;
 }
 
+void processReplconfUuid(client *c, robj *arg)
+{
+    try
+    {
+        if (arg->type != OBJ_STRING)
+            throw "Invalid UUID";
+
+        const char *remoteUUID = (const char*)ptrFromObj(arg);
+        if (strlen(remoteUUID) != 36)
+            throw "Invalid UUID";
+
+        if (uuid_parse(remoteUUID, c->uuid) != 0)
+            throw "Invalid UUID";
+
+        char szServerUUID[36 + 2]; // 1 for the '+', another for '\0'
+        szServerUUID[0] = '+';
+        uuid_unparse(server.uuid, szServerUUID+1);
+        addReplyProto(c, szServerUUID, 37);
+        addReplyProto(c, "\r\n", 2);
+    } 
+    catch (const char *szErr)
+    {
+        addReplyError(c, szErr);
+        return;
+    }
+}
+
 /* REPLCONF <option> <value> <option> <value> ...
  * This command is used by a slave in order to configure the replication
  * process before starting it with the SYNC command.
@@ -860,6 +915,10 @@ void replconfCommand(client *c) {
              * to the slave. */
             if (server.masterhost && server.master) replicationSendAck();
             return;
+        } else if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"uuid")) {
+            /* REPLCONF uuid is used to set and send the UUID of each host */
+            processReplconfUuid(c, c->argv[j+1]);
+            return; // the process function replies to the client for both error and success
         } else {
             addReplyErrorFormat(c,"Unrecognized REPLCONF option: %s",
                 (char*)ptrFromObj(c->argv[j]));
@@ -1134,6 +1193,10 @@ void replicationCreateMasterClient(int fd, int dbid) {
     server.master->reploff = server.master_initial_offset;
     server.master->read_reploff = server.master->reploff;
     server.master->puser = NULL; /* This client can do everything. */
+    
+    memcpy(server.master->uuid, server.master_uuid, UUID_BINARY_LEN);
+    memset(server.master_uuid, 0, UUID_BINARY_LEN); // make sure people don't use this temp storage buffer
+
     memcpy(server.master->replid, server.master_replid,
         sizeof(server.master_replid));
     /* If master offset is set to -1, this master is old and is not
@@ -1738,7 +1801,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
             server.repl_state = REPL_STATE_RECEIVE_AUTH;
             return;
         } else {
-            server.repl_state = REPL_STATE_SEND_PORT;
+            server.repl_state = REPL_STATE_SEND_UUID;
         }
     }
 
@@ -1751,7 +1814,38 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
             goto error;
         }
         sdsfree(err);
+        server.repl_state = REPL_STATE_SEND_UUID;
+    }
+
+    /* Send UUID */
+    if (server.repl_state == REPL_STATE_SEND_UUID) {
+        char szUUID[37];
+        memset(server.master_uuid, 0, UUID_BINARY_LEN);
+        uuid_unparse((unsigned char*)server.uuid, szUUID);
+        err = sendSynchronousCommand(SYNC_CMD_WRITE,fd,"REPLCONF","uuid",szUUID);
+        if (err) goto write_error;
+        server.repl_state = REPL_STATE_RECEIVE_UUID;
+        return;
+    }
+
+    /* Receive UUID */
+    if (server.repl_state == REPL_STATE_RECEIVE_UUID) {
+        err = sendSynchronousCommand(SYNC_CMD_READ,fd,NULL);
+        if (err[0] == '-') {
+            serverLog(LL_WARNING, "non-fatal: Master doesn't understand REPLCONF uuid");
+        }
+        else {
+            if (strlen(err) != 37   // 36-byte UUID string and the leading '+'
+                || uuid_parse(err+1, server.master_uuid) != 0)   
+            {
+                serverLog(LL_WARNING, "Master replied with a UUID we don't understand");
+                sdsfree(err);
+                goto error;
+            }
+        }
+        sdsfree(err);
         server.repl_state = REPL_STATE_SEND_PORT;
+        // fallthrough
     }
 
     /* Set the slave port, so that Master's INFO command can list the

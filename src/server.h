@@ -87,6 +87,8 @@ typedef long long mstime_t; /* millisecond time type. */
 extern "C" {
 #endif
 
+#define UUID_BINARY_LEN 16
+
 /* Error codes */
 #define C_OK                    0
 #define C_ERR                   -1
@@ -185,6 +187,8 @@ extern "C" {
 
 #define CONFIG_DEFAULT_THREADS 1
 #define CONFIG_DEFAULT_THREAD_AFFINITY 0
+
+#define CONFIG_DEFAULT_ACTIVE_REPLICA 0
 
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
@@ -335,17 +339,19 @@ extern "C" {
 #define REPL_STATE_RECEIVE_PONG 3 /* Wait for PING reply */
 #define REPL_STATE_SEND_AUTH 4 /* Send AUTH to master */
 #define REPL_STATE_RECEIVE_AUTH 5 /* Wait for AUTH reply */
-#define REPL_STATE_SEND_PORT 6 /* Send REPLCONF listening-port */
-#define REPL_STATE_RECEIVE_PORT 7 /* Wait for REPLCONF reply */
-#define REPL_STATE_SEND_IP 8 /* Send REPLCONF ip-address */
-#define REPL_STATE_RECEIVE_IP 9 /* Wait for REPLCONF reply */
-#define REPL_STATE_SEND_CAPA 10 /* Send REPLCONF capa */
-#define REPL_STATE_RECEIVE_CAPA 11 /* Wait for REPLCONF reply */
-#define REPL_STATE_SEND_PSYNC 12 /* Send PSYNC */
-#define REPL_STATE_RECEIVE_PSYNC 13 /* Wait for PSYNC reply */
+#define REPL_STATE_SEND_UUID 6 /* send our UUID */
+#define REPL_STATE_RECEIVE_UUID 7 /* they should ack with their UUID */
+#define REPL_STATE_SEND_PORT 8 /* Send REPLCONF listening-port */
+#define REPL_STATE_RECEIVE_PORT 9 /* Wait for REPLCONF reply */
+#define REPL_STATE_SEND_IP 10 /* Send REPLCONF ip-address */
+#define REPL_STATE_RECEIVE_IP 11 /* Wait for REPLCONF reply */
+#define REPL_STATE_SEND_CAPA 12 /* Send REPLCONF capa */
+#define REPL_STATE_RECEIVE_CAPA 13 /* Wait for REPLCONF reply */
+#define REPL_STATE_SEND_PSYNC 14 /* Send PSYNC */
+#define REPL_STATE_RECEIVE_PSYNC 15 /* Wait for PSYNC reply */
 /* --- End of handshake states --- */
-#define REPL_STATE_TRANSFER 14 /* Receiving .rdb from master */
-#define REPL_STATE_CONNECTED 15 /* Connected to master */
+#define REPL_STATE_TRANSFER 16 /* Receiving .rdb from master */
+#define REPL_STATE_CONNECTED 17 /* Connected to master */
 
 /* State of slaves from the POV of the master. Used in client->replstate.
  * In SEND_BULK and ONLINE state the slave receives new updates
@@ -870,6 +876,11 @@ typedef struct client {
     list *pubsub_patterns;  /* patterns a client is interested in (SUBSCRIBE) */
     sds peerid;             /* Cached peer ID. */
     listNode *client_list_node; /* list node in client list */
+
+    /* UUID announced by the client (default nil) - used to detect multiple connections to/from the same peer */
+    /* compliant servers will announce their UUIDs when a replica connection is started, and return when asked */
+    /* UUIDs are transient and lost when the server is shut down */
+    unsigned char uuid[UUID_BINARY_LEN];
 
     /* Response buffer */
     int bufpos;
@@ -1422,6 +1433,11 @@ struct redisServer {
     pthread_mutex_t lruclock_mutex;
     pthread_mutex_t next_client_id_mutex;
     pthread_mutex_t unixtime_mutex;
+
+    int fActiveReplica;                          /* Can this replica also be a master? */
+    unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
+    unsigned char master_uuid[UUID_BINARY_LEN];  /* Used during sync with master, this is our master's UUID */
+                                                /* After we've connected with our master use the UUID in server.master */
 
     struct fastlock flock;
 };

@@ -1819,10 +1819,10 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     /* Send UUID */
     if (server.repl_state == REPL_STATE_SEND_UUID) {
-        char szUUID[37];
+        char szUUID[37] = {0};
         memset(server.master_uuid, 0, UUID_BINARY_LEN);
         uuid_unparse((unsigned char*)server.uuid, szUUID);
-        err = sendSynchronousCommand(SYNC_CMD_WRITE,fd,"REPLCONF","uuid",szUUID);
+        err = sendSynchronousCommand(SYNC_CMD_WRITE,fd,"REPLCONF","uuid",szUUID,NULL);
         if (err) goto write_error;
         server.repl_state = REPL_STATE_RECEIVE_UUID;
         return;

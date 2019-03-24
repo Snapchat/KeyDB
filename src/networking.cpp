@@ -226,6 +226,7 @@ client *createClient(int fd, int iel) {
     c->bufAsync = NULL;
     c->buflenAsync = 0;
     c->bufposAsync = 0;
+    memset(c->uuid, 0, UUID_BINARY_LEN);
 
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
@@ -2135,7 +2136,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
      * corresponding part of the replication stream, will be propagated to
      * the sub-slaves and to the replication backlog. */
     processInputBufferAndReplicate(c);
-    aelock.arm(nullptr);
+    aelock.arm(c);
     ProcessPendingAsyncWrites();
 }
 

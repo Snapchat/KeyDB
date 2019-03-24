@@ -1,12 +1,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/ioctl.h>
-#include <linux/fs.h>
 #include <unistd.h>
 #include <inttypes.h>
 #include "storage.h"
 #include <assert.h>
+#ifdef __linux__
 #include <malloc.h>
+#endif
 
 // initialize the memory subsystem. 
 //  NOTE: This may be called twice, first with NULL specifying we should use ram
@@ -42,7 +43,9 @@ void *srealloc(void *pv, size_t cb, enum MALLOC_CLASS class)
     return realloc(pv, cb);
 }
 
+#ifdef __linux__
 size_t salloc_usable_size(void *ptr)
 {
     return malloc_usable_size(ptr);
 }
+#endif

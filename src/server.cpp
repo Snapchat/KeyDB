@@ -5076,6 +5076,7 @@ int main(int argc, char **argv) {
         pthread_create(rgthread + iel, NULL, workerThreadMain, (void*)((int64_t)iel));
         if (server.fThreadAffinity)
         {
+#ifdef __linux__
             cpu_set_t cpuset;
             CPU_ZERO(&cpuset);
             CPU_SET(iel, &cpuset);
@@ -5083,6 +5084,9 @@ int main(int argc, char **argv) {
             {
                 serverLog(LOG_INFO, "Binding thread %d to cpu %d", iel, iel);
             }
+#else
+			serverLog(LL_WARNING, "CPU pinning not available on this platform");
+#endif
         }
     }
     void *pvRet;

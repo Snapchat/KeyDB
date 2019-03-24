@@ -34,6 +34,20 @@
 #include <sched.h>
 #include <atomic>
 #include <assert.h>
+#include <pthread.h>
+#include <limits.h>
+
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#ifdef TARGET_OS_MAC
+/* The CLANG that ships with Mac OS doesn't have these builtins.
+    but on x86 they are just normal reads/writes anyways */
+#define __atomic_load_4(ptr, csq) (*(reinterpret_cast<const volatile uint32_t*>(ptr)))
+#define __atomic_load_2(ptr, csq) (*(reinterpret_cast<const volatile uint16_t*>(ptr)))
+
+#define __atomic_store_4(ptr, val, csq) (*(reinterpret_cast<volatile uint32_t*>(ptr)) = val)
+#endif
+#endif
 
 /****************************************************
  *
@@ -54,8 +68,17 @@ uint64_t fastlock_getlongwaitcount()
 extern "C" pid_t gettid()
 {
     static thread_local int pidCache = -1;
+#ifdef __linux__
     if (pidCache == -1)
         pidCache = syscall(SYS_gettid);
+#else
+	if (pidCache == -1) {
+		uint64_t tidT;
+		pthread_threadid_np(nullptr, &tidT);
+		assert(tidT < UINT_MAX);
+		pidCache = (int)tidT;
+	}
+#endif
     return pidCache;
 }
 

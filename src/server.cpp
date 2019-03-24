@@ -58,6 +58,7 @@
 #include <locale.h>
 #include <sys/socket.h>
 #include <algorithm>
+#include <uuid/uuid.h>
 
 /* Our shared "common" objects */
 
@@ -2371,6 +2372,7 @@ void initServerConfig(void) {
     server.lazyfree_lazy_server_del = CONFIG_DEFAULT_LAZYFREE_LAZY_SERVER_DEL;
     server.always_show_logo = CONFIG_DEFAULT_ALWAYS_SHOW_LOGO;
     server.lua_time_limit = LUA_SCRIPT_TIME_LIMIT;
+    server.fActiveReplica = CONFIG_DEFAULT_ACTIVE_REPLICA;
 
     unsigned int lruclock = getLRUClock();
     atomicSet(server.lruclock,lruclock);
@@ -2961,6 +2963,10 @@ void initServer(void) {
         server.maxmemory = 3072LL*(1024*1024); /* 3 GB */
         server.maxmemory_policy = MAXMEMORY_NO_EVICTION;
     }
+
+    /* Generate UUID */
+    static_assert(sizeof(uuid_t) == sizeof(server.uuid), "UUIDs are standardized at 16-bytes");
+    uuid_generate((unsigned char*)server.uuid);
 
     if (server.cluster_enabled) clusterInit();
     replicationScriptCacheInit();

@@ -60,6 +60,10 @@ Building KeyDB
 
 KeyDB can be compiled and is tested for use on Linux.  KeyDB currently relies on SO_REUSEADDR's load balancing behavior which is available only in Linux.  When we support marshalling connections across threads we plan to support other operating systems such as FreeBSD.
 
+Install dependencies:
+
+    % sudo apt install build-essential nasm autotools-dev autoconf libjemalloc-dev tcl tcl-dev uuid-dev
+
 Compiling is as simple as:
 
     % make

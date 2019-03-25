@@ -14,6 +14,11 @@ Try our docker container: https://hub.docker.com/r/eqalpha/keydb
 
 Talk on Gitter: https://gitter.im/KeyDB
 
+New: Active Replica Support
+---------------------------
+
+New! KeyDB now has support for Active Replicas.  This feature greatly simplifies hot-spare failover and allows you to distribute writes over replicas instead of just a single master.  For more information [see the wiki page](https://github.com/JohnSully/KeyDB/wiki/KeyDB-(Redis-Fork):-Active-Replica-Support).
+
 Why fork Redis?
 ---------------
 

@@ -1,3 +1,6 @@
+![Current Release](https://img.shields.io/github/release/JohnSully/KeyDB.svg)
+[![Build Status](https://travis-ci.org/JohnSully/KeyDB.svg?branch=unstable)](https://travis-ci.org/JohnSully/KeyDB) [![Join the chat at https://gitter.im/KeyDB/community](https://badges.gitter.im/KeyDB/community.svg)](https://gitter.im/KeyDB/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+
 What is KeyDB?
 --------------
 
@@ -8,6 +11,13 @@ On the same hardware KeyDB can perform twice as many queries per second as Redis
 KeyDB has full compatibility with the Redis protocol, modules, and scripts.  This includes full support for transactions, and atomic execution of scripts.  For more information see our architecture section below.
 
 Try our docker container: https://hub.docker.com/r/eqalpha/keydb
+
+Talk on Gitter: https://gitter.im/KeyDB
+
+New: Active Replica Support
+---------------------------
+
+New! KeyDB now has support for Active Replicas.  This feature greatly simplifies hot-spare failover and allows you to distribute writes over replicas instead of just a single master.  For more information [see the wiki page](https://github.com/JohnSully/KeyDB/wiki/KeyDB-(Redis-Fork):-Active-Replica-Support).
 
 Why fork Redis?
 ---------------
@@ -200,6 +210,26 @@ Unlike most databases the core data structure is the fastest part of the system.
 Future work:
  - Allow rebalancing of connections to different threads after the connection
  - Allow multiple readers access to the hashtable concurrently
+
+Docker Build
+------------
+
+Run the following commands for a full source download and build:
+
+```
+git clone git@github.com:JohnSully/KeyDB.git
+docker run -it --rm `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make
+```
+
+Then you have fresh binaries built, you can also pass any other options to the make command above after the word make. E.g.
+
+```docker run -it --rm `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make MAllOC=memkind```
+
+The above commands will build you binaries in the src directory. Standard `make install` without Docker command will work after if you wish to install
+
+If you'd prefer you can build the Dockerfile in the repo instead of pulling the above container for use:
+
+`docker build -t KeyDB .`
 
 Code contributions
 -----------------

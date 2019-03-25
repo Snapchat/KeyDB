@@ -34,6 +34,20 @@
 #include <sched.h>
 #include <atomic>
 #include <assert.h>
+#include <pthread.h>
+#include <limits.h>
+
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#ifdef TARGET_OS_MAC
+/* The CLANG that ships with Mac OS doesn't have these builtins.
+    but on x86 they are just normal reads/writes anyways */
+#define __atomic_load_4(ptr, csq) (*(reinterpret_cast<const volatile uint32_t*>(ptr)))
+#define __atomic_load_2(ptr, csq) (*(reinterpret_cast<const volatile uint16_t*>(ptr)))
+
+#define __atomic_store_4(ptr, val, csq) (*(reinterpret_cast<volatile uint32_t*>(ptr)) = val)
+#endif
+#endif
 
 /****************************************************
  *
@@ -43,12 +57,28 @@
  ****************************************************/
 
 static_assert(sizeof(pid_t) <= sizeof(fastlock::m_pidOwner), "fastlock::m_pidOwner not large enough");
+uint64_t g_longwaits = 0;
+
+uint64_t fastlock_getlongwaitcount()
+{
+    return g_longwaits;
+}
+
 
 extern "C" pid_t gettid()
 {
     static thread_local int pidCache = -1;
+#ifdef __linux__
     if (pidCache == -1)
         pidCache = syscall(SYS_gettid);
+#else
+	if (pidCache == -1) {
+		uint64_t tidT;
+		pthread_threadid_np(nullptr, &tidT);
+		assert(tidT < UINT_MAX);
+		pidCache = (int)tidT;
+	}
+#endif
     return pidCache;
 }
 
@@ -75,7 +105,10 @@ extern "C" void fastlock_lock(struct fastlock *lock)
     while (__atomic_load_2(&lock->m_ticket.m_active, __ATOMIC_ACQUIRE) != myticket)
     {
         if ((++cloops % 1024*1024) == 0)
+        {
             sched_yield();
+            ++g_longwaits;
+        }
 #if defined(__i386__) || defined(__amd64__)
         __asm__ ("pause");
 #endif
@@ -103,7 +136,7 @@ extern "C" int fastlock_trylock(struct fastlock *lock)
 
     struct ticket ticket_expect { active, active };
     struct ticket ticket_setiflocked { active, next };
-    if (__atomic_compare_exchange(&lock->m_ticket, &ticket_expect, &ticket_setiflocked, true /*strong*/, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
+    if (__atomic_compare_exchange(&lock->m_ticket, &ticket_expect, &ticket_setiflocked, false /*weak*/, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
     {
         lock->m_depth = 1;
         __atomic_store_4(&lock->m_pidOwner, gettid(), __ATOMIC_RELEASE);

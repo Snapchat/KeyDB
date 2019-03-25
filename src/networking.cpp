@@ -138,6 +138,7 @@ void linkClient(client *c) {
      * this way removing the client in unlinkClient() will not require
      * a linear scan, but just a constant time operation. */
     c->client_list_node = listLast(server.clients);
+    if (c->fd != -1) atomicIncr(server.rgthreadvar[c->iel].cclients, 1);
     uint64_t id = htonu64(c->id);
     raxInsert(server.clients_index,(unsigned char*)&id,sizeof(id),c,NULL);
 }
@@ -225,6 +226,7 @@ client *createClient(int fd, int iel) {
     c->bufAsync = NULL;
     c->buflenAsync = 0;
     c->bufposAsync = 0;
+    memset(c->uuid, 0, UUID_BINARY_LEN);
 
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
@@ -1035,6 +1037,7 @@ static void acceptCommonHandler(int fd, int flags, char *ip, int iel) {
         return;
     }
 
+#ifdef HAVE_SO_INCOMING_CPU
     // Set thread affinity
     if (server.fThreadAffinity)
     {
@@ -1044,6 +1047,7 @@ static void acceptCommonHandler(int fd, int flags, char *ip, int iel) {
             serverLog(LL_WARNING, "Failed to set socket affinity");
         }
     }
+#endif
 
     /* If maxclient directive is set and this is one client more... close the
      * connection. Note that we create the client instead to check before
@@ -1206,6 +1210,8 @@ void unlinkClient(client *c) {
         aeDeleteFileEvent(server.rgthreadvar[c->iel].el,c->fd,AE_WRITABLE);
         close(c->fd);
         c->fd = -1;
+
+        atomicDecr(server.rgthreadvar[c->iel].cclients, 1);
     }
 
     /* Remove from the list of pending writes if needed. */
@@ -2130,7 +2136,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
      * corresponding part of the replication stream, will be propagated to
      * the sub-slaves and to the replication backlog. */
     processInputBufferAndReplicate(c);
-    aelock.arm(nullptr);
+    aelock.arm(c);
     ProcessPendingAsyncWrites();
 }
 

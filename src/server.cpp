@@ -57,6 +57,8 @@
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
+#include <algorithm>
+#include <uuid/uuid.h>
 
 /* Our shared "common" objects */
 
@@ -718,7 +720,7 @@ struct redisCommand redisCommandTable[] = {
 
     {"touch",touchCommand,-2,
      "read-only fast @keyspace",
-     0,NULL,1,1,1,0,0,0},
+     0,NULL,1,-1,1,0,0,0},
 
     {"pttl",pttlCommand,2,
      "read-only fast random @keyspace",
@@ -866,7 +868,7 @@ struct redisCommand redisCommandTable[] = {
      "no-script @keyspace",
      0,NULL,0,0,0,0,0,0},
 
-    {"command",commandCommand,0,
+    {"command",commandCommand,-1,
      "ok-loading ok-stale random @connection",
      0,NULL,0,0,0,0,0,0},
 
@@ -2370,6 +2372,7 @@ void initServerConfig(void) {
     server.lazyfree_lazy_server_del = CONFIG_DEFAULT_LAZYFREE_LAZY_SERVER_DEL;
     server.always_show_logo = CONFIG_DEFAULT_ALWAYS_SHOW_LOGO;
     server.lua_time_limit = LUA_SCRIPT_TIME_LIMIT;
+    server.fActiveReplica = CONFIG_DEFAULT_ACTIVE_REPLICA;
 
     unsigned int lruclock = getLRUClock();
     atomicSet(server.lruclock,lruclock);
@@ -2814,6 +2817,7 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     pvar->unblocked_clients = listCreate();
     pvar->clients_pending_asyncwrite = listCreate();
     pvar->ipfd_count = 0;
+    pvar->cclients = 0;
     pvar->el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
     if (pvar->el == NULL) {
         serverLog(LL_WARNING,
@@ -2959,6 +2963,10 @@ void initServer(void) {
         server.maxmemory = 3072LL*(1024*1024); /* 3 GB */
         server.maxmemory_policy = MAXMEMORY_NO_EVICTION;
     }
+
+    /* Generate UUID */
+    static_assert(sizeof(uuid_t) == sizeof(server.uuid), "UUIDs are standardized at 16-bytes");
+    uuid_generate((unsigned char*)server.uuid);
 
     if (server.cluster_enabled) clusterInit();
     replicationScriptCacheInit();
@@ -3996,6 +4004,12 @@ extern "C" sds genRedisInfoString(const char *section) {
             listLength(server.clients)-listLength(server.slaves),
             maxin, maxout,
             server.blocked_clients);
+        for (int ithread = 0; ithread < server.cthreads; ++ithread)
+        {
+            info = sdscatprintf(info,
+                "thread_%d_clients:%d\r\n",
+                ithread, server.rgthreadvar[ithread].cclients);
+        }
     }
 
     /* Memory */
@@ -4400,11 +4414,15 @@ extern "C" sds genRedisInfoString(const char *section) {
         "used_cpu_sys:%ld.%06ld\r\n"
         "used_cpu_user:%ld.%06ld\r\n"
         "used_cpu_sys_children:%ld.%06ld\r\n"
-        "used_cpu_user_children:%ld.%06ld\r\n",
+        "used_cpu_user_children:%ld.%06ld\r\n"
+        "server_threads:%d\r\n"
+        "long_lock_waits:%" PRIu64 "\r\n",
         (long)self_ru.ru_stime.tv_sec, (long)self_ru.ru_stime.tv_usec,
         (long)self_ru.ru_utime.tv_sec, (long)self_ru.ru_utime.tv_usec,
         (long)c_ru.ru_stime.tv_sec, (long)c_ru.ru_stime.tv_usec,
-        (long)c_ru.ru_utime.tv_sec, (long)c_ru.ru_utime.tv_usec);
+        (long)c_ru.ru_utime.tv_sec, (long)c_ru.ru_utime.tv_usec,
+        server.cthreads,
+        fastlock_getlongwaitcount());
     }
 
     /* Command statistics */
@@ -4619,6 +4637,7 @@ static void sigShutdownHandler(int sig) {
         rdbRemoveTempFile(getpid());
         exit(1); /* Exit with an error since this was not a clean shutdown. */
     } else if (server.loading) {
+        serverLogFromHandler(LL_WARNING, "Received shutdown signal during loading, exiting now.");
         exit(0);
     }
 
@@ -5057,6 +5076,7 @@ int main(int argc, char **argv) {
         pthread_create(rgthread + iel, NULL, workerThreadMain, (void*)((int64_t)iel));
         if (server.fThreadAffinity)
         {
+#ifdef __linux__
             cpu_set_t cpuset;
             CPU_ZERO(&cpuset);
             CPU_SET(iel, &cpuset);
@@ -5064,6 +5084,9 @@ int main(int argc, char **argv) {
             {
                 serverLog(LOG_INFO, "Binding thread %d to cpu %d", iel, iel);
             }
+#else
+			serverLog(LL_WARNING, "CPU pinning not available on this platform");
+#endif
         }
     }
     void *pvRet;

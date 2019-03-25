@@ -87,6 +87,8 @@ typedef long long mstime_t; /* millisecond time type. */
 extern "C" {
 #endif
 
+#define UUID_BINARY_LEN 16
+
 /* Error codes */
 #define C_OK                    0
 #define C_ERR                   -1
@@ -185,6 +187,8 @@ extern "C" {
 
 #define CONFIG_DEFAULT_THREADS 1
 #define CONFIG_DEFAULT_THREAD_AFFINITY 0
+
+#define CONFIG_DEFAULT_ACTIVE_REPLICA 0
 
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
@@ -335,17 +339,19 @@ extern "C" {
 #define REPL_STATE_RECEIVE_PONG 3 /* Wait for PING reply */
 #define REPL_STATE_SEND_AUTH 4 /* Send AUTH to master */
 #define REPL_STATE_RECEIVE_AUTH 5 /* Wait for AUTH reply */
-#define REPL_STATE_SEND_PORT 6 /* Send REPLCONF listening-port */
-#define REPL_STATE_RECEIVE_PORT 7 /* Wait for REPLCONF reply */
-#define REPL_STATE_SEND_IP 8 /* Send REPLCONF ip-address */
-#define REPL_STATE_RECEIVE_IP 9 /* Wait for REPLCONF reply */
-#define REPL_STATE_SEND_CAPA 10 /* Send REPLCONF capa */
-#define REPL_STATE_RECEIVE_CAPA 11 /* Wait for REPLCONF reply */
-#define REPL_STATE_SEND_PSYNC 12 /* Send PSYNC */
-#define REPL_STATE_RECEIVE_PSYNC 13 /* Wait for PSYNC reply */
+#define REPL_STATE_SEND_UUID 6 /* send our UUID */
+#define REPL_STATE_RECEIVE_UUID 7 /* they should ack with their UUID */
+#define REPL_STATE_SEND_PORT 8 /* Send REPLCONF listening-port */
+#define REPL_STATE_RECEIVE_PORT 9 /* Wait for REPLCONF reply */
+#define REPL_STATE_SEND_IP 10 /* Send REPLCONF ip-address */
+#define REPL_STATE_RECEIVE_IP 11 /* Wait for REPLCONF reply */
+#define REPL_STATE_SEND_CAPA 12 /* Send REPLCONF capa */
+#define REPL_STATE_RECEIVE_CAPA 13 /* Wait for REPLCONF reply */
+#define REPL_STATE_SEND_PSYNC 14 /* Send PSYNC */
+#define REPL_STATE_RECEIVE_PSYNC 15 /* Wait for PSYNC reply */
 /* --- End of handshake states --- */
-#define REPL_STATE_TRANSFER 14 /* Receiving .rdb from master */
-#define REPL_STATE_CONNECTED 15 /* Connected to master */
+#define REPL_STATE_TRANSFER 16 /* Receiving .rdb from master */
+#define REPL_STATE_CONNECTED 17 /* Connected to master */
 
 /* State of slaves from the POV of the master. Used in client->replstate.
  * In SEND_BULK and ONLINE state the slave receives new updates
@@ -595,16 +601,18 @@ typedef struct RedisModuleIO {
     int ver;            /* Module serialization version: 1 (old),
                          * 2 (current version with opcodes annotation). */
     struct RedisModuleCtx *ctx; /* Optional context, see RM_GetContextFromIO()*/
+    struct redisObject *key;    /* Optional name of key processed */
 } RedisModuleIO;
 
 /* Macro to initialize an IO context. Note that the 'ver' field is populated
  * inside rdb.c according to the version of the value to load. */
-#define moduleInitIOContext(iovar,mtype,rioptr) do { \
+#define moduleInitIOContext(iovar,mtype,rioptr,keyptr) do { \
     iovar.prio = rioptr; \
     iovar.type = mtype; \
     iovar.bytes = 0; \
     iovar.error = 0; \
     iovar.ver = 0; \
+    iovar.key = keyptr; \
     iovar.ctx = NULL; \
 } while(0);
 
@@ -869,6 +877,11 @@ typedef struct client {
     sds peerid;             /* Cached peer ID. */
     listNode *client_list_node; /* list node in client list */
 
+    /* UUID announced by the client (default nil) - used to detect multiple connections to/from the same peer */
+    /* compliant servers will announce their UUIDs when a replica connection is started, and return when asked */
+    /* UUIDs are transient and lost when the server is shut down */
+    unsigned char uuid[UUID_BINARY_LEN];
+
     /* Response buffer */
     int bufpos;
     char buf[PROTO_REPLY_CHUNK_BYTES];
@@ -1053,6 +1066,7 @@ struct redisServerThreadVars {
     list *clients_pending_write; /* There is to write or install handler. */
     list *unblocked_clients;     /* list of clients to unblock before next loop NOT THREADSAFE */
     list *clients_pending_asyncwrite;
+    int cclients;
     struct fastlock lockPendingWrite;
 };
 
@@ -1419,6 +1433,11 @@ struct redisServer {
     pthread_mutex_t lruclock_mutex;
     pthread_mutex_t next_client_id_mutex;
     pthread_mutex_t unixtime_mutex;
+
+    int fActiveReplica;                          /* Can this replica also be a master? */
+    unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
+    unsigned char master_uuid[UUID_BINARY_LEN];  /* Used during sync with master, this is our master's UUID */
+                                                /* After we've connected with our master use the UUID in server.master */
 
     struct fastlock flock;
 };

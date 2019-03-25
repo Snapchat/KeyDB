@@ -45,8 +45,9 @@ endif
 endif
 
 USEASM?=true
-# Do we use our assembly spinlock?
+# Do we use our assembly spinlock? X64 only
 ifeq ($(uname_S),Linux)
+ifeq ($(uname_M),x86_64)
 ifneq ($(@@),32bit)
 ifeq ($(USEASM),true)
 	ASM_OBJ+= fastlock_x64.o
@@ -54,6 +55,11 @@ ifeq ($(USEASM),true)
 	CXXFLAGS+= -DASM_SPINLOCK
 endif
 endif
+endif
+endif
+
+ifeq ($(COMPILER_NAME),clang)
+	CXXFLAGS+= -stdlib=libc++ 
 endif
 
 # To get ARM stack traces if Redis crashes we need a special C flag.
@@ -86,7 +92,7 @@ endif
 -include .make-settings
 
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
-FINAL_CXXFLAGS=$(CXX_STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
+FINAL_CXXFLAGS=$(CXX_STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(CXXFLAGS) $(REDIS_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
 FINAL_LIBS=-lm
 DEBUG=-g -ggdb
@@ -133,7 +139,7 @@ ifeq ($(uname_S),DragonFly)
 else
 	# All the other OSes (notably Linux)
 	FINAL_LDFLAGS+= -rdynamic
-	FINAL_LIBS+=-ldl -pthread -lrt
+	FINAL_LIBS+=-ldl -pthread -lrt -luuid
 endif
 endif
 endif
@@ -229,17 +235,15 @@ persist-settings: distclean
 .PHONY: persist-settings
 
 # Prerequisites target
-.make-prerequisites:
-	@touch $@
-
 # Clean everything, persist settings and build dependencies if anything changed
 ifneq ($(strip $(PREV_FINAL_CFLAGS)), $(strip $(FINAL_CFLAGS)))
 .make-prerequisites: persist-settings
-endif
-
-ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
+else ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
 .make-prerequisites: persist-settings
+else
+.make-prerequisites:
 endif
+	@touch $@
 
 # keydb-server
 $(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ)

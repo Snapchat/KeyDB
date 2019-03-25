@@ -2,6 +2,7 @@ section .text
 
 extern gettid
 extern sched_yield
+extern g_longwaits
 
 ;	This is the first use of assembly in this codebase, a valid question is WHY?
 ;	The spinlock we implement here is performance critical, and simply put GCC
@@ -49,6 +50,8 @@ ALIGN 16
 	syscall                 ; give up our timeslice we'll be here a while
 	pop rax
 	pop rsi
+	mov rcx, g_longwaits
+	inc qword [rcx]         ; increment our long wait counter
 	mov rdi, [rsp]          ; our struct pointer is on the stack already
 	xor ecx, ecx            ; Reset our loop counter
 	jmp .LLoop              ; Get back in the game

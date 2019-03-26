@@ -22,7 +22,7 @@ start_server {} {
                                       # master and slave instances while the
                                       # master is loaded with writes.
 
-    set disconnect_period 1000      ; # Disconnect repl link every N ms.
+    set disconnect_period 2000      ; # Disconnect repl link every N ms.
 
     for {set j 0} {$j < 5} {incr j} {
         set R($j) [srv [expr 0-$j] client]
@@ -71,7 +71,7 @@ start_server {} {
         test "PSYNC2: cluster is consistent after failover" {
             $R($master_id) incr x; incr counter_value
             for {set j 0} {$j < 5} {incr j} {
-                wait_for_condition 50 1000 {
+                wait_for_condition 50 2000 {
                     [$R($j) get x] == $counter_value
                 } else {
                     fail "Instance #$j x variable is inconsistent"
@@ -106,7 +106,7 @@ start_server {} {
         set x [$R($master_id) get x]
         test "PSYNC2: cluster is consistent after load (x = $x)" {
             for {set j 0} {$j < 5} {incr j} {
-                wait_for_condition 50 1000 {
+                wait_for_condition 50 2000 {
                     [$R($j) get x] == $counter_value
                 } else {
                     fail "Instance #$j x variable is inconsistent"
@@ -155,7 +155,7 @@ start_server {} {
         }
 
         # Wait for slaves to sync
-        wait_for_condition 50 1000 {
+        wait_for_condition 50 2000 {
             [status $R($master_id) connected_slaves] == 4
         } else {
             fail "Replica not reconnecting"
@@ -170,7 +170,7 @@ start_server {} {
             $R($slave_id) config rewrite
             $R($slave_id) debug restart
         }
-        wait_for_condition 50 1000 {
+        wait_for_condition 50 2000 {
             [status $R($master_id) connected_slaves] == 4
         } else {
             fail "Replica not reconnecting"
@@ -191,7 +191,7 @@ start_server {} {
         $R($master_id) EVALSHA e6e0b547500efcec21eddb619ac3724081afee89 0
 
         # Wait for the two to sync
-        wait_for_condition 50 1000 {
+        wait_for_condition 50 2000 {
             [$R($master_id) debug digest] == [$R($slave_id) debug digest]
         } else {
             fail "Replica not reconnecting"
@@ -217,7 +217,7 @@ start_server {} {
             if {[catch {
                 $R($slave_id) slaveof $master_host $master_port
             }]} {
-                after 1000
+                after 2000
             } else {
                 break
             }
@@ -225,7 +225,7 @@ start_server {} {
         }
 
         # The master should be back at 4 slaves eventually
-        wait_for_condition 50 1000 {
+        wait_for_condition 50 2000 {
             [status $R($master_id) connected_slaves] == 4
         } else {
             fail "Replica not reconnecting"
@@ -235,7 +235,7 @@ start_server {} {
 
         # However if the slave started with the full state of the
         # scripting engine, we should now have the same digest.
-        wait_for_condition 50 1000 {
+        wait_for_condition 50 2000 {
             [$R($master_id) debug digest] == [$R($slave_id) debug digest]
         } else {
             fail "Debug digest mismatch between master and replica in post-restart handshake"
@@ -243,7 +243,7 @@ start_server {} {
     }
 
     if {$no_exit} {
-        while 1 { puts -nonewline .; flush stdout; after 1000}
+        while 1 { puts -nonewline .; flush stdout; after 2000}
     }
 
 }}}}}

@@ -60,6 +60,10 @@ Building KeyDB
 
 KeyDB can be compiled and is tested for use on Linux.  KeyDB currently relies on SO_REUSEADDR's load balancing behavior which is available only in Linux.  When we support marshalling connections across threads we plan to support other operating systems such as FreeBSD.
 
+Install dependencies:
+
+    % sudo apt install build-essential nasm autotools-dev autoconf libjemalloc-dev tcl tcl-dev uuid-dev
+
 Compiling is as simple as:
 
     % make
@@ -218,12 +222,12 @@ Run the following commands for a full source download and build:
 
 ```
 git clone git@github.com:JohnSully/KeyDB.git
-docker run -it --rm `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make
+docker run -it --rm -v `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make
 ```
 
 Then you have fresh binaries built, you can also pass any other options to the make command above after the word make. E.g.
 
-```docker run -it --rm `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make MAllOC=memkind```
+```docker run -it --rm -v `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make MAllOC=memkind```
 
 The above commands will build you binaries in the src directory. Standard `make install` without Docker command will work after if you wish to install
 

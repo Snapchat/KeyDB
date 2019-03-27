@@ -5089,6 +5089,15 @@ int main(int argc, char **argv) {
 #endif
         }
     }
+
+    /* Block SIGALRM from this thread, it should only be received on a server thread */
+    sigset_t sigset;
+    sigemptyset(&sigset);
+    sigaddset(&sigset, SIGALRM);
+    pthread_sigmask(SIG_BLOCK, &sigset, nullptr);
+
+    /* The main thread sleeps until all the workers are done.
+        this is so that all worker threads are orthogonal in their startup/shutdown */
     void *pvRet;
     pthread_join(rgthread[IDX_EVENT_LOOP_MAIN], &pvRet);
     return 0;

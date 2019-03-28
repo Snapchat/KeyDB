@@ -2055,17 +2055,25 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
             decrRefCount(val);
         } else {
             /* Add the new object in the hash table */
-            dbAdd(db,key,val);
+            int fInserted = dbMerge(db, key, val, rsi->fForceSetKey);
 
-            /* Set the expire time if needed */
-            if (expiretime != -1) setExpire(NULL,db,key,expiretime);
+            if (fInserted)
+            {
+                /* Set the expire time if needed */
+                if (expiretime != -1) setExpire(NULL,db,key,expiretime);
 
-            /* Set usage information (for eviction). */
-            objectSetLRUOrLFU(val,lfu_freq,lru_idle,lru_clock);
+                /* Set usage information (for eviction). */
+                objectSetLRUOrLFU(val,lfu_freq,lru_idle,lru_clock);
 
-            /* Decrement the key refcount since dbAdd() will take its
-             * own reference. */
-            decrRefCount(key);
+                /* Decrement the key refcount since dbMerge() will take its
+                * own reference. */
+                decrRefCount(key);
+            }
+            else
+            {
+                decrRefCount(key);
+                decrRefCount(val);
+            }
         }
 
         /* Reset the state that is key-specified and is populated by

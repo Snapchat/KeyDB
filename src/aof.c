@@ -727,7 +727,8 @@ int loadAppendOnlyFile(char *filename) {
         serverLog(LL_NOTICE,"Reading RDB preamble from AOF file...");
         if (fseek(fp,0,SEEK_SET) == -1) goto readerr;
         rioInitWithFile(&rdb,fileno(fp));
-        if (rdbLoadRio(&rdb,NULL,1) != C_OK) {
+        rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+        if (rdbLoadRio(&rdb,&rsi,1) != C_OK) {
             serverLog(LL_WARNING,"Error reading the RDB preamble of the AOF file, AOF loading aborted");
             goto readerr;
         } else {

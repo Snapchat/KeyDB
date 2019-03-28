@@ -76,6 +76,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #include "quicklist.h"  /* Lists are encoded as linked lists of
                            N-elements flat arrays */
 #include "rax.h"     /* Radix tree */
+#include "uuid.h"
 
 /* Following includes allow test functions to be called from Redis main() */
 #include "zipmap.h"
@@ -86,8 +87,6 @@ typedef long long mstime_t; /* millisecond time type. */
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#define UUID_BINARY_LEN 16
 
 /* Error codes */
 #define C_OK                    0
@@ -1027,9 +1026,10 @@ typedef struct rdbSaveInfo {
     int repl_id_is_set;  /* True if repl_id field is set. */
     char repl_id[CONFIG_RUN_ID_SIZE+1];     /* Replication ID. */
     long long repl_offset;                  /* Replication offset. */
+    int fForceSetKey;
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1,0,"000000000000000000000000000000",-1}
+#define RDB_SAVE_INFO_INIT {-1,0,"000000000000000000000000000000",-1, TRUE}
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -1647,6 +1647,7 @@ int getClientTypeByName(const char *name);
 const char *getClientTypeName(int cclass);
 void flushSlavesOutputBuffers(void);
 void disconnectSlaves(void);
+void disconnectSlavesExcept(unsigned char *uuid);
 int listenToPort(int port, int *fds, int *count, int fReusePort);
 void pauseClients(mstime_t duration);
 int clientsArePaused(void);
@@ -2046,6 +2047,7 @@ void objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
 #define LOOKUP_NOTOUCH (1<<0)
 void dbAdd(redisDb *db, robj *key, robj *val);
 void dbOverwrite(redisDb *db, robj *key, robj *val);
+int dbMerge(redisDb *db, robj *key, robj *val, int fReplace);
 void setKey(redisDb *db, robj *key, robj *val);
 int dbExists(redisDb *db, robj *key);
 robj *dbRandomKey(redisDb *db);

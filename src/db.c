@@ -167,19 +167,47 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
+int dbAddCore(redisDb *db, robj *key, robj *val) {
+    sds copy = sdsdup(ptrFromObj(key));
+    int retval = dictAdd(db->pdict, copy, val);
+
+    if (retval == DICT_OK)
+    {
+        if (val->type == OBJ_LIST ||
+            val->type == OBJ_ZSET)
+            signalKeyAsReady(db, key);
+        if (server.cluster_enabled) slotToKeyAdd(key);
+    }
+    else
+    {
+        sdsfree(copy);
+    }
+
+    return retval;
+}
+
 /* Add the key to the DB. It's up to the caller to increment the reference
  * counter of the value if needed.
  *
  * The program is aborted if the key already exists. */
-void dbAdd(redisDb *db, robj *key, robj *val) {
-    sds copy = sdsdup(ptrFromObj(key));
-    int retval = dictAdd(db->pdict, copy, val);
-
+void dbAdd(redisDb *db, robj *key, robj *val)
+{
+    int retval = dbAddCore(db, key, val);
     serverAssertWithInfo(NULL,key,retval == DICT_OK);
-    if (val->type == OBJ_LIST ||
-        val->type == OBJ_ZSET)
-        signalKeyAsReady(db, key);
-    if (server.cluster_enabled) slotToKeyAdd(key);
+}
+
+/* Insert a key, handling duplicate keys according to fReplace */
+int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
+{
+    if (fReplace)
+    {
+        setKey(db, key, val);
+        return TRUE;
+    }
+    else
+    {
+        return (dbAddCore(db, key, val) == DICT_OK);
+    }
 }
 
 /* Overwrite an existing key with a new value. Incrementing the reference

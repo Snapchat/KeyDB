@@ -77,6 +77,9 @@ char *replicationGetSlaveName(client *c) {
 
 static bool FSameHost(client *clientA, client *clientB)
 {
+    if (clientA == nullptr || clientB == nullptr)
+        return false;
+
     const unsigned char *a = clientA->uuid;
     const unsigned char *b = clientB->uuid;
 
@@ -138,7 +141,8 @@ void freeReplicationBacklog(void) {
     listRewind(server.slaves, &li);
     while ((ln = listNext(&li))) {
         // server.slaves should be empty, or filled with clients pending close
-        serverAssert(((client*)listNodeValue(ln))->flags & CLIENT_CLOSE_ASAP);
+        client *c = (client*)listNodeValue(ln);
+        serverAssert(c->flags & CLIENT_CLOSE_ASAP || FUuidEqual(server.master_uuid, c->uuid));
     }
     zfree(server.repl_backlog);
     server.repl_backlog = NULL;
@@ -1234,8 +1238,8 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
     ssize_t nread, readlen, nwritten;
     off_t left;
     UNUSED(el);
-    UNUSED(privdata);
     UNUSED(mask);
+    int fUpdate = (int)((ptrdiff_t)privdata);   // Should we update our database, or create from scratch?
 
     serverAssert(GlobalLocksAcquired());
 
@@ -1390,15 +1394,19 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
             cancelReplicationHandshake();
             return;
         }
-        serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Flushing old data");
+        serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: %s", fUpdate ? "Keeping old data" : "Flushing old data");
         /* We need to stop any AOFRW fork before flusing and parsing
          * RDB, otherwise we'll create a copy-on-write disaster. */
         if(aof_is_enabled) stopAppendOnly();
-        signalFlushedDb(-1);
-        emptyDb(
-            -1,
-            server.repl_slave_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS,
-            replicationEmptyDbCallback);
+        if (!fUpdate)
+        {
+            signalFlushedDb(-1);
+            emptyDb(
+                -1,
+                server.repl_slave_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS,
+                replicationEmptyDbCallback);
+        }
+
         /* Before loading the DB into memory we need to delete the readable
          * handler, otherwise it will get called recursively since
          * rdbLoad() will call the event loop to process events from time to
@@ -1576,7 +1584,7 @@ int slaveTryPartialResynchronization(aeEventLoop *el, int fd, int read_reply) {
          * client structure representing the master into server.master. */
         server.master_initial_offset = -1;
 
-        if (server.cached_master) {
+        if (server.cached_master && !server.fActiveReplica) {
             psync_replid = server.cached_master->replid;
             snprintf(psync_offset,sizeof(psync_offset),"%lld", server.cached_master->reploff+1);
             serverLog(LL_NOTICE,"Trying a partial resynchronization (request %s:%s).", psync_replid, psync_offset);
@@ -1726,7 +1734,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
     serverAssert(GlobalLocksAcquired());
     char tmpfile[256], *err = NULL;
     int dfd = -1, maxtries = 5;
-    int sockerr = 0, psync_result;
+    int sockerr = 0, psync_result = PSYNC_FULLRESYNC;
     socklen_t errlen = sizeof(sockerr);
     UNUSED(el);
     UNUSED(privdata);
@@ -1960,13 +1968,13 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
     if (psync_result == PSYNC_WAIT_REPLY) return; /* Try again later... */
 
     /* If the master is in an transient error, we should try to PSYNC
-     * from scratch later, so go to the error path. This happens when
-     * the server is loading the dataset or is not connected with its
-     * master and so forth. */
+        * from scratch later, so go to the error path. This happens when
+        * the server is loading the dataset or is not connected with its
+        * master and so forth. */
     if (psync_result == PSYNC_TRY_LATER) goto error;
 
     /* Note: if PSYNC does not return WAIT_REPLY, it will take care of
-     * uninstalling the read handler from the file descriptor. */
+        * uninstalling the read handler from the file descriptor. */
 
     if (psync_result == PSYNC_CONTINUE) {
         serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Master accepted a Partial Resynchronization.");
@@ -1977,7 +1985,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
      * as well, if we have any sub-slaves. The master may transfer us an
      * entirely different data set and we have no way to incrementally feed
      * our slaves after that. */
-    disconnectSlaves(); /* Force our slaves to resync with us as well. */
+    disconnectSlavesExcept(server.master_uuid); /* Force our slaves to resync with us as well. */
     freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
 
     /* Fall back to SYNC if needed. Otherwise psync_result == PSYNC_FULLRESYNC
@@ -2006,7 +2014,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 
     /* Setup the non blocking download of the bulk file. */
-    if (aeCreateFileEvent(el,fd, AE_READABLE,readSyncBulkPayload,NULL)
+    if (aeCreateFileEvent(el,fd, AE_READABLE,readSyncBulkPayload,(void*)((ptrdiff_t)server.fActiveReplica))
             == AE_ERR)
     {
         serverLog(LL_WARNING,

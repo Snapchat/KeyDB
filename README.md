@@ -4,7 +4,7 @@
 What is KeyDB?
 --------------
 
-KeyDB is a high performance fork of Redis focusing on multithreading, memory efficiency, and high throughput.  In addition to multithreading KeyDB also has features only available in Redis Enterprise such as FLASH storage support, and some not available at all such as direct backup to AWS S3.
+KeyDB is a high performance fork of Redis focusing on multithreading, memory efficiency, and high throughput.  In addition to multithreading KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/KeyDB-(Redis-Fork):-Active-Replica-Support), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3.
 
 On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency.
 
@@ -47,7 +47,7 @@ The number of threads used to serve requests.  This should be related to the num
 
     scratch-file-path /path
 
-If you would like to use the FLASH backed storage this option configures the directory for KeyDB's temporary files.  This feature relies on snapshotting to work so must be used on a BTRFS filesystem.  ZFS may also work but is untested.  With this feature KeyDB will use RAM as a cache and page to disk as necessary.  NOTE: This requires special compilation options, see Building KeyDB below.
+If you would like to use the [FLASH backed](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) storage this option configures the directory for KeyDB's temporary files.  This feature relies on snapshotting to work so must be used on a BTRFS filesystem.  ZFS may also work but is untested.  With this feature KeyDB will use RAM as a cache and page to disk as necessary.  NOTE: This requires special compilation options, see Building KeyDB below.
     
     db-s3-object /path/to/bucket
 

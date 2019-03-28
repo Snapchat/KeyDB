@@ -5058,6 +5058,14 @@ int main(int argc, char **argv) {
         sentinelIsRunning();
     }
 
+    if (server.rdb_filename == nullptr)
+    {
+        if (server.rdb_s3bucketpath == nullptr)
+            server.rdb_filename = zstrdup(CONFIG_DEFAULT_RDB_FILENAME);
+        else
+            server.repl_diskless_sync = TRUE;
+    }
+
     if (server.cthreads > 4) {
         serverLog(LL_WARNING, "Warning: server-threads is set to %d.  This is above the maximum recommend value of 4, please ensure you've verified this is actually faster on your machine.", server.cthreads);
     }

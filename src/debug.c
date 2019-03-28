@@ -362,7 +362,8 @@ NULL
         }
         emptyDb(-1,EMPTYDB_NO_FLAGS,NULL);
         protectClient(c);
-        int ret = rdbLoad(NULL);
+        rdbSaveInfo rsiDft = RDB_SAVE_INFO_INIT;
+        int ret = rdbLoad(&rsiDft);
         unprotectClient(c);
         if (ret != C_OK) {
             addReplyError(c,"Error trying to load the RDB dump");

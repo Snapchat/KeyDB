@@ -1166,10 +1166,8 @@ static void freeClientArgv(client *c) {
     c->cmd = NULL;
 }
 
-/* Close all the slaves connections. This is useful in chained replication
- * when we resync with our own master and want to force all our slaves to
- * resync with us as well. */
-void disconnectSlaves(void) {
+void disconnectSlavesExcept(unsigned char *uuid)
+{
     serverAssert(GlobalLocksAcquired());
     listIter li;
     listNode *ln;
@@ -1177,8 +1175,16 @@ void disconnectSlaves(void) {
     listRewind(server.slaves, &li);
     while ((ln = listNext(&li))) {
         client *c = (client*)listNodeValue(ln);
-        freeClientAsync(c);
-    }
+        if (uuid == nullptr || !FUuidEqual(c->uuid, uuid))
+            freeClientAsync(c);
+    }   
+}
+
+/* Close all the slaves connections. This is useful in chained replication
+ * when we resync with our own master and want to force all our slaves to
+ * resync with us as well. */
+void disconnectSlaves(void) {
+    disconnectSlavesExcept(nullptr);
 }
 
 /* Remove the specified client from global lists where the client could

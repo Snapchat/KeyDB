@@ -10,6 +10,7 @@ matrix:
           packages:
             - g++-5
             - nasm
+            - uuid-dev
           sources: &sources
             - llvm-toolchain-precise-3.8
             - ubuntu-toolchain-r-test
@@ -23,4 +24,5 @@ matrix:
             - libc++-dev
             - libc++abi-dev
             - nasm
+            - uuid-dev
           sources: *sources

@@ -77,6 +77,12 @@ uint64_t clusterGetMaxEpoch(void);
 int clusterBumpConfigEpochWithoutConsensus(void);
 void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8_t type, const unsigned char *payload, uint32_t len);
 
+struct redisMaster *getFirstMaster()
+{
+    serverAssert(listLength(server.masters) == 1);
+    return listFirst(server.masters)->value;
+}
+
 /* -----------------------------------------------------------------------------
  * Initialization
  * -------------------------------------------------------------------------- */
@@ -536,7 +542,11 @@ void clusterReset(int hard) {
     /* Turn into master. */
     if (nodeIsSlave(myself)) {
         clusterSetNodeAsMaster(myself);
-        replicationUnsetMaster();
+        if (listLength(server.masters) > 0)
+        {
+            serverAssert(listLength(server.masters) == 1);
+            replicationUnsetMaster(listFirst(server.masters)->value);
+        }
         emptyDb(-1,EMPTYDB_NO_FLAGS,NULL);
     }
 
@@ -623,7 +633,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     /* If the server is starting up, don't accept cluster connections:
      * UPDATE messages may interact with the database content. */
-    if (server.masterhost == NULL && server.loading) return;
+    if (listLength(server.masters) == 0 && server.loading) return;
 
     while(max--) {
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
@@ -1493,7 +1503,12 @@ int nodeUpdateAddressIfNeeded(clusterNode *node, clusterLink *link,
     /* Check if this is our master and we have to change the
      * replication target as well. */
     if (nodeIsSlave(myself) && myself->slaveof == node)
-        replicationSetMaster(node->ip, node->port);
+    {
+        serverAssert(listLength(server.masters) == 1);
+        replicationUnsetMaster(listFirst(server.masters)->value);
+        replicationAddMaster(node->ip, node->port);
+    }
+        
     return 1;
 }
 
@@ -2296,7 +2311,7 @@ void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
 
     /* Set the replication offset. */
     if (nodeIsSlave(myself))
-        offset = replicationGetSlaveOffset();
+        offset = replicationGetSlaveOffset(getFirstMaster());
     else
         offset = server.master_repl_offset;
     hdr->offset = htonu64(offset);
@@ -2827,7 +2842,7 @@ int clusterGetSlaveRank(void) {
     master = myself->slaveof;
     if (master == NULL) return 0; /* Never called by slaves without master. */
 
-    myoffset = replicationGetSlaveOffset();
+    myoffset = replicationGetSlaveOffset(getFirstMaster());
     for (j = 0; j < master->numslaves; j++)
         if (master->slaves[j] != myself &&
             !nodeCantFailover(master->slaves[j]) &&
@@ -2913,7 +2928,7 @@ void clusterFailoverReplaceYourMaster(void) {
 
     /* 1) Turn this node into a master. */
     clusterSetNodeAsMaster(myself);
-    replicationUnsetMaster();
+    replicationUnsetMaster(getFirstMaster());
 
     /* 2) Claim all the slots assigned to our master. */
     for (j = 0; j < CLUSTER_SLOTS; j++) {
@@ -2985,11 +3000,11 @@ void clusterHandleSlaveFailover(void) {
 
     /* Set data_age to the number of seconds we are disconnected from
      * the master. */
-    if (server.repl_state == REPL_STATE_CONNECTED) {
-        data_age = (mstime_t)(server.unixtime - server.master->lastinteraction)
+    if (getFirstMaster()->repl_state == REPL_STATE_CONNECTED) {
+        data_age = (mstime_t)(server.unixtime - getFirstMaster()->master->lastinteraction)
                    * 1000;
     } else {
-        data_age = (mstime_t)(server.unixtime - server.repl_down_since) * 1000;
+        data_age = (mstime_t)(server.unixtime - getFirstMaster()->repl_down_since) * 1000;
     }
 
     /* Remove the node timeout from the data age as it is fine that we are
@@ -3038,7 +3053,7 @@ void clusterHandleSlaveFailover(void) {
             "(rank #%d, offset %lld).",
             server.cluster->failover_auth_time - mstime(),
             server.cluster->failover_auth_rank,
-            replicationGetSlaveOffset());
+            replicationGetSlaveOffset(getFirstMaster()));
         /* Now that we have a scheduled election, broadcast our offset
          * to all the other slaves so that they'll updated their offsets
          * if our offset is better. */
@@ -3291,7 +3306,7 @@ void clusterHandleManualFailover(void) {
 
     if (server.cluster->mf_master_offset == 0) return; /* Wait for offset... */
 
-    if (server.cluster->mf_master_offset == replicationGetSlaveOffset()) {
+    if (server.cluster->mf_master_offset == replicationGetSlaveOffset(getFirstMaster())) {
         /* Our replication offset matches the master replication offset
          * announced after clients were paused. We can start the failover. */
         server.cluster->mf_can_start = 1;
@@ -3559,11 +3574,12 @@ void clusterCron(void) {
      * enable it if we know the address of our master and it appears to
      * be up. */
     if (nodeIsSlave(myself) &&
-        server.masterhost == NULL &&
+        listLength(server.masters) == 0 &&
         myself->slaveof &&
         nodeHasAddr(myself->slaveof))
     {
-        replicationSetMaster(myself->slaveof->ip, myself->slaveof->port);
+        replicationUnsetMaster(getFirstMaster());
+        replicationAddMaster(myself->slaveof->ip, myself->slaveof->port);
     }
 
     /* Abourt a manual failover if the timeout is reached. */
@@ -3943,7 +3959,9 @@ void clusterSetMaster(clusterNode *n) {
     }
     myself->slaveof = n;
     clusterNodeAddSlave(n,myself);
-    replicationSetMaster(n->ip, n->port);
+    if (listLength(server.masters))
+        replicationUnsetMaster(getFirstMaster());
+    replicationAddMaster(n->ip, n->port);
     resetManualFailover();
 }
 

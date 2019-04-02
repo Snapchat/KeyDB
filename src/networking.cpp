@@ -1273,13 +1273,13 @@ void freeClient(client *c) {
      *
      * Note that before doing this we make sure that the client is not in
      * some unexpected state, by checking its flags. */
-    if (server.master && c->flags & CLIENT_MASTER) {
+    if (FActiveMaster(c)) {
         serverLog(LL_WARNING,"Connection with master lost.");
         if (!(c->flags & (CLIENT_CLOSE_AFTER_REPLY|
-                          CLIENT_CLOSE_ASAP|
-                          CLIENT_BLOCKED)))
+                        CLIENT_CLOSE_ASAP|
+                        CLIENT_BLOCKED)))
         {
-            replicationCacheMaster(c);
+            replicationCacheMaster(MasterInfoFromClient(c), c);
             return;
         }
     }
@@ -1339,7 +1339,7 @@ void freeClient(client *c) {
 
     /* Master/slave cleanup Case 2:
      * we lost the connection with the master. */
-    if (c->flags & CLIENT_MASTER) replicationHandleMasterDisconnection();
+    if (c->flags & CLIENT_MASTER) replicationHandleMasterDisconnection(MasterInfoFromClient(c));
 
     /* If this client was scheduled for async freeing we need to remove it
      * from the queue. */
@@ -2564,7 +2564,7 @@ void helloCommand(client *c) {
 
     if (!server.sentinel_mode) {
         addReplyBulkCString(c,"role");
-        addReplyBulkCString(c,server.masterhost ? "replica" : "master");
+        addReplyBulkCString(c,listLength(server.masters) ? "replica" : "master");
     }
 
     addReplyBulkCString(c,"modules");

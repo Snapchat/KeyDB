@@ -532,7 +532,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
             luaPushError(lua,
                 "Write commands not allowed after non deterministic commands. Call redis.replicate_commands() at the start of your script in order to switch to single commands replication mode.");
             goto cleanup;
-        } else if (server.masterhost && server.repl_slave_ro &&
+        } else if (listLength(server.masters) && server.repl_slave_ro &&
                    !server.loading &&
                    !(server.lua_caller->flags & CLIENT_MASTER))
         {
@@ -558,7 +558,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
      * in the middle. */
     if (server.maxmemory &&             /* Maxmemory is actually enabled. */
         !server.loading &&              /* Don't care about mem if loading. */
-        !server.masterhost &&           /* Slave must execute the script. */
+        !listLength(server.masters) &&           /* Slave must execute the script. */
         server.lua_write_dirty == 0 &&  /* Script had no side effects so far. */
         (cmd->flags & CMD_DENYOOM))
     {
@@ -1420,8 +1420,15 @@ void evalGenericCommand(client *c, int evalsha) {
         /* Restore the client that was protected when the script timeout
          * was detected. */
         unprotectClient(c);
-        if (server.masterhost && server.master)
-            queueClientForReprocessing(server.master);
+        listIter li;
+        listNode *ln;
+        listRewind(server.masters, &li);
+        while ((ln = listNext(&li)))
+        {
+            struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
+            if (mi->master)
+                queueClientForReprocessing(mi->master);
+        }
     }
     server.lua_caller = NULL;
 

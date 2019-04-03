@@ -188,6 +188,7 @@ extern "C" {
 #define CONFIG_DEFAULT_THREAD_AFFINITY 0
 
 #define CONFIG_DEFAULT_ACTIVE_REPLICA 0
+#define CONFIG_DEFAULT_ENABLE_MULTIMASTER 0
 
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
@@ -1326,6 +1327,7 @@ struct redisServer {
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
     /* Replication (slave) */
     list *masters;
+    int enable_multimaster; 
     int repl_timeout;               /* Timeout after N seconds of master idle */
     int repl_syncio_timeout; /* Timeout for synchronous I/O calls */
     int repl_disable_tcp_nodelay;   /* Disable TCP_NODELAY after SYNC? */

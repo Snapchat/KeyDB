@@ -1280,7 +1280,8 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
     off_t left;
     UNUSED(el);
     UNUSED(mask);
-    int fUpdate = server.fActiveReplica;   // Should we update our database, or create from scratch?
+    // Should we update our database, or create from scratch?
+    int fUpdate = server.fActiveReplica || server.enable_multimaster;
     redisMaster *mi = (redisMaster*)privdata;
 
     serverAssert(GlobalLocksAcquired());

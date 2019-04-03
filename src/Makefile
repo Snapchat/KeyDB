@@ -230,6 +230,7 @@ persist-settings: distclean
 	echo REDIS_LDFLAGS=$(REDIS_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
+	-(cd modules && $(MAKE))
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
 
 .PHONY: persist-settings
@@ -291,6 +292,7 @@ clean:
 
 distclean: clean
 	-(cd ../deps && $(MAKE) distclean)
+	-(cd modules && $(MAKE) clean)
 	-(rm -f .make-*)
 
 .PHONY: distclean

@@ -491,7 +491,8 @@ extern "C" {
 #define NOTIFY_EXPIRED (1<<8)     /* x */
 #define NOTIFY_EVICTED (1<<9)     /* e */
 #define NOTIFY_STREAM (1<<10)     /* t */
-#define NOTIFY_ALL (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_EXPIRED | NOTIFY_EVICTED | NOTIFY_STREAM) /* A flag */
+#define NOTIFY_KEY_MISS (1<<11)   /* m */
+#define NOTIFY_ALL (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_EXPIRED | NOTIFY_EVICTED | NOTIFY_STREAM | NOTIFY_KEY_MISS) /* A flag */
 
 /* Get the first bind addr or NULL */
 #define NET_FIRST_BIND_ADDR (server.bindaddr_count ? server.bindaddr[0] : NULL)
@@ -1580,6 +1581,7 @@ size_t moduleCount(void);
 void moduleAcquireGIL(int fServerThread);
 void moduleReleaseGIL(int fServerThread);
 void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid);
+void moduleCallCommandFilters(client *c);
 
 /* Utils */
 long long ustime(void);

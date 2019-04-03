@@ -2279,6 +2279,9 @@ void initServerConfig(void) {
     server.runid[CONFIG_RUN_ID_SIZE] = '\0';
     changeReplicationId();
     clearReplicationId2();
+    server.clients = listCreate();
+    server.slaves = listCreate();
+    server.monitors = listCreate();
     server.timezone = getTimeZone(); /* Initialized by tzset(). */
     server.configfile = NULL;
     server.executable = NULL;
@@ -2397,6 +2400,7 @@ void initServerConfig(void) {
 
     /* Replication related */
     server.masters = listCreate();
+    server.enable_multimaster = CONFIG_DEFAULT_ENABLE_MULTIMASTER;
     server.repl_syncio_timeout = CONFIG_REPL_SYNCIO_TIMEOUT;
     server.repl_serve_stale_data = CONFIG_DEFAULT_SLAVE_SERVE_STALE_DATA;
     server.repl_slave_ro = CONFIG_DEFAULT_SLAVE_READ_ONLY;
@@ -2858,11 +2862,8 @@ void initServer(void) {
     server.hz = server.config_hz;
     server.pid = getpid();
     server.current_client = NULL;
-    server.clients = listCreate();
     server.clients_index = raxNew();
     server.clients_to_close = listCreate();
-    server.slaves = listCreate();
-    server.monitors = listCreate();
     server.slaveseldb = -1; /* Force to emit the first SELECT command. */
     server.ready_keys = listCreate();
     server.clients_waiting_acks = listCreate();

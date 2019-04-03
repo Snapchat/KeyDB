@@ -1211,6 +1211,16 @@ void unlinkClient(client *c) {
             c->client_list_node = NULL;
         }
 
+        /* In the case of diskless replication the fork is writing to the
+         * sockets and just closing the fd isn't enough, if we don't also
+         * shutdown the socket the fork will continue to write to the slave
+         * and the salve will only find out that it was disconnected when
+         * it will finish reading the rdb. */
+        if ((c->flags & CLIENT_SLAVE) &&
+            (c->replstate == SLAVE_STATE_WAIT_BGSAVE_END)) {
+            shutdown(c->fd, SHUT_RDWR);
+        }
+
         /* Unregister async I/O handlers and close the socket. */
         aeDeleteFileEvent(server.rgthreadvar[c->iel].el,c->fd,AE_READABLE);
         aeDeleteFileEvent(server.rgthreadvar[c->iel].el,c->fd,AE_WRITABLE);
@@ -2433,7 +2443,10 @@ NULL
             if (c == client) {
                 close_this_client = 1;
             } else {
-                freeClientAsync(client);
+                if (FCorrectThread(client))
+                    freeClient(client);
+                else
+                    freeClientAsync(client);
             }
             killed++;
         }

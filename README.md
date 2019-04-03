@@ -14,6 +14,8 @@ Try our docker container: https://hub.docker.com/r/eqalpha/keydb
 
 Talk on Gitter: https://gitter.im/KeyDB
 
+Management GUI: We recommend [FastoNoSQL](https://fastonosql.com/) which has official KeyDB support.
+
 New: Active Replica Support
 ---------------------------
 

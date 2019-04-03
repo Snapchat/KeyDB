@@ -79,7 +79,9 @@ void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8
 
 struct redisMaster *getFirstMaster()
 {
-    serverAssert(listLength(server.masters) == 1);
+    serverAssert(listLength(server.masters) <= 1);
+    if (!listLength(server.masters))
+        return NULL;
     return listFirst(server.masters)->value;
 }
 
@@ -3578,7 +3580,9 @@ void clusterCron(void) {
         myself->slaveof &&
         nodeHasAddr(myself->slaveof))
     {
-        replicationUnsetMaster(getFirstMaster());
+        struct redisMaster *mi = getFirstMaster();
+        if (mi != NULL)
+            replicationUnsetMaster(mi);
         replicationAddMaster(myself->slaveof->ip, myself->slaveof->port);
     }
 

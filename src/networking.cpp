@@ -2443,7 +2443,10 @@ NULL
             if (c == client) {
                 close_this_client = 1;
             } else {
-                freeClientAsync(client);
+                if (FCorrectThread(client))
+                    freeClient(client);
+                else
+                    freeClientAsync(client);
             }
             killed++;
         }

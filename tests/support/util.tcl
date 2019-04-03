@@ -48,7 +48,7 @@ proc warnings_from_file {filename} {
 
 # Return value for INFO property
 proc status {r property} {
-    if {[regexp "\r\n$property:(.*?)\r\n" [{*}$r info] _ value]} {
+    if {[regexp "\r\n(\t*?)$property:(.*?)\r\n" [{*}$r info] _ __ value]} {
         set _ $value
     }
 }

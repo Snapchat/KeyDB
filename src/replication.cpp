@@ -1231,6 +1231,7 @@ void replicationEmptyDbCallback(void *privdata) {
  * performed, this function materializes the master client we store
  * at server.master, starting from the specified file descriptor. */
 void replicationCreateMasterClient(redisMaster *mi, int fd, int dbid) {
+    serverAssert(mi->master == nullptr);
     mi->master = createClient(fd, serverTL - server.rgthreadvar);
     mi->master->flags |= CLIENT_MASTER;
     mi->master->authenticated = 1;
@@ -1248,8 +1249,6 @@ void replicationCreateMasterClient(redisMaster *mi, int fd, int dbid) {
     if (mi->master->reploff == -1)
         mi->master->flags |= CLIENT_PRE_PSYNC;
     if (dbid != -1) selectDb(mi->master,dbid);
-
-    listAddNodeTail(server.masters, mi);
 }
 
 /* This function will try to re-enable the AOF file after the
@@ -2163,9 +2162,29 @@ int cancelReplicationHandshake(redisMaster *mi) {
 
 /* Set replication to the specified master address and port. */
 struct redisMaster *replicationAddMaster(char *ip, int port) {
-    redisMaster *mi = (redisMaster*)zcalloc(sizeof(redisMaster), MALLOC_LOCAL);
-    initMasterInfo(mi);
-    int was_master = mi->masterhost == NULL;
+    // pre-reqs: We must not already have a replica in the list with the same tuple
+    listIter li;
+    listNode *ln;
+    listRewind(server.masters, &li);
+    while ((ln = listNext(&li)))
+    {
+        redisMaster *miCheck = (redisMaster*)listNodeValue(ln);
+        serverAssert(strcasecmp(miCheck->masterhost, ip) || miCheck->masterport != port);
+    }
+
+    // Pre-req satisfied, lets continue
+    int was_master = listLength(server.masters) == 0;
+    redisMaster *mi = nullptr;
+    if (!server.enable_multimaster && listLength(server.masters)) {
+        serverAssert(listLength(server.masters) == 1);
+        mi = (redisMaster*)listNodeValue(listFirst(server.masters));
+    }
+    else
+    {
+        mi = (redisMaster*)zcalloc(sizeof(redisMaster), MALLOC_LOCAL);
+        initMasterInfo(mi);
+        listAddNodeTail(server.masters, mi);
+    }
 
     sdsfree(mi->masterhost);
     mi->masterhost = sdsnew(ip);
@@ -2186,14 +2205,14 @@ struct redisMaster *replicationAddMaster(char *ip, int port) {
      * our own parameters, to later PSYNC with the new master. */
     if (was_master) replicationCacheMasterUsingMyself(mi);
     mi->repl_state = REPL_STATE_CONNECT;
-    listAddNodeTail(server.masters, mi);
     return mi;
 }
 
 /* Cancel replication, setting the instance as a master itself. */
 void replicationUnsetMaster(redisMaster *mi) {
-    if (mi->masterhost == NULL) return; /* Nothing to do. */
+    serverAssert(mi->masterhost != NULL);
     sdsfree(mi->masterhost);
+    
     mi->masterhost = NULL;
     /* When a slave is turned into a master, the current replication ID
      * (that was inherited from the master at synchronization time) is
@@ -2226,6 +2245,10 @@ void replicationUnsetMaster(redisMaster *mi) {
      * starting from now. Otherwise the backlog will be freed after a
      * failover if slaves do not connect immediately. */
     server.repl_no_slaves_since = server.unixtime;
+
+    listNode *ln = listSearchKey(server.masters, mi);
+    serverAssert(ln != nullptr);
+    listDelNode(server.masters, ln);
 }
 
 /* This function is called when the slave lose the connection with the
@@ -2252,12 +2275,9 @@ void replicaofCommand(client *c) {
     if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"no") &&
         !strcasecmp((const char*)ptrFromObj(c->argv[2]),"one")) {
         if (listLength(server.masters)) {
-            listIter li;
-            listNode *ln;
-            listRewind(server.masters, &li);
-            while ((ln = listNext(&li)))
+            while (listLength(server.masters))
             {
-                replicationUnsetMaster((redisMaster*)listNodeValue(ln));
+                replicationUnsetMaster((redisMaster*)listNodeValue(listFirst(server.masters)));
             }
             sds client = catClientInfoString(sdsempty(),c);
             serverLog(LL_NOTICE,"MASTER MODE enabled (user request from '%s')",

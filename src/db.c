@@ -83,6 +83,7 @@ robj *lookupKey(redisDb *db, robj *key, int flags) {
  * 1. A key gets expired if it reached it's TTL.
  * 2. The key last access time is updated.
  * 3. The global keys hits/misses stats are updated (reported in INFO).
+ * 4. If keyspace notifications are enabled, a "keymiss" notification is fired.
  *
  * This API should not be used when we write to the key after obtaining
  * the object linked to the key, but only for read only operations.
@@ -107,6 +108,7 @@ robj *lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
          * to return NULL ASAP. */
         if (listLength(server.masters) == 0) {
             server.stat_keyspace_misses++;
+            notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
             return NULL;
         }
 
@@ -128,12 +130,15 @@ robj *lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
             server.current_client->cmd->flags & CMD_READONLY)
         {
             server.stat_keyspace_misses++;
+            notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
             return NULL;
         }
     }
     val = lookupKey(db,key,flags);
-    if (val == NULL)
+    if (val == NULL) {
         server.stat_keyspace_misses++;
+        notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
+    }
     else
         server.stat_keyspace_hits++;
     return val;

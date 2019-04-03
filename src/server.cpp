@@ -3394,6 +3394,8 @@ void call(client *c, int flags) {
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c) {
     serverAssert(GlobalLocksAcquired());
+    moduleCallCommandFilters(c);
+
     /* The QUIT command is handled separately. Normal command procs will
      * go through checking for replication and QUIT will cause trouble
      * when FORCE_REPLICATION is enabled and would be implemented in

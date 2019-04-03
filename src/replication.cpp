@@ -2796,7 +2796,7 @@ void processClientsWaitingReplicas(void) {
 long long replicationGetSlaveOffset(redisMaster *mi) {
     long long offset = 0;
 
-    if (mi->masterhost != NULL) {
+    if (mi != NULL && mi->masterhost != NULL) {
         if (mi->master) {
             offset = mi->master->reploff;
         } else if (mi->cached_master) {

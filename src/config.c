@@ -1623,10 +1623,10 @@ void configGetCommand(client *c) {
         char *optname = stringmatch(pattern,"slaveof",1) ?
                         "slaveof" : "replicaof";
         char buf[256];
+        addReplyBulkCString(c,optname);
         if (listLength(server.masters) == 0)
         {
             buf[0] = '\0';
-            addReplyBulkCString(c,optname);
             addReplyBulkCString(c,buf);
         }
         else

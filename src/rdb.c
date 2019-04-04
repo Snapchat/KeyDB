@@ -1859,8 +1859,15 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
          * our cached time since it is used to create and update the last
          * interaction time with clients and for other important things. */
         updateCachedTime();
-        if (server.masterhost && server.repl_state == REPL_STATE_TRANSFER)
-            replicationSendNewlineToMaster();
+        listIter li;
+        listNode *ln;
+        listRewind(server.masters, &li);
+        while ((ln = listNext(&li)))
+        {
+            struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
+            if (mi->repl_state == REPL_STATE_TRANSFER)
+                replicationSendNewlineToMaster(mi);
+        }
         loadingProgress(r->processed_bytes);
         processEventsWhileBlocked(serverTL - server.rgthreadvar);
     }
@@ -2050,7 +2057,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
          * received from the master. In the latter case, the master is
          * responsible for key expiry. If we would expire keys here, the
          * snapshot taken by the master may not be reflected on the slave. */
-        if (server.masterhost == NULL && !loading_aof && expiretime != -1 && expiretime < now) {
+        if (listLength(server.masters) == 0 && !loading_aof && expiretime != -1 && expiretime < now) {
             decrRefCount(key);
             decrRefCount(val);
         } else {
@@ -2528,7 +2535,7 @@ rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
      * connects to us, the NULL repl_backlog will trigger a full
      * synchronization, at the same time we will use a new replid and clear
      * replid2. */
-    if (!server.masterhost && server.repl_backlog) {
+    if (!listLength(server.masters) && server.repl_backlog) {
         /* Note that when server.slaveseldb is -1, it means that this master
          * didn't apply any write commands after a full synchronization.
          * So we can let repl_stream_db be 0, this allows a restarted slave
@@ -2538,10 +2545,17 @@ rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
         return rsi;
     }
 
+    if (listLength(server.masters) > 1)
+    {
+        // BUGBUG, warn user about this incomplete implementation
+        serverLog(LL_WARNING, "Warning: Only backing up first master's information in RDB");
+    }
+    struct redisMaster *miFirst = listLength(server.masters) ? listNodeValue(listFirst(server.masters)) : NULL;
+
     /* If the instance is a slave we need a connected master
      * in order to fetch the currently selected DB. */
-    if (server.master) {
-        rsi->repl_stream_db = server.master->db->id;
+    if (miFirst && miFirst->master) {
+        rsi->repl_stream_db = miFirst->master->db->id;
         return rsi;
     }
 
@@ -2550,8 +2564,8 @@ rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
      * increment the master_repl_offset only from data arriving from the
      * master, so if we are disconnected the offset in the cached master
      * is valid. */
-    if (server.cached_master) {
-        rsi->repl_stream_db = server.cached_master->db->id;
+    if (miFirst && miFirst->cached_master) {
+        rsi->repl_stream_db = miFirst->cached_master->db->id;
         return rsi;
     }
     return NULL;

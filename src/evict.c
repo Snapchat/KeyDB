@@ -448,7 +448,7 @@ int freeMemoryIfNeeded(void) {
     serverAssert(GlobalLocksAcquired());
     /* By default replicas should ignore maxmemory
      * and just be masters exact copies. */
-    if (server.masterhost && server.repl_slave_ignore_maxmemory) return C_OK;
+    if (listLength(server.masters) && server.repl_slave_ignore_maxmemory) return C_OK;
 
     size_t mem_reported, mem_tofree, mem_freed;
     mstime_t latency, eviction_latency;

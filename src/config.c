@@ -354,9 +354,7 @@ void loadServerConfigFromString(char *config) {
         } else if ((!strcasecmp(argv[0],"slaveof") ||
                     !strcasecmp(argv[0],"replicaof")) && argc == 3) {
             slaveof_linenum = linenum;
-            server.masterhost = sdsnew(argv[1]);
-            server.masterport = atoi(argv[2]);
-            server.repl_state = REPL_STATE_CONNECT;
+            replicationAddMaster(sdsnew(argv[1]), atoi(argv[2]));
         } else if ((!strcasecmp(argv[0],"repl-ping-slave-period") ||
                     !strcasecmp(argv[0],"repl-ping-replica-period")) &&
                     argc == 2)
@@ -400,11 +398,11 @@ void loadServerConfigFromString(char *config) {
                 goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"masteruser") && argc == 2) {
-            zfree(server.masteruser);
-            server.masteruser = argv[1][0] ? zstrdup(argv[1]) : NULL;
+            zfree(server.default_masteruser);
+            server.default_masteruser = argv[1][0] ? zstrdup(argv[1]) : NULL;
         } else if (!strcasecmp(argv[0],"masterauth") && argc == 2) {
-            zfree(server.masterauth);
-            server.masterauth = argv[1][0] ? zstrdup(argv[1]) : NULL;
+            zfree(server.default_masterauth);
+            server.default_masterauth = argv[1][0] ? zstrdup(argv[1]) : NULL;
         } else if ((!strcasecmp(argv[0],"slave-serve-stale-data") ||
                     !strcasecmp(argv[0],"replica-serve-stale-data"))
                     && argc == 2)
@@ -859,6 +857,10 @@ void loadServerConfigFromString(char *config) {
                 server.fActiveReplica = CONFIG_DEFAULT_ACTIVE_REPLICA;
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
+        } else if (!strcasecmp(argv[0],"multi-master") && argc == 2){
+            if ((server.enable_multimaster = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -866,7 +868,7 @@ void loadServerConfigFromString(char *config) {
     }
 
     /* Sanity checks. */
-    if (server.cluster_enabled && server.masterhost) {
+    if (server.cluster_enabled && listLength(server.masters)) {
         linenum = slaveof_linenum;
         i = linenum-1;
         err = "replicaof directive not allowed in cluster mode";
@@ -986,11 +988,11 @@ void configSetCommand(client *c) {
         ACLSetUser(DefaultUser,aclop,sdslen(aclop));
         sdsfree(aclop);
     } config_set_special_field("masteruser") {
-        zfree(server.masteruser);
-        server.masteruser = ((char*)ptrFromObj(o))[0] ? zstrdup(ptrFromObj(o)) : NULL;
+        zfree(server.default_masteruser);
+        server.default_masteruser = ((char*)ptrFromObj(o))[0] ? zstrdup(ptrFromObj(o)) : NULL;
     } config_set_special_field("masterauth") {
-        zfree(server.masterauth);
-        server.masterauth = ((char*)ptrFromObj(o))[0] ? zstrdup(ptrFromObj(o)) : NULL;
+        zfree(server.default_masterauth);
+        server.default_masterauth = ((char*)ptrFromObj(o))[0] ? zstrdup(ptrFromObj(o)) : NULL;
     } config_set_special_field("cluster-announce-ip") {
         zfree(server.cluster_announce_ip);
         server.cluster_announce_ip = ((char*)ptrFromObj(o))[0] ? zstrdup(ptrFromObj(o)) : NULL;
@@ -1338,6 +1340,8 @@ void configSetCommand(client *c) {
       "loglevel",server.verbosity,loglevel_enum) {
     } config_set_enum_field(
       "maxmemory-policy",server.maxmemory_policy,maxmemory_policy_enum) {
+    } config_set_bool_field(
+       "multi-master", server.enable_multimaster) {
     } config_set_enum_field(
       "appendfsync",server.aof_fsync,aof_fsync_enum) {
 
@@ -1405,8 +1409,8 @@ void configGetCommand(client *c) {
 
     /* String values */
     config_get_string_field("dbfilename",server.rdb_filename);
-    config_get_string_field("masteruser",server.masteruser);
-    config_get_string_field("masterauth",server.masterauth);
+    config_get_string_field("masteruser",server.default_masteruser);
+    config_get_string_field("masterauth",server.default_masterauth);
     config_get_string_field("cluster-announce-ip",server.cluster_announce_ip);
     config_get_string_field("unixsocket",server.unixsocket);
     config_get_string_field("logfile",server.logfile);
@@ -1619,14 +1623,25 @@ void configGetCommand(client *c) {
         char *optname = stringmatch(pattern,"slaveof",1) ?
                         "slaveof" : "replicaof";
         char buf[256];
-
         addReplyBulkCString(c,optname);
-        if (server.masterhost)
-            snprintf(buf,sizeof(buf),"%s %d",
-                server.masterhost, server.masterport);
-        else
+        if (listLength(server.masters) == 0)
+        {
             buf[0] = '\0';
-        addReplyBulkCString(c,buf);
+            addReplyBulkCString(c,buf);
+        }
+        else
+        {
+            listIter li;
+            listNode *ln;
+            listRewind(server.masters, &li);
+            while ((ln = listNext(&li)))
+            {
+                struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
+                snprintf(buf,sizeof(buf),"%s %d",
+                    mi->masterhost, mi->masterport);
+                addReplyBulkCString(c,buf);
+            }
+        }
         matches++;
     }
     if (stringmatch(pattern,"notify-keyspace-events",1)) {
@@ -2019,18 +2034,26 @@ void rewriteConfigDirOption(struct rewriteConfigState *state) {
 
 /* Rewrite the slaveof option. */
 void rewriteConfigSlaveofOption(struct rewriteConfigState *state, char *option) {
-    sds line;
-
     /* If this is a master, we want all the slaveof config options
-     * in the file to be removed. Note that if this is a cluster instance
-     * we don't want a slaveof directive inside redis.conf. */
-    if (server.cluster_enabled || server.masterhost == NULL) {
+    * in the file to be removed. Note that if this is a cluster instance
+    * we don't want a slaveof directive inside redis.conf. */
+    if (server.cluster_enabled || listLength(server.masters) == 0) {
         rewriteConfigMarkAsProcessed(state,option);
         return;
     }
-    line = sdscatprintf(sdsempty(),"%s %s %d", option,
-        server.masterhost, server.masterport);
-    rewriteConfigRewriteLine(state,option,line,1);
+
+    listIter li;
+    listNode *ln;
+    listRewind(server.masters, &li);
+    while ((ln = listNext(&li)))
+    {
+        struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
+        sds line;
+
+        line = sdscatprintf(sdsempty(),"%s %s %d", option,
+            mi->masterhost, mi->masterport);
+        rewriteConfigRewriteLine(state,option,line,1);
+    }
 }
 
 /* Rewrite the notify-keyspace-events option. */
@@ -2285,8 +2308,8 @@ int rewriteConfig(char *path) {
     rewriteConfigDirOption(state);
     rewriteConfigSlaveofOption(state,"replicaof");
     rewriteConfigStringOption(state,"replica-announce-ip",server.slave_announce_ip,CONFIG_DEFAULT_SLAVE_ANNOUNCE_IP);
-    rewriteConfigStringOption(state,"masteruser",server.masteruser,NULL);
-    rewriteConfigStringOption(state,"masterauth",server.masterauth,NULL);
+    rewriteConfigStringOption(state,"masteruser",server.default_masteruser,NULL);
+    rewriteConfigStringOption(state,"masterauth",server.default_masterauth,NULL);
     rewriteConfigStringOption(state,"cluster-announce-ip",server.cluster_announce_ip,NULL);
     rewriteConfigYesNoOption(state,"replica-serve-stale-data",server.repl_serve_stale_data,CONFIG_DEFAULT_SLAVE_SERVE_STALE_DATA);
     rewriteConfigYesNoOption(state,"replica-read-only",server.repl_slave_ro,CONFIG_DEFAULT_SLAVE_READ_ONLY);
@@ -2361,6 +2384,7 @@ int rewriteConfig(char *path) {
     rewriteConfigYesNoOption(state,"replica-lazy-flush",server.repl_slave_lazy_flush,CONFIG_DEFAULT_SLAVE_LAZY_FLUSH);
     rewriteConfigYesNoOption(state,"dynamic-hz",server.dynamic_hz,CONFIG_DEFAULT_DYNAMIC_HZ);
     rewriteConfigYesNoOption(state,"active-replica",server.fActiveReplica,CONFIG_DEFAULT_ACTIVE_REPLICA);
+    rewriteConfigYesNoOption(state,"multi-master",server.enable_multimaster,CONFIG_DEFAULT_ENABLE_MULTIMASTER);
 
     /* Rewrite Sentinel config if in Sentinel mode. */
     if (server.sentinel_mode) rewriteConfigSentinelOption(state);

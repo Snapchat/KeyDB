@@ -188,6 +188,7 @@ extern "C" {
 #define CONFIG_DEFAULT_THREAD_AFFINITY 0
 
 #define CONFIG_DEFAULT_ACTIVE_REPLICA 0
+#define CONFIG_DEFAULT_ENABLE_MULTIMASTER 0
 
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
@@ -1071,6 +1072,33 @@ struct redisServerThreadVars {
     struct fastlock lockPendingWrite;
 };
 
+struct redisMaster {
+    char *masteruser;               /* AUTH with this user and masterauth with master */
+    char *masterauth;               /* AUTH with this password with master */
+    char *masterhost;               /* Hostname of master */
+    int masterport;                 /* Port of master */
+    client *cached_master; /* Cached master to be reused for PSYNC. */
+    client *master;
+    /* The following two fields is where we store master PSYNC replid/offset
+     * while the PSYNC is in progress. At the end we'll copy the fields into
+     * the server->master client structure. */
+    char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid. */
+    long long master_initial_offset;           /* Master PSYNC offset. */
+
+    int repl_state;          /* Replication status if the instance is a slave */
+    off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
+    off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
+    off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
+    int repl_transfer_s;     /* Slave -> Master SYNC socket */
+    int repl_transfer_fd;    /* Slave -> Master SYNC temp file descriptor */
+    char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
+    time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
+    time_t repl_down_since; /* Unix time at which link with master went down */
+
+    unsigned char master_uuid[UUID_BINARY_LEN];  /* Used during sync with master, this is our master's UUID */
+                                                /* After we've connected with our master use the UUID in server.master */
+};
+
 struct redisServer {
     /* General */
     pid_t pid;                  /* Main process pid. */
@@ -1184,6 +1212,8 @@ struct redisServer {
         int idx;
     } inst_metric[STATS_METRIC_COUNT];
     /* Configuration */
+    char *default_masteruser;               /* AUTH with this user and masterauth with master */
+    char *default_masterauth;               /* AUTH with this password with master */
     int verbosity;                  /* Loglevel in redis.conf */
     int maxidletime;                /* Client timeout in seconds */
     int tcpkeepalive;               /* Set SO_KEEPALIVE if non-zero. */
@@ -1297,35 +1327,17 @@ struct redisServer {
     int repl_diskless_sync;         /* Send RDB to slaves sockets directly. */
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
     /* Replication (slave) */
-    char *masteruser;               /* AUTH with this user and masterauth with master */
-    char *masterauth;               /* AUTH with this password with master */
-    char *masterhost;               /* Hostname of master */
-    int masterport;                 /* Port of master */
+    list *masters;
+    int enable_multimaster; 
     int repl_timeout;               /* Timeout after N seconds of master idle */
-    client *master;     /* Client that is master for this slave */
-    client *cached_master; /* Cached master to be reused for PSYNC. */
     int repl_syncio_timeout; /* Timeout for synchronous I/O calls */
-    int repl_state;          /* Replication status if the instance is a slave */
-    off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
-    off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
-    off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
-    int repl_transfer_s;     /* Slave -> Master SYNC socket */
-    int repl_transfer_fd;    /* Slave -> Master SYNC temp file descriptor */
-    char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
-    time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
+    int repl_disable_tcp_nodelay;   /* Disable TCP_NODELAY after SYNC? */
     int repl_serve_stale_data; /* Serve stale data when link is down? */
     int repl_slave_ro;          /* Slave is read only? */
     int repl_slave_ignore_maxmemory;    /* If true slaves do not evict. */
-    time_t repl_down_since; /* Unix time at which link with master went down */
-    int repl_disable_tcp_nodelay;   /* Disable TCP_NODELAY after SYNC? */
     int slave_priority;             /* Reported in INFO and used by Sentinel. */
     int slave_announce_port;        /* Give the master this listening port. */
     char *slave_announce_ip;        /* Give the master this ip address. */
-    /* The following two fields is where we store master PSYNC replid/offset
-     * while the PSYNC is in progress. At the end we'll copy the fields into
-     * the server->master client structure. */
-    char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid. */
-    long long master_initial_offset;           /* Master PSYNC offset. */
     int repl_slave_lazy_flush;          /* Lazy FLUSHALL before loading DB? */
     /* Replication script cache. */
     dict *repl_scriptcache_dict;        /* SHA1 all slaves are aware of. */
@@ -1437,8 +1449,6 @@ struct redisServer {
 
     int fActiveReplica;                          /* Can this replica also be a master? */
     unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
-    unsigned char master_uuid[UUID_BINARY_LEN];  /* Used during sync with master, this is our master's UUID */
-                                                /* After we've connected with our master use the UUID in server.master */
 
     struct fastlock flock;
 };
@@ -1773,16 +1783,17 @@ ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout);
 ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout);
 
 /* Replication */
+void initMasterInfo(struct redisMaster *master);
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc);
 void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t buflen);
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc);
 void updateSlavesWaitingBgsave(int bgsaveerr, int type);
 void replicationCron(void);
-void replicationHandleMasterDisconnection(void);
-void replicationCacheMaster(client *c);
+void replicationHandleMasterDisconnection(struct redisMaster *mi);
+void replicationCacheMaster(struct redisMaster *mi, client *c);
 void resizeReplicationBacklog(long long newsize);
-void replicationSetMaster(char *ip, int port);
-void replicationUnsetMaster(void);
+struct redisMaster *replicationAddMaster(char *ip, int port);
+void replicationUnsetMaster(struct redisMaster *mi);
 void refreshGoodSlavesCount(void);
 void replicationScriptCacheInit(void);
 void replicationScriptCacheFlush(void);
@@ -1791,15 +1802,15 @@ int replicationScriptCacheExists(sds sha1);
 void processClientsWaitingReplicas(void);
 void unblockClientWaitingReplicas(client *c);
 int replicationCountAcksByOffset(long long offset);
-void replicationSendNewlineToMaster(void);
-long long replicationGetSlaveOffset(void);
+void replicationSendNewlineToMaster(struct redisMaster *mi);
+long long replicationGetSlaveOffset(struct redisMaster *mi);
 char *replicationGetSlaveName(client *c);
 long long getPsyncInitialOffset(void);
 int replicationSetupSlaveForFullResync(client *slave, long long offset);
 void changeReplicationId(void);
 void clearReplicationId2(void);
 void chopReplicationBacklog(void);
-void replicationCacheMasterUsingMyself(void);
+void replicationCacheMasterUsingMyself(struct redisMaster *mi);
 void feedReplicationBacklog(void *ptr, size_t len);
 
 /* Generic persistence functions */
@@ -2351,6 +2362,10 @@ void xdelCommand(client *c);
 void xtrimCommand(client *c);
 void lolwutCommand(client *c);
 void aclCommand(client *c);
+
+int FBrokenLinkToMaster();
+int FActiveMaster(client *c);
+struct redisMaster *MasterInfoFromClient(client *c);
 
 #if defined(__GNUC__)
 #ifndef __cplusplus

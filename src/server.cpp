@@ -1046,7 +1046,7 @@ void serverLogRaw(int level, const char *msg) {
         } else if (pid != server.pid) {
             role_char = 'C'; /* RDB / AOF writing child. */
         } else {
-            role_char = (server.masterhost ? 'S':'M'); /* Slave or Master. */
+            role_char = (listLength(server.masters) ? 'S':'M'); /* Slave or Master. */
         }
         fprintf(fp,"%d:%c %s %c %s\n",
             (int)getpid(),role_char, buf,c[level],msg);
@@ -1687,9 +1687,9 @@ void clientsCron(int iel) {
 void databasesCron(void) {
     /* Expire keys by random sampling. Not required for slaves
      * as master will synthesize DELs for us. */
-    if (server.active_expire_enabled && server.masterhost == NULL) {
+    if (server.active_expire_enabled && listLength(server.masters) == 0) {
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
-    } else if (server.masterhost != NULL) {
+    } else if (listLength(server.masters)) {
         expireSlaveKeys();
     }
 
@@ -2074,7 +2074,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    if (server.active_expire_enabled && server.masterhost == NULL)
+    if (server.active_expire_enabled && listLength(server.masters) == 0)
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
     /* Send all the slaves an ACK request if at least one client blocked
@@ -2254,6 +2254,19 @@ extern "C" void createSharedObjects(void) {
     shared.maxstring = sdsnew("maxstring");
 }
 
+void initMasterInfo(redisMaster *master)
+{
+    master->masterauth = NULL;
+    master->masterhost = NULL;
+    master->masterport = 6379;
+    master->master = NULL;
+    master->cached_master = NULL;
+    master->master_initial_offset = -1;
+
+    master->repl_state = REPL_STATE_NONE;
+    master->repl_down_since = 0; /* Never connected, repl is down since EVER. */
+}
+
 void initServerConfig(void) {
     int j;
 
@@ -2266,6 +2279,9 @@ void initServerConfig(void) {
     server.runid[CONFIG_RUN_ID_SIZE] = '\0';
     changeReplicationId();
     clearReplicationId2();
+    server.clients = listCreate();
+    server.slaves = listCreate();
+    server.monitors = listCreate();
     server.timezone = getTimeZone(); /* Initialized by tzset(). */
     server.configfile = NULL;
     server.executable = NULL;
@@ -2383,19 +2399,13 @@ void initServerConfig(void) {
     appendServerSaveParams(60,10000); /* save after 1 minute and 10000 changes */
 
     /* Replication related */
-    server.masterauth = NULL;
-    server.masterhost = NULL;
-    server.masterport = 6379;
-    server.master = NULL;
-    server.cached_master = NULL;
-    server.master_initial_offset = -1;
-    server.repl_state = REPL_STATE_NONE;
+    server.masters = listCreate();
+    server.enable_multimaster = CONFIG_DEFAULT_ENABLE_MULTIMASTER;
     server.repl_syncio_timeout = CONFIG_REPL_SYNCIO_TIMEOUT;
     server.repl_serve_stale_data = CONFIG_DEFAULT_SLAVE_SERVE_STALE_DATA;
     server.repl_slave_ro = CONFIG_DEFAULT_SLAVE_READ_ONLY;
     server.repl_slave_ignore_maxmemory = CONFIG_DEFAULT_SLAVE_IGNORE_MAXMEMORY;
     server.repl_slave_lazy_flush = CONFIG_DEFAULT_SLAVE_LAZY_FLUSH;
-    server.repl_down_since = 0; /* Never connected, repl is down since EVER. */
     server.repl_disable_tcp_nodelay = CONFIG_DEFAULT_REPL_DISABLE_TCP_NODELAY;
     server.repl_diskless_sync = CONFIG_DEFAULT_REPL_DISKLESS_SYNC;
     server.repl_diskless_sync_delay = CONFIG_DEFAULT_REPL_DISKLESS_SYNC_DELAY;
@@ -2852,11 +2862,8 @@ void initServer(void) {
     server.hz = server.config_hz;
     server.pid = getpid();
     server.current_client = NULL;
-    server.clients = listCreate();
     server.clients_index = raxNew();
     server.clients_to_close = listCreate();
-    server.slaves = listCreate();
-    server.monitors = listCreate();
     server.slaveseldb = -1; /* Force to emit the first SELECT command. */
     server.ready_keys = listCreate();
     server.clients_waiting_acks = listCreate();
@@ -3506,7 +3513,7 @@ int processCommand(client *c) {
      * and if this is a master instance. */
     int deny_write_type = writeCommandsDeniedByDiskError();
     if (deny_write_type != DISK_ERROR_TYPE_NONE &&
-        server.masterhost == NULL &&
+        listLength(server.masters) == 0 &&
         (c->cmd->flags & CMD_WRITE ||
          c->cmd->proc == pingCommand))
     {
@@ -3523,7 +3530,7 @@ int processCommand(client *c) {
 
     /* Don't accept write commands if there are not enough good slaves and
      * user configured the min-slaves-to-write option. */
-    if (server.masterhost == NULL &&
+    if (listLength(server.masters) == 0 &&
         server.repl_min_slaves_to_write &&
         server.repl_min_slaves_max_lag &&
         c->cmd->flags & CMD_WRITE &&
@@ -3536,7 +3543,7 @@ int processCommand(client *c) {
 
     /* Don't accept write commands if this is a read only slave. But
      * accept write commands if this is our master. */
-    if (server.masterhost && server.repl_slave_ro &&
+    if (listLength(server.masters) && server.repl_slave_ro &&
         !(c->flags & CLIENT_MASTER) &&
         c->cmd->flags & CMD_WRITE)
     {
@@ -3559,7 +3566,7 @@ int processCommand(client *c) {
     /* Only allow commands with flag "t", such as INFO, SLAVEOF and so on,
      * when slave-serve-stale-data is no and we are a slave with a broken
      * link with master. */
-    if (server.masterhost && server.repl_state != REPL_STATE_CONNECTED &&
+    if (FBrokenLinkToMaster() &&
         server.repl_serve_stale_data == 0 &&
         !(c->cmd->flags & CMD_STALE))
     {
@@ -4286,46 +4293,57 @@ extern "C" sds genRedisInfoString(const char *section) {
         info = sdscatprintf(info,
             "# Replication\r\n"
             "role:%s\r\n",
-            server.masterhost == NULL ? "master" : "slave");
-        if (server.masterhost) {
-            long long slave_repl_offset = 1;
+            listLength(server.masters) == 0 ? "master" : "slave");
+        if (listLength(server.masters)) {
+            listIter li;
+            listNode *ln;
+            listRewind(server.masters, &li);
 
-            if (server.master)
-                slave_repl_offset = server.master->reploff;
-            else if (server.cached_master)
-                slave_repl_offset = server.cached_master->reploff;
+            int cmasters = 0;
+            while ((ln = listNext(&li)))
+            {
+                long long slave_repl_offset = 1;
+                redisMaster *mi = (redisMaster*)listNodeValue(ln);
+                info = sdscatprintf(info, "Master %d: \r\n", cmasters);
+                ++cmasters;
 
-            info = sdscatprintf(info,
-                "master_host:%s\r\n"
-                "master_port:%d\r\n"
-                "master_link_status:%s\r\n"
-                "master_last_io_seconds_ago:%d\r\n"
-                "master_sync_in_progress:%d\r\n"
-                "slave_repl_offset:%lld\r\n"
-                ,server.masterhost,
-                server.masterport,
-                (server.repl_state == REPL_STATE_CONNECTED) ?
-                    "up" : "down",
-                server.master ?
-                ((int)(server.unixtime-server.master->lastinteraction)) : -1,
-                server.repl_state == REPL_STATE_TRANSFER,
-                slave_repl_offset
-            );
+                if (mi->master)
+                    slave_repl_offset = mi->master->reploff;
+                else if (mi->cached_master)
+                    slave_repl_offset = mi->cached_master->reploff;
 
-            if (server.repl_state == REPL_STATE_TRANSFER) {
                 info = sdscatprintf(info,
-                    "master_sync_left_bytes:%lld\r\n"
-                    "master_sync_last_io_seconds_ago:%d\r\n"
-                    , (long long)
-                        (server.repl_transfer_size - server.repl_transfer_read),
-                    (int)(server.unixtime-server.repl_transfer_lastio)
+                    "master_host:%s\r\n"
+                    "master_port:%d\r\n"
+                    "master_link_status:%s\r\n"
+                    "master_last_io_seconds_ago:%d\r\n"
+                    "master_sync_in_progress:%d\r\n"
+                    "slave_repl_offset:%lld\r\n"
+                    ,mi->masterhost,
+                    mi->masterport,
+                    (mi->repl_state == REPL_STATE_CONNECTED) ?
+                        "up" : "down",
+                    mi->master ?
+                    ((int)(server.unixtime-mi->master->lastinteraction)) : -1,
+                    mi->repl_state == REPL_STATE_TRANSFER,
+                    slave_repl_offset
                 );
-            }
 
-            if (server.repl_state != REPL_STATE_CONNECTED) {
-                info = sdscatprintf(info,
-                    "master_link_down_since_seconds:%jd\r\n",
-                    (intmax_t)server.unixtime-server.repl_down_since);
+                if (mi->repl_state == REPL_STATE_TRANSFER) {
+                    info = sdscatprintf(info,
+                        "master_sync_left_bytes:%lld\r\n"
+                        "master_sync_last_io_seconds_ago:%d\r\n"
+                        , (long long)
+                            (mi->repl_transfer_size - mi->repl_transfer_read),
+                        (int)(server.unixtime-mi->repl_transfer_lastio)
+                    );
+                }
+
+                if (mi->repl_state != REPL_STATE_CONNECTED) {
+                    info = sdscatprintf(info,
+                        "master_link_down_since_seconds:%jd\r\n",
+                        (intmax_t)server.unixtime-mi->repl_down_since);
+                }
             }
             info = sdscatprintf(info,
                 "slave_priority:%d\r\n"
@@ -4696,7 +4714,7 @@ void loadDataFromDisk(void) {
                 (float)(ustime()-start)/1000000);
 
             /* Restore the replication ID / offset from the RDB file. */
-            if ((server.masterhost || (server.cluster_enabled && nodeIsSlave(server.cluster->myself)))&&
+            if ((listLength(server.masters) || (server.cluster_enabled && nodeIsSlave(server.cluster->myself)))&&
                 rsi.repl_id_is_set &&
                 rsi.repl_offset != -1 &&
                 /* Note that older implementations may save a repl_stream_db
@@ -4706,11 +4724,19 @@ void loadDataFromDisk(void) {
             {
                 memcpy(server.replid,rsi.repl_id,sizeof(server.replid));
                 server.master_repl_offset = rsi.repl_offset;
-                /* If we are a slave, create a cached master from this
-                 * information, in order to allow partial resynchronizations
-                 * with masters. */
-                replicationCacheMasterUsingMyself();
-                selectDb(server.cached_master,rsi.repl_stream_db);
+                listIter li;
+                listNode *ln;
+                
+                listRewind(server.masters, &li);
+                while ((ln = listNext(&li)))
+                {
+                    redisMaster *mi = (redisMaster*)listNodeValue(ln);
+                    /* If we are a slave, create a cached master from this
+                    * information, in order to allow partial resynchronizations
+                    * with masters. */
+                    replicationCacheMasterUsingMyself(mi);
+                    selectDb(mi->cached_master,rsi.repl_stream_db);
+                }
             }
         } else if (errno != ENOENT) {
             serverLog(LL_WARNING,"Fatal error loading the DB: %s. Exiting.",strerror(errno));

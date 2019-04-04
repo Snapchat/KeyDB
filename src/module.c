@@ -1470,7 +1470,7 @@ int RM_GetContextFlags(RedisModuleCtx *ctx) {
         flags |= REDISMODULE_CTX_FLAGS_RDB;
 
     /* Replication flags */
-    if (server.masterhost == NULL) {
+    if (listLength(server.masters) == 0) {
         flags |= REDISMODULE_CTX_FLAGS_MASTER;
     } else {
         flags |= REDISMODULE_CTX_FLAGS_SLAVE;

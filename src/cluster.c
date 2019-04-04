@@ -436,6 +436,11 @@ void clusterUpdateMyselfFlags(void) {
 
 void clusterInit(void) {
     int saveconf = 0;
+    if (server.enable_multimaster)
+    {
+        serverLog(LL_WARNING, "Clusters are not compatible with multi-master");
+        exit(EXIT_FAILURE);
+    }
 
     server.cluster = zmalloc(sizeof(clusterState), MALLOC_LOCAL);
     server.cluster->myself = NULL;
@@ -1507,7 +1512,6 @@ int nodeUpdateAddressIfNeeded(clusterNode *node, clusterLink *link,
     if (nodeIsSlave(myself) && myself->slaveof == node)
     {
         serverAssert(listLength(server.masters) == 1);
-        replicationUnsetMaster(listFirst(server.masters)->value);
         replicationAddMaster(node->ip, node->port);
     }
         
@@ -3580,9 +3584,6 @@ void clusterCron(void) {
         myself->slaveof &&
         nodeHasAddr(myself->slaveof))
     {
-        struct redisMaster *mi = getFirstMaster();
-        if (mi != NULL)
-            replicationUnsetMaster(mi);
         replicationAddMaster(myself->slaveof->ip, myself->slaveof->port);
     }
 
@@ -3963,8 +3964,6 @@ void clusterSetMaster(clusterNode *n) {
     }
     myself->slaveof = n;
     clusterNodeAddSlave(n,myself);
-    if (listLength(server.masters))
-        replicationUnsetMaster(getFirstMaster());
     replicationAddMaster(n->ip, n->port);
     resetManualFailover();
 }

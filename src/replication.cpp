@@ -75,14 +75,8 @@ char *replicationGetSlaveName(client *c) {
     return buf;
 }
 
-static bool FSameHost(client *clientA, client *clientB)
+static bool FSameUuidNoNil(const unsigned char *a, const unsigned char *b)
 {
-    if (clientA == nullptr || clientB == nullptr)
-        return false;
-
-    const unsigned char *a = clientA->uuid;
-    const unsigned char *b = clientB->uuid;
-
     unsigned char zeroCheck = 0;
     for (int i = 0; i < UUID_BINARY_LEN; ++i)
     {
@@ -93,6 +87,17 @@ static bool FSameHost(client *clientA, client *clientB)
     return (zeroCheck != 0);    // if the UUID is nil then it is never equal
 }
 
+static bool FSameHost(client *clientA, client *clientB)
+{
+    if (clientA == nullptr || clientB == nullptr)
+        return false;
+
+    const unsigned char *a = clientA->uuid;
+    const unsigned char *b = clientB->uuid;
+
+    return FSameUuidNoNil(a, b);
+}
+
 static bool FMasterHost(client *c)
 {
     listIter li;
@@ -101,7 +106,7 @@ static bool FMasterHost(client *c)
     while ((ln = listNext(&li)))
     {
         redisMaster *mi = (redisMaster*)listNodeValue(ln);
-        if (FSameHost(mi->master, c))
+        if (FSameUuidNoNil(mi->master_uuid, c->uuid))
             return true;
     }
     return false;

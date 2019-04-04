@@ -4313,12 +4313,12 @@ extern "C" sds genRedisInfoString(const char *section) {
                     slave_repl_offset = mi->cached_master->reploff;
 
                 info = sdscatprintf(info,
-                    "\tmaster_host:%s\r\n"
-                    "\tmaster_port:%d\r\n"
-                    "\tmaster_link_status:%s\r\n"
-                    "\tmaster_last_io_seconds_ago:%d\r\n"
-                    "\tmaster_sync_in_progress:%d\r\n"
-                    "\tslave_repl_offset:%lld\r\n"
+                    "master_host:%s\r\n"
+                    "master_port:%d\r\n"
+                    "master_link_status:%s\r\n"
+                    "master_last_io_seconds_ago:%d\r\n"
+                    "master_sync_in_progress:%d\r\n"
+                    "slave_repl_offset:%lld\r\n"
                     ,mi->masterhost,
                     mi->masterport,
                     (mi->repl_state == REPL_STATE_CONNECTED) ?
@@ -4331,8 +4331,8 @@ extern "C" sds genRedisInfoString(const char *section) {
 
                 if (mi->repl_state == REPL_STATE_TRANSFER) {
                     info = sdscatprintf(info,
-                        "\tmaster_sync_left_bytes:%lld\r\n"
-                        "\tmaster_sync_last_io_seconds_ago:%d\r\n"
+                        "master_sync_left_bytes:%lld\r\n"
+                        "master_sync_last_io_seconds_ago:%d\r\n"
                         , (long long)
                             (mi->repl_transfer_size - mi->repl_transfer_read),
                         (int)(server.unixtime-mi->repl_transfer_lastio)
@@ -4341,7 +4341,7 @@ extern "C" sds genRedisInfoString(const char *section) {
 
                 if (mi->repl_state != REPL_STATE_CONNECTED) {
                     info = sdscatprintf(info,
-                        "\tmaster_link_down_since_seconds:%jd\r\n",
+                        "master_link_down_since_seconds:%jd\r\n",
                         (intmax_t)server.unixtime-mi->repl_down_since);
                 }
             }

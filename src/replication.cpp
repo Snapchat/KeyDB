@@ -228,37 +228,10 @@ void feedReplicationBacklogWithObject(robj *o) {
     feedReplicationBacklog(p,len);
 }
 
-/* Propagate write commands to slaves, and populate the replication backlog
- * as well. This function is used if the instance is a master: we use
- * the commands received by our clients in order to create the replication
- * stream. Instead if the instance is a slave and has sub-slaves attached,
- * we use replicationFeedSlavesFromMaster() */
-void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
-    listNode *ln;
-    listIter li;
-    int j, len;
+void replicationFeedSlave(client *slave, int dictid, robj **argv, int argc)
+{
     char llstr[LONG_STR_SIZE];
-    serverAssert(GlobalLocksAcquired());
-
-    /* If the instance is not a top level master, return ASAP: we'll just proxy
-     * the stream of data we receive from our master instead, in order to
-     * propagate *identical* replication stream. In this way this slave can
-     * advertise the same replication ID as the master (since it shares the
-     * master replication history and has the same backlog and offsets). */
-    if (!server.fActiveReplica && listLength(server.masters)) return;
-
-    /* If there aren't slaves, and there is no backlog buffer to populate,
-     * we can return ASAP. */
-    if (server.repl_backlog == NULL && listLength(slaves) == 0) return;
-
-    /* We can't have slaves attached and no backlog. */
-    serverAssert(!(listLength(slaves) != 0 && server.repl_backlog == NULL));
-
-    /* Get the lock on all slaves */
-    listRewind(slaves,&li);
-    while((ln = listNext(&li))) {
-        ((client*)ln->value)->lock.lock();
-    }
+    std::unique_lock<decltype(slave->lock)> lock(slave->lock);
 
     /* Send SELECT command to every slave if needed. */
     if (server.slaveseldb != dictid) {
@@ -280,19 +253,55 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         /* Add the SELECT command into the backlog. */
         if (server.repl_backlog) feedReplicationBacklogWithObject(selectcmd);
 
-        /* Send it to slaves. */
-        listRewind(slaves,&li);
-        while((ln = listNext(&li))) {
-            client *slave = (client*)ln->value;
-            if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
-            if (server.current_client && FSameHost(server.current_client, slave)) continue;
-            addReplyAsync(slave,selectcmd);
-        }
+        /* Send it to slaves */
+        addReply(slave,selectcmd);
 
         if (dictid < 0 || dictid >= PROTO_SHARED_SELECT_CMDS)
             decrRefCount(selectcmd);
     }
     server.slaveseldb = dictid;
+
+    /* Feed slaves that are waiting for the initial SYNC (so these commands
+     * are queued in the output buffer until the initial SYNC completes),
+     * or are already in sync with the master. */
+
+    /* Add the multi bulk length. */
+    addReplyArrayLen(slave,argc);
+
+    /* Finally any additional argument that was not stored inside the
+        * static buffer if any (from j to argc). */
+    for (int j = 0; j < argc; j++)
+        addReplyBulk(slave,argv[j]);
+}
+
+/* Propagate write commands to slaves, and populate the replication backlog
+ * as well. This function is used if the instance is a master: we use
+ * the commands received by our clients in order to create the replication
+ * stream. Instead if the instance is a slave and has sub-slaves attached,
+ * we use replicationFeedSlavesFromMaster() */
+void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
+    listNode *ln, *lnReply;
+    listIter li, liReply;
+    int j, len;
+    serverAssert(GlobalLocksAcquired());
+
+    /* If the instance is not a top level master, return ASAP: we'll just proxy
+     * the stream of data we receive from our master instead, in order to
+     * propagate *identical* replication stream. In this way this slave can
+     * advertise the same replication ID as the master (since it shares the
+     * master replication history and has the same backlog and offsets). */
+    if (!server.fActiveReplica && listLength(server.masters)) return;
+
+    /* If there aren't slaves, and there is no backlog buffer to populate,
+     * we can return ASAP. */
+    if (server.repl_backlog == NULL && listLength(slaves) == 0) return;
+
+    /* We can't have slaves attached and no backlog. */
+    serverAssert(!(listLength(slaves) != 0 && server.repl_backlog == NULL));
+
+    client *fake = createClient(-1, serverTL - server.rgthreadvar);
+    fake->flags |= CLIENT_FORCE_REPLY;
+    replicationFeedSlave(fake, dictid, argv, argc); // Note: updates the repl log, keep above the repl update code below
 
     /* Write the command to the replication backlog if any. */
     if (server.repl_backlog) {
@@ -321,6 +330,25 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         }
     }
 
+    long long cchbuf = fake->bufpos;
+    listRewind(fake->reply, &liReply);
+    while ((lnReply = listNext(&liReply)))
+    {
+        clientReplyBlock* reply = (clientReplyBlock*)listNodeValue(lnReply);
+        cchbuf += reply->used;
+    }
+
+    bool fSendRaw = !server.fActiveReplica || (argc >= 1 && lookupCommand((sds)ptrFromObj(argv[0])) == server.rreplayCommand);
+
+    serverAssert(argc > 0);
+    serverAssert(cchbuf > 0);
+
+    char uuid[40] = {'\0'};
+    uuid_unparse(server.uuid, uuid);
+    char proto[1024];
+    int cchProto = snprintf(proto, sizeof(proto), "*3\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
+    cchProto = std::min((int)sizeof(proto), cchProto);    
+
     /* Write the command to every slave. */
     listRewind(slaves,&li);
     while((ln = listNext(&li))) {
@@ -329,25 +357,23 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         /* Don't feed slaves that are still waiting for BGSAVE to start */
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
         if (server.current_client && FSameHost(server.current_client, slave)) continue;
+        std::unique_lock<decltype(slave->lock)> lock(slave->lock);
 
-        /* Feed slaves that are waiting for the initial SYNC (so these commands
-         * are queued in the output buffer until the initial SYNC completes),
-         * or are already in sync with the master. */
+        if (!fSendRaw)
+            addReplyProtoAsync(slave, proto, cchProto);
 
-        /* Add the multi bulk length. */
-        addReplyArrayLenAsync(slave,argc);
-
-        /* Finally any additional argument that was not stored inside the
-         * static buffer if any (from j to argc). */
-        for (j = 0; j < argc; j++)
-            addReplyBulkAsync(slave,argv[j]);
+        addReplyProtoAsync(slave,fake->buf,fake->bufpos);
+        listRewind(fake->reply, &liReply);
+        while ((lnReply = listNext(&liReply)))
+        {
+            clientReplyBlock* reply = (clientReplyBlock*)listNodeValue(lnReply);
+            addReplyProtoAsync(slave, reply->buf(), reply->used);
+        }
+        if (!fSendRaw)
+            addReplyAsync(slave,shared.crlf);
     }
 
-    listRewind(slaves,&li);
-    while((ln = listNext(&li))) {
-        client *slave = (client*)ln->value;
-        slave->lock.unlock();
-    }
+    freeClient(fake);
 }
 
 /* This function is used in order to proxy what we receive from our master
@@ -369,6 +395,7 @@ void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t bufle
 
     if (server.repl_backlog) feedReplicationBacklog(buf,buflen);
     listRewind(slaves,&li);
+
     while((ln = listNext(&li))) {
         client *slave = (client*)ln->value;
         std::lock_guard<decltype(slave->lock)> ulock(slave->lock);
@@ -377,6 +404,7 @@ void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t bufle
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
+
         addReplyProtoAsync(slave,buf,buflen);
     }
     
@@ -682,6 +710,7 @@ int startBgsaveForReplication(int mincapa) {
         listRewind(server.slaves,&li);
         while((ln = listNext(&li))) {
             client *slave = (client*)ln->value;
+            std::unique_lock<decltype(slave->lock)> lock(slave->lock);
 
             if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
                 slave->replstate = REPL_STATE_NONE;
@@ -701,6 +730,7 @@ int startBgsaveForReplication(int mincapa) {
         listRewind(server.slaves,&li);
         while((ln = listNext(&li))) {
             client *slave = (client*)ln->value;
+            std::unique_lock<decltype(slave->lock)> lock(slave->lock);
 
             if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
                     replicationSetupSlaveForFullResync(slave,
@@ -1731,7 +1761,8 @@ int slaveTryPartialResynchronization(redisMaster *mi, aeEventLoop *el, int fd, i
                 memcpy(mi->cached_master->replid,sznew,sizeof(server.replid));
 
                 /* Disconnect all the sub-slaves: they need to be notified. */
-                disconnectSlaves();
+                if (!server.fActiveReplica)
+                    disconnectSlaves();
             }
         }
 
@@ -2035,8 +2066,23 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
      * as well, if we have any sub-slaves. The master may transfer us an
      * entirely different data set and we have no way to incrementally feed
      * our slaves after that. */
-    disconnectSlavesExcept(mi->master_uuid); /* Force our slaves to resync with us as well. */
-    freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
+    if (!server.fActiveReplica)
+    {
+        disconnectSlavesExcept(mi->master_uuid); /* Force our slaves to resync with us as well. */
+        freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
+    }
+    else
+    {
+        if (listLength(server.slaves))
+        {
+            changeReplicationId();
+            clearReplicationId2();
+        }
+        else
+        {
+            freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
+        }
+    }
 
     /* Fall back to SYNC if needed. Otherwise psync_result == PSYNC_FULLRESYNC
      * and the server.master_replid and master_initial_offset are
@@ -2206,7 +2252,8 @@ struct redisMaster *replicationAddMaster(char *ip, int port) {
 
     /* Force our slaves to resync with us as well. They may hopefully be able
      * to partially resync with us, but we can notify the replid change. */
-    disconnectSlaves();
+    if (!server.fActiveReplica)
+        disconnectSlaves();
     cancelReplicationHandshake(mi);
     /* Before destroying our master state, create a cached master using
      * our own parameters, to later PSYNC with the new master. */
@@ -2238,7 +2285,8 @@ void replicationUnsetMaster(redisMaster *mi) {
      * of the replication ID change (see shiftReplicationId() call). However
      * the slaves will be able to partially resync with us, so it will be
      * a very fast reconnection. */
-    disconnectSlaves();
+    if (!server.fActiveReplica)
+        disconnectSlaves();
     mi->repl_state = REPL_STATE_NONE;
 
     /* We need to make sure the new master will start the replication stream
@@ -3083,4 +3131,58 @@ redisMaster *MasterInfoFromClient(client *c)
             return mi;
     }
     return nullptr;
+}
+
+void replicaReplayCommand(client *c)
+{
+    // the replay command contains two arguments: 
+    //  1: The UUID of the source
+    //  2: The raw command buffer to be replayed
+    
+    if (!(c->flags & CLIENT_MASTER))
+    {
+        addReplyError(c, "Command must be sent from a master");
+        return;
+    }
+
+    /* First Validate Arguments */
+    if (c->argc != 3)
+    {
+        addReplyError(c, "Invalid number of arguments");
+        return;
+    }
+
+    unsigned char uuid[UUID_BINARY_LEN];
+    if (c->argv[1]->type != OBJ_STRING || sdslen((sds)ptrFromObj(c->argv[1])) != 36 
+        || uuid_parse((sds)ptrFromObj(c->argv[1]), uuid) != 0)
+    {
+        addReplyError(c, "Expected UUID arg1");
+        return;
+    }
+
+    if (c->argv[2]->type != OBJ_STRING)
+    {
+        addReplyError(c, "Expected command buffer arg2");
+        return;
+    }
+
+    if (FSameUuidNoNil(uuid, server.uuid))
+    {
+        addReply(c, shared.ok);
+        return; // Our own commands have come back to us.  Ignore them.
+    }
+
+    // OK We've recieved a command lets execute
+    client *cFake = createClient(-1, c->iel);
+    cFake->lock.lock();
+    cFake->querybuf = sdscat(cFake->querybuf,(sds)ptrFromObj(c->argv[2]));
+    selectDb(cFake, c->db->id);
+    processInputBuffer(cFake, (CMD_CALL_FULL & (~CMD_CALL_PROPAGATE)));
+    cFake->lock.unlock();
+    addReply(c, shared.ok);
+    freeClient(cFake);
+
+    // call() will not propogate this for us, so we do so here
+    alsoPropagate(server.rreplayCommand,c->db->id,c->argv,c->argc,PROPAGATE_AOF|PROPAGATE_REPL);
+    return;
 }

@@ -1003,6 +1003,10 @@ struct redisCommand redisCommandTable[] = {
 
     {"acl",aclCommand,-2,
      "admin no-script ok-loading ok-stale",
+     0,NULL,0,0,0,0,0,0},
+
+    {"rreplay",replicaReplayCommand,3,
+     "read-only fast noprop",
      0,NULL,0,0,0,0,0,0}
 };
 
@@ -2456,6 +2460,7 @@ void initServerConfig(void) {
     server.pexpireCommand = lookupCommandByCString("pexpire");
     server.xclaimCommand = lookupCommandByCString("xclaim");
     server.xgroupCommand = lookupCommandByCString("xgroup");
+    server.rreplayCommand = lookupCommandByCString("rreplay");
 
     /* Slow log */
     server.slowlog_log_slower_than = CONFIG_DEFAULT_SLOWLOG_LOG_SLOWER_THAN;
@@ -3023,6 +3028,8 @@ int populateCommandTableParseFlags(struct redisCommand *c, const char *strflags)
             c->flags |= CMD_ASKING;
         } else if (!strcasecmp(flag,"fast")) {
             c->flags |= CMD_FAST | CMD_CATEGORY_FAST;
+        } else if (!strcasecmp(flag,"noprop")) {
+            c->flags |= CMD_SKIP_PROPOGATE;
         } else {
             /* Parse ACL categories here if the flag name starts with @. */
             uint64_t catflag;
@@ -3344,6 +3351,9 @@ void call(client *c, int flags) {
             !(flags & CMD_CALL_PROPAGATE_AOF))
                 propagate_flags &= ~PROPAGATE_AOF;
 
+        if (c->cmd->flags & CMD_SKIP_PROPOGATE)
+            propagate_flags &= ~PROPAGATE_REPL;
+
         /* Call propagate() only if at least one of AOF / replication
          * propagation is needed. Note that modules commands handle replication
          * in an explicit way, so we never replicate them automatically. */
@@ -3392,7 +3402,7 @@ void call(client *c, int flags) {
  * If C_OK is returned the client is still alive and valid and
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
-int processCommand(client *c) {
+int processCommand(client *c, int callFlags) {
     serverAssert(GlobalLocksAcquired());
     moduleCallCommandFilters(c);
 
@@ -3607,7 +3617,7 @@ int processCommand(client *c) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
-        call(c,CMD_CALL_FULL);
+        call(c,callFlags);
         c->woff = server.master_repl_offset;
         if (listLength(server.ready_keys))
             handleClientsBlockedOnKeys();

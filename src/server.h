@@ -266,6 +266,7 @@ extern "C" {
 #define CMD_CATEGORY_CONNECTION (1ULL<<34)
 #define CMD_CATEGORY_TRANSACTION (1ULL<<35)
 #define CMD_CATEGORY_SCRIPTING (1ULL<<36)
+#define CMD_SKIP_PROPOGATE (1ULL<<37)  /* "noprop" flag */
 
 /* AOF states */
 #define AOF_OFF 0             /* AOF is off */
@@ -305,6 +306,7 @@ extern "C" {
 #define CLIENT_LUA_DEBUG_SYNC (1<<26)  /* EVAL debugging without fork() */
 #define CLIENT_MODULE (1<<27) /* Non connected client used by some module. */
 #define CLIENT_PROTECTED (1<<28) /* Client should not be freed for now. */
+#define CLIENT_FORCE_REPLY (1<<29) /* Should addReply be forced to write the text? */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -1171,7 +1173,7 @@ struct redisServer {
                         *lpopCommand, *rpopCommand, *zpopminCommand,
                         *zpopmaxCommand, *sremCommand, *execCommand,
                         *expireCommand, *pexpireCommand, *xclaimCommand,
-                        *xgroupCommand;
+                        *xgroupCommand, *rreplayCommand;
     /* Fields used only for stats */
     time_t stat_starttime;          /* Server start time */
     long long stat_numcommands;     /* Number of processed commands */
@@ -1606,7 +1608,7 @@ void setDeferredMapLen(client *c, void *node, long length);
 void setDeferredSetLen(client *c, void *node, long length);
 void setDeferredAttributeLen(client *c, void *node, long length);
 void setDeferredPushLen(client *c, void *node, long length);
-void processInputBuffer(client *c);
+void processInputBuffer(client *c, int callFlags);
 void processInputBufferAndReplicate(client *c);
 void processGopherRequest(client *c);
 void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask);
@@ -1630,6 +1632,9 @@ void addReplyStatus(client *c, const char *status);
 void addReplyDouble(client *c, double d);
 void addReplyHumanLongDouble(client *c, long double d);
 void addReplyLongLong(client *c, long long ll);
+#ifdef __cplusplus
+void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool fAsync);
+#endif
 void addReplyArrayLen(client *c, long length);
 void addReplyMapLen(client *c, long length);
 void addReplySetLen(client *c, long length);
@@ -1940,7 +1945,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 size_t freeMemoryGetNotCountedMemory();
 int freeMemoryIfNeeded(void);
 int freeMemoryIfNeededAndSafe(void);
-int processCommand(client *c);
+int processCommand(client *c, int callFlags);
 void setupSignalHandlers(void);
 struct redisCommand *lookupCommand(sds name);
 struct redisCommand *lookupCommandByCString(const char *s);
@@ -2362,6 +2367,7 @@ void xdelCommand(client *c);
 void xtrimCommand(client *c);
 void lolwutCommand(client *c);
 void aclCommand(client *c);
+void replicaReplayCommand(client *c);
 
 int FBrokenLinkToMaster();
 int FActiveMaster(client *c);

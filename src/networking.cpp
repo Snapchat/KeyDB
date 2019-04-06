@@ -300,6 +300,9 @@ int prepareClientToWrite(client *c, bool fAsync) {
     serverAssert(!fAsync || GlobalLocksAcquired());
     serverAssert(c->fd <= 0 || c->lock.fOwnLock());
 
+    if (c->flags & CLIENT_FORCE_REPLY) return C_OK; // FORCE REPLY means we're doing something else with the buffer.
+                                                // do not install a write handler
+
     /* If it's the Lua client we always return ok without installing any
      * handler since there is no socket at all. */
     if (c->flags & (CLIENT_LUA|CLIENT_MODULE)) return C_OK;
@@ -1952,7 +1955,7 @@ int processMultibulkBuffer(client *c) {
  * more query buffer to process, because we read more data from the socket
  * or because a client was blocked and later reactivated, so there could be
  * pending query buffer, already representing a full command, to process. */
-void processInputBuffer(client *c) {
+void processInputBuffer(client *c, int callFlags) {
     AssertCorrectThread(c);
     bool fFreed = false;
     
@@ -2014,7 +2017,7 @@ void processInputBuffer(client *c) {
             server.current_client = c;
 
             /* Only reset the client when the command was executed. */
-            if (processCommand(c) == C_OK) {
+            if (processCommand(c, callFlags) == C_OK) {
                 if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
                     /* Update the applied replication offset of our master. */
                     c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
@@ -2051,16 +2054,19 @@ void processInputBuffer(client *c) {
  * raw processInputBuffer(). */
 void processInputBufferAndReplicate(client *c) {
     if (!(c->flags & CLIENT_MASTER)) {
-        processInputBuffer(c);
+        processInputBuffer(c, CMD_CALL_FULL);
     } else {
         size_t prev_offset = c->reploff;
-        processInputBuffer(c);
+        processInputBuffer(c, CMD_CALL_FULL);
         size_t applied = c->reploff - prev_offset;
         if (applied) {
-            aeAcquireLock();
-            replicationFeedSlavesFromMasterStream(server.slaves,
-                    c->pending_querybuf, applied);
-            aeReleaseLock();
+            if (!server.fActiveReplica)
+            {
+                aeAcquireLock();
+                replicationFeedSlavesFromMasterStream(server.slaves,
+                        c->pending_querybuf, applied);
+                aeReleaseLock();
+            }
             sdsrange(c->pending_querybuf,applied,-1);
         }
     }

@@ -38,6 +38,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <mutex>
+#include <algorithm>
 #include <uuid/uuid.h>
 
 void replicationDiscardCachedMaster(redisMaster *mi);

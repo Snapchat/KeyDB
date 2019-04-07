@@ -128,7 +128,7 @@ void processUnblockedClients(int iel) {
     while (listLength(unblocked_clients)) {
         ln = listFirst(unblocked_clients);
         serverAssert(ln != NULL);
-        c = ln->value;
+        c = (client*)ln->value;
         listDelNode(unblocked_clients,ln);
         AssertCorrectThread(c);
         
@@ -231,7 +231,7 @@ void disconnectAllBlockedClients(void) {
 
     listRewind(server.clients,&li);
     while((ln = listNext(&li))) {
-        client *c = listNodeValue(ln);
+        client *c = (client*)listNodeValue(ln);
         
         fastlock_lock(&c->lock);
         if (c->flags & CLIENT_BLOCKED) {
@@ -280,7 +280,7 @@ void handleClientsBlockedOnKeys(void) {
 
         while(listLength(l) != 0) {
             listNode *ln = listFirst(l);
-            readyList *rl = ln->value;
+            readyList *rl = (readyList*)ln->value;
 
             /* First of all remove this key from db->ready_keys so that
              * we can safely call signalKeyAsReady() against this key. */
@@ -295,12 +295,12 @@ void handleClientsBlockedOnKeys(void) {
                  * this key, from the first blocked to the last. */
                 de = dictFind(rl->db->blocking_keys,rl->key);
                 if (de) {
-                    list *clients = dictGetVal(de);
+                    list *clients = (list*)dictGetVal(de);
                     int numclients = listLength(clients);
 
                     while(numclients--) {
                         listNode *clientnode = listFirst(clients);
-                        client *receiver = clientnode->value;
+                        client *receiver = (client*)clientnode->value;
 
                         if (receiver->btype != BLOCKED_LIST) {
                             /* Put at the tail, so that at the next call
@@ -358,13 +358,13 @@ void handleClientsBlockedOnKeys(void) {
                  * this key, from the first blocked to the last. */
                 de = dictFind(rl->db->blocking_keys,rl->key);
                 if (de) {
-                    list *clients = dictGetVal(de);
+                    list *clients = (list*)dictGetVal(de);
                     int numclients = listLength(clients);
                     unsigned long zcard = zsetLength(o);
 
                     while(numclients-- && zcard) {
                         listNode *clientnode = listFirst(clients);
-                        client *receiver = clientnode->value;
+                        client *receiver = (client*)clientnode->value;
 
                         if (receiver->btype != BLOCKED_ZSET) {
                             /* Put at the tail, so that at the next call
@@ -402,21 +402,21 @@ void handleClientsBlockedOnKeys(void) {
             /* Serve clients blocked on stream key. */
             else if (o != NULL && o->type == OBJ_STREAM) {
                 dictEntry *de = dictFind(rl->db->blocking_keys,rl->key);
-                stream *s = ptrFromObj(o);
+                stream *s = (stream*)ptrFromObj(o);
 
                 /* We need to provide the new data arrived on the stream
                  * to all the clients that are waiting for an offset smaller
                  * than the current top item. */
                 if (de) {
-                    list *clients = dictGetVal(de);
+                    list *clients = (list*)dictGetVal(de);
                     listNode *ln;
                     listIter li;
                     listRewind(clients,&li);
 
                     while((ln = listNext(&li))) {
-                        client *receiver = listNodeValue(ln);
+                        client *receiver = (client*)listNodeValue(ln);
                         if (receiver->btype != BLOCKED_STREAM) continue;
-                        streamID *gt = dictFetchValue(receiver->bpop.keys,
+                        streamID *gt = (streamID*)dictFetchValue(receiver->bpop.keys,
                                                       rl->key);
 
                         /* If we blocked in the context of a consumer
@@ -431,7 +431,7 @@ void handleClientsBlockedOnKeys(void) {
                         streamCG *group = NULL;
                         if (receiver->bpop.xread_group) {
                             group = streamLookupCG(s,
-                                    ptrFromObj(receiver->bpop.xread_group));
+                                    szFromObj(receiver->bpop.xread_group));
                             /* If the group was not found, send an error
                              * to the consumer. */
                             if (!group) {
@@ -457,7 +457,7 @@ void handleClientsBlockedOnKeys(void) {
 
                             if (group) {
                                 consumer = streamLookupConsumer(group,
-                                           ptrFromObj(receiver->bpop.xread_consumer),
+                                           szFromObj(receiver->bpop.xread_consumer),
                                            1);
                                 noack = receiver->bpop.xread_group_noack;
                             }
@@ -568,7 +568,7 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
             incrRefCount(keys[j]);
             serverAssertWithInfo(c,keys[j],retval == DICT_OK);
         } else {
-            l = dictGetVal(de);
+            l = (list*)dictGetVal(de);
         }
         listAddNodeTail(l,c);
     }
@@ -586,10 +586,10 @@ void unblockClientWaitingData(client *c) {
     di = dictGetIterator(c->bpop.keys);
     /* The client may wait for multiple keys, so unblock it for every key. */
     while((de = dictNext(di)) != NULL) {
-        robj *key = dictGetKey(de);
+        robj *key = (robj*)dictGetKey(de);
 
         /* Remove this client from the list of clients waiting for this key. */
-        l = dictFetchValue(c->db->blocking_keys,key);
+        l = (list*)dictFetchValue(c->db->blocking_keys,key);
         serverAssertWithInfo(c,key,l != NULL);
         listDelNode(l,listSearchKey(l,c));
         /* If the list is empty we need to remove it to avoid wasting memory */
@@ -629,7 +629,7 @@ void signalKeyAsReady(redisDb *db, robj *key) {
     if (dictFind(db->ready_keys,key) != NULL) return;
 
     /* Ok, we need to queue this key into server.ready_keys. */
-    rl = zmalloc(sizeof(*rl), MALLOC_SHARED);
+    rl = (readyList*)zmalloc(sizeof(*rl), MALLOC_SHARED);
     rl->key = key;
     rl->db = db;
     incrRefCount(key);

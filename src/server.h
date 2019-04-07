@@ -672,6 +672,11 @@ __attribute__((always_inline)) inline void *ptrFromObj(const robj *o)
     return o->m_ptr;
 }
 
+__attribute__((always_inline)) inline char *szFromObj(const robj *o)
+{
+    return (char*)ptrFromObj(o);
+}
+
 /* Macro used to initialize a Redis object allocated on the stack.
  * Note that this macro is taken near the structure definition to make sure
  * we'll update it when the structure is changed, to avoid bugs like
@@ -926,15 +931,21 @@ struct sharedObjectsStruct {
 };
 
 /* ZSETs use a specialized version of Skiplists */
+struct zskiplistLevel {
+        struct zskiplistNode *forward;
+        unsigned long span;
+};
 typedef struct zskiplistNode {
     sds ele;
     double score;
     struct zskiplistNode *backward;
-#ifndef __cplusplus
-    struct zskiplistLevel {
-        struct zskiplistNode *forward;
-        unsigned long span;
-    } level[];
+    
+#ifdef __cplusplus
+    zskiplistLevel *level(size_t idx) {
+        return reinterpret_cast<zskiplistLevel*>(this+1) + idx;
+    }
+#else
+    struct zskiplistLevel level[];
 #endif
 } zskiplistNode;
 
@@ -2393,7 +2404,7 @@ sds genRedisInfoString(const char *section);
 void enableWatchdog(int period);
 void disableWatchdog(void);
 void watchdogScheduleSignal(int period);
-void serverLogHexDump(int level, char *descr, void *value, size_t len);
+void serverLogHexDump(int level, const char *descr, void *value, size_t len);
 int memtest_preserving_test(unsigned long *m, size_t bytes, int passes);
 void mixDigest(unsigned char *digest, void *ptr, size_t len);
 void xorDigest(unsigned char *digest, void *ptr, size_t len);

@@ -46,6 +46,10 @@ typedef struct intset {
 #endif
 } intset;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 intset *intsetNew(void);
 intset *intsetAdd(intset *is, int64_t value, uint8_t *success);
 intset *intsetRemove(intset *is, int64_t value, int *success);
@@ -57,6 +61,10 @@ size_t intsetBlobLen(intset *is);
 
 #ifdef REDIS_TEST
 int intsetTest(int argc, char *argv[]);
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif // __INTSET_H

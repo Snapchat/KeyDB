@@ -270,7 +270,7 @@ $(REDIS_CLI_NAME): $(REDIS_CLI_OBJ)
 $(REDIS_BENCHMARK_NAME): $(REDIS_BENCHMARK_OBJ)
 	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a $(FINAL_LIBS)
 
-dict-benchmark: dict.c zmalloc.c sds.c siphash.c
+dict-benchmark: dict.cpp zmalloc.c sds.c siphash.c
 	$(REDIS_CC) $(FINAL_CFLAGS) $^ -D DICT_BENCHMARK_MAIN -o $@ $(FINAL_LIBS)
 
 # Because the jemalloc.h header is generated as a part of the jemalloc build,

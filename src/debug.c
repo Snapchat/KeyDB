@@ -1402,7 +1402,7 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 
 /* ==================== Logging functions for debugging ===================== */
 
-void serverLogHexDump(int level, char *descr, void *value, size_t len) {
+void serverLogHexDump(int level, const char *descr, void *value, size_t len) {
     char buf[65], *b;
     unsigned char *v = value;
     char charset[] = "0123456789abcdef";

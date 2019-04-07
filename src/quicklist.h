@@ -122,6 +122,10 @@ typedef struct quicklistEntry {
 #define quicklistNodeIsCompressed(node)                                        \
     ((node)->encoding == QUICKLIST_NODE_ENCODING_LZF)
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Prototypes */
 quicklist *quicklistCreate(void);
 quicklist *quicklistNew(int fill, int compress);
@@ -173,5 +177,9 @@ int quicklistTest(int argc, char *argv[]);
 /* Directions for iterators */
 #define AL_START_HEAD 0
 #define AL_START_TAIL 1
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* __QUICKLIST_H__ */

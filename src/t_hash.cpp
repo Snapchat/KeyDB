@@ -772,7 +772,7 @@ void genericHgetallCommand(client *c, int flags) {
     hashTypeIterator *hi;
     int length, count = 0;
 
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == NULL
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],(c->resp < 3) ? shared.emptyarray : shared.null[c->resp])) == NULL
         || checkType(c,o,OBJ_HASH)) return;
 
     /* We return a map if the user requested keys and values, like in the

@@ -46,12 +46,12 @@
  * Incrementing the ref count of all the objects retained is up to
  * this function. */
 slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long duration) {
-    slowlogEntry *se = zmalloc(sizeof(*se), MALLOC_LOCAL);
+    slowlogEntry *se = (slowlogEntry*)zmalloc(sizeof(*se), MALLOC_LOCAL);
     int j, slargc = argc;
 
     if (slargc > SLOWLOG_ENTRY_MAX_ARGC) slargc = SLOWLOG_ENTRY_MAX_ARGC;
     se->argc = slargc;
-    se->argv = zmalloc(sizeof(robj*)*slargc, MALLOC_LOCAL);
+    se->argv = (robj**)zmalloc(sizeof(robj*)*slargc, MALLOC_LOCAL);
     for (j = 0; j < slargc; j++) {
         /* Logging too many arguments is a useless memory waste, so we stop
          * at SLOWLOG_ENTRY_MAX_ARGC, but use the last argument to specify
@@ -64,13 +64,13 @@ slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long dur
             /* Trim too long strings as well... */
             if (argv[j]->type == OBJ_STRING &&
                 sdsEncodedObject(argv[j]) &&
-                sdslen(ptrFromObj(argv[j])) > SLOWLOG_ENTRY_MAX_STRING)
+                sdslen(szFromObj(argv[j])) > SLOWLOG_ENTRY_MAX_STRING)
             {
                 sds s = sdsnewlen(ptrFromObj(argv[j]), SLOWLOG_ENTRY_MAX_STRING);
 
                 s = sdscatprintf(s,"... (%lu more bytes)",
                     (unsigned long)
-                    sdslen(ptrFromObj(argv[j])) - SLOWLOG_ENTRY_MAX_STRING);
+                    sdslen(szFromObj(argv[j])) - SLOWLOG_ENTRY_MAX_STRING);
                 se->argv[j] = createObject(OBJ_STRING,s);
             } else if (argv[j]->refcount == OBJ_SHARED_REFCOUNT) {
                 se->argv[j] = argv[j];
@@ -89,7 +89,7 @@ slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long dur
     se->duration = duration;
     se->id = server.slowlog_entry_id++;
     se->peerid = sdsnew(getClientPeerId(c));
-    se->cname = c->name ? sdsnew(ptrFromObj(c->name)) : sdsempty();
+    se->cname = c->name ? sdsnew(szFromObj(c->name)) : sdsempty();
     return se;
 }
 
@@ -98,7 +98,7 @@ slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long dur
  *
  * This function will take care to release all the retained object. */
 void slowlogFreeEntry(void *septr) {
-    slowlogEntry *se = septr;
+    slowlogEntry *se = (slowlogEntry*)septr;
     int j;
 
     for (j = 0; j < se->argc; j++)
@@ -140,7 +140,7 @@ void slowlogReset(void) {
 /* The SLOWLOG command. Implements all the subcommands needed to handle the
  * Redis slow log. */
 void slowlogCommand(client *c) {
-    if (c->argc == 2 && !strcasecmp(ptrFromObj(c->argv[1]),"help")) {
+    if (c->argc == 2 && !strcasecmp(szFromObj(c->argv[1]),"help")) {
         const char *help[] = {
 "GET [count] -- Return top entries from the slowlog (default: 10)."
 "    Entries are made of:",
@@ -150,13 +150,13 @@ void slowlogCommand(client *c) {
 NULL
         };
         addReplyHelp(c, help);
-    } else if (c->argc == 2 && !strcasecmp(ptrFromObj(c->argv[1]),"reset")) {
+    } else if (c->argc == 2 && !strcasecmp(szFromObj(c->argv[1]),"reset")) {
         slowlogReset();
         addReply(c,shared.ok);
-    } else if (c->argc == 2 && !strcasecmp(ptrFromObj(c->argv[1]),"len")) {
+    } else if (c->argc == 2 && !strcasecmp(szFromObj(c->argv[1]),"len")) {
         addReplyLongLong(c,listLength(server.slowlog));
     } else if ((c->argc == 2 || c->argc == 3) &&
-               !strcasecmp(ptrFromObj(c->argv[1]),"get"))
+               !strcasecmp(szFromObj(c->argv[1]),"get"))
     {
         long count = 10, sent = 0;
         listIter li;
@@ -173,7 +173,7 @@ NULL
         while(count-- && (ln = listNext(&li))) {
             int j;
 
-            se = ln->value;
+            se = (slowlogEntry*)ln->value;
             addReplyArrayLen(c,6);
             addReplyLongLong(c,se->id);
             addReplyLongLong(c,se->time);

@@ -140,7 +140,7 @@ void evictionPoolAlloc(void) {
     struct evictionPoolEntry *ep;
     int j;
 
-    ep = zmalloc(sizeof(*ep)*EVPOOL_SIZE, MALLOC_LOCAL);
+    ep = (evictionPoolEntry*)zmalloc(sizeof(*ep)*EVPOOL_SIZE, MALLOC_LOCAL);
     for (j = 0; j < EVPOOL_SIZE; j++) {
         ep[j].idle = 0;
         ep[j].key = NULL;
@@ -161,7 +161,7 @@ void evictionPoolAlloc(void) {
 
 void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evictionPoolEntry *pool) {
     int j, k, count;
-    dictEntry *samples[server.maxmemory_samples];
+    dictEntry **samples = (dictEntry**)alloca(server.maxmemory_samples * sizeof(dictEntry*));
 
     count = dictGetSomeKeys(sampledict,samples,server.maxmemory_samples);
     for (j = 0; j < count; j++) {
@@ -171,14 +171,14 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
         dictEntry *de;
 
         de = samples[j];
-        key = dictGetKey(de);
+        key = (sds)dictGetKey(de);
 
         /* If the dictionary we are sampling from is not the main
          * dictionary (but the expires one) we need to lookup the key
          * again in the key dictionary to obtain the value object. */
         if (server.maxmemory_policy != MAXMEMORY_VOLATILE_TTL) {
             if (sampledict != keydict) de = dictFind(keydict, key);
-            o = dictGetVal(de);
+            o = (robj*)dictGetVal(de);
         }
 
         /* Calculate the idle time according to the policy. This is called
@@ -360,7 +360,7 @@ size_t freeMemoryGetNotCountedMemory(void) {
 
         listRewind(server.slaves,&li);
         while((ln = listNext(&li))) {
-            client *slave = listNodeValue(ln);
+            client *slave = (client*)listNodeValue(ln);
             overhead += getClientOutputBufferMemoryUsage(slave);
         }
     }
@@ -521,7 +521,7 @@ int freeMemoryIfNeeded(void) {
                     /* If the key exists, is our pick. Otherwise it is
                      * a ghost and we need to try the next element. */
                     if (de) {
-                        bestkey = dictGetKey(de);
+                        bestkey = (sds)dictGetKey(de);
                         break;
                     } else {
                         /* Ghost... Iterate again. */
@@ -544,7 +544,7 @@ int freeMemoryIfNeeded(void) {
                         db->pdict : db->expires;
                 if (dictSize(dict) != 0) {
                     de = dictGetRandomKey(dict);
-                    bestkey = dictGetKey(de);
+                    bestkey = (sds)dictGetKey(de);
                     bestdbid = j;
                     break;
                 }

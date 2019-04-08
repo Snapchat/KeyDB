@@ -58,12 +58,12 @@ void queueMultiCommand(client *c) {
     multiCmd *mc;
     int j;
 
-    c->mstate.commands = zrealloc(c->mstate.commands,
+    c->mstate.commands = (multiCmd*)zrealloc(c->mstate.commands,
             sizeof(multiCmd)*(c->mstate.count+1), MALLOC_LOCAL);
     mc = c->mstate.commands+c->mstate.count;
     mc->cmd = c->cmd;
     mc->argc = c->argc;
-    mc->argv = zmalloc(sizeof(robj*)*c->argc, MALLOC_LOCAL);
+    mc->argv = (robj**)zmalloc(sizeof(robj*)*c->argc, MALLOC_LOCAL);
     memcpy(mc->argv,c->argv,sizeof(robj*)*c->argc);
     for (j = 0; j < c->argc; j++)
         incrRefCount(mc->argv[j]);
@@ -201,7 +201,7 @@ void execCommand(client *c) {
          * rest was not. We need to make sure to at least terminate the
          * backlog with the final EXEC. */
         if (server.repl_backlog && was_master && !is_master) {
-            char *execcmd = "*1\r\n$4\r\nEXEC\r\n";
+            const char *execcmd = "*1\r\n$4\r\nEXEC\r\n";
             feedReplicationBacklog(execcmd,strlen(execcmd));
         }
     }
@@ -243,12 +243,12 @@ void watchForKey(client *c, robj *key) {
     /* Check if we are already watching for this key */
     listRewind(c->watched_keys,&li);
     while((ln = listNext(&li))) {
-        wk = listNodeValue(ln);
+        wk = (watchedKey*)listNodeValue(ln);
         if (wk->db == c->db && equalStringObjects(key,wk->key))
             return; /* Key already watched */
     }
     /* This key is not already watched in this DB. Let's add it */
-    clients = dictFetchValue(c->db->watched_keys,key);
+    clients = (decltype(clients)) dictFetchValue(c->db->watched_keys,key);
     if (!clients) {
         clients = listCreate();
         dictAdd(c->db->watched_keys,key,clients);
@@ -256,7 +256,7 @@ void watchForKey(client *c, robj *key) {
     }
     listAddNodeTail(clients,c);
     /* Add the new key to the list of keys watched by this client */
-    wk = zmalloc(sizeof(*wk), MALLOC_SHARED);
+    wk = (watchedKey*)zmalloc(sizeof(*wk), MALLOC_SHARED);
     wk->key = key;
     wk->db = c->db;
     incrRefCount(key);
@@ -277,8 +277,8 @@ void unwatchAllKeys(client *c) {
 
         /* Lookup the watched key -> clients list and remove the client
          * from the list */
-        wk = listNodeValue(ln);
-        clients = dictFetchValue(wk->db->watched_keys, wk->key);
+        wk = (watchedKey*)listNodeValue(ln);
+        clients = (decltype(clients))dictFetchValue(wk->db->watched_keys, wk->key);
         serverAssertWithInfo(c,NULL,clients != NULL);
         listDelNode(clients,listSearchKey(clients,c));
         /* Kill the entry at all if this was the only client */
@@ -300,14 +300,14 @@ void touchWatchedKey(redisDb *db, robj *key) {
     listNode *ln;
 
     if (dictSize(db->watched_keys) == 0) return;
-    clients = dictFetchValue(db->watched_keys, key);
+    clients = (list*)dictFetchValue(db->watched_keys, key);
     if (!clients) return;
 
     /* Mark all the clients watching this key as CLIENT_DIRTY_CAS */
     /* Check if we are already watching for this key */
     listRewind(clients,&li);
     while((ln = listNext(&li))) {
-        client *c = listNodeValue(ln);
+        client *c = (client*)listNodeValue(ln);
 
         c->flags |= CLIENT_DIRTY_CAS;
     }
@@ -325,10 +325,10 @@ void touchWatchedKeysOnFlush(int dbid) {
     /* For every client, check all the waited keys */
     listRewind(server.clients,&li1);
     while((ln = listNext(&li1))) {
-        client *c = listNodeValue(ln);
+        client *c = (client*)listNodeValue(ln);
         listRewind(c->watched_keys,&li2);
         while((ln = listNext(&li2))) {
-            watchedKey *wk = listNodeValue(ln);
+            watchedKey *wk = (watchedKey*)listNodeValue(ln);
 
             /* For every watched key matching the specified DB, if the
              * key exists, mark the client as dirty, as the key will be

@@ -61,9 +61,10 @@ typedef ucontext_t sigcontext_t;
  * "add" digests relative to unordered elements.
  *
  * So digest(a,b,c,d) will be the same of digest(b,a,c,d) */
-void xorDigest(unsigned char *digest, void *ptr, size_t len) {
+extern "C" void xorDigest(unsigned char *digest, const void *ptr, size_t len) {
     SHA1_CTX ctx;
-    unsigned char hash[20], *s = ptr;
+    unsigned char hash[20];
+    const unsigned char *s = (const unsigned char*)ptr;
     int j;
 
     SHA1Init(&ctx);
@@ -76,7 +77,7 @@ void xorDigest(unsigned char *digest, void *ptr, size_t len) {
 
 void xorStringObjectDigest(unsigned char *digest, robj *o) {
     o = getDecodedObject(o);
-    xorDigest(digest,ptrFromObj(o),sdslen(ptrFromObj(o)));
+    xorDigest(digest,(const unsigned char*)ptrFromObj(o),sdslen(szFromObj(o)));
     decrRefCount(o);
 }
 
@@ -96,7 +97,7 @@ void xorStringObjectDigest(unsigned char *digest, robj *o) {
  */
 void mixDigest(unsigned char *digest, void *ptr, size_t len) {
     SHA1_CTX ctx;
-    char *s = ptr;
+    char *s = (char*)ptr;
 
     xorDigest(digest,s,len);
     SHA1Init(&ctx);
@@ -106,7 +107,7 @@ void mixDigest(unsigned char *digest, void *ptr, size_t len) {
 
 void mixStringObjectDigest(unsigned char *digest, robj *o) {
     o = getDecodedObject(o);
-    mixDigest(digest,ptrFromObj(o),sdslen(ptrFromObj(o)));
+    mixDigest(digest,ptrFromObj(o),sdslen(szFromObj(o)));
     decrRefCount(o);
 }
 
@@ -148,7 +149,7 @@ void xorObjectDigest(redisDb *db, robj *keyobj, unsigned char *digest, robj *o) 
         unsigned char eledigest[20];
 
         if (o->encoding == OBJ_ENCODING_ZIPLIST) {
-            unsigned char *zl = ptrFromObj(o);
+            unsigned char *zl = (unsigned char*)ptrFromObj(o);
             unsigned char *eptr, *sptr;
             unsigned char *vstr;
             unsigned int vlen;
@@ -178,13 +179,13 @@ void xorObjectDigest(redisDb *db, robj *keyobj, unsigned char *digest, robj *o) 
                 zzlNext(zl,&eptr,&sptr);
             }
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
-            zset *zs = ptrFromObj(o);
+            zset *zs = (zset*)ptrFromObj(o);
             dictIterator *di = dictGetIterator(zs->pdict);
             dictEntry *de;
 
             while((de = dictNext(di)) != NULL) {
-                sds sdsele = dictGetKey(de);
-                double *score = dictGetVal(de);
+                sds sdsele = (sds)dictGetKey(de);
+                double *score = (double*)dictGetVal(de);
 
                 snprintf(buf,sizeof(buf),"%.17g",*score);
                 memset(eledigest,0,20);
@@ -214,7 +215,7 @@ void xorObjectDigest(redisDb *db, robj *keyobj, unsigned char *digest, robj *o) 
         hashTypeReleaseIterator(hi);
     } else if (o->type == OBJ_STREAM) {
         streamIterator si;
-        streamIteratorStart(&si,ptrFromObj(o),NULL,NULL,0);
+        streamIteratorStart(&si,(stream*)ptrFromObj(o),NULL,NULL,0);
         streamID id;
         int64_t numfields;
 
@@ -235,7 +236,7 @@ void xorObjectDigest(redisDb *db, robj *keyobj, unsigned char *digest, robj *o) 
         streamIteratorStop(&si);
     } else if (o->type == OBJ_MODULE) {
         RedisModuleDigest md;
-        moduleValue *mv = ptrFromObj(o);
+        moduleValue *mv = (moduleValue*)ptrFromObj(o);
         moduleType *mt = mv->type;
         moduleInitDigestContext(md);
         if (mt->digest) {
@@ -281,12 +282,12 @@ void computeDatasetDigest(unsigned char *final) {
             robj *keyobj, *o;
 
             memset(digest,0,20); /* This key-val digest */
-            key = dictGetKey(de);
+            key = (sds)dictGetKey(de);
             keyobj = createStringObject(key,sdslen(key));
 
             mixDigest(digest,key,sdslen(key));
 
-            o = dictGetVal(de);
+            o = (robj*)dictGetVal(de);
             xorObjectDigest(db,keyobj,digest,o);
 
             /* We can finally xor the key-val digest to the final digest */
@@ -298,7 +299,7 @@ void computeDatasetDigest(unsigned char *final) {
 }
 
 void debugCommand(client *c) {
-    if (c->argc == 2 && !strcasecmp(ptrFromObj(c->argv[1]),"help")) {
+    if (c->argc == 2 && !strcasecmp(szFromObj(c->argv[1]),"help")) {
         const char *help[] = {
 "ASSERT -- Crash by assertion failed.",
 "CHANGE-REPL-ID -- Change the replication IDs of the instance. Dangerous, should be used only for testing the replication subsystem.",
@@ -326,12 +327,12 @@ void debugCommand(client *c) {
 NULL
         };
         addReplyHelp(c, help);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"segfault")) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"segfault")) {
         *((char*)-1) = 'x';
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"panic")) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"panic")) {
         serverPanic("DEBUG PANIC called at Unix time %ld", time(NULL));
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"restart") ||
-               !strcasecmp(ptrFromObj(c->argv[1]),"crash-and-recover"))
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"restart") ||
+               !strcasecmp(szFromObj(c->argv[1]),"crash-and-recover"))
     {
         long long delay = 0;
         if (c->argc >= 3) {
@@ -339,21 +340,21 @@ NULL
                 != C_OK) return;
             if (delay < 0) delay = 0;
         }
-        int flags = !strcasecmp(ptrFromObj(c->argv[1]),"restart") ?
+        int flags = !strcasecmp(szFromObj(c->argv[1]),"restart") ?
             (RESTART_SERVER_GRACEFULLY|RESTART_SERVER_CONFIG_REWRITE) :
              RESTART_SERVER_NONE;
         restartServer(flags,delay);
         addReplyError(c,"failed to restart the server. Check server logs.");
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"oom")) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"oom")) {
         void *ptr = zmalloc(ULONG_MAX, MALLOC_LOCAL); /* Should trigger an out of memory. */
         zfree(ptr);
         addReply(c,shared.ok);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"assert")) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"assert")) {
         serverAssertWithInfo(c,c->argv[0],1 == 2);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"log") && c->argc == 3) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"log") && c->argc == 3) {
         serverLog(LL_WARNING, "DEBUG LOG: %s", (char*)ptrFromObj(c->argv[2]));
         addReply(c,shared.ok);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"reload")) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"reload")) {
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
         if (rdbSave(rsiptr) != C_OK) {
@@ -371,7 +372,7 @@ NULL
         }
         serverLog(LL_WARNING,"DB reloaded by DEBUG RELOAD");
         addReply(c,shared.ok);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"loadaof")) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"loadaof")) {
         if (server.aof_state != AOF_OFF) flushAppendOnlyFile(1);
         emptyDb(-1,EMPTYDB_NO_FLAGS,NULL);
         protectClient(c);
@@ -384,23 +385,23 @@ NULL
         server.dirty = 0; /* Prevent AOF / replication */
         serverLog(LL_WARNING,"Append Only File loaded by DEBUG LOADAOF");
         addReply(c,shared.ok);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"object") && c->argc == 3) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"object") && c->argc == 3) {
         dictEntry *de;
         robj *val;
-        char *strenc;
+        const char *strenc;
 
         if ((de = dictFind(c->db->pdict,ptrFromObj(c->argv[2]))) == NULL) {
             addReply(c,shared.nokeyerr);
             return;
         }
-        val = dictGetVal(de);
+        val = (robj*)dictGetVal(de);
         strenc = strEncoding(val->encoding);
 
         char extra[138] = {0};
         if (val->encoding == OBJ_ENCODING_QUICKLIST) {
             char *nextra = extra;
             int remaining = sizeof(extra);
-            quicklist *ql = val->m_ptr;
+            quicklist *ql = (quicklist*)val->m_ptr;
             /* Add number of quicklist nodes */
             int used = snprintf(nextra, remaining, " ql_nodes:%lu", ql->len);
             nextra += used;
@@ -436,7 +437,7 @@ NULL
             (void*)val, val->refcount,
             strenc, rdbSavedObjectLen(val),
             val->lru, estimateObjectIdleTime(val)/1000, extra);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"sdslen") && c->argc == 3) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"sdslen") && c->argc == 3) {
         dictEntry *de;
         robj *val;
         sds key;
@@ -445,8 +446,8 @@ NULL
             addReply(c,shared.nokeyerr);
             return;
         }
-        val = dictGetVal(de);
-        key = dictGetKey(de);
+        val = (robj*)dictGetVal(de);
+        key = (sds)dictGetKey(de);
 
         if (val->type != OBJ_STRING || !sdsEncodedObject(val)) {
             addReplyError(c,"Not an sds encoded string.");
@@ -457,11 +458,11 @@ NULL
                 (long long) sdslen(key),
                 (long long) sdsavail(key),
                 (long long) sdsZmallocSize(key),
-                (long long) sdslen(ptrFromObj(val)),
-                (long long) sdsavail(ptrFromObj(val)),
+                (long long) sdslen(szFromObj(val)),
+                (long long) sdsavail(szFromObj(val)),
                 (long long) getStringObjectSdsUsedMemory(val));
         }
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"ziplist") && c->argc == 3) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"ziplist") && c->argc == 3) {
         robj *o;
 
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.nokeyerr))
@@ -470,10 +471,10 @@ NULL
         if (o->encoding != OBJ_ENCODING_ZIPLIST) {
             addReplyError(c,"Not an sds encoded string.");
         } else {
-            ziplistRepr(ptrFromObj(o));
+            ziplistRepr((unsigned char*)ptrFromObj(o));
             addReplyStatus(c,"Ziplist structure printed on stdout");
         }
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"populate") &&
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"populate") &&
                c->argc >= 3 && c->argc <= 5) {
         long keys, j;
         robj *key, *val;
@@ -507,7 +508,7 @@ NULL
             decrRefCount(key);
         }
         addReply(c,shared.ok);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"digest") && c->argc == 2) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"digest") && c->argc == 2) {
         /* DEBUG DIGEST (form without keys specified) */
         unsigned char digest[20];
         sds d = sdsempty();
@@ -516,7 +517,7 @@ NULL
         for (int i = 0; i < 20; i++) d = sdscatprintf(d, "%02x",digest[i]);
         addReplyStatus(c,d);
         sdsfree(d);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"digest-value") && c->argc >= 2) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"digest-value") && c->argc >= 2) {
         /* DEBUG DIGEST-VALUE key key key ... key. */
         addReplyArrayLen(c,c->argc-2);
         for (int j = 2; j < c->argc; j++) {
@@ -530,10 +531,10 @@ NULL
             addReplyStatus(c,d);
             sdsfree(d);
         }
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"protocol") && c->argc == 3) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"protocol") && c->argc == 3) {
         /* DEBUG PROTOCOL [string|integer|double|bignum|null|array|set|map|
          *                 attrib|push|verbatim|true|false|state|err|bloberr] */
-        char *name = ptrFromObj(c->argv[2]);
+        char *name = szFromObj(c->argv[2]);
         if (!strcasecmp(name,"string")) {
             addReplyBulkCString(c,"Hello World");
         } else if (!strcasecmp(name,"integer")) {
@@ -582,8 +583,8 @@ NULL
         } else {
             addReplyError(c,"Wrong protocol type name. Please use one of the following: string|integer|double|bignum|null|array|set|map|attrib|push|verbatim|true|false|state|err|bloberr");
         }
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"sleep") && c->argc == 3) {
-        double dtime = strtod(ptrFromObj(c->argv[2]),NULL);
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"sleep") && c->argc == 3) {
+        double dtime = strtod(szFromObj(c->argv[2]),NULL);
         long long utime = dtime*1000000;
         struct timespec tv;
 
@@ -591,24 +592,24 @@ NULL
         tv.tv_nsec = (utime % 1000000) * 1000;
         nanosleep(&tv, NULL);
         addReply(c,shared.ok);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"set-active-expire") &&
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"set-active-expire") &&
                c->argc == 3)
     {
-        server.active_expire_enabled = atoi(ptrFromObj(c->argv[2]));
+        server.active_expire_enabled = atoi(szFromObj(c->argv[2]));
         addReply(c,shared.ok);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"lua-always-replicate-commands") &&
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"lua-always-replicate-commands") &&
                c->argc == 3)
     {
-        server.lua_always_replicate_commands = atoi(ptrFromObj(c->argv[2]));
+        server.lua_always_replicate_commands = atoi(szFromObj(c->argv[2]));
         addReply(c,shared.ok);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"error") && c->argc == 3) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"error") && c->argc == 3) {
         sds errstr = sdsnewlen("-",1);
 
-        errstr = sdscatsds(errstr,ptrFromObj(c->argv[2]));
+        errstr = sdscatsds(errstr,szFromObj(c->argv[2]));
         errstr = sdsmapchars(errstr,"\n\r","  ",2); /* no newlines in errors. */
         errstr = sdscatlen(errstr,"\r\n",2);
         addReplySds(c,errstr);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"structsize") && c->argc == 2) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"structsize") && c->argc == 2) {
         sds sizes = sdsempty();
         sizes = sdscatprintf(sizes,"bits:%d ",(sizeof(void*) == 8)?64:32);
         sizes = sdscatprintf(sizes,"robj:%d ",(int)sizeof(robj));
@@ -619,7 +620,7 @@ NULL
         sizes = sdscatprintf(sizes,"sdshdr32:%d ",(int)sizeof(struct sdshdr32));
         sizes = sdscatprintf(sizes,"sdshdr64:%d ",(int)sizeof(struct sdshdr64));
         addReplyBulkSds(c,sizes);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"htstats") && c->argc == 3) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"htstats") && c->argc == 3) {
         long dbid;
         sds stats = sdsempty();
         char buf[4096];
@@ -640,7 +641,7 @@ NULL
         stats = sdscat(stats,buf);
 
         addReplyBulkSds(c,stats);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"htstats-key") && c->argc == 3) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"htstats-key") && c->argc == 3) {
         robj *o;
         dict *ht = NULL;
 
@@ -651,12 +652,12 @@ NULL
         switch (o->encoding) {
         case OBJ_ENCODING_SKIPLIST:
             {
-                zset *zs = ptrFromObj(o);
+                zset *zs = (zset*)ptrFromObj(o);
                 ht = zs->pdict;
             }
             break;
         case OBJ_ENCODING_HT:
-            ht = ptrFromObj(o);
+            ht = (dict*)ptrFromObj(o);
             break;
         }
 
@@ -668,12 +669,12 @@ NULL
             dictGetStats(buf,sizeof(buf),ht);
             addReplyBulkCString(c,buf);
         }
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"change-repl-id") && c->argc == 2) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"change-repl-id") && c->argc == 2) {
         serverLog(LL_WARNING,"Changing replication IDs after receiving DEBUG change-repl-id");
         changeReplicationId();
         clearReplicationId2();
         addReply(c,shared.ok);
-    } else if (!strcasecmp(ptrFromObj(c->argv[1]),"stringmatch-test") && c->argc == 2)
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"stringmatch-test") && c->argc == 2)
     {
         stringmatchlen_fuzz_test();
         addReplyStatus(c,"Apparently Redis did not crash: test passed");
@@ -727,9 +728,9 @@ void serverLogObjectDebugInfo(const robj *o) {
     serverLog(LL_WARNING,"Object encoding: %d", o->encoding);
     serverLog(LL_WARNING,"Object refcount: %d", o->refcount);
     if (o->type == OBJ_STRING && sdsEncodedObject(o)) {
-        serverLog(LL_WARNING,"Object raw string len: %zu", sdslen(ptrFromObj(o)));
-        if (sdslen(ptrFromObj(o)) < 4096) {
-            sds repr = sdscatrepr(sdsempty(),ptrFromObj(o),sdslen(ptrFromObj(o)));
+        serverLog(LL_WARNING,"Object raw string len: %zu", sdslen(szFromObj(o)));
+        if (sdslen(szFromObj(o)) < 4096) {
+            sds repr = sdscatrepr(sdsempty(),szFromObj(o),sdslen(szFromObj(o)));
             serverLog(LL_WARNING,"Object raw string content: %s", repr);
             sdsfree(repr);
         }
@@ -1149,8 +1150,8 @@ void logStackTrace(ucontext_t *uc) {
     trace_size = backtrace(trace+1, 100);
 
     if (getMcontextEip(uc) != NULL) {
-        char *msg1 = "EIP:\n";
-        char *msg2 = "\nBacktrace:\n";
+        const char *msg1 = "EIP:\n";
+        const char *msg2 = "\nBacktrace:\n";
         if (write(fd,msg1,strlen(msg1)) == -1) {/* Avoid warning. */};
         trace[0] = getMcontextEip(uc);
         backtrace_symbols_fd(trace, 1, fd);
@@ -1195,7 +1196,7 @@ void logCurrentClient(void) {
         key = getDecodedObject(cc->argv[1]);
         de = dictFind(cc->db->pdict, ptrFromObj(key));
         if (de) {
-            val = dictGetVal(de);
+            val = (robj*)dictGetVal(de);
             serverLog(LL_WARNING,"key '%s' found in DB containing the following object:", (char*)ptrFromObj(key));
             serverLogObjectDebugInfo(val);
         }
@@ -1256,7 +1257,7 @@ int memtest_test_linux_anonymous_maps(void) {
     int errors = 0;
     for (j = 0; j < regions; j++) {
         if (write(fd,".",1) == -1) { /* Nothing to do. */ }
-        errors += memtest_preserving_test((void*)start_vect[j],size_vect[j],1);
+        errors += memtest_preserving_test((unsigned long*)start_vect[j],size_vect[j],1);
         if (write(fd, errors ? "E" : "O",1) == -1) { /* Nothing to do. */ }
     }
     if (write(fd,"\n",1) == -1) { /* Nothing to do. */ }
@@ -1275,7 +1276,7 @@ int memtest_test_linux_anonymous_maps(void) {
  * and the call offset if they appear to be valid. */
 void dumpX86Calls(void *addr, size_t len) {
     size_t j;
-    unsigned char *p = addr;
+    unsigned char *p = (unsigned char*)addr;
     Dl_info info;
     /* Hash table to best-effort avoid printing the same symbol
      * multiple times. */
@@ -1404,7 +1405,7 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 
 void serverLogHexDump(int level, const char *descr, void *value, size_t len) {
     char buf[65], *b;
-    unsigned char *v = value;
+    unsigned char *v = (unsigned char*)value;
     char charset[] = "0123456789abcdef";
 
     serverLog(level,"%s (hexdump of %zu bytes):", descr, len);

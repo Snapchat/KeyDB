@@ -129,7 +129,7 @@ void bioInit(void) {
 }
 
 void bioCreateBackgroundJob(int type, void *arg1, void *arg2, void *arg3) {
-    struct bio_job *job = zmalloc(sizeof(*job), MALLOC_LOCAL);
+    struct bio_job *job = (bio_job*)zmalloc(sizeof(*job), MALLOC_LOCAL);
 
     job->time = time(NULL);
     job->arg1 = arg1;
@@ -178,7 +178,7 @@ void *bioProcessBackgroundJobs(void *arg) {
         }
         /* Pop the job from the queue. */
         ln = listFirst(bio_jobs[type]);
-        job = ln->value;
+        job = (bio_job*)ln->value;
         /* It is now possible to unlock the background system as we know have
          * a stand alone job structure to process.*/
         pthread_mutex_unlock(&bio_mutex[type]);
@@ -194,11 +194,11 @@ void *bioProcessBackgroundJobs(void *arg) {
              * arg2 & arg3 -> free two dictionaries (a Redis DB).
              * only arg3 -> free the skiplist. */
             if (job->arg1)
-                lazyfreeFreeObjectFromBioThread(job->arg1);
+                lazyfreeFreeObjectFromBioThread((robj*)job->arg1);
             else if (job->arg2 && job->arg3)
-                lazyfreeFreeDatabaseFromBioThread(job->arg2,job->arg3);
+                lazyfreeFreeDatabaseFromBioThread((dict*)job->arg2,(dict*)job->arg3);
             else if (job->arg3)
-                lazyfreeFreeSlotsMapFromBioThread(job->arg3);
+                lazyfreeFreeSlotsMapFromBioThread((rax*)job->arg3);
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

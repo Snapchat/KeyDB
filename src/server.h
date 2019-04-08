@@ -136,7 +136,6 @@ extern "C" {
 #define CONFIG_DEFAULT_UNIX_SOCKET_PERM 0
 #define CONFIG_DEFAULT_TCP_KEEPALIVE 300
 #define CONFIG_DEFAULT_PROTECTED_MODE 1
-#define CONFIG_DEFAULT_GOPHER_ENABLED 0
 #define CONFIG_DEFAULT_LOGFILE ""
 #define CONFIG_DEFAULT_SYSLOG_ENABLED 0
 #define CONFIG_DEFAULT_STOP_WRITES_ON_BGSAVE_ERROR 1
@@ -1171,8 +1170,6 @@ struct redisServer {
     dict *migrate_cached_sockets;/* MIGRATE cached sockets */
     uint64_t next_client_id;    /* Next client unique ID. Incremental. */
     int protected_mode;         /* Don't accept external connections. */
-    int gopher_enabled;         /* If true the server will reply to gopher
-                                   queries. Will still serve RESP2 queries. */
     /* RDB / AOF loading information */
     int loading;                /* We are loading data from disk if true */
     off_t loading_total_bytes;
@@ -1604,7 +1601,7 @@ void getRandomBytes(unsigned char *p, size_t len);
 uint64_t crc64(uint64_t crc, const unsigned char *s, uint64_t l);
 void exitFromChild(int retcode);
 size_t redisPopcount(void *s, long count);
-void redisSetProcTitle(char *title);
+void redisSetProcTitle(const char *title);
 
 /* networking.c -- Networking and Client related operations */
 client *createClient(int fd, int iel);
@@ -1621,7 +1618,6 @@ void setDeferredAttributeLen(client *c, void *node, long length);
 void setDeferredPushLen(client *c, void *node, long length);
 void processInputBuffer(client *c, int callFlags);
 void processInputBufferAndReplicate(client *c);
-void processGopherRequest(client *c);
 void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask);
@@ -1785,7 +1781,7 @@ int getDoubleFromObject(const robj *o, double *target);
 int getLongLongFromObject(robj *o, long long *target);
 int getLongDoubleFromObject(robj *o, long double *target);
 int getLongDoubleFromObjectOrReply(client *c, robj *o, long double *target, const char *msg);
-char *strEncoding(int encoding);
+const char *strEncoding(int encoding);
 int compareStringObjects(robj *a, robj *b);
 int collateStringObjects(robj *a, robj *b);
 int equalStringObjects(robj *a, robj *b);
@@ -1827,7 +1823,7 @@ void changeReplicationId(void);
 void clearReplicationId2(void);
 void chopReplicationBacklog(void);
 void replicationCacheMasterUsingMyself(struct redisMaster *mi);
-void feedReplicationBacklog(void *ptr, size_t len);
+void feedReplicationBacklog(const void *ptr, size_t len);
 
 /* Generic persistence functions */
 void startLoading(FILE *fp);
@@ -1881,7 +1877,7 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen);
 sds ACLDefaultUserFirstPassword(void);
 uint64_t ACLGetCommandCategoryFlagByName(const char *name);
 int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err);
-char *ACLSetUserStringError(void);
+const char *ACLSetUserStringError(void);
 int ACLLoadConfiguredUsers(void);
 sds ACLDescribeUser(user *u);
 void ACLLoadUsersAtStartup(void);
@@ -2130,12 +2126,12 @@ int clusterSendModuleMessageToTarget(const char *target, uint64_t module_id, uin
 void initSentinelConfig(void);
 void initSentinel(void);
 void sentinelTimer(void);
-char *sentinelHandleConfiguration(char **argv, int argc);
+const char *sentinelHandleConfiguration(char **argv, int argc);
 void sentinelIsRunning(void);
 
 /* keydb-check-rdb & aof */
-int redis_check_rdb(char *rdbfilename, FILE *fp);
-int redis_check_rdb_main(int argc, char **argv, FILE *fp);
+int redis_check_rdb(const char *rdbfilename, FILE *fp);
+int redis_check_rdb_main(int argc, const char **argv, FILE *fp);
 int redis_check_aof_main(int argc, char **argv);
 
 /* Scripting */
@@ -2376,7 +2372,6 @@ void xclaimCommand(client *c);
 void xinfoCommand(client *c);
 void xdelCommand(client *c);
 void xtrimCommand(client *c);
-void lolwutCommand(client *c);
 void aclCommand(client *c);
 void replicaReplayCommand(client *c);
 
@@ -2407,7 +2402,7 @@ void watchdogScheduleSignal(int period);
 void serverLogHexDump(int level, const char *descr, void *value, size_t len);
 int memtest_preserving_test(unsigned long *m, size_t bytes, int passes);
 void mixDigest(unsigned char *digest, void *ptr, size_t len);
-void xorDigest(unsigned char *digest, void *ptr, size_t len);
+void xorDigest(unsigned char *digest, const void *ptr, size_t len);
 int populateCommandTableParseFlags(struct redisCommand *c, const char *strflags);
 
 int moduleGILAcquiredByModule(void);

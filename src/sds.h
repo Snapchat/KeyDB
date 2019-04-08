@@ -60,6 +60,10 @@ struct __attribute__ ((__packed__)) sdshdr8 {
     unsigned char flags; /* 3 lsb of type, 5 unused bits */
 #ifndef __cplusplus
     char buf[];
+#else
+    char *buf() {
+        return reinterpret_cast<char*>(this+1);
+    }
 #endif
 };
 struct __attribute__ ((__packed__)) sdshdr16 {
@@ -270,7 +274,7 @@ sds sdsfromlonglong(long long value);
 sds sdscatrepr(sds s, const char *p, size_t len);
 sds *sdssplitargs(const char *line, int *argc);
 sds sdsmapchars(sds s, const char *from, const char *to, size_t setlen);
-sds sdsjoin(char **argv, int argc, char *sep);
+sds sdsjoin(char **argv, int argc, const char *sep);
 sds sdsjoinsds(sds *argv, int argc, const char *sep, size_t seplen);
 
 /* Low level functions exposed to the user API */

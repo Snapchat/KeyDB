@@ -55,7 +55,7 @@ static int label_margin_top = 1;
 
 /* Create a new sequence. */
 struct sequence *createSparklineSequence(void) {
-    struct sequence *seq = zmalloc(sizeof(*seq), MALLOC_LOCAL);
+    struct sequence *seq = (sequence*)zmalloc(sizeof(*seq), MALLOC_LOCAL);
     seq->length = 0;
     seq->samples = NULL;
     return seq;
@@ -70,7 +70,7 @@ void sparklineSequenceAddSample(struct sequence *seq, double value, char *label)
         if (value < seq->min) seq->min = value;
         else if (value > seq->max) seq->max = value;
     }
-    seq->samples = zrealloc(seq->samples,sizeof(struct sample)*(seq->length+1), MALLOC_SHARED);
+    seq->samples = (sample*)zrealloc(seq->samples,sizeof(struct sample)*(seq->length+1), MALLOC_SHARED);
     seq->samples[seq->length].value = value;
     seq->samples[seq->length].label = label;
     seq->length++;
@@ -99,7 +99,7 @@ sds sparklineRenderRange(sds output, struct sequence *seq, int rows, int offset,
     double relmax = seq->max - seq->min;
     int steps = charset_len*rows;
     int row = 0;
-    char *chars = zmalloc(len, MALLOC_LOCAL);
+    char *chars = (char*)zmalloc(len, MALLOC_LOCAL);
     int loop = 1;
     int opt_fill = flags & SPARKLINE_FILL;
     int opt_log = flags & SPARKLINE_LOG_SCALE;

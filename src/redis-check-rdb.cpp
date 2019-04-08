@@ -37,7 +37,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len);
 int rdbCheckMode = 0;
 
 struct {
-    rio *rio;
+    ::rio *rio;
     robj *key;                      /* Current key we are reading. */
     int key_type;                   /* Current key type if != -1. */
     unsigned long keys;             /* Number of keys processed. */
@@ -59,7 +59,7 @@ struct {
 #define RDB_CHECK_DOING_READ_LEN 6
 #define RDB_CHECK_DOING_READ_AUX 7
 
-char *rdb_check_doing_string[] = {
+const char *rdb_check_doing_string[] = {
     "start",
     "read-type",
     "read-expire",
@@ -70,7 +70,7 @@ char *rdb_check_doing_string[] = {
     "read-aux"
 };
 
-char *rdb_type_string[] = {
+const char *rdb_type_string[] = {
     "string",
     "list-linked",
     "set-hashtable",
@@ -176,7 +176,7 @@ void rdbCheckSetupSignals(void) {
  * 1 is returned.
  * The file is specified as a filename in 'rdbfilename' if 'fp' is not NULL,
  * otherwise the already open file 'fp' is checked. */
-int redis_check_rdb(char *rdbfilename, FILE *fp) {
+int redis_check_rdb(const char *rdbfilename, FILE *fp) {
     uint64_t dbid;
     int type, rdbver;
     char buf[1024];
@@ -339,7 +339,7 @@ err:
  * status code according to success (RDB is sane) or error (RDB is corrupted).
  * Otherwise if called with a non NULL fp, the function returns C_OK or
  * C_ERR depending on the success or failure. */
-int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
+int redis_check_rdb_main(int argc, const char **argv, FILE *fp) {
     if (argc != 2 && fp == NULL) {
         fprintf(stderr, "Usage: %s <rdb-file-name>\n", argv[0]);
         exit(1);

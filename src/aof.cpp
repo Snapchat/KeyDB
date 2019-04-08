@@ -83,7 +83,7 @@ unsigned long aofRewriteBufferSize(void) {
 
     listRewind(server.aof_rewrite_buf_blocks,&li);
     while((ln = listNext(&li))) {
-        aofrwblock *block = listNodeValue(ln);
+        aofrwblock *block = (aofrwblock*)listNodeValue(ln);
         size += block->used;
     }
     return size;
@@ -105,7 +105,7 @@ void aofChildWriteDiffData(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     while(1) {
         ln = listFirst(server.aof_rewrite_buf_blocks);
-        block = ln ? ln->value : NULL;
+        block = (aofrwblock*)(ln ? ln->value : NULL);
         if (server.aof_stop_sending_diff || !block) {
             aeDeleteFileEvent(el,server.aof_pipe_write_data_to_child,
                               AE_WRITABLE);
@@ -126,7 +126,7 @@ void aofChildWriteDiffData(aeEventLoop *el, int fd, void *privdata, int mask) {
 /* Append data to the AOF rewrite buffer, allocating new blocks if needed. */
 void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
     listNode *ln = listLast(server.aof_rewrite_buf_blocks);
-    aofrwblock *block = ln ? ln->value : NULL;
+    aofrwblock *block = (aofrwblock*)(ln ? ln->value : NULL);
 
     while(len) {
         /* If we already got at least an allocated block, try appending
@@ -145,7 +145,7 @@ void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
         if (len) { /* First block to allocate, or need another block. */
             int numblocks;
 
-            block = zmalloc(sizeof(*block), MALLOC_LOCAL);
+            block = (aofrwblock*)zmalloc(sizeof(*block), MALLOC_LOCAL);
             block->free = AOF_RW_BUF_BLOCK_SIZE;
             block->used = 0;
             listAddNodeTail(server.aof_rewrite_buf_blocks,block);
@@ -180,7 +180,7 @@ ssize_t aofRewriteBufferWrite(int fd) {
 
     listRewind(server.aof_rewrite_buf_blocks,&li);
     while((ln = listNext(&li))) {
-        aofrwblock *block = listNodeValue(ln);
+        aofrwblock *block = (aofrwblock*)listNodeValue(ln);
         ssize_t nwritten;
 
         if (block->used) {
@@ -508,11 +508,11 @@ sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
     for (j = 0; j < argc; j++) {
         o = getDecodedObject(argv[j]);
         buf[0] = '$';
-        len = 1+ll2string(buf+1,sizeof(buf)-1,sdslen(ptrFromObj(o)));
+        len = 1+ll2string(buf+1,sizeof(buf)-1,sdslen(szFromObj(o)));
         buf[len++] = '\r';
         buf[len++] = '\n';
         dst = sdscatlen(dst,buf,len);
-        dst = sdscatlen(dst,ptrFromObj(o),sdslen(ptrFromObj(o)));
+        dst = sdscatlen(dst,ptrFromObj(o),sdslen(szFromObj(o)));
         dst = sdscatlen(dst,"\r\n",2);
         decrRefCount(o);
     }
@@ -532,7 +532,7 @@ sds catAppendOnlyExpireAtCommand(sds buf, struct redisCommand *cmd, robj *key, r
 
     /* Make sure we can use strtoll */
     seconds = getDecodedObject(seconds);
-    when = strtoll(ptrFromObj(seconds),NULL,10);
+    when = strtoll(szFromObj(seconds),NULL,10);
     /* Convert argument into milliseconds for EXPIRE, SETEX, EXPIREAT */
     if (cmd->proc == expireCommand || cmd->proc == setexCommand ||
         cmd->proc == expireatCommand)
@@ -589,8 +589,8 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
         /* Translate SET [EX seconds][PX milliseconds] to SET and PEXPIREAT */
         buf = catAppendOnlyGenericCommand(buf,3,argv);
         for (i = 3; i < argc; i ++) {
-            if (!strcasecmp(ptrFromObj(argv[i]), "ex")) exarg = argv[i+1];
-            if (!strcasecmp(ptrFromObj(argv[i]), "px")) pxarg = argv[i+1];
+            if (!strcasecmp(szFromObj(argv[i]), "ex")) exarg = argv[i+1];
+            if (!strcasecmp(szFromObj(argv[i]), "px")) pxarg = argv[i+1];
         }
         serverAssert(!(exarg && pxarg));
         if (exarg)
@@ -628,8 +628,8 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
 
 /* In Redis commands are always executed in the context of a client, so in
  * order to load the append only file we need to create a fake client. */
-struct client *createFakeClient(void) {
-    struct client *c = zmalloc(sizeof(*c), MALLOC_LOCAL);
+client *createFakeClient(void) {
+    client *c = (client*)zmalloc(sizeof(*c), MALLOC_LOCAL);
 
     selectDb(c,0);
     c->fd = -1;
@@ -762,7 +762,7 @@ int loadAppendOnlyFile(char *filename) {
         argc = atoi(buf+1);
         if (argc < 1) goto fmterr;
 
-        argv = zmalloc(sizeof(robj*)*argc, MALLOC_LOCAL);
+        argv = (robj**)zmalloc(sizeof(robj*)*argc, MALLOC_LOCAL);
         fakeClient->argc = argc;
         fakeClient->argv = argv;
 
@@ -790,7 +790,7 @@ int loadAppendOnlyFile(char *filename) {
         }
 
         /* Command lookup */
-        cmd = lookupCommand(ptrFromObj(argv[0]));
+        cmd = lookupCommand(szFromObj(argv[0]));
         if (!cmd) {
             serverLog(LL_WARNING,
                 "Unknown command '%s' reading the append only file",
@@ -898,7 +898,7 @@ int rioWriteBulkObject(rio *r, robj *obj) {
     if (obj->encoding == OBJ_ENCODING_INT) {
         return rioWriteBulkLongLong(r,(long)obj->m_ptr);
     } else if (sdsEncodedObject(obj)) {
-        return rioWriteBulkString(r,ptrFromObj(obj),sdslen(ptrFromObj(obj)));
+        return rioWriteBulkString(r,szFromObj(obj),sdslen(szFromObj(obj)));
     } else {
         serverPanic("Unknown string encoding");
     }
@@ -910,7 +910,7 @@ int rewriteListObject(rio *r, robj *key, robj *o) {
     long long count = 0, items = listTypeLength(o);
 
     if (o->encoding == OBJ_ENCODING_QUICKLIST) {
-        quicklist *list = ptrFromObj(o);
+        quicklist *list = (quicklist*)ptrFromObj(o);
         quicklistIter *li = quicklistGetIterator(list, AL_START_HEAD);
         quicklistEntry entry;
 
@@ -947,7 +947,7 @@ int rewriteSetObject(rio *r, robj *key, robj *o) {
         int ii = 0;
         int64_t llval;
 
-        while(intsetGet(ptrFromObj(o),ii++,&llval)) {
+        while(intsetGet((intset*)ptrFromObj(o),ii++,&llval)) {
             if (count == 0) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ?
                     AOF_REWRITE_ITEMS_PER_CMD : items;
@@ -961,11 +961,11 @@ int rewriteSetObject(rio *r, robj *key, robj *o) {
             items--;
         }
     } else if (o->encoding == OBJ_ENCODING_HT) {
-        dictIterator *di = dictGetIterator(ptrFromObj(o));
+        dictIterator *di = dictGetIterator((dict*)ptrFromObj(o));
         dictEntry *de;
 
         while((de = dictNext(di)) != NULL) {
-            sds ele = dictGetKey(de);
+            sds ele = (sds)dictGetKey(de);
             if (count == 0) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ?
                     AOF_REWRITE_ITEMS_PER_CMD : items;
@@ -991,7 +991,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
     long long count = 0, items = zsetLength(o);
 
     if (o->encoding == OBJ_ENCODING_ZIPLIST) {
-        unsigned char *zl = ptrFromObj(o);
+        unsigned char *zl = (unsigned char*)ptrFromObj(o);
         unsigned char *eptr, *sptr;
         unsigned char *vstr;
         unsigned int vlen;
@@ -1026,13 +1026,13 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
             items--;
         }
     } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = ptrFromObj(o);
+        zset *zs = (zset*)ptrFromObj(o);
         dictIterator *di = dictGetIterator(zs->pdict);
         dictEntry *de;
 
         while((de = dictNext(di)) != NULL) {
-            sds ele = dictGetKey(de);
-            double *score = dictGetVal(de);
+            sds ele = (sds)dictGetKey(de);
+            double *score = (double*)dictGetVal(de);
 
             if (count == 0) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ?
@@ -1147,7 +1147,7 @@ int rioWriteStreamPendingEntry(rio *r, robj *key, const char *groupname, size_t 
 /* Emit the commands needed to rebuild a stream object.
  * The function returns 0 on error, 1 on success. */
 int rewriteStreamObject(rio *r, robj *key, robj *o) {
-    stream *s = ptrFromObj(o);
+    stream *s = (stream*)ptrFromObj(o);
     streamIterator si;
     streamIteratorStart(&si,s,NULL,NULL,0);
     streamID id;
@@ -1200,7 +1200,7 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
         raxStart(&ri,s->cgroups);
         raxSeek(&ri,"^",NULL,0);
         while(raxNext(&ri)) {
-            streamCG *group = ri.data;
+            streamCG *group = (streamCG*)ri.data;
             /* Emit the XGROUP CREATE in order to create the group. */
             if (rioWriteBulkCount(r,'*',5) == 0) return 0;
             if (rioWriteBulkString(r,"XGROUP",6) == 0) return 0;
@@ -1216,14 +1216,14 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
             raxStart(&ri_cons,group->consumers);
             raxSeek(&ri_cons,"^",NULL,0);
             while(raxNext(&ri_cons)) {
-                streamConsumer *consumer = ri_cons.data;
+                streamConsumer *consumer = (streamConsumer*)ri_cons.data;
                 /* For the current consumer, iterate all the PEL entries
                  * to emit the XCLAIM protocol. */
                 raxIterator ri_pel;
                 raxStart(&ri_pel,consumer->pel);
                 raxSeek(&ri_pel,"^",NULL,0);
                 while(raxNext(&ri_pel)) {
-                    streamNACK *nack = ri_pel.data;
+                    streamNACK *nack = (streamNACK*)ri_pel.data;
                     if (rioWriteStreamPendingEntry(r,key,(char*)ri.key,
                                                    ri.key_len,consumer,
                                                    ri_pel.key,nack) == 0)
@@ -1247,7 +1247,7 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
  * The function returns 0 on error, 1 on success. */
 int rewriteModuleObject(rio *r, robj *key, robj *o) {
     RedisModuleIO io;
-    moduleValue *mv = ptrFromObj(o);
+    moduleValue *mv = (moduleValue*)ptrFromObj(o);
     moduleType *mt = mv->type;
     moduleInitIOContext(io,mt,r,key);
     mt->aof_rewrite(&io,key,mv->value);
@@ -1296,8 +1296,8 @@ int rewriteAppendOnlyFileRio(rio *aof) {
             robj key, *o;
             long long expiretime;
 
-            keystr = dictGetKey(de);
-            o = dictGetVal(de);
+            keystr = (sds)dictGetKey(de);
+            o = (robj*)dictGetVal(de);
             initStaticStringObject(key,keystr);
 
             expiretime = getExpire(db,&key);
@@ -1360,6 +1360,8 @@ int rewriteAppendOnlyFile(char *filename) {
     FILE *fp;
     char tmpfile[256];
     char byte;
+    int nodata = 0;
+    mstime_t start = 0;
 
     /* Note that we have to use a different temp name here compared to the
      * one used by rewriteAppendOnlyFileBackground() function. */
@@ -1397,8 +1399,7 @@ int rewriteAppendOnlyFile(char *filename) {
      * some more data in a loop as soon as there is a good chance more data
      * will come. If it looks like we are wasting time, we abort (this
      * happens after 20 ms without new data). */
-    int nodata = 0;
-    mstime_t start = mstime();
+    start = mstime();
     while(mstime()-start < 1000 && nodata < 20) {
         if (aeWait(server.aof_pipe_read_data_from_parent, AE_READABLE, 1) <= 0)
         {

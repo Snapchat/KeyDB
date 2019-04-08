@@ -54,7 +54,7 @@
 int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
     long long t = dictGetSignedIntegerVal(de);
     if (now > t) {
-        sds key = dictGetKey(de);
+        sds key = (sds)dictGetKey(de);
         robj *keyobj = createStringObject(key,sdslen(key));
 
         propagateExpire(db,keyobj,server.lazyfree_lazy_expire);
@@ -290,7 +290,7 @@ void expireSlaveKeys(void) {
     mstime_t start = mstime();
     while(1) {
         dictEntry *de = dictGetRandomKey(slaveKeysWithExpire);
-        sds keyname = dictGetKey(de);
+        sds keyname = (sds)dictGetKey(de);
         uint64_t dbids = dictGetUnsignedIntegerVal(de);
         uint64_t new_dbids = 0;
 
@@ -361,7 +361,7 @@ void rememberSlaveKeyWithExpire(redisDb *db, robj *key) {
      * in sync with the main DB. The keys will be removed by expireSlaveKeys()
      * as it scans to find keys to remove. */
     if (de->key == ptrFromObj(key)) {
-        de->key = sdsdup(ptrFromObj(key));
+        de->key = sdsdup(szFromObj(key));
         dictSetUnsignedIntegerVal(de,0);
     }
 

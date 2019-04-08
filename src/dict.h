@@ -39,6 +39,10 @@
 extern "C" {
 #endif
 
+#ifndef __cplusplus
+#error "C++ Only"
+#endif
+
 #ifndef __DICT_H
 #define __DICT_H
 

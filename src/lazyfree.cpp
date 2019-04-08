@@ -30,16 +30,16 @@ size_t lazyfreeGetPendingObjectsCount(void) {
  * representing the list. */
 size_t lazyfreeGetFreeEffort(robj *obj) {
     if (obj->type == OBJ_LIST) {
-        quicklist *ql = ptrFromObj(obj);
+        quicklist *ql = (quicklist*)ptrFromObj(obj);
         return ql->len;
     } else if (obj->type == OBJ_SET && obj->encoding == OBJ_ENCODING_HT) {
-        dict *ht = ptrFromObj(obj);
+        dict *ht = (dict*)ptrFromObj(obj);
         return dictSize(ht);
     } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_SKIPLIST){
-        zset *zs = ptrFromObj(obj);
+        zset *zs = (zset*)ptrFromObj(obj);
         return zs->zsl->length;
     } else if (obj->type == OBJ_HASH && obj->encoding == OBJ_ENCODING_HT) {
-        dict *ht = ptrFromObj(obj);
+        dict *ht = (dict*)ptrFromObj(obj);
         return dictSize(ht);
     } else {
         return 1; /* Everything else is a single allocation. */
@@ -61,7 +61,7 @@ int dbAsyncDelete(redisDb *db, robj *key) {
      * the object synchronously. */
     dictEntry *de = dictUnlink(db->pdict,ptrFromObj(key));
     if (de) {
-        robj *val = dictGetVal(de);
+        robj *val = (robj*)dictGetVal(de);
         size_t free_effort = lazyfreeGetFreeEffort(val);
 
         /* If releasing the object is too much work, do it in the background

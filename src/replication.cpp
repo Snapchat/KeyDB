@@ -186,9 +186,9 @@ void freeReplicationBacklog(void) {
  * This function also increments the global replication offset stored at
  * server.master_repl_offset, because there is no case where we want to feed
  * the backlog without incrementing the offset. */
-void feedReplicationBacklog(void *ptr, size_t len) {
+void feedReplicationBacklog(const void *ptr, size_t len) {
     serverAssert(GlobalLocksAcquired());
-    unsigned char *p = (unsigned char*)ptr;
+    const unsigned char *p = (const unsigned char*)ptr;
 
     server.master_repl_offset += len;
 

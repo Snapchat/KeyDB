@@ -41,10 +41,11 @@
 #include <assert.h>
 #include <math.h>
 #include <pthread.h>
-
+extern "C" {
 #include <sds.h> /* Use hiredis sds. */
-#include "ae.h"
 #include "hiredis.h"
+}
+#include "ae.h"
 #include "adlist.h"
 #include "dict.h"
 #include "zmalloc.h"
@@ -231,7 +232,7 @@ static int dictSdsKeyCompare(void *privdata, const void *key1,
 }
 
 /* _serverAssert is needed by dict */
-void _serverAssert(const char *estr, const char *file, int line) {
+extern "C" void _serverAssert(const char *estr, const char *file, int line) {
     fprintf(stderr, "=== ASSERTION FAILED ===");
     fprintf(stderr, "==> %s:%d '%s' is not true",file,line,estr);
     *((char*)-1) = 'x';
@@ -240,7 +241,9 @@ void _serverAssert(const char *estr, const char *file, int line) {
 static redisConfig *getRedisConfig(const char *ip, int port,
                                    const char *hostsocket)
 {
-    redisConfig *cfg = zcalloc(sizeof(*cfg), MALLOC_LOCAL);
+    redisConfig *cfg = (redisConfig*)zcalloc(sizeof(*cfg), MALLOC_LOCAL);
+    int i = 0;
+    void *r = NULL;
     if (!cfg) return NULL;
     redisContext *c = NULL;
     redisReply *reply = NULL, *sub_reply = NULL;
@@ -250,15 +253,14 @@ static redisConfig *getRedisConfig(const char *ip, int port,
         c = redisConnectUnix(hostsocket);
     if (c == NULL || c->err) {
         fprintf(stderr,"Could not connect to Redis at ");
-        char *err = (c != NULL ? c->errstr : "");
+        const char *err = (c != NULL ? c->errstr : "");
         if (hostsocket == NULL) fprintf(stderr,"%s:%d: %s\n",ip,port,err);
         else fprintf(stderr,"%s: %s\n",hostsocket,err);
         goto fail;
     }
     redisAppendCommand(c, "CONFIG GET %s", "save");
     redisAppendCommand(c, "CONFIG GET %s", "appendonly");
-    int i = 0;
-    void *r = NULL;
+    
     for (; i < 2; i++) {
         int res = redisGetReply(c, &r);
         if (reply) freeReplyObject(reply);
@@ -270,7 +272,7 @@ static redisConfig *getRedisConfig(const char *ip, int port,
         }
         if (reply->type != REDIS_REPLY_ARRAY || reply->elements < 2) goto fail;
         sub_reply = reply->element[1];
-        char *value = sub_reply->str;
+        const char *value = sub_reply->str;
         if (!value) value = "";
         switch (i) {
         case 0: cfg->save = sdsnew(value); break;
@@ -325,7 +327,7 @@ static void freeAllClients(void) {
 
     while(ln) {
         next = ln->next;
-        freeClient(ln->value);
+        freeClient((client)ln->value);
         ln = next;
     }
 }
@@ -405,7 +407,7 @@ static void clientDone(client c) {
 }
 
 static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
-    client c = privdata;
+    client c = (client)privdata;
     void *reply = NULL;
     UNUSED(el);
     UNUSED(fd);
@@ -430,7 +432,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     fprintf(stderr,"Unexpected error reply, exiting...\n");
                     exit(1);
                 }
-                redisReply *r = reply;
+                redisReply *r = (redisReply*)reply;
                 int is_err = (r->type == REDIS_REPLY_ERROR);
 
                 if (is_err && config.showerrors) {
@@ -505,7 +507,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 }
 
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
-    client c = privdata;
+    client c = (client)privdata;
     UNUSED(el);
     UNUSED(fd);
     UNUSED(mask);
@@ -565,10 +567,10 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  *    for arguments randomization.
  *
  * Even when cloning another client, prefix commands are applied if needed.*/
-static client createClient(char *cmd, size_t len, client from, int thread_id) {
+static client createClient(const char *cmd, size_t len, client from, int thread_id) {
     int j;
     int is_cluster_client = (config.cluster_mode && thread_id >= 0);
-    client c = zmalloc(sizeof(struct _client), MALLOC_LOCAL);
+    client c = (client)zmalloc(sizeof(struct _client), MALLOC_LOCAL);
 
     const char *ip = NULL;
     int port = 0;
@@ -653,7 +655,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
         if (from) {
             c->randlen = from->randlen;
             c->randfree = 0;
-            c->randptr = zmalloc(sizeof(char*)*c->randlen, MALLOC_LOCAL);
+            c->randptr = (char**)zmalloc(sizeof(char*)*c->randlen, MALLOC_LOCAL);
             /* copy the offsets. */
             for (j = 0; j < (int)c->randlen; j++) {
                 c->randptr[j] = c->obuf + (from->randptr[j]-from->obuf);
@@ -665,10 +667,10 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
 
             c->randlen = 0;
             c->randfree = RANDPTR_INITIAL_SIZE;
-            c->randptr = zmalloc(sizeof(char*)*c->randfree, MALLOC_LOCAL);
+            c->randptr = (char**)zmalloc(sizeof(char*)*c->randfree, MALLOC_LOCAL);
             while ((p = strstr(p,"__rand_int__")) != NULL) {
                 if (c->randfree == 0) {
-                    c->randptr = zrealloc(c->randptr,sizeof(char*)*c->randlen*2, MALLOC_LOCAL);
+                    c->randptr = (char**)zrealloc(c->randptr,sizeof(char*)*c->randlen*2, MALLOC_LOCAL);
                     c->randfree += c->randlen;
                 }
                 c->randptr[c->randlen++] = p;
@@ -682,7 +684,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
         if (from) {
             c->staglen = from->staglen;
             c->stagfree = 0;
-            c->stagptr = zmalloc(sizeof(char*)*c->staglen, MALLOC_LOCAL);
+            c->stagptr = (char**)zmalloc(sizeof(char*)*c->staglen, MALLOC_LOCAL);
             /* copy the offsets. */
             for (j = 0; j < (int)c->staglen; j++) {
                 c->stagptr[j] = c->obuf + (from->stagptr[j]-from->obuf);
@@ -694,10 +696,10 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
 
             c->staglen = 0;
             c->stagfree = RANDPTR_INITIAL_SIZE;
-            c->stagptr = zmalloc(sizeof(char*)*c->stagfree, MALLOC_LOCAL);
+            c->stagptr = (char**)zmalloc(sizeof(char*)*c->stagfree, MALLOC_LOCAL);
             while ((p = strstr(p,"{tag}")) != NULL) {
                 if (c->stagfree == 0) {
-                    c->stagptr = zrealloc(c->stagptr,
+                    c->stagptr = (char**)zrealloc(c->stagptr,
                                           sizeof(char*) * c->staglen*2, MALLOC_LOCAL);
                     c->stagfree += c->staglen;
                 }
@@ -821,7 +823,7 @@ static void showLatencyReport(void) {
 static void initBenchmarkThreads() {
     int i;
     if (config.threads) freeBenchmarkThreads();
-    config.threads = zmalloc(config.num_threads * sizeof(benchmarkThread*), MALLOC_LOCAL);
+    config.threads = (benchmarkThread**)zmalloc(config.num_threads * sizeof(benchmarkThread*), MALLOC_LOCAL);
     for (i = 0; i < config.num_threads; i++) {
         benchmarkThread *thread = createBenchmarkThread(i);
         config.threads[i] = thread;
@@ -841,7 +843,7 @@ static void startBenchmarkThreads() {
         pthread_join(config.threads[i]->thread, NULL);
 }
 
-static void benchmark(char *title, char *cmd, int len) {
+static void benchmark(const char *title, const char *cmd, int len) {
     client c;
 
     config.title = title;
@@ -867,7 +869,7 @@ static void benchmark(char *title, char *cmd, int len) {
 /* Thread functions. */
 
 static benchmarkThread *createBenchmarkThread(int index) {
-    benchmarkThread *thread = zmalloc(sizeof(*thread), MALLOC_LOCAL);
+    benchmarkThread *thread = (benchmarkThread*)zmalloc(sizeof(*thread), MALLOC_LOCAL);
     if (thread == NULL) return NULL;
     thread->index = index;
     thread->el = aeCreateEventLoop(1024*10);
@@ -899,7 +901,7 @@ static void *execBenchmarkThread(void *ptr) {
 /* Cluster helper functions. */
 
 static clusterNode *createClusterNode(char *ip, int port) {
-    clusterNode *node = zmalloc(sizeof(*node), MALLOC_LOCAL);
+    clusterNode *node = (clusterNode*)zmalloc(sizeof(*node), MALLOC_LOCAL);
     if (!node) return NULL;
     node->ip = ip;
     node->port = port;
@@ -907,7 +909,7 @@ static clusterNode *createClusterNode(char *ip, int port) {
     node->flags = 0;
     node->replicate = NULL;
     node->replicas_count = 0;
-    node->slots = zmalloc(CLUSTER_SLOTS * sizeof(int), MALLOC_LOCAL);
+    node->slots = (int*)zmalloc(CLUSTER_SLOTS * sizeof(int), MALLOC_LOCAL);
     node->slots_count = 0;
     node->current_slot_index = 0;
     node->updated_slots = NULL;
@@ -953,7 +955,7 @@ static void freeClusterNodes() {
 
 static clusterNode **addClusterNode(clusterNode *node) {
     int count = config.cluster_node_count + 1;
-    config.cluster_nodes = zrealloc(config.cluster_nodes,
+    config.cluster_nodes = (clusterNode**)zrealloc(config.cluster_nodes,
                                     count * sizeof(*node), MALLOC_LOCAL);
     if (!config.cluster_nodes) return NULL;
     config.cluster_nodes[config.cluster_node_count++] = node;
@@ -964,6 +966,7 @@ static int fetchClusterConfiguration() {
     int success = 1;
     redisContext *ctx = NULL;
     redisReply *reply =  NULL;
+    char *lines = reply->str, *p, *line;
     if (config.hostsocket == NULL)
         ctx = redisConnect(config.hostip,config.hostport);
     else
@@ -979,7 +982,7 @@ static int fetchClusterConfiguration() {
     clusterNode *firstNode = createClusterNode((char *) config.hostip,
                                                config.hostport);
     if (!firstNode) {success = 0; goto cleanup;}
-    reply = redisCommand(ctx, "CLUSTER NODES");
+    reply = (redisReply*)redisCommand(ctx, "CLUSTER NODES");
     success = (reply != NULL);
     if (!success) goto cleanup;
     success = (reply->type != REDIS_REPLY_ERROR);
@@ -993,7 +996,7 @@ static int fetchClusterConfiguration() {
         }
         goto cleanup;
     }
-    char *lines = reply->str, *p, *line;
+    lines = reply->str;
     while ((p = strstr(lines, "\n")) != NULL) {
         *p = '\0';
         line = lines;
@@ -1077,7 +1080,7 @@ static int fetchClusterConfiguration() {
                         sds dst = sdsnew(p);
                         node->migrating_count += 2;
                         node->migrating =
-                            zrealloc(node->migrating,
+                            (char**)zrealloc(node->migrating,
                                 (node->migrating_count * sizeof(sds)), MALLOC_LOCAL);
                         node->migrating[node->migrating_count - 2] =
                             slot;
@@ -1091,7 +1094,7 @@ static int fetchClusterConfiguration() {
                         sds slot = sdsnew(slotsdef);
                         sds src = sdsnew(p);
                         node->importing_count += 2;
-                        node->importing = zrealloc(node->importing,
+                        node->importing = (char**)zrealloc(node->importing,
                             (node->importing_count * sizeof(sds)), MALLOC_LOCAL);
                         node->importing[node->importing_count - 2] =
                             slot;
@@ -1183,7 +1186,7 @@ static int fetchClusterSlotsConfiguration(client c) {
         node->updated_slots_count = 0;
         dictReplace(masters, node->name, node) ;
     }
-    reply = redisCommand(ctx, "CLUSTER SLOTS");
+    reply = (redisReply*)redisCommand(ctx, "CLUSTER SLOTS");
     if (reply == NULL || reply->type == REDIS_REPLY_ERROR) {
         success = 0;
         if (reply)
@@ -1211,9 +1214,9 @@ static int fetchClusterSlotsConfiguration(client c) {
             goto cleanup;
         }
         sdsfree(name);
-        clusterNode *node = dictGetVal(entry);
+        clusterNode *node = (clusterNode*)dictGetVal(entry);
         if (node->updated_slots == NULL)
-            node->updated_slots = zcalloc(CLUSTER_SLOTS * sizeof(int), MALLOC_LOCAL);
+            node->updated_slots = (int*)zcalloc(CLUSTER_SLOTS * sizeof(int), MALLOC_LOCAL);
         for (slot = from; slot <= to; slot++)
             node->updated_slots[node->updated_slots_count++] = slot;
     }
@@ -1436,7 +1439,7 @@ int showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData
 
 /* Return true if the named test was selected using the -t command line
  * switch, or if all the tests are selected (no -t passed by user). */
-int test_is_selected(char *name) {
+int test_is_selected(const char *name) {
     char buf[256];
     int l = strlen(name);
 
@@ -1499,7 +1502,7 @@ int main(int argc, const char **argv) {
     argc -= i;
     argv += i;
 
-    config.latency = zmalloc(sizeof(long long)*config.requests, MALLOC_LOCAL);
+    config.latency = (long long*)zmalloc(sizeof(long long)*config.requests, MALLOC_LOCAL);
 
     if (config.cluster_mode) {
         /* Fetch cluster configuration. */
@@ -1596,7 +1599,7 @@ int main(int argc, const char **argv) {
     }
 
     /* Run default benchmark suite. */
-    data = zmalloc(config.datasize+1, MALLOC_LOCAL);
+    data = (char*)zmalloc(config.datasize+1, MALLOC_LOCAL);
     do {
         memset(data,'x',config.datasize);
         data[config.datasize] = '\0';

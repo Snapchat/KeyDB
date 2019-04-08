@@ -813,7 +813,10 @@ void sinterGenericCommand(client *c, robj **setkeys,
                 }
                 addReply(c,shared.czero);
             } else {
-                addReplyNull(c);
+                if (c->resp >= 3)
+                    addReplyNull(c);
+                else
+                    addReply(c, shared.emptyarray);
             }
             return;
         }

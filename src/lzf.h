@@ -48,6 +48,10 @@
 
 #define LZF_VERSION 0x0105 /* 1.5, API version */
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * Compress in_len bytes stored at the memory block starting at
  * in_data and write the result to out_data, up to a maximum length
@@ -95,6 +99,10 @@ lzf_compress (const void *const in_data,  unsigned int in_len,
 unsigned int
 lzf_decompress (const void *const in_data,  unsigned int in_len,
                 void             *out_data, unsigned int out_len);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 

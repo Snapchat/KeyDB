@@ -997,10 +997,6 @@ struct redisCommand redisCommandTable[] = {
      "admin no-script ok-loading ok-stale",
      0,NULL,0,0,0,0,0,0},
 
-    {"lolwut",lolwutCommand,-1,
-     "read-only fast",
-     0,NULL,0,0,0,0,0,0},
-
     {"acl",aclCommand,-2,
      "admin no-script ok-loading ok-stale",
      0,NULL,0,0,0,0,0,0},
@@ -1139,13 +1135,13 @@ void exitFromChild(int retcode) {
  * keys and redis objects as values (objects can hold SDS strings,
  * lists, sets). */
 
-extern "C" void dictVanillaFree(void *privdata, void *val)
+void dictVanillaFree(void *privdata, void *val)
 {
     DICT_NOTUSED(privdata);
     zfree(val);
 }
 
-extern "C" void dictListDestructor(void *privdata, void *val)
+void dictListDestructor(void *privdata, void *val)
 {
     DICT_NOTUSED(privdata);
     listRelease((list*)val);
@@ -1165,7 +1161,7 @@ int dictSdsKeyCompare(void *privdata, const void *key1,
 
 /* A case insensitive version used for the command lookup table and other
  * places where case insensitive non binary-safe comparison is needed. */
-extern "C" int dictSdsKeyCaseCompare(void *privdata, const void *key1,
+int dictSdsKeyCaseCompare(void *privdata, const void *key1,
         const void *key2)
 {
     DICT_NOTUSED(privdata);
@@ -1205,7 +1201,7 @@ uint64_t dictSdsHash(const void *key) {
     return dictGenHashFunction((unsigned char*)key, sdslen((char*)key));
 }
 
-extern "C" uint64_t dictSdsCaseHash(const void *key) {
+uint64_t dictSdsCaseHash(const void *key) {
     return dictGenCaseHashFunction((unsigned char*)key, sdslen((char*)key));
 }
 
@@ -2155,7 +2151,7 @@ void afterSleep(struct aeEventLoop *eventLoop) {
 
 /* =========================== Server initialization ======================== */
 
-extern "C" void createSharedObjects(void) {
+void createSharedObjects(void) {
     int j;
 
     shared.crlf = createObject(OBJ_STRING,sdsnew("\r\n"));
@@ -2299,7 +2295,6 @@ void initServerConfig(void) {
     server.unixsocketperm = CONFIG_DEFAULT_UNIX_SOCKET_PERM;
     server.sofd = -1;
     server.protected_mode = CONFIG_DEFAULT_PROTECTED_MODE;
-    server.gopher_enabled = CONFIG_DEFAULT_GOPHER_ENABLED;
     server.dbnum = CONFIG_DEFAULT_DBNUM;
     server.verbosity = CONFIG_DEFAULT_VERBOSITY;
     server.maxidletime = CONFIG_DEFAULT_CLIENT_TIMEOUT;
@@ -4761,7 +4756,7 @@ void redisOutOfMemoryHandler(size_t allocation_size) {
     serverPanic("Redis aborting for OUT OF MEMORY");
 }
 
-void redisSetProcTitle(char *title) {
+void redisSetProcTitle(const char *title) {
 #ifdef USE_SETPROCTITLE
     const char *server_mode = "";
     if (server.cluster_enabled) server_mode = " [cluster]";
@@ -4968,7 +4963,7 @@ int main(int argc, char **argv) {
      * the program main. However the program is part of the Redis executable
      * so that we can easily execute an RDB check on loading errors. */
     if (strstr(argv[0],"keydb-check-rdb") != NULL)
-        redis_check_rdb_main(argc,argv,NULL);
+        redis_check_rdb_main(argc,(const char**)argv,NULL);
     else if (strstr(argv[0],"keydb-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
 

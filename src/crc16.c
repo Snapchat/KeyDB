@@ -1,5 +1,3 @@
-#include "server.h"
-
 /*
  * Copyright 2001-2010 Georges Menie (www.menie.org)
  * Copyright 2010-2012 Salvatore Sanfilippo (adapted to Redis coding style)
@@ -28,6 +26,8 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
+#include <inttypes.h>
 
 /* CRC16 implementation according to CCITT standards.
  *

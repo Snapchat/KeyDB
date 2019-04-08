@@ -266,8 +266,8 @@ void rioInitWithFdset(rio *r, int *fds, int numfds) {
     int j;
 
     *r = rioFdsetIO;
-    r->io.fdset.fds = zmalloc(sizeof(int)*numfds, MALLOC_LOCAL);
-    r->io.fdset.state = zmalloc(sizeof(int)*numfds, MALLOC_LOCAL);
+    r->io.fdset.fds = (int*)zmalloc(sizeof(int)*numfds, MALLOC_LOCAL);
+    r->io.fdset.state = (int*)zmalloc(sizeof(int)*numfds, MALLOC_LOCAL);
     memcpy(r->io.fdset.fds,fds,sizeof(int)*numfds);
     for (j = 0; j < numfds; j++) r->io.fdset.state[j] = 0;
     r->io.fdset.numfds = numfds;
@@ -287,7 +287,7 @@ void rioFreeFdset(rio *r) {
 /* This function can be installed both in memory and file streams when checksum
  * computation is needed. */
 void rioGenericUpdateChecksum(rio *r, const void *buf, size_t len) {
-    r->cksum = crc64(r->cksum,buf,len);
+    r->cksum = crc64(r->cksum,(const unsigned char*)buf,len);
 }
 
 /* Set the file-based rio object to auto-fsync every 'bytes' file written.

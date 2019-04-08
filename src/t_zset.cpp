@@ -2427,7 +2427,7 @@ void zrangeGenericCommand(client *c, int reverse) {
         return;
     }
 
-    if ((zobj = lookupKeyReadOrReply(c,key,shared.null[c->resp])) == NULL
+    if ((zobj = lookupKeyReadOrReply(c,key,(c->resp < 3) ? shared.emptyarray : shared.null[c->resp])) == NULL
          || checkType(c,zobj,OBJ_ZSET)) return;
 
     /* Sanitize indexes. */
@@ -2575,7 +2575,7 @@ void genericZrangebyscoreCommand(client *c, int reverse) {
     }
 
     /* Ok, lookup the key and get the range */
-    if ((zobj = lookupKeyReadOrReply(c,key,shared.null[c->resp])) == NULL ||
+    if ((zobj = lookupKeyReadOrReply(c,key,(c->resp < 3) ? shared.emptyarray : shared.null[c->resp])) == NULL ||
         checkType(c,zobj,OBJ_ZSET)) return;
 
     if (zobj->encoding == OBJ_ENCODING_ZIPLIST) {

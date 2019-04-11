@@ -2263,6 +2263,13 @@ struct redisMaster *replicationAddMaster(char *ip, int port) {
     return mi;
 }
 
+void freeMasterInfo(redisMaster *mi)
+{
+    zfree(mi->masterauth);
+    zfree(mi->masteruser);
+    zfree(mi);
+}
+
 /* Cancel replication, setting the instance as a master itself. */
 void replicationUnsetMaster(redisMaster *mi) {
     serverAssert(mi->masterhost != NULL);
@@ -2305,6 +2312,7 @@ void replicationUnsetMaster(redisMaster *mi) {
     listNode *ln = listSearchKey(server.masters, mi);
     serverAssert(ln != nullptr);
     listDelNode(server.masters, ln);
+    freeMasterInfo(mi);
 }
 
 /* This function is called when the slave lose the connection with the

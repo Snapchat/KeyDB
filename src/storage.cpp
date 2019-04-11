@@ -15,7 +15,7 @@
 struct memkind *mkdisk = NULL;
 static const char *PMEM_DIR = NULL;
 
-int memkind_pmem_iskind(struct memkind *kind, const void *pv);
+extern "C" int memkind_pmem_iskind(struct memkind *kind, const void *pv);
 
 void handle_prefork();
 void handle_postfork_parent();
@@ -27,7 +27,10 @@ struct object_page
 {
     uint64_t allocmap[OBJECT_PAGE_BUFFER_SIZE/(8*sizeof(uint64_t))];
     struct object_page *pnext;
-    char rgb[];
+    char *rgb()
+    {
+        return reinterpret_cast<char*>(this+1);
+    };
 };
 
 struct alloc_pool
@@ -40,7 +43,7 @@ struct alloc_pool
 struct object_page *pool_allocate_page(int cbObject)
 {
     size_t cb = (((size_t)cbObject) * OBJECT_PAGE_BUFFER_SIZE) + sizeof(struct object_page);
-    return scalloc(cb, 1, MALLOC_SHARED);
+    return (object_page*)scalloc(cb, 1, MALLOC_SHARED);
 }
 void pool_initialize(struct alloc_pool *ppool, int cbObject)
 {
@@ -78,7 +81,7 @@ void *pool_alloc(struct alloc_pool *ppool)
         int idx = IdxAllocObject(cur);
         if (idx >= 0)
         {
-            return cur->rgb + (((size_t)ppool->cbObject) * idx);
+            return cur->rgb() + (((size_t)ppool->cbObject) * idx);
         }
 
         if (cur->pnext == NULL)
@@ -93,14 +96,14 @@ void *pool_alloc(struct alloc_pool *ppool)
 void pool_free(struct alloc_pool *ppool, void *pv)
 {
     struct object_page *cur = ppool->pobjpageHead;
-    char *obj = pv;
+    char *obj = (char*)pv;
 
     for (;cur != NULL;)
     {
-        if (obj >= cur->rgb && (obj < (cur->rgb + (OBJECT_PAGE_BUFFER_SIZE * ppool->cbObject))))
+        if (obj >= cur->rgb() && (obj < (cur->rgb() + (OBJECT_PAGE_BUFFER_SIZE * ppool->cbObject))))
         {
             // Its on this page
-            int idx = (obj - cur->rgb) / ppool->cbObject;
+            int idx = (obj - cur->rgb()) / ppool->cbObject;
             cur->allocmap[idx / OBJ_PAGE_BITS_PER_WORD] &= ~(1ULL << (idx % OBJ_PAGE_BITS_PER_WORD));
             return;
         }
@@ -143,7 +146,7 @@ void storage_init(const char *tmpfilePath, size_t cbFileReserve)
     {
         // First create the file
         serverAssert(mkdisk == MEMKIND_DEFAULT);
-        PMEM_DIR = memkind_malloc(MEMKIND_DEFAULT, strlen(tmpfilePath));
+        PMEM_DIR = (char*)memkind_malloc(MEMKIND_DEFAULT, strlen(tmpfilePath));
         strcpy((char*)PMEM_DIR, tmpfilePath);
         int errv = memkind_create_pmem(PMEM_DIR, 0, &mkdisk);
         if (errv == MEMKIND_ERROR_INVALID)
@@ -181,7 +184,7 @@ void storage_init(const char *tmpfilePath, size_t cbFileReserve)
 
 struct redisObject *salloc_obj()
 {
-    return pool_alloc(&poolobj);
+    return (redisObject*)pool_alloc(&poolobj);
 }
 void sfree_obj(struct redisObject *obj)
 {
@@ -189,7 +192,7 @@ void sfree_obj(struct redisObject *obj)
 }
 struct redisObject *salloc_objembstr()
 {
-    return pool_alloc(&poolembstrobj);
+    return (redisObject*)pool_alloc(&poolembstrobj);
 }
 void sfree_objembstr(robj *obj)
 {
@@ -211,9 +214,9 @@ size_t salloc_usable_size(void *ptr)
     return memkind_malloc_usable_size(kindFromPtr(ptr), ptr);
 }
 
-static memkind_t kindFromClass(enum MALLOC_CLASS class)
+static memkind_t kindFromClass(enum MALLOC_CLASS mclass)
 {
-    switch (class)
+    switch (mclass)
     {
     case MALLOC_SHARED:
         return mkdisk;
@@ -223,17 +226,17 @@ static memkind_t kindFromClass(enum MALLOC_CLASS class)
     return MEMKIND_DEFAULT;
 }
 
-void *salloc(size_t cb, enum MALLOC_CLASS class)
+void *salloc(size_t cb, enum MALLOC_CLASS mclass)
 {
     if (cb == 0) 
         cb = 1;
         
-    return memkind_malloc(kindFromClass(class), cb);
+    return memkind_malloc(kindFromClass(mclass), cb);
 }
 
-void *scalloc(size_t cb, size_t c, enum MALLOC_CLASS class)
+void *scalloc(size_t cb, size_t c, enum MALLOC_CLASS mclass)
 {
-    return memkind_calloc(kindFromClass(class), cb, c);
+    return memkind_calloc(kindFromClass(mclass), cb, c);
 }
 
 void sfree(void *pv)
@@ -241,9 +244,9 @@ void sfree(void *pv)
     memkind_free(kindFromPtr(pv), pv);
 }
 
-void *srealloc(void *pv, size_t cb, enum MALLOC_CLASS class)
+void *srealloc(void *pv, size_t cb, enum MALLOC_CLASS mclass)
 {
-    return memkind_realloc(kindFromClass(class), pv, cb);
+    return memkind_realloc(kindFromClass(mclass), pv, cb);
 }
 
 int fdNew = -1;

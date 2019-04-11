@@ -4,7 +4,7 @@
 What is KeyDB?
 --------------
 
-KeyDB is a high performance fork of Redis focusing on multithreading, memory efficiency, and high throughput.  In addition to multithreading KeyDB also has features only available in Redis Enterprise such as FLASH storage support, and some not available at all such as direct backup to AWS S3.
+KeyDB is a high performance fork of Redis focusing on multithreading, memory efficiency, and high throughput.  In addition to multithreading KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/KeyDB-(Redis-Fork):-Active-Replica-Support), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3.
 
 On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency.
 
@@ -13,6 +13,8 @@ KeyDB has full compatibility with the Redis protocol, modules, and scripts.  Thi
 Try our docker container: https://hub.docker.com/r/eqalpha/keydb
 
 Talk on Gitter: https://gitter.im/KeyDB
+
+Management GUI: We recommend [FastoNoSQL](https://fastonosql.com/) which has official KeyDB support.
 
 New: Active Replica Support
 ---------------------------
@@ -47,7 +49,7 @@ The number of threads used to serve requests.  This should be related to the num
 
     scratch-file-path /path
 
-If you would like to use the FLASH backed storage this option configures the directory for KeyDB's temporary files.  This feature relies on snapshotting to work so must be used on a BTRFS filesystem.  ZFS may also work but is untested.  With this feature KeyDB will use RAM as a cache and page to disk as necessary.  NOTE: This requires special compilation options, see Building KeyDB below.
+If you would like to use the [FLASH backed](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) storage this option configures the directory for KeyDB's temporary files.  This feature relies on snapshotting to work so must be used on a BTRFS filesystem.  ZFS may also work but is untested.  With this feature KeyDB will use RAM as a cache and page to disk as necessary.  NOTE: This requires special compilation options, see Building KeyDB below.
     
     db-s3-object /path/to/bucket
 
@@ -59,6 +61,10 @@ Building KeyDB
 --------------
 
 KeyDB can be compiled and is tested for use on Linux.  KeyDB currently relies on SO_REUSEADDR's load balancing behavior which is available only in Linux.  When we support marshalling connections across threads we plan to support other operating systems such as FreeBSD.
+
+Install dependencies:
+
+    % sudo apt install build-essential nasm autotools-dev autoconf libjemalloc-dev tcl tcl-dev uuid-dev
 
 Compiling is as simple as:
 
@@ -218,12 +224,12 @@ Run the following commands for a full source download and build:
 
 ```
 git clone git@github.com:JohnSully/KeyDB.git
-docker run -it --rm `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make
+docker run -it --rm -v `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make
 ```
 
 Then you have fresh binaries built, you can also pass any other options to the make command above after the word make. E.g.
 
-```docker run -it --rm `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make MAllOC=memkind```
+```docker run -it --rm -v `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make MAllOC=memkind```
 
 The above commands will build you binaries in the src directory. Standard `make install` without Docker command will work after if you wish to install
 

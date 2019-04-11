@@ -300,6 +300,9 @@ int prepareClientToWrite(client *c, bool fAsync) {
     serverAssert(!fAsync || GlobalLocksAcquired());
     serverAssert(c->fd <= 0 || c->lock.fOwnLock());
 
+    if (c->flags & CLIENT_FORCE_REPLY) return C_OK; // FORCE REPLY means we're doing something else with the buffer.
+                                                // do not install a write handler
+
     /* If it's the Lua client we always return ok without installing any
      * handler since there is no socket at all. */
     if (c->flags & (CLIENT_LUA|CLIENT_MODULE)) return C_OK;
@@ -1166,10 +1169,8 @@ static void freeClientArgv(client *c) {
     c->cmd = NULL;
 }
 
-/* Close all the slaves connections. This is useful in chained replication
- * when we resync with our own master and want to force all our slaves to
- * resync with us as well. */
-void disconnectSlaves(void) {
+void disconnectSlavesExcept(unsigned char *uuid)
+{
     serverAssert(GlobalLocksAcquired());
     listIter li;
     listNode *ln;
@@ -1177,8 +1178,16 @@ void disconnectSlaves(void) {
     listRewind(server.slaves, &li);
     while ((ln = listNext(&li))) {
         client *c = (client*)listNodeValue(ln);
-        freeClientAsync(c);
-    }
+        if (uuid == nullptr || !FUuidEqual(c->uuid, uuid))
+            freeClientAsync(c);
+    }   
+}
+
+/* Close all the slaves connections. This is useful in chained replication
+ * when we resync with our own master and want to force all our slaves to
+ * resync with us as well. */
+void disconnectSlaves(void) {
+    disconnectSlavesExcept(nullptr);
 }
 
 /* Remove the specified client from global lists where the client could
@@ -1203,6 +1212,16 @@ void unlinkClient(client *c) {
             raxRemove(server.clients_index,(unsigned char*)&id,sizeof(id),NULL);
             listDelNode(server.clients,c->client_list_node);
             c->client_list_node = NULL;
+        }
+
+        /* In the case of diskless replication the fork is writing to the
+         * sockets and just closing the fd isn't enough, if we don't also
+         * shutdown the socket the fork will continue to write to the slave
+         * and the salve will only find out that it was disconnected when
+         * it will finish reading the rdb. */
+        if ((c->flags & CLIENT_SLAVE) &&
+            (c->replstate == SLAVE_STATE_WAIT_BGSAVE_END)) {
+            shutdown(c->fd, SHUT_RDWR);
         }
 
         /* Unregister async I/O handlers and close the socket. */
@@ -1267,13 +1286,13 @@ void freeClient(client *c) {
      *
      * Note that before doing this we make sure that the client is not in
      * some unexpected state, by checking its flags. */
-    if (server.master && c->flags & CLIENT_MASTER) {
+    if (FActiveMaster(c)) {
         serverLog(LL_WARNING,"Connection with master lost.");
         if (!(c->flags & (CLIENT_CLOSE_AFTER_REPLY|
-                          CLIENT_CLOSE_ASAP|
-                          CLIENT_BLOCKED)))
+                        CLIENT_CLOSE_ASAP|
+                        CLIENT_BLOCKED)))
         {
-            replicationCacheMaster(c);
+            replicationCacheMaster(MasterInfoFromClient(c), c);
             return;
         }
     }
@@ -1333,7 +1352,7 @@ void freeClient(client *c) {
 
     /* Master/slave cleanup Case 2:
      * we lost the connection with the master. */
-    if (c->flags & CLIENT_MASTER) replicationHandleMasterDisconnection();
+    if (c->flags & CLIENT_MASTER) replicationHandleMasterDisconnection(MasterInfoFromClient(c));
 
     /* If this client was scheduled for async freeing we need to remove it
      * from the queue. */
@@ -1936,7 +1955,7 @@ int processMultibulkBuffer(client *c) {
  * more query buffer to process, because we read more data from the socket
  * or because a client was blocked and later reactivated, so there could be
  * pending query buffer, already representing a full command, to process. */
-void processInputBuffer(client *c) {
+void processInputBuffer(client *c, int callFlags) {
     AssertCorrectThread(c);
     bool fFreed = false;
     
@@ -1972,17 +1991,6 @@ void processInputBuffer(client *c) {
 
         if (c->reqtype == PROTO_REQ_INLINE) {
             if (processInlineBuffer(c) != C_OK) break;
-            /* If the Gopher mode and we got zero or one argument, process
-             * the request in Gopher mode. */
-            if (server.gopher_enabled &&
-                ((c->argc == 1 && ((char*)(ptrFromObj(c->argv[0])))[0] == '/') ||
-                  c->argc == 0))
-            {
-                processGopherRequest(c);
-                resetClient(c);
-                c->flags |= CLIENT_CLOSE_AFTER_REPLY;
-                break;
-            }
         } else if (c->reqtype == PROTO_REQ_MULTIBULK) {
             if (processMultibulkBuffer(c) != C_OK) break;
         } else {
@@ -1998,7 +2006,7 @@ void processInputBuffer(client *c) {
             server.current_client = c;
 
             /* Only reset the client when the command was executed. */
-            if (processCommand(c) == C_OK) {
+            if (processCommand(c, callFlags) == C_OK) {
                 if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
                     /* Update the applied replication offset of our master. */
                     c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
@@ -2035,16 +2043,19 @@ void processInputBuffer(client *c) {
  * raw processInputBuffer(). */
 void processInputBufferAndReplicate(client *c) {
     if (!(c->flags & CLIENT_MASTER)) {
-        processInputBuffer(c);
+        processInputBuffer(c, CMD_CALL_FULL);
     } else {
         size_t prev_offset = c->reploff;
-        processInputBuffer(c);
+        processInputBuffer(c, CMD_CALL_FULL);
         size_t applied = c->reploff - prev_offset;
         if (applied) {
-            aeAcquireLock();
-            replicationFeedSlavesFromMasterStream(server.slaves,
-                    c->pending_querybuf, applied);
-            aeReleaseLock();
+            if (!server.fActiveReplica)
+            {
+                aeAcquireLock();
+                replicationFeedSlavesFromMasterStream(server.slaves,
+                        c->pending_querybuf, applied);
+                aeReleaseLock();
+            }
             sdsrange(c->pending_querybuf,applied,-1);
         }
     }
@@ -2427,7 +2438,10 @@ NULL
             if (c == client) {
                 close_this_client = 1;
             } else {
-                freeClientAsync(client);
+                if (FCorrectThread(client))
+                    freeClient(client);
+                else
+                    freeClientAsync(client);
             }
             killed++;
         }
@@ -2558,7 +2572,7 @@ void helloCommand(client *c) {
 
     if (!server.sentinel_mode) {
         addReplyBulkCString(c,"role");
-        addReplyBulkCString(c,server.masterhost ? "replica" : "master");
+        addReplyBulkCString(c,listLength(server.masters) ? "replica" : "master");
     }
 
     addReplyBulkCString(c,"modules");

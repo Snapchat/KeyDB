@@ -36,6 +36,10 @@
 #include <stdint.h>
 #include "sds.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct _rio {
     /* Backend functions.
      * Since this functions do not tolerate short writes or reads the return
@@ -140,5 +144,9 @@ int rioWriteBulkObject(rio *r, struct redisObject *obj);
 
 void rioGenericUpdateChecksum(rio *r, const void *buf, size_t len);
 void rioSetAutoSync(rio *r, off_t bytes);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

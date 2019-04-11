@@ -2256,12 +2256,21 @@ void createSharedObjects(void) {
 
 void initMasterInfo(redisMaster *master)
 {
-    master->masterauth = NULL;
-    master->masterhost = NULL;
+    if (server.default_masterauth)
+        master->masterauth = zstrdup(server.default_masterauth);
+    else
+        master->masterauth = NULL;
+
+    if (server.default_masteruser)
+        master->masteruser = zstrdup(server.default_masteruser);
+    else
+        master->masteruser = NULL;
+
     master->masterport = 6379;
     master->master = NULL;
     master->cached_master = NULL;
     master->master_initial_offset = -1;
+    
 
     master->repl_state = REPL_STATE_NONE;
     master->repl_down_since = 0; /* Never connected, repl is down since EVER. */

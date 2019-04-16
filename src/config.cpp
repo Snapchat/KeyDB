@@ -399,6 +399,8 @@ void loadServerConfigFromString(char *config) {
         } else if (!strcasecmp(argv[0],"masterauth") && argc == 2) {
             zfree(server.default_masterauth);
             server.default_masterauth = argv[1][0] ? zstrdup(argv[1]) : NULL;
+            // Loop through all existing master infos and update them (in case this came after the replicaof config)
+            updateMasterAuth();
         } else if ((!strcasecmp(argv[0],"slave-serve-stale-data") ||
                     !strcasecmp(argv[0],"replica-serve-stale-data"))
                     && argc == 2)

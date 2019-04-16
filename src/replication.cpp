@@ -3195,3 +3195,22 @@ void replicaReplayCommand(client *c)
     alsoPropagate(server.rreplayCommand,c->db->id,c->argv,c->argc,PROPAGATE_AOF|PROPAGATE_REPL);
     return;
 }
+
+void updateMasterAuth()
+{
+    listIter li;
+    listNode *ln;
+
+    listRewind(server.masters, &li);
+    while ((ln = listNext(&li)))
+    {
+        redisMaster *mi = (redisMaster*)listNodeValue(ln);
+        zfree(mi->masterauth); mi->masterauth = nullptr;
+        zfree(mi->masteruser); mi->masteruser = nullptr;
+
+        if (server.default_masterauth)
+            mi->masterauth = zstrdup(server.default_masterauth);
+        if (server.default_masteruser)
+            mi->masteruser = zstrdup(server.default_masteruser);
+    }
+}

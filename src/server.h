@@ -1824,6 +1824,7 @@ void clearReplicationId2(void);
 void chopReplicationBacklog(void);
 void replicationCacheMasterUsingMyself(struct redisMaster *mi);
 void feedReplicationBacklog(const void *ptr, size_t len);
+void updateMasterAuth();
 
 /* Generic persistence functions */
 void startLoading(FILE *fp);

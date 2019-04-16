@@ -36,7 +36,7 @@
  * for instance to free results obtained by backtrace_symbols(). We need
  * to define this function before including zmalloc.h that may shadow the
  * free implementation if we use jemalloc or another non standard allocator. */
-void zlibc_free(void *ptr) {
+extern "C" void zlibc_free(void *ptr) {
     free(ptr);
 }
 
@@ -49,12 +49,15 @@ void zlibc_free(void *ptr) {
 #ifdef HAVE_MALLOC_SIZE
 #define PREFIX_SIZE (0)
 #else
+#define PREFIX_SIZE 16
 #if defined(__sun) || defined(__sparc) || defined(__sparc__)
-#define PREFIX_SIZE (sizeof(long long))
+static_assert(PREFIX_SIZE >= (sizeof(long long)), "");
 #else
-#define PREFIX_SIZE (sizeof(size_t))
+static_assert(PREFIX_SIZE >= (sizeof(size_t)), "");
 #endif
 #endif
+
+static_assert((PREFIX_SIZE % 16) == 0, "Our prefix must be modulo 16-bytes or our pointers will not be aligned");
 
 /* Explicitly override malloc/free etc when using tcmalloc. */
 #if defined(USE_MEMKIND)
@@ -104,9 +107,9 @@ static void zmalloc_default_oom(size_t size) {
 
 static void (*zmalloc_oom_handler)(size_t) = zmalloc_default_oom;
 
-void *zmalloc(size_t size, enum MALLOC_CLASS class) {
-    (void)class;
-    void *ptr = malloc(size+PREFIX_SIZE, class);
+void *zmalloc(size_t size, enum MALLOC_CLASS mclass) {
+    (void)mclass;
+    void *ptr = malloc(size+PREFIX_SIZE, mclass);
 
     if (!ptr) zmalloc_oom_handler(size);
 #ifdef HAVE_MALLOC_SIZE
@@ -137,9 +140,9 @@ void zfree_no_tcache(void *ptr) {
 }
 #endif
 
-void *zcalloc(size_t size, enum MALLOC_CLASS class) {
-    (void)(class);
-    void *ptr = calloc(1, size+PREFIX_SIZE, class);
+void *zcalloc(size_t size, enum MALLOC_CLASS mclass) {
+    (void)(mclass);
+    void *ptr = calloc(1, size+PREFIX_SIZE, mclass);
 
     if (!ptr) zmalloc_oom_handler(size);
 #ifdef HAVE_MALLOC_SIZE
@@ -152,7 +155,7 @@ void *zcalloc(size_t size, enum MALLOC_CLASS class) {
 #endif
 }
 
-void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS class) {
+void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS mclass) {
 #ifndef HAVE_MALLOC_SIZE
     void *realptr;
 #endif
@@ -163,10 +166,10 @@ void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS class) {
         zfree(ptr);
         return NULL;
     }
-    if (ptr == NULL) return zmalloc(size, class);
+    if (ptr == NULL) return zmalloc(size, mclass);
 #ifdef HAVE_MALLOC_SIZE
     oldsize = zmalloc_size(ptr);
-    newptr = realloc(ptr,size, class);
+    newptr = realloc(ptr,size, mclass);
     if (!newptr) zmalloc_oom_handler(size);
 
     update_zmalloc_stat_free(oldsize);
@@ -175,7 +178,7 @@ void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS class) {
 #else
     realptr = (char*)ptr-PREFIX_SIZE;
     oldsize = *((size_t*)realptr);
-    newptr = realloc(realptr,size+PREFIX_SIZE, class);
+    newptr = realloc(realptr,size+PREFIX_SIZE, mclass);
     if (!newptr) zmalloc_oom_handler(size);
 
     *((size_t*)newptr) = size;
@@ -222,7 +225,7 @@ void zfree(void *ptr) {
 
 char *zstrdup(const char *s) {
     size_t l = strlen(s)+1;
-    char *p = zmalloc(l, MALLOC_SHARED);
+    char *p = (char*)zmalloc(l, MALLOC_SHARED);
 
     memcpy(p,s,l);
     return p;

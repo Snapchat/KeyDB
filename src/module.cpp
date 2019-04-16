@@ -5077,7 +5077,7 @@ dictType moduleAPIDictType = {
     NULL                       /* val destructor */
 };
 
-int moduleRegisterApi(const char *funcname, void *funcptr) {
+extern "C" int moduleRegisterApi(const char *funcname, void *funcptr) {
     return dictAdd(server.moduleapi, (char*)funcname, funcptr);
 }
 

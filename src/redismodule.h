@@ -5,6 +5,10 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ---------------- Defines common between core and modules --------------- */
 
 /* Error status return values. */
@@ -538,4 +542,9 @@ static int RedisModule_Init(RedisModuleCtx *ctx, const char *name, int ver, int 
 #define RedisModuleString robj
 
 #endif /* REDISMODULE_CORE */
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif /* REDISMOUDLE_H */

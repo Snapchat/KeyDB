@@ -4797,7 +4797,7 @@ NULL
 
 /* Generates a DUMP-format representation of the object 'o', adding it to the
  * io stream pointed by 'rio'. This function can't fail. */
-void createDumpPayload(rio *payload, robj *o, robj *key) {
+void createDumpPayload(rio *payload, robj_roptr o, robj *key) {
     unsigned char buf[2];
     uint64_t crc;
 
@@ -4853,11 +4853,11 @@ int verifyDumpPayload(unsigned char *p, size_t len) {
  * DUMP is actually not used by Redis Cluster but it is the obvious
  * complement of RESTORE and can be useful for different applications. */
 void dumpCommand(client *c) {
-    robj *o, *dumpobj;
+    robj_roptr o, dumpobj;
     rio payload;
 
     /* Check if the key is here. */
-    if ((o = lookupKeyRead(c->db,c->argv[1])) == NULL) {
+    if ((o = lookupKeyRead(c->db,c->argv[1])) == nullptr) {
         addReplyNull(c);
         return;
     }
@@ -5086,7 +5086,7 @@ void migrateCommand(client *c) {
     char *password = NULL;
     long timeout;
     long dbid;
-    robj **ov = NULL; /* Objects to migrate. */
+    robj_roptr *ov = NULL; /* Objects to migrate. */
     robj **kv = NULL; /* Key names. */
     robj **newargv = NULL; /* Used to rewrite the command as DEL ... keys ... */
     rio cmd, payload;
@@ -5141,12 +5141,12 @@ void migrateCommand(client *c) {
      * the caller there was nothing to migrate. We don't return an error in
      * this case, since often this is due to a normal condition like the key
      * expiring in the meantime. */
-    ov = (robj**)zrealloc(ov,sizeof(robj*)*num_keys, MALLOC_LOCAL);
+    ov = (robj_roptr*)zrealloc(ov,sizeof(robj_roptr)*num_keys, MALLOC_LOCAL);
     kv = (robj**)zrealloc(kv,sizeof(robj*)*num_keys, MALLOC_LOCAL);
     int oi = 0;
 
     for (j = 0; j < num_keys; j++) {
-        if ((ov[oi] = lookupKeyRead(c->db,c->argv[first_key+j])) != NULL) {
+        if ((ov[oi] = lookupKeyRead(c->db,c->argv[first_key+j])) != nullptr) {
             kv[oi] = c->argv[first_key+j];
             oi++;
         }
@@ -5583,7 +5583,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
 
             /* Migarting / Improrting slot? Count keys we don't have. */
             if ((migrating_slot || importing_slot) &&
-                lookupKeyRead(&server.db[0],thiskey) == NULL)
+                lookupKeyRead(&server.db[0],thiskey) == nullptr)
             {
                 missing_keys++;
             }

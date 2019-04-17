@@ -3132,7 +3132,7 @@ void redisOpArrayFree(redisOpArray *oa) {
 
 /* ====================== Commands lookup and execution ===================== */
 
-extern "C" struct redisCommand *lookupCommand(sds name) {
+struct redisCommand *lookupCommand(sds name) {
     return (struct redisCommand*)dictFetchValue(server.commands, name);
 }
 
@@ -3930,7 +3930,7 @@ void bytesToHuman(char *s, unsigned long long n) {
 /* Create the string returned by the INFO command. This is decoupled
  * by the INFO command itself as we need to report the same information
  * on memory corruption problems. */
-extern "C" sds genRedisInfoString(const char *section) {
+sds genRedisInfoString(const char *section) {
     sds info = sdsempty();
     time_t uptime = server.unixtime-server.stat_starttime;
     int j;
@@ -4874,6 +4874,11 @@ int redisIsSupervised(int mode) {
     }
 
     return 0;
+}
+
+uint64_t getMvccTstamp()
+{
+    return (server.mstime << 16);
 }
 
 void *workerThreadMain(void *parg)

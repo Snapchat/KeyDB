@@ -71,16 +71,16 @@ robj *listTypePop(robj *subject, int where) {
     return value;
 }
 
-unsigned long listTypeLength(const robj *subject) {
+unsigned long listTypeLength(robj_roptr subject) {
     if (subject->encoding == OBJ_ENCODING_QUICKLIST) {
-        return quicklistCount((quicklist*)ptrFromObj(subject));
+        return quicklistCount((const quicklist*)ptrFromObj(subject));
     } else {
         serverPanic("Unknown list encoding");
     }
 }
 
 /* Initialize an iterator at the specified index. */
-listTypeIterator *listTypeInitIterator(robj *subject, long index,
+listTypeIterator *listTypeInitIterator(robj_roptr subject, long index,
                                        unsigned char direction) {
     listTypeIterator *li = (listTypeIterator*)zmalloc(sizeof(listTypeIterator), MALLOC_LOCAL);
     li->subject = subject;
@@ -306,14 +306,14 @@ void linsertCommand(client *c) {
 }
 
 void llenCommand(client *c) {
-    robj *o = lookupKeyReadOrReply(c,c->argv[1],shared.czero);
-    if (o == NULL || checkType(c,o,OBJ_LIST)) return;
+    robj_roptr o = lookupKeyReadOrReply(c,c->argv[1],shared.czero);
+    if (o == nullptr || checkType(c,o,OBJ_LIST)) return;
     addReplyLongLong(c,listTypeLength(o));
 }
 
 void lindexCommand(client *c) {
-    robj *o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp]);
-    if (o == NULL || checkType(c,o,OBJ_LIST)) return;
+    robj_roptr o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp]);
+    if (o == nullptr || checkType(c,o,OBJ_LIST)) return;
     long index;
     robj *value = NULL;
 
@@ -396,13 +396,13 @@ void rpopCommand(client *c) {
 }
 
 void lrangeCommand(client *c) {
-    robj *o;
+    robj_roptr o;
     long start, end, llen, rangelen;
 
     if ((getLongFromObjectOrReply(c, c->argv[2], &start, NULL) != C_OK) ||
         (getLongFromObjectOrReply(c, c->argv[3], &end, NULL) != C_OK)) return;
 
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],(c->resp < 3) ? shared.emptyarray : shared.null[c->resp])) == NULL
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],(c->resp < 3) ? shared.emptyarray : shared.null[c->resp])) == nullptr
          || checkType(c,o,OBJ_LIST)) return;
     llen = listTypeLength(o);
 

@@ -44,6 +44,9 @@ robj *createObject(int type, void *ptr) {
     o->encoding = OBJ_ENCODING_RAW;
     o->m_ptr = ptr;
     o->refcount = 1;
+#ifdef ENABLE_MVCC
+    o->mvcc_tstamp = OBJ_MVCC_INVALID;
+#endif
 
     /* Set the LRU to the current lruclock (minutes resolution), or
      * alternatively the LFU counter. */
@@ -91,6 +94,9 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     o->type = OBJ_STRING;
     o->encoding = OBJ_ENCODING_EMBSTR;
     o->refcount = 1;
+#ifdef ENABLE_MVCC
+    o->mvcc_tstamp = OBJ_MVCC_INVALID;
+#endif
     if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
     } else {
@@ -280,13 +286,13 @@ robj *createModuleObject(moduleType *mt, void *value) {
     return createObject(OBJ_MODULE,mv);
 }
 
-void freeStringObject(robj *o) {
+void freeStringObject(robj_roptr o) {
     if (o->encoding == OBJ_ENCODING_RAW) {
         sdsfree(szFromObj(o));
     }
 }
 
-void freeListObject(robj *o) {
+void freeListObject(robj_roptr o) {
     if (o->encoding == OBJ_ENCODING_QUICKLIST) {
         quicklistRelease((quicklist*)ptrFromObj(o));
     } else {
@@ -294,7 +300,7 @@ void freeListObject(robj *o) {
     }
 }
 
-void freeSetObject(robj *o) {
+void freeSetObject(robj_roptr o) {
     switch (o->encoding) {
     case OBJ_ENCODING_HT:
         dictRelease((dict*) ptrFromObj(o));
@@ -307,7 +313,7 @@ void freeSetObject(robj *o) {
     }
 }
 
-void freeZsetObject(robj *o) {
+void freeZsetObject(robj_roptr o) {
     zset *zs;
     switch (o->encoding) {
     case OBJ_ENCODING_SKIPLIST:
@@ -324,7 +330,7 @@ void freeZsetObject(robj *o) {
     }
 }
 
-void freeHashObject(robj *o) {
+void freeHashObject(robj_roptr o) {
     switch (o->encoding) {
     case OBJ_ENCODING_HT:
         dictRelease((dict*) ptrFromObj(o));
@@ -338,21 +344,21 @@ void freeHashObject(robj *o) {
     }
 }
 
-void freeModuleObject(robj *o) {
+void freeModuleObject(robj_roptr o) {
     moduleValue *mv = (moduleValue*)ptrFromObj(o);
     mv->type->free(mv->value);
     zfree(mv);
 }
 
-void freeStreamObject(robj *o) {
+void freeStreamObject(robj_roptr o) {
     freeStream((stream*)ptrFromObj(o));
 }
 
-void incrRefCount(robj *o) {
+void incrRefCount(robj_roptr o) {
     if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount++;
 }
 
-void decrRefCount(robj *o) {
+void decrRefCount(robj_roptr o) {
     if (o->refcount == 1) {
         switch(o->type) {
         case OBJ_STRING: freeStringObject(o); break;
@@ -364,7 +370,7 @@ void decrRefCount(robj *o) {
         case OBJ_STREAM: freeStreamObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
-        zfree(o);
+        zfree(o.unsafe_robjcast());
     } else {
         if (o->refcount <= 0) serverPanic("decrRefCount against refcount <= 0");
         if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount--;
@@ -374,7 +380,7 @@ void decrRefCount(robj *o) {
 /* This variant of decrRefCount() gets its argument as void, and is useful
  * as free method in data structures that expect a 'void free_object(void*)'
  * prototype for the free method. */
-void decrRefCountVoid(void *o) {
+void decrRefCountVoid(const void *o) {
     decrRefCount((robj*)o);
 }
 
@@ -395,7 +401,7 @@ robj *resetRefCount(robj *obj) {
     return obj;
 }
 
-int checkType(client *c, robj *o, int type) {
+int checkType(client *c, robj_roptr o, int type) {
     if (o->type != type) {
         addReplyAsync(c,shared.wrongtypeerr);
         return 1;
@@ -403,7 +409,7 @@ int checkType(client *c, robj *o, int type) {
     return 0;
 }
 
-int isSdsRepresentableAsLongLong(sds s, long long *llval) {
+int isSdsRepresentableAsLongLong(const char *s, long long *llval) {
     return string2ll(s,sdslen(s),llval) ? C_OK : C_ERR;
 }
 
@@ -524,6 +530,10 @@ robj *getDecodedObject(robj *o) {
     }
 }
 
+robj_roptr getDecodedObject(robj_roptr o) {
+    return getDecodedObject(o.unsafe_robjcast());
+}
+
 /* Compare two string objects via strcmp() or strcoll() depending on flags.
  * Note that the objects may be integer-encoded. In such a case we
  * use ll2string() to get a string representation of the numbers on the stack
@@ -592,7 +602,7 @@ int equalStringObjects(robj *a, robj *b) {
     }
 }
 
-size_t stringObjectLen(robj *o) {
+size_t stringObjectLen(robj_roptr o) {
     serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
     if (sdsEncodedObject(o)) {
         return sdslen(szFromObj(o));

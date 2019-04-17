@@ -1266,7 +1266,7 @@ void xaddCommand(client *c) {
 
 /* XRANGE/XREVRANGE actual implementation. */
 void xrangeGenericCommand(client *c, int rev) {
-    robj *o;
+    robj_roptr o;
     stream *s;
     streamID startid, endid;
     long long count = -1;
@@ -1293,7 +1293,7 @@ void xrangeGenericCommand(client *c, int rev) {
     }
 
     /* Return the specified range to the user. */
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptyarray)) == NULL ||
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptyarray)) == nullptr ||
          checkType(c,o,OBJ_STREAM)) return;
 
     s = (stream*)ptrFromObj(o);
@@ -1318,8 +1318,8 @@ void xrevrangeCommand(client *c) {
 
 /* XLEN */
 void xlenCommand(client *c) {
-    robj *o;
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL
+    robj_roptr o;
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == nullptr
         || checkType(c,o,OBJ_STREAM)) return;
     stream *s = (stream*)ptrFromObj(o);
     addReplyLongLong(c,s->length);
@@ -1419,14 +1419,14 @@ void xreadCommand(client *c) {
          * starting from now. */
         int id_idx = i - streams_arg - streams_count;
         robj *key = c->argv[i-streams_count];
-        robj *o = lookupKeyRead(c->db,key);
+        robj_roptr o = lookupKeyRead(c->db,key);
         if (o && checkType(c,o,OBJ_STREAM)) goto cleanup;
         streamCG *group = NULL;
 
         /* If a group was specified, than we need to be sure that the
          * key and group actually exist. */
         if (groupname) {
-            if (o == NULL ||
+            if (o == nullptr ||
                 (group = streamLookupCG((stream*)ptrFromObj(o),szFromObj(groupname))) == NULL)
             {
                 addReplyErrorFormat(c, "-NOGROUP No such key '%s' or consumer "
@@ -1475,8 +1475,8 @@ void xreadCommand(client *c) {
 
     /* Try to serve the client synchronously. */
     for (int i = 0; i < streams_count; i++) {
-        robj *o = lookupKeyRead(c->db,c->argv[streams_arg+i]);
-        if (o == NULL) continue;
+        robj_roptr o = lookupKeyRead(c->db,c->argv[streams_arg+i]);
+        if (o == nullptr) continue;
         stream *s = (stream*)ptrFromObj(o);
         streamID *gt = ids+i; /* ID must be greater than this. */
         int serve_synchronously = 0;
@@ -1887,14 +1887,14 @@ void xsetidCommand(client *c) {
  */
 void xackCommand(client *c) {
     streamCG *group = NULL;
-    robj *o = lookupKeyRead(c->db,c->argv[1]);
+    robj_roptr o = lookupKeyRead(c->db,c->argv[1]);
     if (o) {
         if (checkType(c,o,OBJ_STREAM)) return; /* Type error. */
         group = streamLookupCG((stream*)ptrFromObj(o),szFromObj(c->argv[2]));
     }
 
     /* No key or group? Nothing to ack. */
-    if (o == NULL || group == NULL) {
+    if (o == nullptr || group == NULL) {
         addReply(c,shared.czero);
         return;
     }
@@ -1958,11 +1958,11 @@ void xpendingCommand(client *c) {
     }
 
     /* Lookup the key and the group inside the stream. */
-    robj *o = lookupKeyRead(c->db,c->argv[1]);
+    robj_roptr o = lookupKeyRead(c->db,c->argv[1]);
     streamCG *group;
 
     if (o && checkType(c,o,OBJ_STREAM)) return;
-    if (o == NULL ||
+    if (o == nullptr ||
         (group = streamLookupCG((stream*)ptrFromObj(o),szFromObj(groupname))) == NULL)
     {
         addReplyErrorFormat(c, "-NOGROUP No such key '%s' or consumer "
@@ -2137,7 +2137,7 @@ void xpendingCommand(client *c) {
  * what messages it is now in charge of. */
 void xclaimCommand(client *c) {
     streamCG *group = NULL;
-    robj *o = lookupKeyRead(c->db,c->argv[1]);
+    robj_roptr o = lookupKeyRead(c->db,c->argv[1]);
     long long minidle; /* Minimum idle time argument. */
     long long retrycount = -1;   /* -1 means RETRYCOUNT option not given. */
     mstime_t deliverytime = -1;  /* -1 means IDLE/TIME options not given. */
@@ -2151,7 +2151,7 @@ void xclaimCommand(client *c) {
 
     /* No key or group? Send an error given that the group creation
      * is mandatory. */
-    if (o == NULL || group == NULL) {
+    if (o == nullptr || group == NULL) {
         addReplyErrorFormat(c,"-NOGROUP No such key '%s' or "
                               "consumer group '%s'", (char*)ptrFromObj(c->argv[1]),
                               (char*)ptrFromObj(c->argv[2]));

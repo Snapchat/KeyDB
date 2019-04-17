@@ -455,7 +455,7 @@ ssize_t rdbSaveLongLongAsStringObject(rio *rdb, long long value) {
 }
 
 /* Like rdbSaveRawString() gets a Redis object instead. */
-ssize_t rdbSaveStringObject(rio *rdb, robj *obj) {
+ssize_t rdbSaveStringObject(rio *rdb, robj_roptr obj) {
     /* Avoid to decode the object, then encode it again, if the
      * object is already integer encoded. */
     if (obj->encoding == OBJ_ENCODING_INT) {
@@ -623,7 +623,7 @@ int rdbLoadBinaryFloatValue(rio *rdb, float *val) {
 }
 
 /* Save the object type of object "o". */
-int rdbSaveObjectType(rio *rdb, robj *o) {
+int rdbSaveObjectType(rio *rdb, robj_roptr o) {
     switch (o->type) {
     case OBJ_STRING:
         return rdbSaveType(rdb,RDB_TYPE_STRING);
@@ -752,7 +752,7 @@ size_t rdbSaveStreamConsumers(rio *rdb, streamCG *cg) {
 
 /* Save a Redis object.
  * Returns -1 on error, number of bytes written on success. */
-ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key) {
+ssize_t rdbSaveObject(rio *rdb, robj_roptr o, robj *key) {
     ssize_t n = 0, nwritten = 0;
 
     if (o->type == OBJ_STRING) {

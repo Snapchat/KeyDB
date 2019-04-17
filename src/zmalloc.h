@@ -89,7 +89,7 @@ extern "C" {
 void *zmalloc(size_t size, enum MALLOC_CLASS mclass);
 void *zcalloc(size_t size, enum MALLOC_CLASS mclass);
 void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS mclass);
-void zfree(void *ptr);
+void zfree(const void *ptr);
 char *zstrdup(const char *s);
 size_t zmalloc_used_memory(void);
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t));

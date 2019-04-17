@@ -155,9 +155,9 @@ void psetexCommand(client *c) {
 }
 
 int getGenericCommand(client *c) {
-    robj *o;
+    robj_roptr o;
 
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == NULL)
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == nullptr)
         return C_OK;
 
     if (o->type != OBJ_STRING) {
@@ -242,23 +242,24 @@ void setrangeCommand(client *c) {
 }
 
 void getrangeCommand(client *c) {
-    robj *o;
+    robj_roptr o;
     long long start, end;
-    char *str, llbuf[32];
+    const char *str;
+    char llbuf[32];
     size_t strlen;
 
     if (getLongLongFromObjectOrReply(c,c->argv[2],&start,NULL) != C_OK)
         return;
     if (getLongLongFromObjectOrReply(c,c->argv[3],&end,NULL) != C_OK)
         return;
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptybulk)) == NULL ||
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptybulk)) == nullptr ||
         checkType(c,o,OBJ_STRING)) return;
 
     if (o->encoding == OBJ_ENCODING_INT) {
         str = llbuf;
         strlen = ll2string(llbuf,sizeof(llbuf),(long)ptrFromObj(o));
     } else {
-        str = (char*)ptrFromObj(o);
+        str = szFromObj(o);
         strlen = sdslen(str);
     }
 
@@ -287,8 +288,8 @@ void mgetCommand(client *c) {
 
     addReplyArrayLen(c,c->argc-1);
     for (j = 1; j < c->argc; j++) {
-        robj *o = lookupKeyRead(c->db,c->argv[j]);
-        if (o == NULL) {
+        robj_roptr o = lookupKeyRead(c->db,c->argv[j]);
+        if (o == nullptr) {
             addReplyNull(c);
         } else {
             if (o->type != OBJ_STRING) {
@@ -464,8 +465,8 @@ void appendCommand(client *c) {
 }
 
 void strlenCommand(client *c) {
-    robj *o;
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+    robj_roptr o;
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == nullptr ||
         checkType(c,o,OBJ_STRING)) return;
     addReplyLongLong(c,stringObjectLen(o));
 }

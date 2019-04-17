@@ -6,7 +6,7 @@ extern "C" {
 #include <sys/wait.h>
 
 /* Save the DB on disk. Return C_ERR on error, C_OK on success. */
-extern "C" int rdbSaveS3(char *s3bucket, rdbSaveInfo *rsi)
+int rdbSaveS3(char *s3bucket, rdbSaveInfo *rsi)
 {
     int status = EXIT_FAILURE;
     int fd[2];

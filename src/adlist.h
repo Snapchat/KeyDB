@@ -52,7 +52,7 @@ typedef struct list {
     listNode *head;
     listNode *tail;
     void *(*dup)(void *ptr);
-    void (*free)(void *ptr);
+    void (*free)(const void *ptr);
     int (*match)(void *ptr, void *key);
     unsigned long len;
 } list;

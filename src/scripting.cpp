@@ -1616,7 +1616,7 @@ void ldbInit(void) {
     ldb.fd = -1;
     ldb.active = 0;
     ldb.logs = listCreate();
-    listSetFreeMethod(ldb.logs,(void (*)(void*))sdsfree);
+    listSetFreeMethod(ldb.logs,(void (*)(const void*))sdsfree);
     ldb.children = listCreate();
     ldb.src = NULL;
     ldb.lines = 0;

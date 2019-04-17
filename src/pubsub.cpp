@@ -120,7 +120,7 @@ void addReplyPubsubPatUnsubscribed(client *c, robj *pattern) {
  * Pubsub low level API
  *----------------------------------------------------------------------------*/
 
-void freePubsubPattern(void *p) {
+void freePubsubPattern(const void *p) {
     pubsubPattern *pat = (pubsubPattern *)p;
 
     decrRefCount(pat->pattern);

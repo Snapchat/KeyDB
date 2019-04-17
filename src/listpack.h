@@ -44,6 +44,10 @@
 #define LP_AFTER 1
 #define LP_REPLACE 2
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 unsigned char *lpNew(void);
 void lpFree(unsigned char *lp);
 unsigned char *lpInsert(unsigned char *lp, unsigned char *ele, uint32_t size, unsigned char *p, int where, unsigned char **newp);
@@ -57,5 +61,9 @@ unsigned char *lpNext(unsigned char *lp, unsigned char *p);
 unsigned char *lpPrev(unsigned char *lp, unsigned char *p);
 uint32_t lpBytes(unsigned char *lp);
 unsigned char *lpSeek(unsigned char *lp, long index);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

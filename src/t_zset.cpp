@@ -777,7 +777,7 @@ int zzlCompareElements(unsigned char *eptr, unsigned char *cstr, unsigned int cl
     return cmp;
 }
 
-unsigned int zzlLength(unsigned char *zl) {
+unsigned int zzlLength(const unsigned char *zl) {
     return ziplistLen(zl)/2;
 }
 
@@ -1153,10 +1153,10 @@ unsigned char *zzlDeleteRangeByRank(unsigned char *zl, unsigned int start, unsig
  * Common sorted set API
  *----------------------------------------------------------------------------*/
 
-unsigned long zsetLength(const robj *zobj) {
+unsigned long zsetLength(robj_roptr zobj) {
     unsigned long length = 0;
     if (zobj->encoding == OBJ_ENCODING_ZIPLIST) {
-        length = zzlLength((unsigned char*)zobj->m_ptr);
+        length = zzlLength((const unsigned char*)zobj->m_ptr);
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         length = ((const zset*)zobj->m_ptr)->zsl->length;
     } else {
@@ -1252,7 +1252,7 @@ void zsetConvertToZiplistIfNeeded(robj *zobj, size_t maxelelen) {
  * storing it into *score. If the element does not exist C_ERR is returned
  * otherwise C_OK is returned and *score is correctly populated.
  * If 'zobj' or 'member' is NULL, C_ERR is returned. */
-int zsetScore(robj *zobj, sds member, double *score) {
+int zsetScore(robj_roptr zobj, sds member, double *score) {
     if (!zobj || !member) return C_ERR;
 
     if (zobj->encoding == OBJ_ENCODING_ZIPLIST) {
@@ -1470,7 +1470,7 @@ int zsetDel(robj *zobj, sds ele) {
  * the one with the lowest score. Otherwise if 'reverse' is non-zero
  * the rank is computed considering as element with rank 0 the one with
  * the highest score. */
-long zsetRank(robj *zobj, sds ele, int reverse) {
+long zsetRank(robj_roptr zobj, sds ele, int reverse) {
     unsigned long llen;
     unsigned long rank;
 
@@ -2410,7 +2410,7 @@ void zinterstoreCommand(client *c) {
 
 void zrangeGenericCommand(client *c, int reverse) {
     robj *key = c->argv[1];
-    robj *zobj;
+    robj_roptr zobj;
     int withscores = 0;
     long start;
     long end;
@@ -2427,7 +2427,7 @@ void zrangeGenericCommand(client *c, int reverse) {
         return;
     }
 
-    if ((zobj = lookupKeyReadOrReply(c,key,(c->resp < 3) ? shared.emptyarray : shared.null[c->resp])) == NULL
+    if ((zobj = lookupKeyReadOrReply(c,key,(c->resp < 3) ? shared.emptyarray : shared.null[c->resp])) == nullptr
          || checkType(c,zobj,OBJ_ZSET)) return;
 
     /* Sanitize indexes. */
@@ -2527,7 +2527,7 @@ void zrevrangeCommand(client *c) {
 void genericZrangebyscoreCommand(client *c, int reverse) {
     zrangespec range;
     robj *key = c->argv[1];
-    robj *zobj;
+    robj_roptr zobj;
     long offset = 0, limit = -1;
     int withscores = 0;
     unsigned long rangelen = 0;
@@ -2575,7 +2575,7 @@ void genericZrangebyscoreCommand(client *c, int reverse) {
     }
 
     /* Ok, lookup the key and get the range */
-    if ((zobj = lookupKeyReadOrReply(c,key,(c->resp < 3) ? shared.emptyarray : shared.null[c->resp])) == NULL ||
+    if ((zobj = lookupKeyReadOrReply(c,key,(c->resp < 3) ? shared.emptyarray : shared.null[c->resp])) == nullptr ||
         checkType(c,zobj,OBJ_ZSET)) return;
 
     if (zobj->encoding == OBJ_ENCODING_ZIPLIST) {
@@ -2719,7 +2719,7 @@ void zrevrangebyscoreCommand(client *c) {
 
 void zcountCommand(client *c) {
     robj *key = c->argv[1];
-    robj *zobj;
+    robj_roptr zobj;
     zrangespec range;
     unsigned long count = 0;
 
@@ -2730,7 +2730,7 @@ void zcountCommand(client *c) {
     }
 
     /* Lookup the sorted set */
-    if ((zobj = lookupKeyReadOrReply(c, key, shared.czero)) == NULL ||
+    if ((zobj = lookupKeyReadOrReply(c, key, shared.czero)) == nullptr ||
         checkType(c, zobj, OBJ_ZSET)) return;
 
     if (zobj->encoding == OBJ_ENCODING_ZIPLIST) {
@@ -2796,7 +2796,7 @@ void zcountCommand(client *c) {
 
 void zlexcountCommand(client *c) {
     robj *key = c->argv[1];
-    robj *zobj;
+    robj_roptr zobj;
     zlexrangespec range;
     unsigned long count = 0;
 
@@ -2807,7 +2807,7 @@ void zlexcountCommand(client *c) {
     }
 
     /* Lookup the sorted set */
-    if ((zobj = lookupKeyReadOrReply(c, key, shared.czero)) == NULL ||
+    if ((zobj = lookupKeyReadOrReply(c, key, shared.czero)) == nullptr ||
         checkType(c, zobj, OBJ_ZSET))
     {
         zslFreeLexRange(&range);
@@ -2877,7 +2877,7 @@ void zlexcountCommand(client *c) {
 void genericZrangebylexCommand(client *c, int reverse) {
     zlexrangespec range;
     robj *key = c->argv[1];
-    robj *zobj;
+    robj_roptr zobj;
     long offset = 0, limit = -1;
     unsigned long rangelen = 0;
     void *replylen = NULL;
@@ -2920,7 +2920,7 @@ void genericZrangebylexCommand(client *c, int reverse) {
     }
 
     /* Ok, lookup the key and get the range */
-    if ((zobj = lookupKeyReadOrReply(c,key,shared.null[c->resp])) == NULL ||
+    if ((zobj = lookupKeyReadOrReply(c,key,shared.null[c->resp])) == nullptr ||
         checkType(c,zobj,OBJ_ZSET))
     {
         zslFreeLexRange(&range);
@@ -3063,9 +3063,9 @@ void zrevrangebylexCommand(client *c) {
 
 void zcardCommand(client *c) {
     robj *key = c->argv[1];
-    robj *zobj;
+    robj_roptr zobj;
 
-    if ((zobj = lookupKeyReadOrReply(c,key,shared.czero)) == NULL ||
+    if ((zobj = lookupKeyReadOrReply(c,key,shared.czero)) == nullptr ||
         checkType(c,zobj,OBJ_ZSET)) return;
 
     addReplyLongLong(c,zsetLength(zobj));
@@ -3073,10 +3073,10 @@ void zcardCommand(client *c) {
 
 void zscoreCommand(client *c) {
     robj *key = c->argv[1];
-    robj *zobj;
+    robj_roptr zobj;
     double score;
 
-    if ((zobj = lookupKeyReadOrReply(c,key,shared.null[c->resp])) == NULL ||
+    if ((zobj = lookupKeyReadOrReply(c,key,shared.null[c->resp])) == nullptr ||
         checkType(c,zobj,OBJ_ZSET)) return;
 
     if (zsetScore(zobj,szFromObj(c->argv[2]),&score) == C_ERR) {
@@ -3089,10 +3089,10 @@ void zscoreCommand(client *c) {
 void zrankGenericCommand(client *c, int reverse) {
     robj *key = c->argv[1];
     robj *ele = c->argv[2];
-    robj *zobj;
+    robj_roptr zobj;
     long rank;
 
-    if ((zobj = lookupKeyReadOrReply(c,key,shared.null[c->resp])) == NULL ||
+    if ((zobj = lookupKeyReadOrReply(c,key,shared.null[c->resp])) == nullptr ||
         checkType(c,zobj,OBJ_ZSET)) return;
 
     serverAssertWithInfo(c,ele,sdsEncodedObject(ele));
@@ -3113,11 +3113,11 @@ void zrevrankCommand(client *c) {
 }
 
 void zscanCommand(client *c) {
-    robj *o;
+    robj_roptr o;
     unsigned long cursor;
 
     if (parseScanCursorOrReply(c,c->argv[2],&cursor) == C_ERR) return;
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptyscan)) == NULL ||
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptyscan)) == nullptr ||
         checkType(c,o,OBJ_ZSET)) return;
     scanGenericCommand(c,o,cursor);
 }

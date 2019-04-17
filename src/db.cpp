@@ -52,7 +52,7 @@ void updateLFU(robj *val) {
 /* Low level key lookup API, not actually called directly from commands
  * implementations that should instead rely on lookupKeyRead(),
  * lookupKeyWrite() and lookupKeyReadWithFlags(). */
-robj *lookupKey(redisDb *db, robj *key, int flags) {
+static robj *lookupKey(redisDb *db, robj *key, int flags) {
     dictEntry *de = dictFind(db->pdict,ptrFromObj(key));
     if (de) {
         robj *val = (robj*)dictGetVal(de);
@@ -98,7 +98,7 @@ robj *lookupKey(redisDb *db, robj *key, int flags) {
  * for read operations. Even if the key expiry is master-driven, we can
  * correctly report a key is expired on slaves even if the master is lagging
  * expiring our key via DELs in the replication link. */
-robj *lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
+robj_roptr lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
     robj *val;
     serverAssert(GlobalLocksAcquired());
 
@@ -146,7 +146,7 @@ robj *lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
 
 /* Like lookupKeyReadWithFlags(), but does not use any flag, which is the
  * common case. */
-robj *lookupKeyRead(redisDb *db, robj *key) {
+robj_roptr lookupKeyRead(redisDb *db, robj *key) {
     return lookupKeyReadWithFlags(db,key,LOOKUP_NONE);
 }
 
@@ -160,8 +160,8 @@ robj *lookupKeyWrite(redisDb *db, robj *key) {
     return lookupKey(db,key,LOOKUP_NONE);
 }
 
-robj *lookupKeyReadOrReply(client *c, robj *key, robj *reply) {
-    robj *o = lookupKeyRead(c->db, key);
+robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply) {
+    robj_roptr o = lookupKeyRead(c->db, key);
     if (!o) addReply(c,reply);
     return o;
 }
@@ -175,6 +175,9 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
 int dbAddCore(redisDb *db, robj *key, robj *val) {
     sds copy = sdsdup(szFromObj(key));
     int retval = dictAdd(db->pdict, copy, val);
+#ifdef ENABLE_MVCC
+    val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
+#endif
 
     if (retval == DICT_OK)
     {
@@ -229,6 +232,9 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
     if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         val->lru = old->lru;
     }
+#ifdef ENABLE_MVCC
+    val->mvcc_tstamp = getMvccTstamp();
+#endif
     dictSetVal(db->pdict, de, val);
 
     if (server.lazyfree_lazy_server_del) {
@@ -652,7 +658,7 @@ int parseScanCursorOrReply(client *c, robj *o, unsigned long *cursor) {
  *
  * In the case of a Hash object the function returns both the field and value
  * of every element on the Hash. */
-void scanGenericCommand(client *c, robj *o, unsigned long cursor) {
+void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
     int i, j;
     list *keys = listCreate();
     listNode *node, *nextnode;
@@ -663,11 +669,11 @@ void scanGenericCommand(client *c, robj *o, unsigned long cursor) {
 
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
-    serverAssert(o == NULL || o->type == OBJ_SET || o->type == OBJ_HASH ||
+    serverAssert(o == nullptr || o->type == OBJ_SET || o->type == OBJ_HASH ||
                 o->type == OBJ_ZSET);
 
     /* Set i to the first option argument. The previous one is the cursor. */
-    i = (o == NULL) ? 2 : 3; /* Skip the key argument if needed. */
+    i = (o == nullptr) ? 2 : 3; /* Skip the key argument if needed. */
 
     /* Step 1: Parse options. */
     while (i < c->argc) {
@@ -710,7 +716,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long cursor) {
 
     /* Handle the case of a hash table. */
     ht = NULL;
-    if (o == NULL) {
+    if (o == nullptr) {
         ht = c->db->pdict;
     } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HT) {
         ht = (dict*)ptrFromObj(o);
@@ -735,7 +741,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long cursor) {
          * add new elements, and the object containing the dictionary so that
          * it is possible to fetch more data in a type-dependent way. */
         privdata[0] = keys;
-        privdata[1] = o;
+        privdata[1] = o.unsafe_robjcast();
         do {
             cursor = dictScan(ht, cursor, scanCallback, NULL, privdata);
         } while (cursor &&
@@ -789,7 +795,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long cursor) {
         }
 
         /* Filter element if it is an expired key. */
-        if (!filter && o == NULL && expireIfNeeded(c->db, kobj)) filter = 1;
+        if (!filter && o == nullptr && expireIfNeeded(c->db, kobj)) filter = 1;
 
         /* Remove the element and its associted value if needed. */
         if (filter) {
@@ -833,7 +839,7 @@ cleanup:
 void scanCommand(client *c) {
     unsigned long cursor;
     if (parseScanCursorOrReply(c,c->argv[1],&cursor) == C_ERR) return;
-    scanGenericCommand(c,NULL,cursor);
+    scanGenericCommand(c,nullptr,cursor);
 }
 
 void dbsizeCommand(client *c) {
@@ -845,11 +851,10 @@ void lastsaveCommand(client *c) {
 }
 
 void typeCommand(client *c) {
-    robj *o;
     const char *type;
 
-    o = lookupKeyReadWithFlags(c->db,c->argv[1],LOOKUP_NOTOUCH);
-    if (o == NULL) {
+    robj_roptr o = lookupKeyReadWithFlags(c->db,c->argv[1],LOOKUP_NOTOUCH);
+    if (o == nullptr) {
         type = "none";
     } else {
         switch(o->type) {
@@ -1121,7 +1126,7 @@ void setExpire(client *c, redisDb *db, robj *key, long long when) {
 
 /* Return the expire time of the specified key, or -1 if no expire
  * is associated with this key (i.e. the key is non volatile) */
-long long getExpire(redisDb *db, robj *key) {
+long long getExpire(redisDb *db, robj_roptr key) {
     dictEntry *de;
 
     /* No expire? return ASAP */

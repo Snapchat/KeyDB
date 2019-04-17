@@ -37,7 +37,7 @@
 /* Count number of bits set in the binary array pointed by 's' and long
  * 'count' bytes. The implementation of this function is required to
  * work with a input string length up to 512 MB. */
-size_t redisPopcount(void *s, long count) {
+size_t redisPopcount(const void *s, long count) {
     size_t bits = 0;
     unsigned char *p = (unsigned char*)s;
     uint32_t *p4;
@@ -98,7 +98,7 @@ size_t redisPopcount(void *s, long count) {
  * no zero bit is found, it returns count*8 assuming the string is zero
  * padded on the right. However if 'bit' is 1 it is possible that there is
  * not a single set bit in the bitmap. In this special case -1 is returned. */
-long redisBitpos(void *s, unsigned long count, int bit) {
+long redisBitpos(const void *s, unsigned long count, int bit) {
     unsigned long *l;
     unsigned char *c;
     unsigned long skipval, word = 0, one;
@@ -503,17 +503,17 @@ robj *lookupStringForBitCommand(client *c, size_t maxbit) {
  *
  * If the source object is NULL the function is guaranteed to return NULL
  * and set 'len' to 0. */
-unsigned char *getObjectReadOnlyString(robj *o, long *len, char *llbuf) {
+const unsigned char *getObjectReadOnlyString(robj_roptr o, long *len, char *llbuf) {
     serverAssert(o->type == OBJ_STRING);
-    unsigned char *p = NULL;
+    const unsigned char *p = NULL;
 
     /* Set the 'p' pointer to the string, that can be just a stack allocated
      * array if our string was integer encoded. */
     if (o && o->encoding == OBJ_ENCODING_INT) {
-        p = (unsigned char*) llbuf;
+        p = (const unsigned char*) llbuf;
         if (len) *len = ll2string(llbuf,LONG_STR_SIZE,(long)ptrFromObj(o));
     } else if (o) {
-        p = (unsigned char*) ptrFromObj(o);
+        p = (const unsigned char*) ptrFromObj(o);
         if (len) *len = sdslen(szFromObj(o));
     } else {
         if (len) *len = 0;
@@ -562,7 +562,7 @@ void setbitCommand(client *c) {
 
 /* GETBIT key offset */
 void getbitCommand(client *c) {
-    robj *o;
+    robj_roptr o;
     char llbuf[32];
     size_t bitoffset;
     size_t byte, bit;
@@ -571,7 +571,7 @@ void getbitCommand(client *c) {
     if (getBitOffsetFromArgument(c,c->argv[2],&bitoffset,0,0) != C_OK)
         return;
 
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == nullptr ||
         checkType(c,o,OBJ_STRING)) return;
 
     byte = bitoffset >> 3;
@@ -590,9 +590,10 @@ void getbitCommand(client *c) {
 /* BITOP op_name target_key src_key1 src_key2 src_key3 ... src_keyN */
 void bitopCommand(client *c) {
     char *opname = szFromObj(c->argv[1]);
-    robj *o, *targetkey = c->argv[2];
+    robj *targetkey = c->argv[2];
+    robj_roptr o;
     unsigned long op, j, numkeys;
-    robj **objects;      /* Array of source objects. */
+    robj_roptr *objects;      /* Array of source objects. */
     unsigned char **src; /* Array of source strings pointers. */
     unsigned long *len, maxlen = 0; /* Array of length of src strings,
                                        and max len. */
@@ -623,12 +624,12 @@ void bitopCommand(client *c) {
     numkeys = c->argc - 3;
     src = (unsigned char**)zmalloc(sizeof(unsigned char*) * numkeys, MALLOC_LOCAL);
     len = (unsigned long*)zmalloc(sizeof(long) * numkeys, MALLOC_LOCAL);
-    objects = (robj**)zmalloc(sizeof(robj*) * numkeys, MALLOC_LOCAL);
+    objects = (robj_roptr*)zmalloc(sizeof(robj_roptr) * numkeys, MALLOC_LOCAL);
     for (j = 0; j < numkeys; j++) {
         o = lookupKeyRead(c->db,c->argv[j+3]);
         /* Handle non-existing keys as empty strings. */
-        if (o == NULL) {
-            objects[j] = NULL;
+        if (o == nullptr) {
+            objects[j] = nullptr;
             src[j] = NULL;
             len[j] = 0;
             minlen = 0;
@@ -753,7 +754,7 @@ void bitopCommand(client *c) {
 
     /* Store the computed value into the target key */
     if (maxlen) {
-        o = createObject(OBJ_STRING,res);
+        robj *o = createObject(OBJ_STRING,res);
         setKey(c->db,targetkey,o);
         notifyKeyspaceEvent(NOTIFY_STRING,"set",targetkey,c->db->id);
         decrRefCount(o);
@@ -767,13 +768,13 @@ void bitopCommand(client *c) {
 
 /* BITCOUNT key [start end] */
 void bitcountCommand(client *c) {
-    robj *o;
+    robj_roptr o;
     long start, end, strlen;
-    unsigned char *p;
+    const unsigned char *p;
     char llbuf[LONG_STR_SIZE];
 
     /* Lookup, check for type, and return 0 for non existing keys. */
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == nullptr ||
         checkType(c,o,OBJ_STRING)) return;
     p = getObjectReadOnlyString(o,&strlen,llbuf);
 
@@ -816,9 +817,9 @@ void bitcountCommand(client *c) {
 
 /* BITPOS key bit [start [end]] */
 void bitposCommand(client *c) {
-    robj *o;
+    robj_roptr o;
     long bit, start, end, strlen;
-    unsigned char *p;
+    const unsigned char *p;
     char llbuf[LONG_STR_SIZE];
     int end_given = 0;
 
@@ -834,7 +835,7 @@ void bitposCommand(client *c) {
     /* If the key does not exist, from our point of view it is an infinite
      * array of 0 bits. If the user is looking for the fist clear bit return 0,
      * If the user is looking for the first set bit, return -1. */
-    if ((o = lookupKeyRead(c->db,c->argv[1])) == NULL) {
+    if ((o = lookupKeyRead(c->db,c->argv[1])) == nullptr) {
         addReplyLongLong(c, bit ? -1 : 0);
         return;
     }
@@ -912,7 +913,7 @@ struct bitfieldOp {
 };
 
 void bitfieldCommand(client *c) {
-    robj *o;
+    robj_roptr o;
     size_t bitoffset;
     int j, numops = 0, changes = 0;
     struct bitfieldOp *ops = NULL; /* Array of ops to execute at end. */
@@ -994,12 +995,12 @@ void bitfieldCommand(client *c) {
         /* Lookup for read is ok if key doesn't exit, but errors
          * if it's not a string. */
         o = lookupKeyRead(c->db,c->argv[1]);
-        if (o != NULL && checkType(c,o,OBJ_STRING)) return;
+        if (o != nullptr && checkType(c,o,OBJ_STRING)) return;
     } else {
         /* Lookup by making room up to the farest bit reached by
          * this operation. */
         if ((o = lookupStringForBitCommand(c,
-            highest_write_offset)) == NULL) return;
+            highest_write_offset)) == nullptr) return;
     }
 
     addReplyArrayLen(c,numops);
@@ -1084,10 +1085,10 @@ void bitfieldCommand(client *c) {
             /* GET */
             unsigned char buf[9];
             long strlen = 0;
-            unsigned char *src = NULL;
+            const unsigned char *src = NULL;
             char llbuf[LONG_STR_SIZE];
 
-            if (o != NULL)
+            if (o != nullptr)
                 src = getObjectReadOnlyString(o,&strlen,llbuf);
 
             /* For GET we use a trick: before executing the operation

@@ -61,7 +61,8 @@ redisSortOperation *createSortOperation(int type, robj *pattern) {
 robj *lookupKeyByPattern(redisDb *db, robj *pattern, robj *subst, int writeflag) {
     char *p, *f, *k;
     sds spat, ssub;
-    robj *keyobj, *fieldobj = NULL, *o;
+    robj *keyobj, *fieldobj = NULL;
+    robj_roptr o;
     int prefixlen, sublen, postfixlen, fieldlen;
 
     /* If the pattern is "#" return the substitution object itself in order
@@ -110,7 +111,7 @@ robj *lookupKeyByPattern(redisDb *db, robj *pattern, robj *subst, int writeflag)
         o = lookupKeyRead(db,keyobj);
     else
         o = lookupKeyWrite(db,keyobj);
-    if (o == NULL) goto noobj;
+    if (o == nullptr) goto noobj;
 
     if (fieldobj) {
         if (o->type != OBJ_HASH) goto noobj;
@@ -127,7 +128,7 @@ robj *lookupKeyByPattern(redisDb *db, robj *pattern, robj *subst, int writeflag)
     }
     decrRefCount(keyobj);
     if (fieldobj) decrRefCount(fieldobj);
-    return o;
+    return o.unsafe_robjcast();
 
 noobj:
     decrRefCount(keyobj);
@@ -271,7 +272,7 @@ void sortCommand(client *c) {
 
     /* Lookup the key to sort. It must be of the right types */
     if (storekey)
-        sortval = lookupKeyRead(c->db,c->argv[1]);
+        sortval = lookupKeyRead(c->db,c->argv[1]).unsafe_robjcast();
     else
         sortval = lookupKeyWrite(c->db,c->argv[1]);
     if (sortval && sortval->type != OBJ_SET &&

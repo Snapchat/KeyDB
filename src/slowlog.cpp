@@ -97,7 +97,7 @@ slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long dur
  * function matches the one of the 'free' method of adlist.c.
  *
  * This function will take care to release all the retained object. */
-void slowlogFreeEntry(void *septr) {
+void slowlogFreeEntry(const void *septr) {
     slowlogEntry *se = (slowlogEntry*)septr;
     int j;
 

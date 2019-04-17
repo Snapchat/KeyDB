@@ -45,6 +45,7 @@ typedef ucontext_t sigcontext_t;
 #include <fcntl.h>
 #include "bio.h"
 #include <unistd.h>
+#include <cxxabi.h>
 #endif /* HAVE_BACKTRACE */
 
 #ifdef __CYGWIN__
@@ -61,7 +62,7 @@ typedef ucontext_t sigcontext_t;
  * "add" digests relative to unordered elements.
  *
  * So digest(a,b,c,d) will be the same of digest(b,a,c,d) */
-extern "C" void xorDigest(unsigned char *digest, const void *ptr, size_t len) {
+void xorDigest(unsigned char *digest, const void *ptr, size_t len) {
     SHA1_CTX ctx;
     unsigned char hash[20];
     const unsigned char *s = (const unsigned char*)ptr;
@@ -95,9 +96,9 @@ void xorStringObjectDigest(unsigned char *digest, robj *o) {
  * Also note that mixdigest("foo") followed by mixdigest("bar")
  * will lead to a different digest compared to "fo", "obar".
  */
-void mixDigest(unsigned char *digest, void *ptr, size_t len) {
+void mixDigest(unsigned char *digest, const void *ptr, size_t len) {
     SHA1_CTX ctx;
-    char *s = (char*)ptr;
+    const char *s = (const char*)ptr;
 
     xorDigest(digest,s,len);
     SHA1Init(&ctx);
@@ -105,7 +106,7 @@ void mixDigest(unsigned char *digest, void *ptr, size_t len) {
     SHA1Final(digest,&ctx);
 }
 
-void mixStringObjectDigest(unsigned char *digest, robj *o) {
+void mixStringObjectDigest(unsigned char *digest, robj_roptr o) {
     o = getDecodedObject(o);
     mixDigest(digest,ptrFromObj(o),sdslen(szFromObj(o)));
     decrRefCount(o);
@@ -119,7 +120,7 @@ void mixStringObjectDigest(unsigned char *digest, robj *o) {
  * Note that this function does not reset the initial 'digest' passed, it
  * will continue mixing this object digest to anything that was already
  * present. */
-void xorObjectDigest(redisDb *db, robj *keyobj, unsigned char *digest, robj *o) {
+void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj_roptr o) {
     uint32_t aux = htonl(o->type);
     mixDigest(digest,&aux,sizeof(aux));
     long long expiretime = getExpire(db,keyobj);
@@ -523,7 +524,7 @@ NULL
         for (int j = 2; j < c->argc; j++) {
             unsigned char digest[20];
             memset(digest,0,20); /* Start with a clean result */
-            robj *o = lookupKeyReadWithFlags(c->db,c->argv[j],LOOKUP_NOTOUCH);
+            robj_roptr o = lookupKeyReadWithFlags(c->db,c->argv[j],LOOKUP_NOTOUCH);
             if (o) xorObjectDigest(c->db,c->argv[j],digest,o);
 
             sds d = sdsempty();
@@ -723,7 +724,7 @@ void _serverAssertPrintClientInfo(const client *c) {
     }
 }
 
-void serverLogObjectDebugInfo(const robj *o) {
+void serverLogObjectDebugInfo(robj_roptr o) {
     serverLog(LL_WARNING,"Object type: %d", o->type);
     serverLog(LL_WARNING,"Object encoding: %d", o->encoding);
     serverLog(LL_WARNING,"Object refcount: %d", o->refcount);
@@ -747,13 +748,13 @@ void serverLogObjectDebugInfo(const robj *o) {
     }
 }
 
-void _serverAssertPrintObject(const robj *o) {
+void _serverAssertPrintObject(robj_roptr o) {
     bugReportStart();
     serverLog(LL_WARNING,"=== ASSERTION FAILED OBJECT CONTEXT ===");
     serverLogObjectDebugInfo(o);
 }
 
-void _serverAssertWithInfo(const client *c, const robj *o, const char *estr, const char *file, int line) {
+void _serverAssertWithInfo(const client *c, robj_roptr o, const char *estr, const char *file, int line) {
     if (c) _serverAssertPrintClientInfo(c);
     if (o) _serverAssertPrintObject(o);
     _serverAssert(estr,file,line);
@@ -1138,6 +1139,61 @@ void closeDirectLogFiledes(int fd) {
     if (!log_to_stdout) close(fd);
 }
 
+void safe_write(int fd, const void *pv, ssize_t cb)
+{
+    ssize_t offset = 0;
+    do
+    {
+        ssize_t cbWrite = write(fd, reinterpret_cast<const char*>(pv)+offset, cb-offset);
+        if (cbWrite <= 0)
+            return;
+        offset += cbWrite;
+    } while (offset < cb);
+}
+
+void backtrace_symbols_demangle_fd(void **trace, size_t csym, int fd)
+{
+    char **syms = backtrace_symbols(trace, csym);
+    char symbuf[1024];
+    for (size_t itrace = 0; itrace < csym; ++itrace)
+    {
+        int status = 0;
+
+        // First find the symbol (preceded by a '(')
+        char *pchSymStart = syms[itrace];
+        while (*pchSymStart != '(' && *pchSymStart != '\0')
+            ++pchSymStart;
+        if (*pchSymStart != '\0')
+            ++pchSymStart;  // skip the '('
+        char *pchSymEnd = pchSymStart;
+        while (*pchSymEnd != '+' && *pchSymEnd != '\0')
+            ++pchSymEnd;
+
+        if ((pchSymEnd - pchSymStart) < 1023)
+        {
+            memcpy(symbuf, pchSymStart, pchSymEnd - pchSymStart);
+            symbuf[pchSymEnd - pchSymStart] = '\0';
+            char *sz = abi::__cxa_demangle(symbuf, nullptr, nullptr, &status);
+            if (status == 0)
+            {
+                safe_write(fd, syms[itrace], pchSymStart - syms[itrace]);
+                safe_write(fd, sz, strlen(sz));
+                safe_write(fd, pchSymEnd, (syms[itrace] + strlen(syms[itrace])-pchSymEnd));
+            }
+            else
+            {
+                safe_write(fd, syms[itrace], strlen(syms[itrace]));
+            }
+            free(sz);
+        }
+        else {
+            safe_write(fd, syms[itrace], strlen(syms[itrace]));
+        }
+        safe_write(fd, "\n", 1);   
+    }
+    free(syms);
+}
+
 /* Logs the stack trace using the backtrace() call. This function is designed
  * to be called from signal handlers safely. */
 void logStackTrace(ucontext_t *uc) {
@@ -1154,12 +1210,12 @@ void logStackTrace(ucontext_t *uc) {
         const char *msg2 = "\nBacktrace:\n";
         if (write(fd,msg1,strlen(msg1)) == -1) {/* Avoid warning. */};
         trace[0] = getMcontextEip(uc);
-        backtrace_symbols_fd(trace, 1, fd);
+        backtrace_symbols_demangle_fd(trace, 1, fd);
         if (write(fd,msg2,strlen(msg2)) == -1) {/* Avoid warning. */};
     }
 
     /* Write symbols to log file */
-    backtrace_symbols_fd(trace+1, trace_size, fd);
+    backtrace_symbols_demangle_fd(trace+1, trace_size, fd);
 
     /* Cleanup */
     closeDirectLogFiledes(fd);

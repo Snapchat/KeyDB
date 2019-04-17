@@ -54,8 +54,8 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
 
 /* Get the value from a ziplist encoded hash, identified by field.
  * Returns -1 when the field cannot be found. */
-int hashTypeGetFromZiplist(robj *o, sds field,
-                           unsigned char **vstr,
+int hashTypeGetFromZiplist(robj_roptr o, const char *field,
+                           const unsigned char **vstr,
                            unsigned int *vlen,
                            long long *vll)
 {
@@ -64,7 +64,7 @@ int hashTypeGetFromZiplist(robj *o, sds field,
 
     serverAssert(o->encoding == OBJ_ENCODING_ZIPLIST);
 
-    zl = (unsigned char*)ptrFromObj(o);
+    zl = (unsigned char*)(ptrFromObj(o));
     fptr = ziplistIndex(zl, ZIPLIST_HEAD);
     if (fptr != NULL) {
         fptr = ziplistFind(fptr, (unsigned char*)field, sdslen(field), 1);
@@ -76,7 +76,7 @@ int hashTypeGetFromZiplist(robj *o, sds field,
     }
 
     if (vptr != NULL) {
-        ret = ziplistGet(vptr, vstr, vlen, vll);
+        ret = ziplistGet(vptr, (unsigned char**)vstr, vlen, vll);
         serverAssert(ret);
         return 0;
     }
@@ -87,7 +87,7 @@ int hashTypeGetFromZiplist(robj *o, sds field,
 /* Get the value from a hash table encoded hash, identified by field.
  * Returns NULL when the field cannot be found, otherwise the SDS value
  * is returned. */
-sds hashTypeGetFromHashTable(robj *o, sds field) {
+const char *hashTypeGetFromHashTable(robj_roptr o, const char *field) {
     dictEntry *de;
 
     serverAssert(o->encoding == OBJ_ENCODING_HT);
@@ -106,15 +106,15 @@ sds hashTypeGetFromHashTable(robj *o, sds field) {
  * If *vll is populated *vstr is set to NULL, so the caller
  * can always check the function return by checking the return value
  * for C_OK and checking if vll (or vstr) is NULL. */
-int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll) {
+int hashTypeGetValue(robj_roptr o, sds field, const unsigned char **vstr, unsigned int *vlen, long long *vll) {
     if (o->encoding == OBJ_ENCODING_ZIPLIST) {
         *vstr = NULL;
         if (hashTypeGetFromZiplist(o, field, vstr, vlen, vll) == 0)
             return C_OK;
     } else if (o->encoding == OBJ_ENCODING_HT) {
-        sds value;
+        const char *value;
         if ((value = hashTypeGetFromHashTable(o, field)) != NULL) {
-            *vstr = (unsigned char*) value;
+            *vstr = (const unsigned char*) value;
             *vlen = sdslen(value);
             return C_OK;
         }
@@ -128,8 +128,8 @@ int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vle
  * interaction with the hash type outside t_hash.c.
  * The function returns NULL if the field is not found in the hash. Otherwise
  * a newly allocated string object with the value is returned. */
-robj *hashTypeGetValueObject(robj *o, sds field) {
-    unsigned char *vstr;
+robj *hashTypeGetValueObject(robj_roptr o, sds field) {
+    const unsigned char *vstr;
     unsigned int vlen;
     long long vll;
 
@@ -141,17 +141,17 @@ robj *hashTypeGetValueObject(robj *o, sds field) {
 /* Higher level function using hashTypeGet*() to return the length of the
  * object associated with the requested field, or 0 if the field does not
  * exist. */
-size_t hashTypeGetValueLength(robj *o, sds field) {
+size_t hashTypeGetValueLength(robj_roptr o, const char *field) {
     size_t len = 0;
     if (o->encoding == OBJ_ENCODING_ZIPLIST) {
-        unsigned char *vstr = NULL;
+        const unsigned char *vstr = NULL;
         unsigned int vlen = UINT_MAX;
         long long vll = LLONG_MAX;
 
         if (hashTypeGetFromZiplist(o, field, &vstr, &vlen, &vll) == 0)
             len = vstr ? vlen : sdigits10(vll);
     } else if (o->encoding == OBJ_ENCODING_HT) {
-        sds aux;
+        const char *aux;
 
         if ((aux = hashTypeGetFromHashTable(o, field)) != NULL)
             len = sdslen(aux);
@@ -163,9 +163,9 @@ size_t hashTypeGetValueLength(robj *o, sds field) {
 
 /* Test if the specified field exists in the given hash. Returns 1 if the field
  * exists, and 0 when it doesn't. */
-int hashTypeExists(robj *o, sds field) {
+int hashTypeExists(robj_roptr o, const char *field) {
     if (o->encoding == OBJ_ENCODING_ZIPLIST) {
-        unsigned char *vstr = NULL;
+        const unsigned char *vstr = NULL;
         unsigned int vlen = UINT_MAX;
         long long vll = LLONG_MAX;
 
@@ -308,7 +308,7 @@ int hashTypeDelete(robj *o, sds field) {
 }
 
 /* Return the number of elements in a hash. */
-unsigned long hashTypeLength(const robj *o) {
+unsigned long hashTypeLength(robj_roptr o) {
     unsigned long length = ULONG_MAX;
 
     if (o->encoding == OBJ_ENCODING_ZIPLIST) {
@@ -321,7 +321,7 @@ unsigned long hashTypeLength(const robj *o) {
     return length;
 }
 
-hashTypeIterator *hashTypeInitIterator(robj *subject) {
+hashTypeIterator *hashTypeInitIterator(robj_roptr subject) {
     hashTypeIterator *hi = (hashTypeIterator*)zmalloc(sizeof(hashTypeIterator), MALLOC_LOCAL);
     hi->subject = subject;
     hi->encoding = subject->encoding;
@@ -560,7 +560,7 @@ void hincrbyCommand(client *c) {
     long long value, incr, oldvalue;
     robj *o;
     sds newstr;
-    unsigned char *vstr;
+    const unsigned char *vstr;
     unsigned int vlen;
 
     if (getLongLongFromObjectOrReply(c,c->argv[3],&incr,NULL) != C_OK) return;
@@ -596,7 +596,7 @@ void hincrbyfloatCommand(client *c) {
     long long ll;
     robj *o;
     sds newstr;
-    unsigned char *vstr;
+    const unsigned char *vstr;
     unsigned int vlen;
 
     if (getLongDoubleFromObjectOrReply(c,c->argv[3],&incr,NULL) != C_OK) return;
@@ -641,16 +641,16 @@ void hincrbyfloatCommand(client *c) {
     decrRefCount(newobj);
 }
 
-static void addHashFieldToReply(client *c, robj *o, sds field) {
+static void addHashFieldToReply(client *c, robj_roptr o, sds field) {
     int ret;
 
-    if (o == NULL) {
+    if (o == nullptr) {
         addReplyNull(c);
         return;
     }
 
     if (o->encoding == OBJ_ENCODING_ZIPLIST) {
-        unsigned char *vstr = NULL;
+        const unsigned char *vstr = NULL;
         unsigned int vlen = UINT_MAX;
         long long vll = LLONG_MAX;
 
@@ -666,7 +666,7 @@ static void addHashFieldToReply(client *c, robj *o, sds field) {
         }
 
     } else if (o->encoding == OBJ_ENCODING_HT) {
-        sds value = hashTypeGetFromHashTable(o, field);
+        const char* value = hashTypeGetFromHashTable(o, field);
         if (value == NULL)
             addReplyNull(c);
         else
@@ -677,22 +677,22 @@ static void addHashFieldToReply(client *c, robj *o, sds field) {
 }
 
 void hgetCommand(client *c) {
-    robj *o;
+    robj_roptr o;
 
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == NULL ||
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == nullptr ||
         checkType(c,o,OBJ_HASH)) return;
 
     addHashFieldToReply(c, o, szFromObj(c->argv[2]));
 }
 
 void hmgetCommand(client *c) {
-    robj *o;
+    robj_roptr o;
     int i;
 
     /* Don't abort when the key cannot be found. Non-existing keys are empty
      * hashes, where HMGET should respond with a series of null bulks. */
     o = lookupKeyRead(c->db, c->argv[1]);
-    if (o != NULL && o->type != OBJ_HASH) {
+    if (o != nullptr && o->type != OBJ_HASH) {
         addReply(c, shared.wrongtypeerr);
         return;
     }
@@ -732,18 +732,18 @@ void hdelCommand(client *c) {
 }
 
 void hlenCommand(client *c) {
-    robj *o;
+    robj_roptr o;
 
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == nullptr ||
         checkType(c,o,OBJ_HASH)) return;
 
     addReplyLongLong(c,hashTypeLength(o));
 }
 
 void hstrlenCommand(client *c) {
-    robj *o;
+    robj_roptr o;
 
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == nullptr ||
         checkType(c,o,OBJ_HASH)) return;
     addReplyLongLong(c,hashTypeGetValueLength(o,szFromObj(c->argv[2])));
 }
@@ -768,11 +768,11 @@ static void addHashIteratorCursorToReply(client *c, hashTypeIterator *hi, int wh
 }
 
 void genericHgetallCommand(client *c, int flags) {
-    robj *o;
+    robj_roptr o;
     hashTypeIterator *hi;
     int length, count = 0;
 
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],(c->resp < 3) ? shared.emptyarray : shared.null[c->resp])) == NULL
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],(c->resp < 3) ? shared.emptyarray : shared.null[c->resp])) == nullptr
         || checkType(c,o,OBJ_HASH)) return;
 
     /* We return a map if the user requested keys and values, like in the
@@ -816,19 +816,19 @@ void hgetallCommand(client *c) {
 }
 
 void hexistsCommand(client *c) {
-    robj *o;
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+    robj_roptr o;
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == nullptr ||
         checkType(c,o,OBJ_HASH)) return;
 
     addReply(c, hashTypeExists(o,szFromObj(c->argv[2])) ? shared.cone : shared.czero);
 }
 
 void hscanCommand(client *c) {
-    robj *o;
+    robj_roptr o;
     unsigned long cursor;
 
     if (parseScanCursorOrReply(c,c->argv[2],&cursor) == C_ERR) return;
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptyscan)) == NULL ||
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptyscan)) == nullptr ||
         checkType(c,o,OBJ_HASH)) return;
     scanGenericCommand(c,o,cursor);
 }

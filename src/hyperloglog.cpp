@@ -1073,7 +1073,7 @@ int hllAdd(robj *o, unsigned char *ele, size_t elesize) {
  *
  * If the HyperLogLog is sparse and is found to be invalid, C_ERR
  * is returned, otherwise the function always succeeds. */
-int hllMerge(uint8_t *max, size_t cmax, robj *hll) {
+int hllMerge(uint8_t *max, size_t cmax, robj_roptr hll) {
     struct hllhdr *hdr = (hllhdr*)ptrFromObj(hll);
     int i;
 
@@ -1085,7 +1085,7 @@ int hllMerge(uint8_t *max, size_t cmax, robj *hll) {
             if (val > max[i]) max[i] = val;
         }
     } else {
-        uint8_t *p = (uint8_t*)ptrFromObj(hll), *end = p + sdslen(szFromObj(hll));
+        const uint8_t *p = (const uint8_t*)ptrFromObj(hll), *end = p + sdslen(szFromObj(hll));
         long runlen, regval;
 
         p += HLL_HDR_SIZE;
@@ -1156,7 +1156,7 @@ robj *createHLLObject(void) {
 /* Check if the object is a String with a valid HLL representation.
  * Return C_OK if this is true, otherwise reply to the client
  * with an error and return C_ERR. */
-int isHLLObjectOrReply(client *c, robj *o) {
+int isHLLObjectOrReply(client *c, robj_roptr o) {
     struct hllhdr *hdr;
 
     /* Key exists, check type */
@@ -1248,8 +1248,8 @@ void pfcountCommand(client *c) {
         registers = max + HLL_HDR_SIZE;
         for (j = 1; j < c->argc; j++) {
             /* Check type and size. */
-            robj *o = lookupKeyRead(c->db,c->argv[j]);
-            if (o == NULL) continue; /* Assume empty HLL for non existing var.*/
+            robj_roptr o = lookupKeyRead(c->db,c->argv[j]);
+            if (o == nullptr) continue; /* Assume empty HLL for non existing var.*/
             if (isHLLObjectOrReply(c,o) != C_OK) return;
 
             /* Merge with this HLL with our 'max' HHL by setting max[i]
@@ -1330,8 +1330,8 @@ void pfmergeCommand(client *c) {
     memset(max,0,sizeof(max));
     for (j = 1; j < c->argc; j++) {
         /* Check type and size. */
-        robj *o = lookupKeyRead(c->db,c->argv[j]);
-        if (o == NULL) continue; /* Assume empty HLL for non existing var. */
+        robj_roptr o = lookupKeyRead(c->db,c->argv[j]);
+        if (o == nullptr) continue; /* Assume empty HLL for non existing var. */
         if (isHLLObjectOrReply(c,o) != C_OK) return;
 
         /* If at least one involved HLL is dense, use the dense representation

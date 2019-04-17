@@ -122,7 +122,7 @@ void *dupClientReplyValue(void *o) {
     return buf;
 }
 
-void freeClientReplyValue(void *o) {
+void freeClientReplyValue(const void *o) {
     zfree(o);
 }
 
@@ -405,7 +405,7 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
  * Higher level functions to queue data on the client output buffer.
  * The following functions are the ones that commands implementations will call.
  * -------------------------------------------------------------------------- */
-void addReplyCore(client *c, robj *obj, bool fAsync) {
+void addReplyCore(client *c, robj_roptr obj, bool fAsync) {
     if (prepareClientToWrite(c, fAsync) != C_OK) return;
 
     if (sdsEncodedObject(obj)) {
@@ -425,11 +425,11 @@ void addReplyCore(client *c, robj *obj, bool fAsync) {
 }
 
 /* Add the object 'obj' string representation to the client output buffer. */
-void addReply(client *c, robj *obj)
+void addReply(client *c, robj_roptr obj)
 {
     addReplyCore(c, obj, false);
 }
-void addReplyAsync(client *c, robj *obj)
+void addReplyAsync(client *c, robj_roptr obj)
 {
     addReplyCore(c, obj, true);
 }
@@ -867,7 +867,7 @@ void addReplyNullArray(client *c) {
 }
 
 /* Create the length prefix of a bulk reply, example: $2234 */
-void addReplyBulkLenCore(client *c, robj *obj, bool fAsync) {
+void addReplyBulkLenCore(client *c, robj_roptr obj, bool fAsync) {
     size_t len = stringObjectLen(obj);
 
     if (len < OBJ_SHARED_BULKHDR_LEN)
@@ -882,18 +882,18 @@ void addReplyBulkLen(client *c, robj *obj)
 }
 
 /* Add a Redis Object as a bulk reply */
-void addReplyBulkCore(client *c, robj *obj, bool fAsync) {
+void addReplyBulkCore(client *c, robj_roptr obj, bool fAsync) {
     addReplyBulkLenCore(c,obj,fAsync);
     addReplyCore(c,obj,fAsync);
     addReplyCore(c,shared.crlf,fAsync);
 }
 
-void addReplyBulk(client *c, robj *obj)
+void addReplyBulk(client *c, robj_roptr obj)
 {
     addReplyBulkCore(c, obj, false);
 }
 
-void addReplyBulkAsync(client *c, robj *obj)
+void addReplyBulkAsync(client *c, robj_roptr obj)
 {
     addReplyBulkCore(c, obj, true);
 }

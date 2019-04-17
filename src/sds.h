@@ -102,7 +102,7 @@ struct __attribute__ ((__packed__)) sdshdr64 {
 #define SDS_HDR(T,s) ((struct sdshdr##T *)((s)-(sizeof(struct sdshdr##T))))
 #define SDS_TYPE_5_LEN(f) ((f)>>SDS_TYPE_BITS)
 
-static inline size_t sdslen(const sds s) {
+static inline size_t sdslen(const char *s) {
     unsigned char flags = s[-1];
     int type = flags & SDS_TYPE_MASK;
 
@@ -126,7 +126,7 @@ static inline size_t sdslen(const sds s) {
     return 0;
 }
 
-static inline size_t sdsavail(const sds s) {
+static inline size_t sdsavail(const char * s) {
     unsigned char flags = s[-1];
     switch(flags&SDS_TYPE_MASK) {
         case SDS_TYPE_5: {
@@ -243,8 +243,8 @@ static inline void sdssetalloc(sds s, size_t newlen) {
 sds sdsnewlen(const void *init, size_t initlen);
 sds sdsnew(const char *init);
 sds sdsempty(void);
-sds sdsdup(const sds s);
-void sdsfree(sds s);
+sds sdsdup(const char *s);
+void sdsfree(const char *s);
 sds sdsgrowzero(sds s, size_t len);
 sds sdscatlen(sds s, const void *t, size_t len);
 sds sdscat(sds s, const char *t);

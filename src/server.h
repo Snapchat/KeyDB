@@ -84,9 +84,57 @@ typedef long long mstime_t; /* millisecond time type. */
 #include "endianconv.h"
 #include "crc64.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+struct redisObject;
+class robj_roptr
+{
+    const redisObject *m_ptr;
+
+public:
+    robj_roptr()
+        : m_ptr(nullptr)
+        {}
+    robj_roptr(const redisObject *ptr)
+        : m_ptr(ptr)
+        {}
+    robj_roptr(const robj_roptr&) = default;
+    robj_roptr(robj_roptr&&) = default;
+
+    robj_roptr &operator=(const robj_roptr&) = default;
+    robj_roptr &operator=(const redisObject *ptr)
+    {
+        m_ptr = ptr;
+        return *this;
+    }
+
+    bool operator==(const robj_roptr &other) const
+    {
+        return m_ptr == other.m_ptr;
+    }
+
+    bool operator!=(const robj_roptr &other) const
+    {
+        return m_ptr != other.m_ptr;
+    }
+
+    const redisObject* operator->() const
+    {
+        return m_ptr;
+    }
+
+    bool operator!() const
+    {
+        return !m_ptr;
+    }
+
+    operator bool() const{
+        return !!m_ptr;
+    }
+
+    redisObject *unsafe_robjcast()
+    {
+        return (redisObject*)m_ptr;
+    }
+};
 
 /* Error codes */
 #define C_OK                    0
@@ -654,21 +702,38 @@ typedef struct RedisModuleDigest {
 #define LRU_CLOCK_RESOLUTION 1000 /* LRU clock resolution in ms */
 
 #define OBJ_SHARED_REFCOUNT INT_MAX
+#define OBJ_MVCC_INVALID (0xFFFFFFFFFFFFFFFFULL)
 typedef struct redisObject {
     unsigned type:4;
     unsigned encoding:4;
     unsigned lru:LRU_BITS; /* LRU time (relative to global lru_clock) or
                             * LFU data (least significant 8 bits frequency
                             * and most significant 16 bits access time). */
-    int refcount;
+#ifdef ENABLE_MVCC
+    uint64_t mvcc_tstamp;
+#endif
+    mutable int refcount;
     void *m_ptr;
 } robj;
+
+
+__attribute__((always_inline)) inline const void *ptrFromObj(robj_roptr &o)
+{
+    if (o->encoding == OBJ_ENCODING_EMBSTR)
+        return ((char*)&(o)->m_ptr) + sizeof(struct sdshdr8);
+    return o->m_ptr;
+}
 
 __attribute__((always_inline)) inline void *ptrFromObj(const robj *o)
 {
     if (o->encoding == OBJ_ENCODING_EMBSTR)
         return ((char*)&((robj*)o)->m_ptr) + sizeof(struct sdshdr8);
     return o->m_ptr;
+}
+
+__attribute__((always_inline)) inline const char *szFromObj(robj_roptr o)
+{
+    return (const char*)ptrFromObj(o);
 }
 
 __attribute__((always_inline)) inline char *szFromObj(const robj *o)
@@ -1511,7 +1576,7 @@ typedef struct _redisSortOperation {
 
 /* Structure to hold list iteration abstraction. */
 typedef struct {
-    robj *subject;
+    robj_roptr subject;
     unsigned char encoding;
     unsigned char direction; /* Iteration direction */
     quicklistIter *iter;
@@ -1525,7 +1590,7 @@ typedef struct {
 
 /* Structure to hold set iteration abstraction. */
 typedef struct {
-    robj *subject;
+    robj_roptr subject;
     int encoding;
     int ii; /* intset iterator */
     dictIterator *di;
@@ -1536,7 +1601,7 @@ typedef struct {
  * not both are required, store pointers in the iterator to avoid
  * unnecessary memory allocation for fields/values. */
 typedef struct {
-    robj *subject;
+    robj_roptr subject;
     int encoding;
 
     unsigned char *fptr, *vptr;
@@ -1596,11 +1661,11 @@ void moduleCallCommandFilters(client *c);
 /* Utils */
 long long ustime(void);
 long long mstime(void);
-void getRandomHexChars(char *p, size_t len);
-void getRandomBytes(unsigned char *p, size_t len);
+extern "C" void getRandomHexChars(char *p, size_t len);
+extern "C" void getRandomBytes(unsigned char *p, size_t len);
 uint64_t crc64(uint64_t crc, const unsigned char *s, uint64_t l);
 void exitFromChild(int retcode);
-size_t redisPopcount(void *s, long count);
+size_t redisPopcount(const void *s, long count);
 void redisSetProcTitle(const char *title);
 
 /* networking.c -- Networking and Client related operations */
@@ -1627,11 +1692,11 @@ void addReplyNullArray(client *c);
 void addReplyBool(client *c, int b);
 void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext);
 void addReplyProto(client *c, const char *s, size_t len);
-void addReplyBulk(client *c, robj *obj);
+void addReplyBulk(client *c, robj_roptr obj);
 void addReplyBulkCString(client *c, const char *s);
 void addReplyBulkCBuffer(client *c, const void *p, size_t len);
 void addReplyBulkLongLong(client *c, long long ll);
-void addReply(client *c, robj *obj);
+void addReply(client *c, robj_roptr obj);
 void addReplySds(client *c, sds s);
 void addReplyBulkSds(client *c, sds s);
 void addReplyError(client *c, const char *err);
@@ -1653,7 +1718,7 @@ void addReplyLoadedModules(client *c);
 void copyClientOutputBuffer(client *dst, client *src);
 size_t sdsZmallocSize(sds s);
 size_t getStringObjectSdsUsedMemory(robj *o);
-void freeClientReplyValue(void *o);
+void freeClientReplyValue(const void *o);
 void *dupClientReplyValue(void *o);
 void getClientsMaxBuffers(unsigned long *longest_output_list,
                           unsigned long *biggest_input_buffer);
@@ -1685,10 +1750,10 @@ void protectClient(client *c);
 void unprotectClient(client *c);
 
 // Special Thread-safe addReply() commands for posting messages to clients from a different thread
-void addReplyAsync(client *c, robj *obj);
+void addReplyAsync(client *c, robj_roptr obj);
 void addReplyArrayLenAsync(client *c, long length);
 void addReplyProtoAsync(client *c, const char *s, size_t len);
-void addReplyBulkAsync(client *c, robj *obj);
+void addReplyBulkAsync(client *c, robj_roptr obj);
 void addReplyBulkCBufferAsync(client *c, const void *p, size_t len);
 void addReplyErrorAsync(client *c, const char *err);
 void addReplyMapLenAsync(client *c, long length);
@@ -1717,8 +1782,8 @@ void addReplyStatusFormat(client *c, const char *fmt, ...);
 void listTypeTryConversion(robj *subject, robj *value);
 void listTypePush(robj *subject, robj *value, int where);
 robj *listTypePop(robj *subject, int where);
-unsigned long listTypeLength(const robj *subject);
-listTypeIterator *listTypeInitIterator(robj *subject, long index, unsigned char direction);
+unsigned long listTypeLength(robj_roptr subject);
+listTypeIterator *listTypeInitIterator(robj_roptr subject, long index, unsigned char direction);
 void listTypeReleaseIterator(listTypeIterator *li);
 int listTypeNext(listTypeIterator *li, listTypeEntry *entry);
 robj *listTypeGet(listTypeEntry *entry);
@@ -1741,9 +1806,9 @@ void flagTransaction(client *c);
 void execCommandPropagateMulti(client *c);
 
 /* Redis object implementation */
-void decrRefCount(robj *o);
-void decrRefCountVoid(void *o);
-void incrRefCount(robj *o);
+void decrRefCount(robj_roptr o);
+void decrRefCountVoid(const void *o);
+void incrRefCount(robj_roptr o);
 robj *makeObjectShared(robj *o);
 robj *resetRefCount(robj *obj);
 void freeStringObject(robj *o);
@@ -1756,11 +1821,12 @@ robj *createStringObject(const char *ptr, size_t len);
 robj *createRawStringObject(const char *ptr, size_t len);
 robj *createEmbeddedStringObject(const char *ptr, size_t len);
 robj *dupStringObject(const robj *o);
-int isSdsRepresentableAsLongLong(sds s, long long *llval);
+int isSdsRepresentableAsLongLong(const char *s, long long *llval);
 int isObjectRepresentableAsLongLong(robj *o, long long *llongval);
 robj *tryObjectEncoding(robj *o);
 robj *getDecodedObject(robj *o);
-size_t stringObjectLen(robj *o);
+robj_roptr getDecodedObject(robj_roptr o);
+size_t stringObjectLen(robj_roptr o);
 robj *createStringObjectFromLongLong(long long value);
 robj *createStringObjectFromLongLongForValue(long long value);
 robj *createStringObjectFromLongDouble(long double value, int humanfriendly);
@@ -1774,7 +1840,7 @@ robj *createZsetZiplistObject(void);
 robj *createStreamObject(void);
 robj *createModuleObject(moduleType *mt, void *value);
 int getLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg);
-int checkType(client *c, robj *o, int type);
+int checkType(client *c, robj_roptr o, int type);
 int getLongLongFromObjectOrReply(client *c, robj *o, long long *target, const char *msg);
 int getDoubleFromObjectOrReply(client *c, robj *o, double *target, const char *msg);
 int getDoubleFromObject(const robj *o, double *target);
@@ -1925,13 +1991,13 @@ void zzlNext(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range);
 unsigned char *zzlLastInRange(unsigned char *zl, zrangespec *range);
-unsigned long zsetLength(const robj *zobj);
+unsigned long zsetLength(robj_roptr zobj);
 void zsetConvert(robj *zobj, int encoding);
 void zsetConvertToZiplistIfNeeded(robj *zobj, size_t maxelelen);
-int zsetScore(robj *zobj, sds member, double *score);
+int zsetScore(robj_roptr zobj, sds member, double *score);
 unsigned long zslGetRank(zskiplist *zsl, double score, sds o);
 int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore);
-long zsetRank(robj *zobj, sds ele, int reverse);
+long zsetRank(robj_roptr zobj, sds ele, int reverse);
 int zsetDel(robj *zobj, sds ele);
 void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey, robj *countarg);
 sds ziplistGetObject(unsigned char *sptr);
@@ -1996,17 +2062,17 @@ void freeMemoryOverheadData(struct redisMemOverhead *mh);
 int restartServer(int flags, mstime_t delay);
 
 /* Set data type */
-robj *setTypeCreate(sds value);
-int setTypeAdd(robj *subject, sds value);
-int setTypeRemove(robj *subject, sds value);
-int setTypeIsMember(robj *subject, sds value);
-setTypeIterator *setTypeInitIterator(robj *subject);
+robj *setTypeCreate(const char *value);
+int setTypeAdd(robj *subject, const char *value);
+int setTypeRemove(robj *subject, const char *value);
+int setTypeIsMember(robj_roptr subject, const char *value);
+setTypeIterator *setTypeInitIterator(robj_roptr subject);
 void setTypeReleaseIterator(setTypeIterator *si);
-int setTypeNext(setTypeIterator *si, sds *sdsele, int64_t *llele);
+int setTypeNext(setTypeIterator *si, const char **sdsele, int64_t *llele);
 sds setTypeNextObject(setTypeIterator *si);
 int setTypeRandomElement(robj *setobj, sds *sdsele, int64_t *llele);
 unsigned long setTypeRandomElements(robj *set, unsigned long count, robj *aux_set);
-unsigned long setTypeSize(const robj *subject);
+unsigned long setTypeSize(robj_roptr subject);
 void setTypeConvert(robj *subject, int enc);
 
 /* Hash data type */
@@ -2016,10 +2082,10 @@ void setTypeConvert(robj *subject, int enc);
 
 void hashTypeConvert(robj *o, int enc);
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);
-int hashTypeExists(robj *o, sds key);
+int hashTypeExists(robj_roptr o, const char *key);
 int hashTypeDelete(robj *o, sds key);
-unsigned long hashTypeLength(const robj *o);
-hashTypeIterator *hashTypeInitIterator(robj *subject);
+unsigned long hashTypeLength(robj_roptr o);
+hashTypeIterator *hashTypeInitIterator(robj_roptr subject);
 void hashTypeReleaseIterator(hashTypeIterator *hi);
 int hashTypeNext(hashTypeIterator *hi);
 void hashTypeCurrentFromZiplist(hashTypeIterator *hi, int what,
@@ -2030,13 +2096,13 @@ sds hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what);
 void hashTypeCurrentObject(hashTypeIterator *hi, int what, unsigned char **vstr, unsigned int *vlen, long long *vll);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
-robj *hashTypeGetValueObject(robj *o, sds field);
+robj *hashTypeGetValueObject(robj_roptr o, sds field);
 int hashTypeSet(robj *o, sds field, sds value, int flags);
 
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(client *c, int notify);
 int pubsubUnsubscribeAllPatterns(client *c, int notify);
-void freePubsubPattern(void *p);
+void freePubsubPattern(const void *p);
 int listMatchPubsubPattern(void *a, void *b);
 int pubsubPublishMessage(robj *channel, robj *message);
 
@@ -2057,14 +2123,13 @@ int rewriteConfig(char *path);
 int removeExpire(redisDb *db, robj *key);
 void propagateExpire(redisDb *db, robj *key, int lazy);
 int expireIfNeeded(redisDb *db, robj *key);
-long long getExpire(redisDb *db, robj *key);
+long long getExpire(redisDb *db, robj_roptr key);
 void setExpire(client *c, redisDb *db, robj *key, long long when);
-robj *lookupKey(redisDb *db, robj *key, int flags);
-robj *lookupKeyRead(redisDb *db, robj *key);
+robj_roptr lookupKeyRead(redisDb *db, robj *key);
 robj *lookupKeyWrite(redisDb *db, robj *key);
-robj *lookupKeyReadOrReply(client *c, robj *key, robj *reply);
+robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply);
 robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply);
-robj *lookupKeyReadWithFlags(redisDb *db, robj *key, int flags);
+robj_roptr lookupKeyReadWithFlags(redisDb *db, robj *key, int flags);
 robj *objectCommandLookup(client *c, robj *key);
 robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply);
 void objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
@@ -2092,7 +2157,7 @@ unsigned int getKeysInSlot(unsigned int hashslot, robj **keys, unsigned int coun
 unsigned int countKeysInSlot(unsigned int hashslot);
 unsigned int delKeysInSlot(unsigned int hashslot);
 int verifyClusterConfigWithData(void);
-void scanGenericCommand(client *c, robj *o, unsigned long cursor);
+void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor);
 int parseScanCursorOrReply(client *c, robj *o, unsigned long *cursor);
 void slotToKeyAdd(robj *key);
 void slotToKeyDel(robj *key);
@@ -2115,7 +2180,7 @@ int *xreadGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys)
 
 /* Cluster */
 void clusterInit(void);
-unsigned short crc16(const char *buf, int len);
+extern "C" unsigned short crc16(const char *buf, int len);
 unsigned int keyHashSlot(char *key, int keylen);
 void clusterCron(void);
 void clusterPropagatePublish(robj *channel, robj *message);
@@ -2174,9 +2239,9 @@ int dictSdsKeyCompare(void *privdata, const void *key1, const void *key2);
 void dictSdsDestructor(void *privdata, void *val);
 
 /* Git SHA1 */
-char *redisGitSHA1(void);
-char *redisGitDirty(void);
-uint64_t redisBuildId(void);
+extern "C" char *redisGitSHA1(void);
+extern "C" char *redisGitDirty(void);
+extern "C" uint64_t redisBuildId(void);
 
 /* Commands prototypes */
 void authCommand(client *c);
@@ -2380,6 +2445,9 @@ int FBrokenLinkToMaster();
 int FActiveMaster(client *c);
 struct redisMaster *MasterInfoFromClient(client *c);
 
+/* MVCC */
+uint64_t getMvccTstamp();
+
 #if defined(__GNUC__)
 #ifndef __cplusplus
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));
@@ -2390,19 +2458,19 @@ void *realloc(void *ptr, size_t size) __attribute__ ((deprecated));
 #endif
 
 /* Debugging stuff */
-void _serverAssertWithInfo(const client *c, const robj *o, const char *estr, const char *file, int line);
-void _serverAssert(const char *estr, const char *file, int line);
-void _serverPanic(const char *file, int line, const char *msg, ...);
+void _serverAssertWithInfo(const client *c, robj_roptr o, const char *estr, const char *file, int line);
+extern "C" void _serverAssert(const char *estr, const char *file, int line);
+extern "C" void _serverPanic(const char *file, int line, const char *msg, ...);
 void bugReportStart(void);
-void serverLogObjectDebugInfo(const robj *o);
+void serverLogObjectDebugInfo(robj_roptr o);
 void sigsegvHandler(int sig, siginfo_t *info, void *secret);
 sds genRedisInfoString(const char *section);
 void enableWatchdog(int period);
 void disableWatchdog(void);
 void watchdogScheduleSignal(int period);
 void serverLogHexDump(int level, const char *descr, void *value, size_t len);
-int memtest_preserving_test(unsigned long *m, size_t bytes, int passes);
-void mixDigest(unsigned char *digest, void *ptr, size_t len);
+extern "C" int memtest_preserving_test(unsigned long *m, size_t bytes, int passes);
+void mixDigest(unsigned char *digest, const void *ptr, size_t len);
 void xorDigest(unsigned char *digest, const void *ptr, size_t len);
 int populateCommandTableParseFlags(struct redisCommand *c, const char *strflags);
 
@@ -2436,9 +2504,5 @@ inline int FCorrectThread(client *c)
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define redisDebugMark() \
     printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

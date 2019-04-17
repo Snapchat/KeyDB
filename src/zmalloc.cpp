@@ -205,7 +205,7 @@ size_t zmalloc_usable(void *ptr) {
 }
 #endif
 
-void zfree(void *ptr) {
+void zfree(const void *ptr) {
 #ifndef HAVE_MALLOC_SIZE
     void *realptr;
     size_t oldsize;
@@ -213,8 +213,8 @@ void zfree(void *ptr) {
 
     if (ptr == NULL) return;
 #ifdef HAVE_MALLOC_SIZE
-    update_zmalloc_stat_free(zmalloc_size(ptr));
-    free(ptr);
+    update_zmalloc_stat_free(zmalloc_size((void*)ptr));
+    free((void*)ptr);
 #else
     realptr = (char*)ptr-PREFIX_SIZE;
     oldsize = *((size_t*)realptr);

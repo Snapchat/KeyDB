@@ -889,29 +889,28 @@ void syncCommand(client *c) {
 
 void processReplconfUuid(client *c, robj *arg)
 {
-    try
-    {
-        if (arg->type != OBJ_STRING)
-            throw "Invalid UUID";
+    const char *remoteUUID = nullptr;
 
-        const char *remoteUUID = (const char*)ptrFromObj(arg);
-        if (strlen(remoteUUID) != 36)
-            throw "Invalid UUID";
+    if (arg->type != OBJ_STRING)
+        goto LError;
 
-        if (uuid_parse(remoteUUID, c->uuid) != 0)
-            throw "Invalid UUID";
+    remoteUUID = (const char*)ptrFromObj(arg);
+    if (strlen(remoteUUID) != 36)
+        goto LError;
 
-        char szServerUUID[36 + 2]; // 1 for the '+', another for '\0'
-        szServerUUID[0] = '+';
-        uuid_unparse(server.uuid, szServerUUID+1);
-        addReplyProto(c, szServerUUID, 37);
-        addReplyProto(c, "\r\n", 2);
-    } 
-    catch (const char *szErr)
-    {
-        addReplyError(c, szErr);
-        return;
-    }
+    if (uuid_parse(remoteUUID, c->uuid) != 0)
+        goto LError;
+
+    char szServerUUID[36 + 2]; // 1 for the '+', another for '\0'
+    szServerUUID[0] = '+';
+    uuid_unparse(server.uuid, szServerUUID+1);
+    addReplyProto(c, szServerUUID, 37);
+    addReplyProto(c, "\r\n", 2);
+    return;
+
+LError:
+    addReplyError(c, "Invalid UUID");
+    return;
 }
 
 /* REPLCONF <option> <value> <option> <value> ...

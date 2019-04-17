@@ -1525,7 +1525,7 @@ void *RM_OpenKey(RedisModuleCtx *ctx, robj *keyname, int mode) {
     if (mode & REDISMODULE_WRITE) {
         value = lookupKeyWrite(ctx->client->db,keyname);
     } else {
-        value = lookupKeyRead(ctx->client->db,keyname);
+        value = lookupKeyRead(ctx->client->db,keyname).unsafe_robjcast();
         if (value == NULL) {
             return NULL;
         }

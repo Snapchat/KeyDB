@@ -474,7 +474,7 @@ void ttlGenericCommand(client *c, int output_ms) {
     long long expire, ttl = -1;
 
     /* If the key does not exist at all, return -2 */
-    if (lookupKeyReadWithFlags(c->db,c->argv[1],LOOKUP_NOTOUCH) == NULL) {
+    if (lookupKeyReadWithFlags(c->db,c->argv[1],LOOKUP_NOTOUCH) == nullptr) {
         addReplyLongLong(c,-2);
         return;
     }
@@ -520,7 +520,7 @@ void persistCommand(client *c) {
 void touchCommand(client *c) {
     int touched = 0;
     for (int j = 1; j < c->argc; j++)
-        if (lookupKeyRead(c->db,c->argv[j]) != NULL) touched++;
+        if (lookupKeyRead(c->db,c->argv[j]) != nullptr) touched++;
     addReplyLongLong(c,touched);
 }
 

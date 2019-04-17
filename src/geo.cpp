@@ -110,7 +110,7 @@ int extractLongLatOrReply(client *c, robj **argv, double *xy) {
 /* Input Argument Helper */
 /* Decode lat/long from a zset member's score.
  * Returns C_OK on successful decoding, otherwise C_ERR is returned. */
-int longLatFromMember(robj *zobj, robj *member, double *xy) {
+int longLatFromMember(robj_roptr zobj, robj *member, double *xy) {
     double score = 0;
 
     if (zsetScore(zobj, szFromObj(member), &score) == C_ERR) return C_ERR;
@@ -222,7 +222,7 @@ int geoAppendIfWithinRadius(geoArray *ga, double lon, double lat, double radius,
  * using multiple queries to the sorted set, that we later need to sort
  * via qsort. Similarly we need to be able to reject points outside the search
  * radius area ASAP in order to allocate and process more points than needed. */
-int geoGetPointsInRange(robj *zobj, double min, double max, double lon, double lat, double radius, geoArray *ga) {
+int geoGetPointsInRange(robj_roptr zobj, double min, double max, double lon, double lat, double radius, geoArray *ga) {
     /* minex 0 = include min in range; maxex 1 = exclude max in range */
     /* That's: min <= val < max */
     zrangespec range = { min, max, 0, 1 };
@@ -315,7 +315,7 @@ void scoresOfGeoHashBox(GeoHashBits hash, GeoHashFix52Bits *min, GeoHashFix52Bit
 /* Obtain all members between the min/max of this geohash bounding box.
  * Populate a geoArray of GeoPoints by calling geoGetPointsInRange().
  * Return the number of points added to the array. */
-int membersOfGeoHashBox(robj *zobj, GeoHashBits hash, geoArray *ga, double lon, double lat, double radius) {
+int membersOfGeoHashBox(robj_roptr zobj, GeoHashBits hash, geoArray *ga, double lon, double lat, double radius) {
     GeoHashFix52Bits min, max;
 
     scoresOfGeoHashBox(hash,&min,&max);
@@ -323,7 +323,7 @@ int membersOfGeoHashBox(robj *zobj, GeoHashBits hash, geoArray *ga, double lon, 
 }
 
 /* Search all eight neighbors + self geohash box */
-int membersOfAllNeighbors(robj *zobj, GeoHashRadius n, double lon, double lat, double radius, geoArray *ga) {
+int membersOfAllNeighbors(robj_roptr zobj, GeoHashRadius n, double lon, double lat, double radius, geoArray *ga) {
     GeoHashBits neighbors[9];
     unsigned int i, count = 0, last_processed = 0;
     int debugmsg = 0;
@@ -465,8 +465,8 @@ void georadiusGeneric(client *c, int flags) {
     int storedist = 0; /* 0 for STORE, 1 for STOREDIST. */
 
     /* Look up the requested zset */
-    robj *zobj = NULL;
-    if ((zobj = lookupKeyReadOrReply(c, key, shared.null[c->resp])) == NULL ||
+    robj_roptr zobj;
+    if ((zobj = lookupKeyReadOrReply(c, key, shared.null[c->resp])) == nullptr ||
         checkType(c, zobj, OBJ_ZSET)) {
         return;
     }
@@ -701,7 +701,7 @@ void geohashCommand(client *c) {
     int j;
 
     /* Look up the requested zset */
-    robj *zobj = lookupKeyRead(c->db, c->argv[1]);
+    robj_roptr zobj = lookupKeyRead(c->db, c->argv[1]);
     if (zobj && checkType(c, zobj, OBJ_ZSET)) return;
 
     /* Geohash elements one after the other, using a null bulk reply for
@@ -754,7 +754,7 @@ void geoposCommand(client *c) {
     int j;
 
     /* Look up the requested zset */
-    robj *zobj = lookupKeyRead(c->db, c->argv[1]);
+    robj_roptr zobj = lookupKeyRead(c->db, c->argv[1]);
     if (zobj && checkType(c, zobj, OBJ_ZSET)) return;
 
     /* Report elements one after the other, using a null bulk reply for
@@ -796,9 +796,9 @@ void geodistCommand(client *c) {
     }
 
     /* Look up the requested zset */
-    robj *zobj = NULL;
+    robj_roptr zobj = NULL;
     if ((zobj = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp]))
-        == NULL || checkType(c, zobj, OBJ_ZSET)) return;
+        == nullptr || checkType(c, zobj, OBJ_ZSET)) return;
 
     /* Get the scores. We need both otherwise NULL is returned. */
     double score1, score2, xyxy[4];

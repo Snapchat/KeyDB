@@ -39,7 +39,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum,
 /* Factory method to return a set that *can* hold "value". When the object has
  * an integer-encodable value, an intset will be returned. Otherwise a regular
  * hash table. */
-robj *setTypeCreate(sds value) {
+robj *setTypeCreate(const char *value) {
     if (isSdsRepresentableAsLongLong(value,NULL) == C_OK)
         return createIntsetObject();
     return createSetObject();
@@ -49,11 +49,11 @@ robj *setTypeCreate(sds value) {
  *
  * If the value was already member of the set, nothing is done and 0 is
  * returned, otherwise the new element is added and 1 is returned. */
-int setTypeAdd(robj *subject, sds value) {
+int setTypeAdd(robj *subject, const char *value) {
     long long llval;
     if (subject->encoding == OBJ_ENCODING_HT) {
         dict *ht = (dict*)subject->m_ptr;
-        dictEntry *de = dictAddRaw(ht,value,NULL);
+        dictEntry *de = dictAddRaw(ht,(char*)value,NULL);
         if (de) {
             dictSetKey(ht,de,sdsdup(value));
             dictSetVal(ht,de,NULL);
@@ -85,7 +85,7 @@ int setTypeAdd(robj *subject, sds value) {
     return 0;
 }
 
-int setTypeRemove(robj *setobj, sds value) {
+int setTypeRemove(robj *setobj, const char *value) {
     long long llval;
     if (setobj->encoding == OBJ_ENCODING_HT) {
         if (dictDelete((dict*)setobj->m_ptr,value) == DICT_OK) {
@@ -104,7 +104,7 @@ int setTypeRemove(robj *setobj, sds value) {
     return 0;
 }
 
-int setTypeIsMember(robj *subject, sds value) {
+int setTypeIsMember(robj_roptr subject, const char *value) {
     long long llval;
     if (subject->encoding == OBJ_ENCODING_HT) {
         return dictFind((dict*)subject->m_ptr,value) != NULL;
@@ -118,7 +118,7 @@ int setTypeIsMember(robj *subject, sds value) {
     return 0;
 }
 
-setTypeIterator *setTypeInitIterator(robj *subject) {
+setTypeIterator *setTypeInitIterator(robj_roptr subject) {
     setTypeIterator *si = (setTypeIterator*)zmalloc(sizeof(setTypeIterator), MALLOC_LOCAL);
     si->subject = subject;
     si->encoding = subject->encoding;
@@ -151,7 +151,7 @@ void setTypeReleaseIterator(setTypeIterator *si) {
  * used field with values which are easy to trap if misused.
  *
  * When there are no longer elements -1 is returned. */
-int setTypeNext(setTypeIterator *si, sds *sdsele, int64_t *llele) {
+int setTypeNext(setTypeIterator *si, const char **sdsele, int64_t *llele) {
     if (si->encoding == OBJ_ENCODING_HT) {
         dictEntry *de = dictNext(si->di);
         if (de == NULL) return -1;
@@ -176,7 +176,7 @@ int setTypeNext(setTypeIterator *si, sds *sdsele, int64_t *llele) {
  * an issue. */
 sds setTypeNextObject(setTypeIterator *si) {
     int64_t intele;
-    sds sdsele;
+    const char *sdsele;
     int encoding;
 
     encoding = setTypeNext(si,&sdsele,&intele);
@@ -219,7 +219,12 @@ int setTypeRandomElement(robj *setobj, sds *sdsele, int64_t *llele) {
     return setobj->encoding;
 }
 
-unsigned long setTypeSize(const robj *subject) {
+int setTypeRandomElement(robj_roptr setobj, const char **sdsele, const int64_t *llele)
+{
+    return setTypeRandomElement(setobj.unsafe_robjcast(), (sds*)sdsele, const_cast<int64_t*>(llele));
+}
+
+unsigned long setTypeSize(robj_roptr subject) {
     if (subject->encoding == OBJ_ENCODING_HT) {
         return dictSize((const dict*)subject->m_ptr);
     } else if (subject->encoding == OBJ_ENCODING_INTSET) {
@@ -240,7 +245,7 @@ void setTypeConvert(robj *setobj, int enc) {
     if (enc == OBJ_ENCODING_HT) {
         int64_t intele;
         dict *d = dictCreate(&setDictType,NULL);
-        sds element;
+        const char *element;
 
         /* Presize the dict to avoid rehashing */
         dictExpand(d,intsetLen((intset*)setobj->m_ptr));
@@ -248,8 +253,8 @@ void setTypeConvert(robj *setobj, int enc) {
         /* To add the elements we extract integers and create redis objects */
         si = setTypeInitIterator(setobj);
         while (setTypeNext(si,&element,&intele) != -1) {
-            element = sdsfromlonglong(intele);
-            serverAssert(dictAdd(d,element,NULL) == DICT_OK);
+            sds elementNew = sdsfromlonglong(intele);
+            serverAssert(dictAdd(d,elementNew,NULL) == DICT_OK);
         }
         setTypeReleaseIterator(si);
 
@@ -371,9 +376,9 @@ void smoveCommand(client *c) {
 }
 
 void sismemberCommand(client *c) {
-    robj *set;
+    robj_roptr set;
 
-    if ((set = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+    if ((set = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == nullptr ||
         checkType(c,set,OBJ_SET)) return;
 
     if (setTypeIsMember(set,szFromObj(c->argv[2])))
@@ -383,9 +388,9 @@ void sismemberCommand(client *c) {
 }
 
 void scardCommand(client *c) {
-    robj *o;
+    robj_roptr o;
 
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == nullptr ||
         checkType(c,o,OBJ_SET)) return;
 
     addReplyLongLong(c,setTypeSize(o));
@@ -458,7 +463,7 @@ void spopWithCountCommand(client *c) {
     addReplySetLen(c,count);
 
     /* Common iteration vars. */
-    sds sdsele;
+    const char *sdsele;
     robj *objele;
     int encoding;
     int64_t llele;
@@ -615,8 +620,8 @@ void srandmemberWithCountCommand(client *c) {
     long l;
     unsigned long count, size;
     int uniq = 1;
-    robj *set;
-    sds ele;
+    robj_roptr set;
+    const char *ele;
     int64_t llele;
     int encoding;
 
@@ -633,7 +638,7 @@ void srandmemberWithCountCommand(client *c) {
     }
 
     if ((set = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp]))
-        == NULL || checkType(c,set,OBJ_SET)) return;
+        == nullptr || checkType(c,set,OBJ_SET)) return;
     size = setTypeSize(set);
 
     /* If count is zero, serve it ASAP to avoid special cases later. */
@@ -747,8 +752,8 @@ void srandmemberWithCountCommand(client *c) {
 }
 
 void srandmemberCommand(client *c) {
-    robj *set;
-    sds ele;
+    robj_roptr set;
+    const char *ele;
     int64_t llele;
     int encoding;
 
@@ -761,7 +766,7 @@ void srandmemberCommand(client *c) {
     }
 
     if ((set = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp]))
-        == NULL || checkType(c,set,OBJ_SET)) return;
+        == nullptr || checkType(c,set,OBJ_SET)) return;
 
     encoding = setTypeRandomElement(set,&ele,&llele);
     if (encoding == OBJ_ENCODING_INTSET) {
@@ -794,7 +799,7 @@ void sinterGenericCommand(client *c, robj **setkeys,
     robj **sets = (robj**)zmalloc(sizeof(robj*)*setnum, MALLOC_SHARED);
     setTypeIterator *si;
     robj *dstset = NULL;
-    sds elesds;
+    const char *elesds;
     int64_t intobj;
     void *replylen = NULL;
     unsigned long j, cardinality = 0;
@@ -803,7 +808,7 @@ void sinterGenericCommand(client *c, robj **setkeys,
     for (j = 0; j < setnum; j++) {
         robj *setobj = dstkey ?
             lookupKeyWrite(c->db,setkeys[j]) :
-            lookupKeyRead(c->db,setkeys[j]);
+            lookupKeyRead(c->db,setkeys[j]).unsafe_robjcast();
         if (!setobj) {
             zfree(sets);
             if (dstkey) {
@@ -943,7 +948,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum,
     for (j = 0; j < setnum; j++) {
         robj *setobj = dstkey ?
             lookupKeyWrite(c->db,setkeys[j]) :
-            lookupKeyRead(c->db,setkeys[j]);
+            lookupKeyRead(c->db,setkeys[j]).unsafe_robjcast();
         if (!setobj) {
             sets[j] = NULL;
             continue;
@@ -1109,11 +1114,11 @@ void sdiffstoreCommand(client *c) {
 }
 
 void sscanCommand(client *c) {
-    robj *set;
+    robj_roptr set;
     unsigned long cursor;
 
     if (parseScanCursorOrReply(c,c->argv[2],&cursor) == C_ERR) return;
-    if ((set = lookupKeyReadOrReply(c,c->argv[1],shared.emptyscan)) == NULL ||
+    if ((set = lookupKeyReadOrReply(c,c->argv[1],shared.emptyscan)) == nullptr ||
         checkType(c,set,OBJ_SET)) return;
     scanGenericCommand(c,set,cursor);
 }

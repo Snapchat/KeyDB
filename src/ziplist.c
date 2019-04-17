@@ -468,7 +468,7 @@ int zipPrevLenByteDiff(unsigned char *p, unsigned int len) {
 }
 
 /* Return the total number of bytes used by the entry pointed to by 'p'. */
-unsigned int zipRawEntryLength(unsigned char *p) {
+unsigned int zipRawEntryLength(const unsigned char *p) {
     unsigned int prevlensize, encoding, lensize, len;
     ZIP_DECODE_PREVLENSIZE(p, prevlensize);
     ZIP_DECODE_LENGTH(p + prevlensize, encoding, lensize, len);
@@ -1165,12 +1165,12 @@ unsigned char *ziplistFind(unsigned char *p, unsigned char *vstr, unsigned int v
 }
 
 /* Return length of ziplist. */
-unsigned int ziplistLen(unsigned char *zl) {
+unsigned int ziplistLen(const unsigned char *zl) {
     unsigned int len = 0;
     if (intrev16ifbe(ZIPLIST_LENGTH(zl)) < UINT16_MAX) {
         len = intrev16ifbe(ZIPLIST_LENGTH(zl));
     } else {
-        unsigned char *p = zl+ZIPLIST_HEADER_SIZE;
+        const unsigned char *p = zl+ZIPLIST_HEADER_SIZE;
         while (*p != ZIP_END) {
             p += zipRawEntryLength(p);
             len++;

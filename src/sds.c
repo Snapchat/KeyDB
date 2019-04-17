@@ -157,12 +157,12 @@ sds sdsnew(const char *init) {
 }
 
 /* Duplicate an sds string. */
-sds sdsdup(const sds s) {
+sds sdsdup(const char *s) {
     return sdsnewlen(s, sdslen(s));
 }
 
 /* Free an sds string. No operation is performed if 's' is NULL. */
-void sdsfree(sds s) {
+void sdsfree(const char *s) {
     if (s == NULL) return;
     s_free((char*)s-sdsHdrSize(s[-1]));
 }

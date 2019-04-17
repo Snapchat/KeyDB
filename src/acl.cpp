@@ -161,7 +161,7 @@ int ACLListMatchSds(void *a, void *b) {
 }
 
 /* Method to free list elements from ACL users password/ptterns lists. */
-void ACLListFreeSds(void *item) {
+void ACLListFreeSds(const void *item) {
     sdsfree((sds)item);
 }
 

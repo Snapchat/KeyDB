@@ -282,7 +282,7 @@ static int helpEntriesLen;
 
 static sds cliVersion(void) {
     sds version;
-    version = sdscatprintf(sdsempty(), "%s", REDIS_VERSION);
+    version = sdscatprintf(sdsempty(), "%s", KEYDB_REAL_VERSION);
 
     /* Add git commit and working tree status when available */
     if (strtoll(redisGitSHA1(),NULL,16)) {

@@ -2489,6 +2489,20 @@ void initServerConfig(void) {
     /* Multithreading */
     server.cthreads = CONFIG_DEFAULT_THREADS;
     server.fThreadAffinity = CONFIG_DEFAULT_THREAD_AFFINITY;
+
+    server.db = (redisDb*)zmalloc(sizeof(redisDb)*server.dbnum, MALLOC_LOCAL);
+
+    /* Create the Redis databases, and initialize other internal state. */
+    for (int j = 0; j < server.dbnum; j++) {
+        server.db[j].pdict = dictCreate(&dbDictType,NULL);
+        server.db[j].expires = dictCreate(&keyptrDictType,NULL);
+        server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
+        server.db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
+        server.db[j].watched_keys = dictCreate(&keylistDictType,NULL);
+        server.db[j].id = j;
+        server.db[j].avg_ttl = 0;
+        server.db[j].defrag_later = listCreate();
+    }
 }
 
 extern char **environ;
@@ -2883,19 +2897,6 @@ void initServer(void) {
     createSharedObjects();
     adjustOpenFilesLimit();
 
-    server.db = (redisDb*)zmalloc(sizeof(redisDb)*server.dbnum, MALLOC_LOCAL);
-
-    /* Create the Redis databases, and initialize other internal state. */
-    for (int j = 0; j < server.dbnum; j++) {
-        server.db[j].pdict = dictCreate(&dbDictType,NULL);
-        server.db[j].expires = dictCreate(&keyptrDictType,NULL);
-        server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
-        server.db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
-        server.db[j].watched_keys = dictCreate(&keylistDictType,NULL);
-        server.db[j].id = j;
-        server.db[j].avg_ttl = 0;
-        server.db[j].defrag_later = listCreate();
-    }
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
     server.pubsub_channels = dictCreate(&keylistDictType,NULL);
     server.pubsub_patterns = listCreate();

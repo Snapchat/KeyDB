@@ -3183,6 +3183,8 @@ void replicaReplayCommand(client *c)
     // OK We've recieved a command lets execute
     client *cFake = createClient(-1, c->iel);
     cFake->lock.lock();
+    cFake->authenticated = c->authenticated;
+    cFake->puser = c->puser;
     cFake->querybuf = sdscat(cFake->querybuf,(sds)ptrFromObj(c->argv[2]));
     selectDb(cFake, c->db->id);
     processInputBuffer(cFake, (CMD_CALL_FULL & (~CMD_CALL_PROPAGATE)));

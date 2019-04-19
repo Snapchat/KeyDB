@@ -2557,7 +2557,7 @@ void helloCommand(client *c) {
     addReplyBulkCString(c,"redis");
 
     addReplyBulkCString(c,"version");
-    addReplyBulkCString(c,REDIS_VERSION);
+    addReplyBulkCString(c,KEYDB_SET_VERSION);
 
     addReplyBulkCString(c,"proto");
     addReplyLongLong(c,3);

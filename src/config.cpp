@@ -34,6 +34,8 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+const char *KEYDB_SET_VERSION = KEYDB_REAL_VERSION;
+
 /*-----------------------------------------------------------------------------
  * Config file name-value maps.
  *----------------------------------------------------------------------------*/
@@ -859,6 +861,9 @@ void loadServerConfigFromString(char *config) {
             if ((server.enable_multimaster = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
+        } else if (!strcasecmp(argv[0], "version-override") && argc == 2) {
+            KEYDB_SET_VERSION = zstrdup(argv[1]);
+            serverLog(LL_WARNING, "Warning version is overriden to: %s\n", KEYDB_SET_VERSION);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -1413,6 +1418,7 @@ void configGetCommand(client *c) {
     config_get_string_field("pidfile",server.pidfile);
     config_get_string_field("slave-announce-ip",server.slave_announce_ip);
     config_get_string_field("replica-announce-ip",server.slave_announce_ip);
+    config_get_string_field("version-override",KEYDB_SET_VERSION);
 
     /* Numerical values */
     config_get_numerical_field("maxmemory",server.maxmemory);
@@ -2378,6 +2384,7 @@ int rewriteConfig(char *path) {
     rewriteConfigYesNoOption(state,"dynamic-hz",server.dynamic_hz,CONFIG_DEFAULT_DYNAMIC_HZ);
     rewriteConfigYesNoOption(state,"active-replica",server.fActiveReplica,CONFIG_DEFAULT_ACTIVE_REPLICA);
     rewriteConfigYesNoOption(state,"multi-master",server.enable_multimaster,CONFIG_DEFAULT_ENABLE_MULTIMASTER);
+    rewriteConfigStringOption(state, "version-override",KEYDB_SET_VERSION,KEYDB_REAL_VERSION);
 
     /* Rewrite Sentinel config if in Sentinel mode. */
     if (server.sentinel_mode) rewriteConfigSentinelOption(state);

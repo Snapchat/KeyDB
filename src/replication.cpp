@@ -3145,22 +3145,15 @@ redisMaster *MasterInfoFromClient(client *c)
 class ReplicaNestState
 {
 public:
-    bool FPush(unsigned char *uuid)
+    bool FPush()
     {
         if (m_cnesting == REPLAY_MAX_NESTING) {
             m_fCancelled = true;
             return false;   // overflow
         }
-        for (int i = 0; i < m_cnesting; ++i)
-        {
-            if (FUuidEqual(m_stackUUID[i], uuid)) {
-                m_fCancelled = true;
-                return false;   // cycle detected
-            }
-        }
+        
         if (m_cnesting == 0)
             m_fCancelled = false;
-        memcpy(m_stackUUID[m_cnesting], uuid, UUID_BINARY_LEN);
         ++m_cnesting;
         return true;
     }
@@ -3188,7 +3181,6 @@ public:
 private:
     int m_cnesting = 0;
     bool m_fCancelled = false;
-    unsigned char m_stackUUID[REPLAY_MAX_NESTING][UUID_BINARY_LEN];
 };
 
 void replicaReplayCommand(client *c)
@@ -3239,7 +3231,7 @@ void replicaReplayCommand(client *c)
         return; // Our own commands have come back to us.  Ignore them.
     }
 
-    if (!s_pstate->FPush(uuid))
+    if (!s_pstate->FPush())
         return;
 
     // OK We've recieved a command lets execute

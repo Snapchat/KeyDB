@@ -1362,7 +1362,7 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 
     bugReportStart();
     serverLog(LL_WARNING,
-        "Redis %s crashed by signal: %d", REDIS_VERSION, sig);
+        "Redis %s crashed by signal: %d", KEYDB_REAL_VERSION, sig);
     if (eip != NULL) {
         serverLog(LL_WARNING,
         "Crashed running the instruction at: %p", eip);

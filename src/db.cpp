@@ -204,18 +204,27 @@ void dbAdd(redisDb *db, robj *key, robj *val)
     serverAssertWithInfo(NULL,key,retval == DICT_OK);
 }
 
-/* Insert a key, handling duplicate keys according to fReplace */
-int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
+void dbOverwriteCore(redisDb *db, dictEntry *de, robj *val, bool fUpdateMvcc)
 {
-    if (fReplace)
-    {
-        setKey(db, key, val);
-        return TRUE;
+    dictEntry auxentry = *de;
+    robj *old = (robj*)dictGetVal(de);
+    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+        val->lru = old->lru;
     }
-    else
-    {
-        return (dbAddCore(db, key, val) == DICT_OK);
+#ifdef ENABLE_MVCC
+    if (fUpdateMvcc)
+        val->mvcc_tstamp = getMvccTstamp();
+#else
+    UNUSED(fUpdateMvcc);
+#endif
+    dictSetVal(db->pdict, de, val);
+
+    if (server.lazyfree_lazy_server_del) {
+        freeObjAsync(old);
+        dictSetVal(db->pdict, &auxentry, NULL);
     }
+
+    dictFreeVal(db->pdict, &auxentry);
 }
 
 /* Overwrite an existing key with a new value. Incrementing the reference
@@ -227,22 +236,31 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
     dictEntry *de = dictFind(db->pdict,ptrFromObj(key));
 
     serverAssertWithInfo(NULL,key,de != NULL);
-    dictEntry auxentry = *de;
-    robj *old = (robj*)dictGetVal(de);
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-        val->lru = old->lru;
-    }
+    dbOverwriteCore(db, de, val, true);
+}
+
+/* Insert a key, handling duplicate keys according to fReplace */
+int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
+{
+    if (fReplace)
+    {
+        dictEntry *de = dictFind(db->pdict, ptrFromObj(key));
+        if (de == nullptr)
+            return (dbAddCore(db, key, val) == DICT_OK);
 #ifdef ENABLE_MVCC
-    val->mvcc_tstamp = getMvccTstamp();
+        robj *old = (robj*)dictGetVal(de);
+        if (old->mvcc_tstamp <= val->mvcc_tstamp)
 #endif
-    dictSetVal(db->pdict, de, val);
-
-    if (server.lazyfree_lazy_server_del) {
-        freeObjAsync(old);
-        dictSetVal(db->pdict, &auxentry, NULL);
+        {
+            dbOverwriteCore(db, de, val, false);
+            return true;
+        }
+        return false;
     }
-
-    dictFreeVal(db->pdict, &auxentry);
+    else
+    {
+        return (dbAddCore(db, key, val) == DICT_OK);
+    }
 }
 
 /* High level Set operation. This function can be used in order to set

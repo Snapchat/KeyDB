@@ -44,8 +44,6 @@ endif
 endif
 endif
 
-# CXXFLAGS+= -DENABLE_MVCC
-
 USEASM?=true
 # Do we use our assembly spinlock? X64 only
 ifeq ($(uname_S),Linux)

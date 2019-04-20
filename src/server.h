@@ -709,10 +709,8 @@ typedef struct redisObject {
     unsigned lru:LRU_BITS; /* LRU time (relative to global lru_clock) or
                             * LFU data (least significant 8 bits frequency
                             * and most significant 16 bits access time). */
-#ifdef ENABLE_MVCC
-    uint64_t mvcc_tstamp;
-#endif
     mutable int refcount;
+    uint64_t mvcc_tstamp;
     void *m_ptr;
 } robj;
 
@@ -1526,6 +1524,7 @@ struct redisServer {
     unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
 
     struct fastlock flock;
+    uint64_t mvcc_tstamp;
 };
 
 typedef struct pubsubPattern {
@@ -2136,6 +2135,7 @@ void objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
                        long long lru_clock);
 #define LOOKUP_NONE 0
 #define LOOKUP_NOTOUCH (1<<0)
+#define LOOKUP_UPDATEMVCC (1<<1)
 void dbAdd(redisDb *db, robj *key, robj *val);
 void dbOverwrite(redisDb *db, robj *key, robj *val);
 int dbMerge(redisDb *db, robj *key, robj *val, int fReplace);
@@ -2447,6 +2447,7 @@ struct redisMaster *MasterInfoFromClient(client *c);
 
 /* MVCC */
 uint64_t getMvccTstamp();
+void incrementMvccTstamp();
 
 #if defined(__GNUC__)
 #ifndef __cplusplus

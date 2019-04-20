@@ -1524,6 +1524,10 @@ struct redisServer {
     unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
 
     struct fastlock flock;
+
+    // Format:
+    //  Lower 20 bits: a counter incrementing for each command executed in the same millisecond
+    //  Upper 44 bits: mstime (least significant 44-bits) enough for ~500 years before rollover from date of addition
     uint64_t mvcc_tstamp;
 };
 

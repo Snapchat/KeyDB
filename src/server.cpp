@@ -4887,14 +4887,14 @@ uint64_t getMvccTstamp()
 
 void incrementMvccTstamp()
 {
-    uint64_t msPrev = server.mvcc_tstamp >> 22;
+    uint64_t msPrev = server.mvcc_tstamp >> 20;
     if (msPrev >= (uint64_t)server.mstime)  // we can be greater if the count overflows
     {
         atomicIncr(server.mvcc_tstamp, 1);
     }
     else
     {
-        server.mvcc_tstamp = ((uint64_t)server.mstime) << 22;
+        server.mvcc_tstamp = ((uint64_t)server.mstime) << 20;
     }
 }
 

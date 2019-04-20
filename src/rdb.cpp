@@ -1061,11 +1061,9 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
         if (rdbWriteRaw(rdb,buf,1) == -1) return -1;
     }
 
-#ifdef ENABLE_MVCC
     char szMvcc[32];
     snprintf(szMvcc, 32, "%" PRIu64, val->mvcc_tstamp);
     if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szMvcc) == -1) return -1;
-#endif
 
     /* Save type, key, value */
     if (rdbSaveObjectType(rdb,val) == -1) return -1;
@@ -1822,11 +1820,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
     } else {
         rdbExitReportCorruptRDB("Unknown RDB encoding type %d",rdbtype);
     }
-#ifdef ENABLE_MVCC
+
     o->mvcc_tstamp = mvcc_tstamp;
-#else
-    UNUSED(mvcc_tstamp);
-#endif
     return o;
 }
 

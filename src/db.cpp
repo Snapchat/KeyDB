@@ -70,6 +70,10 @@ static robj *lookupKey(redisDb *db, robj *key, int flags) {
                 val->lru = LRU_CLOCK();
             }
         }
+
+        if (flags & LOOKUP_UPDATEMVCC) {
+            val->mvcc_tstamp = getMvccTstamp();
+        }
         return val;
     } else {
         return NULL;
@@ -157,7 +161,7 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key) {
  * does not exist in the specified DB. */
 robj *lookupKeyWrite(redisDb *db, robj *key) {
     expireIfNeeded(db,key);
-    return lookupKey(db,key,LOOKUP_NONE);
+    return lookupKey(db,key,LOOKUP_UPDATEMVCC);
 }
 
 robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply) {
@@ -175,9 +179,7 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
 int dbAddCore(redisDb *db, robj *key, robj *val) {
     sds copy = sdsdup(szFromObj(key));
     int retval = dictAdd(db->pdict, copy, val);
-#ifdef ENABLE_MVCC
     val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
-#endif
 
     if (retval == DICT_OK)
     {
@@ -211,12 +213,9 @@ void dbOverwriteCore(redisDb *db, dictEntry *de, robj *val, bool fUpdateMvcc)
     if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         val->lru = old->lru;
     }
-#ifdef ENABLE_MVCC
     if (fUpdateMvcc)
         val->mvcc_tstamp = getMvccTstamp();
-#else
-    UNUSED(fUpdateMvcc);
-#endif
+
     dictSetVal(db->pdict, de, val);
 
     if (server.lazyfree_lazy_server_del) {
@@ -247,14 +246,14 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
         dictEntry *de = dictFind(db->pdict, ptrFromObj(key));
         if (de == nullptr)
             return (dbAddCore(db, key, val) == DICT_OK);
-#ifdef ENABLE_MVCC
+
         robj *old = (robj*)dictGetVal(de);
         if (old->mvcc_tstamp <= val->mvcc_tstamp)
-#endif
         {
             dbOverwriteCore(db, de, val, false);
             return true;
         }
+        
         return false;
     }
     else

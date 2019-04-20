@@ -2933,6 +2933,8 @@ void initServer(void) {
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
 
+    server.mvcc_tstamp = 0;
+
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
      * expired keys and so forth. */
@@ -3423,6 +3425,7 @@ int processCommand(client *c, int callFlags) {
 
     AssertCorrectThread(c);
     serverAssert(GlobalLocksAcquired());
+    incrementMvccTstamp();
 
     /* Now lookup the command and check ASAP about trivial error conditions
      * such as wrong arity, bad command name and so forth. */
@@ -4879,7 +4882,20 @@ int redisIsSupervised(int mode) {
 
 uint64_t getMvccTstamp()
 {
-    return (server.mstime << 16);
+    return server.mvcc_tstamp;
+}
+
+void incrementMvccTstamp()
+{
+    uint64_t msPrev = server.mvcc_tstamp >> 22;
+    if (msPrev >= (uint64_t)server.mstime)  // we can be greater if the count overflows
+    {
+        atomicIncr(server.mvcc_tstamp, 1);
+    }
+    else
+    {
+        server.mvcc_tstamp = ((uint64_t)server.mstime) << 22;
+    }
 }
 
 void *workerThreadMain(void *parg)

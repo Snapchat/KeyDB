@@ -167,7 +167,7 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
     for (j = 0; j < count; j++) {
         unsigned long long idle;
         sds key;
-        robj *o;
+        robj *o = nullptr;
         dictEntry *de;
 
         de = samples[j];
@@ -185,7 +185,7 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
          * idle just because the code initially handled LRU, but is in fact
          * just a score where an higher score means better candidate. */
         if (server.maxmemory_policy & MAXMEMORY_FLAG_LRU) {
-            idle = estimateObjectIdleTime(o);
+            idle = (o != nullptr) ? estimateObjectIdleTime(o) : 0;
         } else if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
             /* When we use an LRU policy, we sort the keys by idle time
              * so that we expire keys starting from greater idle time.

@@ -1001,7 +1001,7 @@ struct redisCommand redisCommandTable[] = {
      "admin no-script ok-loading ok-stale",
      0,NULL,0,0,0,0,0,0},
 
-    {"rreplay",replicaReplayCommand,3,
+    {"rreplay",replicaReplayCommand,-3,
      "read-only fast noprop",
      0,NULL,0,0,0,0,0,0}
 };

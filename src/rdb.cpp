@@ -992,6 +992,31 @@ ssize_t rdbSaveObject(rio *rdb, robj_roptr o, robj *key) {
     return nwritten;
 }
 
+/* Save an AUX field. */
+ssize_t rdbSaveAuxField(rio *rdb, const void *key, size_t keylen, const void *val, size_t vallen) {
+    ssize_t ret, len = 0;
+    if ((ret = rdbSaveType(rdb,RDB_OPCODE_AUX)) == -1) return -1;
+    len += ret;
+    if ((ret = rdbSaveRawString(rdb,(const unsigned char*)key,keylen)) == -1) return -1;
+    len += ret;
+    if ((ret = rdbSaveRawString(rdb,(const unsigned char*)val,vallen)) == -1) return -1;
+    len += ret;
+    return len;
+}
+
+/* Wrapper for rdbSaveAuxField() used when key/val length can be obtained
+ * with strlen(). */
+ssize_t rdbSaveAuxFieldStrStr(rio *rdb, const char *key, const char *val) {
+    return rdbSaveAuxField(rdb,key,strlen(key),val,strlen(val));
+}
+
+/* Wrapper for strlen(key) + integer type (up to long long range). */
+ssize_t rdbSaveAuxFieldStrInt(rio *rdb, const char *key, long long val) {
+    char buf[LONG_STR_SIZE];
+    int vlen = ll2string(buf,sizeof(buf),val);
+    return rdbSaveAuxField(rdb,key,strlen(key),buf,vlen);
+}
+
 /* Return the length the object will have on disk if saved with
  * the rdbSaveObject() function. Currently we use a trick to get
  * this length with very little changes to the code. In the future
@@ -1036,36 +1061,17 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
         if (rdbWriteRaw(rdb,buf,1) == -1) return -1;
     }
 
+#ifdef ENABLE_MVCC
+    char szMvcc[32];
+    snprintf(szMvcc, 32, "%" PRIu64, val->mvcc_tstamp);
+    if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szMvcc) == -1) return -1;
+#endif
+
     /* Save type, key, value */
     if (rdbSaveObjectType(rdb,val) == -1) return -1;
     if (rdbSaveStringObject(rdb,key) == -1) return -1;
     if (rdbSaveObject(rdb,val,key) == -1) return -1;
     return 1;
-}
-
-/* Save an AUX field. */
-ssize_t rdbSaveAuxField(rio *rdb, const void *key, size_t keylen, const void *val, size_t vallen) {
-    ssize_t ret, len = 0;
-    if ((ret = rdbSaveType(rdb,RDB_OPCODE_AUX)) == -1) return -1;
-    len += ret;
-    if ((ret = rdbSaveRawString(rdb,(const unsigned char*)key,keylen)) == -1) return -1;
-    len += ret;
-    if ((ret = rdbSaveRawString(rdb,(const unsigned char*)val,vallen)) == -1) return -1;
-    len += ret;
-    return len;
-}
-
-/* Wrapper for rdbSaveAuxField() used when key/val length can be obtained
- * with strlen(). */
-ssize_t rdbSaveAuxFieldStrStr(rio *rdb, const char *key, const char *val) {
-    return rdbSaveAuxField(rdb,key,strlen(key),val,strlen(val));
-}
-
-/* Wrapper for strlen(key) + integer type (up to long long range). */
-ssize_t rdbSaveAuxFieldStrInt(rio *rdb, const char *key, long long val) {
-    char buf[LONG_STR_SIZE];
-    int vlen = ll2string(buf,sizeof(buf),val);
-    return rdbSaveAuxField(rdb,key,strlen(key),buf,vlen);
 }
 
 /* Save a few default AUX fields with information about the RDB generated. */
@@ -1401,7 +1407,7 @@ robj *rdbLoadCheckModuleValue(rio *rdb, char *modulename) {
 
 /* Load a Redis object of the specified type from the specified file.
  * On success a newly allocated object is returned, otherwise NULL. */
-robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key) {
+robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
     robj *o = NULL, *ele, *dec;
     uint64_t len;
     unsigned int i;
@@ -1816,6 +1822,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key) {
     } else {
         rdbExitReportCorruptRDB("Unknown RDB encoding type %d",rdbtype);
     }
+#ifdef ENABLE_MVCC
+    o->mvcc_tstamp = mvcc_tstamp;
+#else
+    UNUSED(mvcc_tstamp);
+#endif
     return o;
 }
 
@@ -1882,7 +1893,8 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
     char buf[1024];
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
-    long long lru_clock = LRU_CLOCK();
+    long long lru_clock = 0;
+    uint64_t mvcc_tstamp = OBJ_MVCC_INVALID;
 
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = server.loading_process_events_interval_bytes;
@@ -2010,6 +2022,9 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
                 if (haspreamble) serverLog(LL_NOTICE,"RDB has an AOF tail");
             } else if (!strcasecmp(szFromObj(auxkey),"redis-bits")) {
                 /* Just ignored. */
+            } else if (!strcasecmp(szFromObj(auxkey),"mvcc-tstamp")) {
+                static_assert(sizeof(unsigned long long) == sizeof(uint64_t), "Ensure long long is 64-bits");
+                mvcc_tstamp = strtoull(szFromObj(auxval), nullptr, 10);
             } else {
                 /* We ignore fields we don't understand, as by AUX field
                  * contract. */
@@ -2053,7 +2068,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
         /* Read key */
         if ((key = rdbLoadStringObject(rdb)) == NULL) goto eoferr;
         /* Read value */
-        if ((val = rdbLoadObject(type,rdb,key)) == NULL) goto eoferr;
+        if ((val = rdbLoadObject(type,rdb,key, mvcc_tstamp)) == NULL) goto eoferr;
         /* Check if the key already expired. This function is used when loading
          * an RDB file from disk, either at startup, or when an RDB was
          * received from the master. In the latter case, the master is

@@ -44,9 +44,7 @@ robj *createObject(int type, void *ptr) {
     o->encoding = OBJ_ENCODING_RAW;
     o->m_ptr = ptr;
     o->refcount = 1;
-#ifdef ENABLE_MVCC
     o->mvcc_tstamp = OBJ_MVCC_INVALID;
-#endif
 
     /* Set the LRU to the current lruclock (minutes resolution), or
      * alternatively the LFU counter. */
@@ -94,9 +92,8 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     o->type = OBJ_STRING;
     o->encoding = OBJ_ENCODING_EMBSTR;
     o->refcount = 1;
-#ifdef ENABLE_MVCC
     o->mvcc_tstamp = OBJ_MVCC_INVALID;
-#endif
+
     if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
     } else {

@@ -3201,7 +3201,7 @@ void replicaReplayCommand(client *c)
     }
 
     /* First Validate Arguments */
-    if (c->argc != 3)
+    if (c->argc < 3)
     {
         addReplyError(c, "Invalid number of arguments");
         s_pstate->Cancel();

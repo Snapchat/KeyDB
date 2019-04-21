@@ -62,7 +62,7 @@ void rdbCheckThenExit(int linenum, const char *reason, ...) {
 
     if (!rdbCheckMode) {
         serverLog(LL_WARNING, "%s", msg);
-        const char * argv[2] = {"",server.rdb_filename};
+        const char * argv[2] = {"",g_pserver->rdb_filename};
         redis_check_rdb_main(2,argv,NULL);
     } else {
         rdbCheckError("%s",msg);
@@ -418,7 +418,7 @@ ssize_t rdbSaveRawString(rio *rdb, const unsigned char *s, size_t len) {
 
     /* Try LZF compression - under 20 bytes it's unable to compress even
      * aaaaaaaaaaaaaaaaaa so skip it */
-    if (server.rdb_compression && len > 20) {
+    if (g_pserver->rdb_compression && len > 20) {
         n = rdbSaveLzfStringObject(rdb,(const unsigned char*)s,len);
         if (n == -1) return -1;
         if (n > 0) return n;
@@ -1032,8 +1032,8 @@ size_t rdbSavedObjectLen(robj *o) {
  * On success if the key was actually saved 1 is returned, otherwise 0
  * is returned (the key was already expired). */
 int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
-    int savelru = server.maxmemory_policy & MAXMEMORY_FLAG_LRU;
-    int savelfu = server.maxmemory_policy & MAXMEMORY_FLAG_LFU;
+    int savelru = g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LRU;
+    int savelfu = g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU;
 
     /* Save the expire time */
     if (expiretime != -1) {
@@ -1087,9 +1087,9 @@ int rdbSaveInfoAuxFields(rio *rdb, int flags, rdbSaveInfo *rsi) {
     if (rsi) {
         if (rdbSaveAuxFieldStrInt(rdb,"repl-stream-db",rsi->repl_stream_db)
             == -1) return -1;
-        if (rdbSaveAuxFieldStrStr(rdb,"repl-id",server.replid)
+        if (rdbSaveAuxFieldStrStr(rdb,"repl-id",g_pserver->replid)
             == -1) return -1;
-        if (rdbSaveAuxFieldStrInt(rdb,"repl-offset",server.master_repl_offset)
+        if (rdbSaveAuxFieldStrInt(rdb,"repl-offset",g_pserver->master_repl_offset)
             == -1) return -1;
     }
     if (rdbSaveAuxFieldStrInt(rdb,"aof-preamble",aof_preamble) == -1) return -1;
@@ -1112,14 +1112,14 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
     uint64_t cksum;
     size_t processed = 0;
 
-    if (server.rdb_checksum)
+    if (g_pserver->rdb_checksum)
         rdb->update_cksum = rioGenericUpdateChecksum;
     snprintf(magic,sizeof(magic),"REDIS%04d",RDB_VERSION);
     if (rdbWriteRaw(rdb,magic,9) == -1) goto werr;
     if (rdbSaveInfoAuxFields(rdb,flags,rsi) == -1) goto werr;
 
     for (j = 0; j < cserver.dbnum; j++) {
-        redisDb *db = server.db+j;
+        redisDb *db = g_pserver->db+j;
         dict *d = db->pdict;
         if (dictSize(d) == 0) continue;
         di = dictGetSafeIterator(d);
@@ -1167,8 +1167,8 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
      * the script cache as well: on successful PSYNC after a restart, we need
      * to be able to process any EVALSHA inside the replication backlog the
      * master will send us. */
-    if (rsi && dictSize(server.lua_scripts)) {
-        di = dictGetIterator(server.lua_scripts);
+    if (rsi && dictSize(g_pserver->lua_scripts)) {
+        di = dictGetIterator(g_pserver->lua_scripts);
         while((de = dictNext(di)) != NULL) {
             robj *body = (robj*)dictGetVal(de);
             if (rdbSaveAuxField(rdb,"lua",3,szFromObj(body),sdslen(szFromObj(body))) == -1)
@@ -1227,7 +1227,7 @@ int rdbSaveFd(int fd, rdbSaveInfo *rsi)
 
     rioInitWithFile(&rdb,fd);
 
-    if (server.rdb_save_incremental_fsync)
+    if (g_pserver->rdb_save_incremental_fsync)
         rioSetAutoSync(&rdb,REDIS_AUTOSYNC_BYTES);
 
     if (rdbSaveRio(&rdb,&error,RDB_SAVE_NONE,rsi) == C_ERR) {
@@ -1240,11 +1240,11 @@ int rdbSaveFd(int fd, rdbSaveInfo *rsi)
 int rdbSave(rdbSaveInfo *rsi)
 {
     int err = C_OK;
-    if (server.rdb_filename != NULL)
-        err = rdbSaveFile(server.rdb_filename, rsi);
+    if (g_pserver->rdb_filename != NULL)
+        err = rdbSaveFile(g_pserver->rdb_filename, rsi);
 
-    if (err == C_OK && server.rdb_s3bucketpath != NULL)
-        err = rdbSaveS3(server.rdb_s3bucketpath, rsi);
+    if (err == C_OK && g_pserver->rdb_s3bucketpath != NULL)
+        err = rdbSaveS3(g_pserver->rdb_s3bucketpath, rsi);
     return err;
 }
 
@@ -1292,9 +1292,9 @@ int rdbSaveFile(char *filename, rdbSaveInfo *rsi) {
     }
 
     serverLog(LL_NOTICE,"DB saved on disk");
-    server.dirty = 0;
-    server.lastsave = time(NULL);
-    server.lastbgsave_status = C_OK;
+    g_pserver->dirty = 0;
+    g_pserver->lastsave = time(NULL);
+    g_pserver->lastbgsave_status = C_OK;
     return C_OK;
 
 werr:
@@ -1308,10 +1308,10 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
     pid_t childpid;
     long long start;
 
-    if (server.aof_child_pid != -1 || server.rdb_child_pid != -1) return C_ERR;
+    if (g_pserver->aof_child_pid != -1 || g_pserver->rdb_child_pid != -1) return C_ERR;
 
-    server.dirty_before_bgsave = server.dirty;
-    server.lastbgsave_try = time(NULL);
+    g_pserver->dirty_before_bgsave = g_pserver->dirty;
+    g_pserver->lastbgsave_try = time(NULL);
     openChildInfoPipe();
 
     start = ustime();
@@ -1331,26 +1331,26 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
                     private_dirty/(1024*1024));
             }
 
-            server.child_info_data.cow_size = private_dirty;
+            g_pserver->child_info_data.cow_size = private_dirty;
             sendChildInfo(CHILD_INFO_TYPE_RDB);
         }
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
         /* Parent */
-        server.stat_fork_time = ustime()-start;
-        server.stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024*1024*1024); /* GB per second. */
-        latencyAddSampleIfNeeded("fork",server.stat_fork_time/1000);
+        g_pserver->stat_fork_time = ustime()-start;
+        g_pserver->stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / g_pserver->stat_fork_time / (1024*1024*1024); /* GB per second. */
+        latencyAddSampleIfNeeded("fork",g_pserver->stat_fork_time/1000);
         if (childpid == -1) {
             closeChildInfoPipe();
-            server.lastbgsave_status = C_ERR;
+            g_pserver->lastbgsave_status = C_ERR;
             serverLog(LL_WARNING,"Can't save in background: fork: %s",
                 strerror(errno));
             return C_ERR;
         }
         serverLog(LL_NOTICE,"Background saving started by pid %d",childpid);
-        server.rdb_save_time_start = time(NULL);
-        server.rdb_child_pid = childpid;
-        server.rdb_child_type = RDB_CHILD_TYPE_DISK;
+        g_pserver->rdb_save_time_start = time(NULL);
+        g_pserver->rdb_child_pid = childpid;
+        g_pserver->rdb_child_type = RDB_CHILD_TYPE_DISK;
         updateDictResizePolicy();
         return C_OK;
     }
@@ -1419,8 +1419,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
         if ((len = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
 
         o = createQuicklistObject();
-        quicklistSetOptions((quicklist*)ptrFromObj(o), server.list_max_ziplist_size,
-                            server.list_compress_depth);
+        quicklistSetOptions((quicklist*)ptrFromObj(o), g_pserver->list_max_ziplist_size,
+                            g_pserver->list_compress_depth);
 
         /* Load every single element of the list */
         while(len--) {
@@ -1436,7 +1436,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
         if ((len = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
 
         /* Use a regular set when there are too many entries. */
-        if (len > server.set_max_intset_entries) {
+        if (len > g_pserver->set_max_intset_entries) {
             o = createSetObject();
             /* It's faster to expand the dict to the right size asap in order
              * to avoid rehashing */
@@ -1508,8 +1508,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
         }
 
         /* Convert *after* loading, since sorted sets are not stored ordered. */
-        if (zsetLength(o) <= server.zset_max_ziplist_entries &&
-            maxelelen <= server.zset_max_ziplist_value)
+        if (zsetLength(o) <= g_pserver->zset_max_ziplist_entries &&
+            maxelelen <= g_pserver->zset_max_ziplist_value)
                 zsetConvert(o,OBJ_ENCODING_ZIPLIST);
     } else if (rdbtype == RDB_TYPE_HASH) {
         uint64_t len;
@@ -1522,7 +1522,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
         o = createHashObject();
 
         /* Too many entries? Use a hash table. */
-        if (len > server.hash_max_ziplist_entries)
+        if (len > g_pserver->hash_max_ziplist_entries)
             hashTypeConvert(o, OBJ_ENCODING_HT);
 
         /* Load every field and value into the ziplist */
@@ -1541,8 +1541,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
                     sdslen(value), ZIPLIST_TAIL);
 
             /* Convert to hash table if size threshold is exceeded */
-            if (sdslen(field) > server.hash_max_ziplist_value ||
-                sdslen(value) > server.hash_max_ziplist_value)
+            if (sdslen(field) > g_pserver->hash_max_ziplist_value ||
+                sdslen(value) > g_pserver->hash_max_ziplist_value)
             {
                 sdsfree(field);
                 sdsfree(value);
@@ -1577,8 +1577,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
     } else if (rdbtype == RDB_TYPE_LIST_QUICKLIST) {
         if ((len = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
         o = createQuicklistObject();
-        quicklistSetOptions((quicklist*)ptrFromObj(o), server.list_max_ziplist_size,
-                            server.list_compress_depth);
+        quicklistSetOptions((quicklist*)ptrFromObj(o), g_pserver->list_max_ziplist_size,
+                            g_pserver->list_compress_depth);
 
         while (len--) {
             unsigned char *zl = (unsigned char*)
@@ -1626,8 +1626,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
                     o->type = OBJ_HASH;
                     o->encoding = OBJ_ENCODING_ZIPLIST;
 
-                    if (hashTypeLength(o) > server.hash_max_ziplist_entries ||
-                        maxlen > server.hash_max_ziplist_value)
+                    if (hashTypeLength(o) > g_pserver->hash_max_ziplist_entries ||
+                        maxlen > g_pserver->hash_max_ziplist_value)
                     {
                         hashTypeConvert(o, OBJ_ENCODING_HT);
                     }
@@ -1641,19 +1641,19 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
             case RDB_TYPE_SET_INTSET:
                 o->type = OBJ_SET;
                 o->encoding = OBJ_ENCODING_INTSET;
-                if (intsetLen((intset*)ptrFromObj(o)) > server.set_max_intset_entries)
+                if (intsetLen((intset*)ptrFromObj(o)) > g_pserver->set_max_intset_entries)
                     setTypeConvert(o,OBJ_ENCODING_HT);
                 break;
             case RDB_TYPE_ZSET_ZIPLIST:
                 o->type = OBJ_ZSET;
                 o->encoding = OBJ_ENCODING_ZIPLIST;
-                if (zsetLength(o) > server.zset_max_ziplist_entries)
+                if (zsetLength(o) > g_pserver->zset_max_ziplist_entries)
                     zsetConvert(o,OBJ_ENCODING_SKIPLIST);
                 break;
             case RDB_TYPE_HASH_ZIPLIST:
                 o->type = OBJ_HASH;
                 o->encoding = OBJ_ENCODING_ZIPLIST;
-                if (hashTypeLength(o) > server.hash_max_ziplist_entries)
+                if (hashTypeLength(o) > g_pserver->hash_max_ziplist_entries)
                     hashTypeConvert(o, OBJ_ENCODING_HT);
                 break;
             default:
@@ -1831,35 +1831,35 @@ void startLoading(FILE *fp) {
     struct stat sb;
 
     /* Load the DB */
-    server.loading = 1;
-    server.loading_start_time = time(NULL);
-    server.loading_loaded_bytes = 0;
+    g_pserver->loading = 1;
+    g_pserver->loading_start_time = time(NULL);
+    g_pserver->loading_loaded_bytes = 0;
     if (fstat(fileno(fp), &sb) == -1) {
-        server.loading_total_bytes = 0;
+        g_pserver->loading_total_bytes = 0;
     } else {
-        server.loading_total_bytes = sb.st_size;
+        g_pserver->loading_total_bytes = sb.st_size;
     }
 }
 
 /* Refresh the loading progress info */
 void loadingProgress(off_t pos) {
-    server.loading_loaded_bytes = pos;
-    if (server.stat_peak_memory < zmalloc_used_memory())
-        server.stat_peak_memory = zmalloc_used_memory();
+    g_pserver->loading_loaded_bytes = pos;
+    if (g_pserver->stat_peak_memory < zmalloc_used_memory())
+        g_pserver->stat_peak_memory = zmalloc_used_memory();
 }
 
 /* Loading finished */
 void stopLoading(void) {
-    server.loading = 0;
+    g_pserver->loading = 0;
 }
 
 /* Track loading progress in order to serve client's from time to time
    and if needed calculate rdb checksum  */
 void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
-    if (server.rdb_checksum)
+    if (g_pserver->rdb_checksum)
         rioGenericUpdateChecksum(r, buf, len);
-    if (server.loading_process_events_interval_bytes &&
-        (r->processed_bytes + len)/server.loading_process_events_interval_bytes > r->processed_bytes/server.loading_process_events_interval_bytes)
+    if (g_pserver->loading_process_events_interval_bytes &&
+        (r->processed_bytes + len)/g_pserver->loading_process_events_interval_bytes > r->processed_bytes/g_pserver->loading_process_events_interval_bytes)
     {
         /* The DB can take some non trivial amount of time to load. Update
          * our cached time since it is used to create and update the last
@@ -1867,7 +1867,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         updateCachedTime();
         listIter li;
         listNode *ln;
-        listRewind(server.masters, &li);
+        listRewind(g_pserver->masters, &li);
         while ((ln = listNext(&li)))
         {
             struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
@@ -1875,7 +1875,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
                 replicationSendNewlineToMaster(mi);
         }
         loadingProgress(r->processed_bytes);
-        processEventsWhileBlocked(serverTL - server.rgthreadvar);
+        processEventsWhileBlocked(serverTL - g_pserver->rgthreadvar);
     }
 }
 
@@ -1884,7 +1884,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
 int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
     uint64_t dbid;
     int type, rdbver;
-    redisDb *db = server.db+0;
+    redisDb *db = g_pserver->db+0;
     char buf[1024];
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
@@ -1892,7 +1892,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
     uint64_t mvcc_tstamp = OBJ_MVCC_INVALID;
 
     rdb->update_cksum = rdbLoadProgressCallback;
-    rdb->max_processing_chunk = server.loading_process_events_interval_bytes;
+    rdb->max_processing_chunk = g_pserver->loading_process_events_interval_bytes;
     if (rioRead(rdb,buf,9) == 0) goto eoferr;
     buf[9] = '\0';
     if (memcmp(buf,"REDIS",5) != 0) {
@@ -1954,7 +1954,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
                     "databases. Exiting\n", cserver.dbnum);
                 exit(1);
             }
-            db = server.db+dbid;
+            db = g_pserver->db+dbid;
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_RESIZEDB) {
             /* RESIZEDB: Hint about the size of the keys in the currently
@@ -1995,7 +1995,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
                 if (rsi) rsi->repl_offset = strtoll(szFromObj(auxval),NULL,10);
             } else if (!strcasecmp(szFromObj(auxkey),"lua")) {
                 /* Load the script back in memory. */
-                if (luaCreateFunction(NULL,server.lua,auxval) == NULL) {
+                if (luaCreateFunction(NULL,g_pserver->lua,auxval) == NULL) {
                     rdbExitReportCorruptRDB(
                         "Can't load Lua script from RDB file! "
                         "BODY: %s", ptrFromObj(auxval));
@@ -2069,7 +2069,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
          * received from the master. In the latter case, the master is
          * responsible for key expiry. If we would expire keys here, the
          * snapshot taken by the master may not be reflected on the slave. */
-        if (listLength(server.masters) == 0 && !loading_aof && expiretime != -1 && expiretime < now) {
+        if (listLength(g_pserver->masters) == 0 && !loading_aof && expiretime != -1 && expiretime < now) {
             decrRefCount(key);
             decrRefCount(val);
         } else {
@@ -2106,7 +2106,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
         uint64_t cksum, expected = rdb->cksum;
 
         if (rioRead(rdb,&cksum,8) == 0) goto eoferr;
-        if (server.rdb_checksum) {
+        if (g_pserver->rdb_checksum) {
             memrev64ifbe(&cksum);
             if (cksum == 0) {
                 serverLog(LL_WARNING,"RDB file was saved with checksum disabled: no check performed.");
@@ -2128,11 +2128,11 @@ int rdbLoadFile(char *filename, rdbSaveInfo *rsi);
 int rdbLoad(rdbSaveInfo *rsi)
 {
     int err = C_ERR;
-    if (server.rdb_filename != NULL)
-        err = rdbLoadFile(server.rdb_filename, rsi);
+    if (g_pserver->rdb_filename != NULL)
+        err = rdbLoadFile(g_pserver->rdb_filename, rsi);
 
-    if ((err == C_ERR) && server.rdb_s3bucketpath != NULL)
-        err = rdbLoadS3(server.rdb_s3bucketpath, rsi);
+    if ((err == C_ERR) && g_pserver->rdb_s3bucketpath != NULL)
+        err = rdbLoadS3(g_pserver->rdb_s3bucketpath, rsi);
 
     return err;
 }
@@ -2164,30 +2164,30 @@ void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal) {
     if (!bysignal && exitcode == 0) {
         serverLog(LL_NOTICE,
             "Background saving terminated with success");
-        server.dirty = server.dirty - server.dirty_before_bgsave;
-        server.lastsave = time(NULL);
-        server.lastbgsave_status = C_OK;
+        g_pserver->dirty = g_pserver->dirty - g_pserver->dirty_before_bgsave;
+        g_pserver->lastsave = time(NULL);
+        g_pserver->lastbgsave_status = C_OK;
     } else if (!bysignal && exitcode != 0) {
         serverLog(LL_WARNING, "Background saving error");
-        server.lastbgsave_status = C_ERR;
+        g_pserver->lastbgsave_status = C_ERR;
     } else {
         mstime_t latency;
 
         serverLog(LL_WARNING,
             "Background saving terminated by signal %d", bysignal);
         latencyStartMonitor(latency);
-        rdbRemoveTempFile(server.rdb_child_pid);
+        rdbRemoveTempFile(g_pserver->rdb_child_pid);
         latencyEndMonitor(latency);
         latencyAddSampleIfNeeded("rdb-unlink-temp-file",latency);
         /* SIGUSR1 is whitelisted, so we have a way to kill a child without
          * tirggering an error condition. */
         if (bysignal != SIGUSR1)
-            server.lastbgsave_status = C_ERR;
+            g_pserver->lastbgsave_status = C_ERR;
     }
-    server.rdb_child_pid = -1;
-    server.rdb_child_type = RDB_CHILD_TYPE_NONE;
-    server.rdb_save_time_last = time(NULL)-server.rdb_save_time_start;
-    server.rdb_save_time_start = -1;
+    g_pserver->rdb_child_pid = -1;
+    g_pserver->rdb_child_type = RDB_CHILD_TYPE_NONE;
+    g_pserver->rdb_save_time_last = time(NULL)-g_pserver->rdb_save_time_start;
+    g_pserver->rdb_save_time_start = -1;
     /* Possibly there are slaves waiting for a BGSAVE in order to be served
      * (the first stage of SYNC is a bulk transfer of dump.rdb) */
     updateSlavesWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, RDB_CHILD_TYPE_DISK);
@@ -2209,9 +2209,9 @@ void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
         serverLog(LL_WARNING,
             "Background transfer terminated by signal %d", bysignal);
     }
-    server.rdb_child_pid = -1;
-    server.rdb_child_type = RDB_CHILD_TYPE_NONE;
-    server.rdb_save_time_start = -1;
+    g_pserver->rdb_child_pid = -1;
+    g_pserver->rdb_child_type = RDB_CHILD_TYPE_NONE;
+    g_pserver->rdb_save_time_start = -1;
 
     /* If the child returns an OK exit code, read the set of slave client
      * IDs and the associated status code. We'll terminate all the slaves
@@ -2225,7 +2225,7 @@ void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
     if (!bysignal && exitcode == 0) {
         int readlen = sizeof(uint64_t);
 
-        if (read(server.rdb_pipe_read_result_from_child, ok_slaves, readlen) ==
+        if (read(g_pserver->rdb_pipe_read_result_from_child, ok_slaves, readlen) ==
                  readlen)
         {
             readlen = ok_slaves[0]*sizeof(uint64_t)*2;
@@ -2234,7 +2234,7 @@ void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
              * uint64_t element in the array. */
             ok_slaves = (uint64_t*)zrealloc(ok_slaves,sizeof(uint64_t)+readlen, MALLOC_LOCAL);
             if (readlen &&
-                read(server.rdb_pipe_read_result_from_child, ok_slaves+1,
+                read(g_pserver->rdb_pipe_read_result_from_child, ok_slaves+1,
                      readlen) != readlen)
             {
                 ok_slaves[0] = 0;
@@ -2242,15 +2242,15 @@ void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
         }
     }
 
-    close(server.rdb_pipe_read_result_from_child);
-    close(server.rdb_pipe_write_result_to_parent);
+    close(g_pserver->rdb_pipe_read_result_from_child);
+    close(g_pserver->rdb_pipe_write_result_to_parent);
 
     /* We can continue the replication process with all the slaves that
      * correctly received the full payload. Others are terminated. */
     listNode *ln;
     listIter li;
 
-    listRewind(server.slaves,&li);
+    listRewind(g_pserver->slaves,&li);
     while((ln = listNext(&li))) {
         client *slave = (client*)ln->value;
 
@@ -2291,7 +2291,7 @@ void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
 
 /* When a background RDB saving/transfer terminates, call the right handler. */
 void backgroundSaveDoneHandler(int exitcode, int bysignal) {
-    switch(server.rdb_child_type) {
+    switch(g_pserver->rdb_child_type) {
     case RDB_CHILD_TYPE_DISK:
         backgroundSaveDoneHandlerDisk(exitcode,bysignal);
         break;
@@ -2308,8 +2308,8 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
  * the child did not exit for an error, but because we wanted), and performs
  * the cleanup needed. */
 void killRDBChild(void) {
-    kill(server.rdb_child_pid,SIGUSR1);
-    rdbRemoveTempFile(server.rdb_child_pid);
+    kill(g_pserver->rdb_child_pid,SIGUSR1);
+    rdbRemoveTempFile(g_pserver->rdb_child_pid);
     closeChildInfoPipe();
     updateDictResizePolicy();
 }
@@ -2327,25 +2327,25 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     long long start;
     int pipefds[2];
 
-    if (server.aof_child_pid != -1 || server.rdb_child_pid != -1) return C_ERR;
+    if (g_pserver->aof_child_pid != -1 || g_pserver->rdb_child_pid != -1) return C_ERR;
 
     /* Before to fork, create a pipe that will be used in order to
      * send back to the parent the IDs of the slaves that successfully
      * received all the writes. */
     if (pipe(pipefds) == -1) return C_ERR;
-    server.rdb_pipe_read_result_from_child = pipefds[0];
-    server.rdb_pipe_write_result_to_parent = pipefds[1];
+    g_pserver->rdb_pipe_read_result_from_child = pipefds[0];
+    g_pserver->rdb_pipe_write_result_to_parent = pipefds[1];
 
     /* Collect the file descriptors of the slaves we want to transfer
      * the RDB to, which are i WAIT_BGSAVE_START state. */
-    fds = (int*)zmalloc(sizeof(int)*listLength(server.slaves), MALLOC_LOCAL);
+    fds = (int*)zmalloc(sizeof(int)*listLength(g_pserver->slaves), MALLOC_LOCAL);
     /* We also allocate an array of corresponding client IDs. This will
      * be useful for the child process in order to build the report
      * (sent via unix pipe) that will be sent to the parent. */
-    clientids = (uint64_t*)zmalloc(sizeof(uint64_t)*listLength(server.slaves), MALLOC_LOCAL);
+    clientids = (uint64_t*)zmalloc(sizeof(uint64_t)*listLength(g_pserver->slaves), MALLOC_LOCAL);
     numfds = 0;
 
-    listRewind(server.slaves,&li);
+    listRewind(g_pserver->slaves,&li);
     while((ln = listNext(&li))) {
         client *slave = (client*)ln->value;
 
@@ -2357,7 +2357,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
              * We'll restore it when the children returns (since duped socket
              * will share the O_NONBLOCK attribute with the parent). */
             anetBlock(NULL,slave->fd);
-            anetSendTimeout(NULL,slave->fd,server.repl_timeout*1000);
+            anetSendTimeout(NULL,slave->fd,g_pserver->repl_timeout*1000);
         }
     }
 
@@ -2388,7 +2388,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
                     private_dirty/(1024*1024));
             }
 
-            server.child_info_data.cow_size = private_dirty;
+            g_pserver->child_info_data.cow_size = private_dirty;
             sendChildInfo(CHILD_INFO_TYPE_RDB);
 
             /* If we are returning OK, at least one slave was served
@@ -2423,7 +2423,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
              * process with all the childre that were waiting. */
             msglen = sizeof(uint64_t)*(1+2*numfds);
             if (*len == 0 ||
-                write(server.rdb_pipe_write_result_to_parent,msg,msglen)
+                write(g_pserver->rdb_pipe_write_result_to_parent,msg,msglen)
                 != msglen)
             {
                 retval = C_ERR;
@@ -2442,7 +2442,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
             /* Undo the state change. The caller will perform cleanup on
              * all the slaves in BGSAVE_START state, but an early call to
              * replicationSetupSlaveForFullResync() turned it into BGSAVE_END */
-            listRewind(server.slaves,&li);
+            listRewind(g_pserver->slaves,&li);
             while((ln = listNext(&li))) {
                 client *slave = (client*)ln->value;
                 int j;
@@ -2458,15 +2458,15 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
             close(pipefds[1]);
             closeChildInfoPipe();
         } else {
-            server.stat_fork_time = ustime()-start;
-            server.stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024*1024*1024); /* GB per second. */
-            latencyAddSampleIfNeeded("fork",server.stat_fork_time/1000);
+            g_pserver->stat_fork_time = ustime()-start;
+            g_pserver->stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / g_pserver->stat_fork_time / (1024*1024*1024); /* GB per second. */
+            latencyAddSampleIfNeeded("fork",g_pserver->stat_fork_time/1000);
 
             serverLog(LL_NOTICE,"Background RDB transfer started by pid %d",
                 childpid);
-            server.rdb_save_time_start = time(NULL);
-            server.rdb_child_pid = childpid;
-            server.rdb_child_type = RDB_CHILD_TYPE_SOCKET;
+            g_pserver->rdb_save_time_start = time(NULL);
+            g_pserver->rdb_child_pid = childpid;
+            g_pserver->rdb_child_type = RDB_CHILD_TYPE_SOCKET;
             updateDictResizePolicy();
         }
         zfree(clientids);
@@ -2477,7 +2477,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
 }
 
 void saveCommand(client *c) {
-    if (server.rdb_child_pid != -1) {
+    if (g_pserver->rdb_child_pid != -1) {
         addReplyError(c,"Background save already in progress");
         return;
     }
@@ -2508,11 +2508,11 @@ void bgsaveCommand(client *c) {
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
 
-    if (server.rdb_child_pid != -1) {
+    if (g_pserver->rdb_child_pid != -1) {
         addReplyError(c,"Background save already in progress");
-    } else if (server.aof_child_pid != -1) {
+    } else if (g_pserver->aof_child_pid != -1) {
         if (schedule) {
-            server.rdb_bgsave_scheduled = 1;
+            g_pserver->rdb_bgsave_scheduled = 1;
             addReplyStatus(c,"Background saving scheduled");
         } else {
             addReplyError(c,
@@ -2547,22 +2547,22 @@ rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
      * connects to us, the NULL repl_backlog will trigger a full
      * synchronization, at the same time we will use a new replid and clear
      * replid2. */
-    if (!listLength(server.masters) && server.repl_backlog) {
-        /* Note that when server.slaveseldb is -1, it means that this master
+    if (!listLength(g_pserver->masters) && g_pserver->repl_backlog) {
+        /* Note that when g_pserver->slaveseldb is -1, it means that this master
          * didn't apply any write commands after a full synchronization.
          * So we can let repl_stream_db be 0, this allows a restarted slave
          * to reload replication ID/offset, it's safe because the next write
          * command must generate a SELECT statement. */
-        rsi->repl_stream_db = server.slaveseldb == -1 ? 0 : server.slaveseldb;
+        rsi->repl_stream_db = g_pserver->slaveseldb == -1 ? 0 : g_pserver->slaveseldb;
         return rsi;
     }
 
-    if (listLength(server.masters) > 1)
+    if (listLength(g_pserver->masters) > 1)
     {
         // BUGBUG, warn user about this incomplete implementation
         serverLog(LL_WARNING, "Warning: Only backing up first master's information in RDB");
     }
-    struct redisMaster *miFirst = (redisMaster*)(listLength(server.masters) ? listNodeValue(listFirst(server.masters)) : NULL);
+    struct redisMaster *miFirst = (redisMaster*)(listLength(g_pserver->masters) ? listNodeValue(listFirst(g_pserver->masters)) : NULL);
 
     /* If the instance is a slave we need a connected master
      * in order to fetch the currently selected DB. */

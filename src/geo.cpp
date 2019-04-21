@@ -661,11 +661,11 @@ void georadiusGeneric(client *c, int flags) {
             decrRefCount(zobj);
             notifyKeyspaceEvent(NOTIFY_ZSET,"georadiusstore",storekey,
                                 c->db->id);
-            server.dirty += returned_items;
+            g_pserver->dirty += returned_items;
         } else if (dbDelete(c->db,storekey)) {
             signalModifiedKey(c->db,storekey);
             notifyKeyspaceEvent(NOTIFY_GENERIC,"del",storekey,c->db->id);
-            server.dirty++;
+            g_pserver->dirty++;
         }
         addReplyLongLong(c, returned_items);
     }

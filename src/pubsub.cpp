@@ -152,10 +152,10 @@ int pubsubSubscribeChannel(client *c, robj *channel) {
         retval = 1;
         incrRefCount(channel);
         /* Add the client to the channel -> list of clients hash table */
-        de = dictFind(server.pubsub_channels,channel);
+        de = dictFind(g_pserver->pubsub_channels,channel);
         if (de == NULL) {
             clients = listCreate();
-            dictAdd(server.pubsub_channels,channel,clients);
+            dictAdd(g_pserver->pubsub_channels,channel,clients);
             incrRefCount(channel);
         } else {
             clients = (list*)dictGetVal(de);
@@ -181,7 +181,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify) {
     if (dictDelete(c->pubsub_channels,channel) == DICT_OK) {
         retval = 1;
         /* Remove the client from the channel -> clients list hash table */
-        de = dictFind(server.pubsub_channels,channel);
+        de = dictFind(g_pserver->pubsub_channels,channel);
         serverAssertWithInfo(c,NULL,de != NULL);
         clients = (list*)dictGetVal(de);
         ln = listSearchKey(clients,c);
@@ -191,7 +191,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify) {
             /* Free the list and associated hash entry at all if this was
              * the latest client, so that it will be possible to abuse
              * Redis PUBSUB creating millions of channels. */
-            dictDelete(server.pubsub_channels,channel);
+            dictDelete(g_pserver->pubsub_channels,channel);
         }
     }
     /* Notify the client */
@@ -212,7 +212,7 @@ int pubsubSubscribePattern(client *c, robj *pattern) {
         pat = (pubsubPattern*)zmalloc(sizeof(*pat), MALLOC_LOCAL);
         pat->pattern = getDecodedObject(pattern);
         pat->pclient = c;
-        listAddNodeTail(server.pubsub_patterns,pat);
+        listAddNodeTail(g_pserver->pubsub_patterns,pat);
     }
     /* Notify the client */
     addReplyPubsubPatSubscribed(c,pattern);
@@ -232,8 +232,8 @@ int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
         listDelNode(c->pubsub_patterns,ln);
         pat.pclient = c;
         pat.pattern = pattern;
-        ln = listSearchKey(server.pubsub_patterns,&pat);
-        listDelNode(server.pubsub_patterns,ln);
+        ln = listSearchKey(g_pserver->pubsub_patterns,&pat);
+        listDelNode(g_pserver->pubsub_patterns,ln);
     }
     /* Notify the client */
     if (notify) addReplyPubsubPatUnsubscribed(c,pattern);
@@ -284,7 +284,7 @@ int pubsubPublishMessage(robj *channel, robj *message) {
     listIter li;
 
     /* Send to clients listening for that channel */
-    de = dictFind(server.pubsub_channels,channel);
+    de = dictFind(g_pserver->pubsub_channels,channel);
     if (de) {
         list *list = reinterpret_cast<::list*>(dictGetVal(de));
         listNode *ln;
@@ -300,8 +300,8 @@ int pubsubPublishMessage(robj *channel, robj *message) {
         }
     }
     /* Send to clients listening to matching channels */
-    if (listLength(server.pubsub_patterns)) {
-        listRewind(server.pubsub_patterns,&li);
+    if (listLength(g_pserver->pubsub_patterns)) {
+        listRewind(g_pserver->pubsub_patterns,&li);
         channel = getDecodedObject(channel);
         while ((ln = listNext(&li)) != NULL) {
             pubsubPattern *pat = (pubsubPattern*)ln->value;
@@ -371,7 +371,7 @@ void punsubscribeCommand(client *c) {
 
 void publishCommand(client *c) {
     int receivers = pubsubPublishMessage(c->argv[1],c->argv[2]);
-    if (server.cluster_enabled)
+    if (g_pserver->cluster_enabled)
         clusterPropagatePublish(c->argv[1],c->argv[2]);
     else
         forceCommandPropagation(c,PROPAGATE_REPL);
@@ -393,7 +393,7 @@ NULL
     {
         /* PUBSUB CHANNELS [<pattern>] */
         sds pat = (c->argc == 2) ? NULL : szFromObj(c->argv[2]);
-        dictIterator *di = dictGetIterator(server.pubsub_channels);
+        dictIterator *di = dictGetIterator(g_pserver->pubsub_channels);
         dictEntry *de;
         long mblen = 0;
         void *replylen;
@@ -418,14 +418,14 @@ NULL
 
         addReplyArrayLen(c,(c->argc-2)*2);
         for (j = 2; j < c->argc; j++) {
-            list *l = (list*)dictFetchValue(server.pubsub_channels,c->argv[j]);
+            list *l = (list*)dictFetchValue(g_pserver->pubsub_channels,c->argv[j]);
 
             addReplyBulk(c,c->argv[j]);
             addReplyLongLong(c,l ? listLength(l) : 0);
         }
     } else if (!strcasecmp(szFromObj(c->argv[1]),"numpat") && c->argc == 2) {
         /* PUBSUB NUMPAT */
-        addReplyLongLong(c,listLength(server.pubsub_patterns));
+        addReplyLongLong(c,listLength(g_pserver->pubsub_patterns));
     } else {
         addReplySubcommandSyntaxError(c);
     }

@@ -128,10 +128,10 @@ robj_roptr lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
          * will say the key as non existing.
          *
          * Notably this covers GETs when slaves are used to scale reads. */
-        if (server.current_client &&
-            !FActiveMaster(server.current_client) &&
-            server.current_client->cmd &&
-            server.current_client->cmd->flags & CMD_READONLY)
+        if (serverTL->current_client &&
+            !FActiveMaster(serverTL->current_client) &&
+            serverTL->current_client->cmd &&
+            serverTL->current_client->cmd->flags & CMD_READONLY)
         {
             server.stat_keyspace_misses++;
             notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
@@ -400,7 +400,7 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
     int async = (flags & EMPTYDB_ASYNC);
     long long removed = 0;
 
-    if (dbnum < -1 || dbnum >= server.dbnum) {
+    if (dbnum < -1 || dbnum >= cserver.dbnum) {
         errno = EINVAL;
         return -1;
     }
@@ -408,7 +408,7 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
     int startdb, enddb;
     if (dbnum == -1) {
         startdb = 0;
-        enddb = server.dbnum-1;
+        enddb = cserver.dbnum-1;
     } else {
         startdb = enddb = dbnum;
     }
@@ -434,7 +434,7 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
 }
 
 int selectDb(client *c, int id) {
-    if (id < 0 || id >= server.dbnum)
+    if (id < 0 || id >= cserver.dbnum)
         return C_ERR;
     c->db = &server.db[id];
     return C_OK;
@@ -1051,8 +1051,8 @@ void scanDatabaseForReadyLists(redisDb *db) {
  * Returns C_ERR if at least one of the DB ids are out of range, otherwise
  * C_OK is returned. */
 int dbSwapDatabases(int id1, int id2) {
-    if (id1 < 0 || id1 >= server.dbnum ||
-        id2 < 0 || id2 >= server.dbnum) return C_ERR;
+    if (id1 < 0 || id1 >= cserver.dbnum ||
+        id2 < 0 || id2 >= cserver.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
     redisDb aux = server.db[id1];
     redisDb *db1 = &server.db[id1], *db2 = &server.db[id2];
@@ -1174,7 +1174,7 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
     incrRefCount(argv[1]);
 
     if (server.aof_state != AOF_OFF)
-        feedAppendOnlyFile(server.delCommand,db->id,argv,2);
+        feedAppendOnlyFile(cserver.delCommand,db->id,argv,2);
     replicationFeedSlaves(server.slaves,db->id,argv,2);
 
     decrRefCount(argv[0]);

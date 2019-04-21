@@ -74,6 +74,7 @@ double R_Zero, R_PosInf, R_NegInf, R_Nan;
 
 /* Global vars */
 struct redisServer server; /* Server global state */
+struct redisServerConst cserver;
 __thread struct redisServerThreadVars *serverTL = NULL;   // thread local server vars
 volatile unsigned long lru_clock; /* Server global current LRU time. */
 
@@ -1023,7 +1024,7 @@ void serverLogRaw(int level, const char *msg) {
     int log_to_stdout = server.logfile[0] == '\0';
 
     level &= 0xff; /* clear flags */
-    if (level < server.verbosity) return;
+    if (level < cserver.verbosity) return;
 
     fp = log_to_stdout ? stdout : fopen(server.logfile,"a");
     if (!fp) return;
@@ -1043,7 +1044,7 @@ void serverLogRaw(int level, const char *msg) {
         snprintf(buf+off,sizeof(buf)-off,"%03d",(int)tv.tv_usec/1000);
         if (server.sentinel_mode) {
             role_char = 'X'; /* Sentinel. */
-        } else if (pid != server.pid) {
+        } else if (pid != cserver.pid) {
             role_char = 'C'; /* RDB / AOF writing child. */
         } else {
             role_char = (listLength(server.masters) ? 'S':'M'); /* Slave or Master. */
@@ -1064,7 +1065,7 @@ void serverLog(int level, const char *fmt, ...) {
     va_list ap;
     char msg[LOG_MAX_LEN];
 
-    if ((level&0xff) < server.verbosity) return;
+    if ((level&0xff) < cserver.verbosity) return;
 
     va_start(ap, fmt);
     vsnprintf(msg, sizeof(msg), fmt, ap);
@@ -1084,7 +1085,7 @@ void serverLogFromHandler(int level, const char *msg) {
     int log_to_stdout = server.logfile[0] == '\0';
     char buf[64];
 
-    if ((level&0xff) < server.verbosity || (log_to_stdout && server.daemonize))
+    if ((level&0xff) < cserver.verbosity || (log_to_stdout && cserver.daemonize))
         return;
     fd = log_to_stdout ? STDOUT_FILENO :
                          open(server.logfile, O_APPEND|O_CREAT|O_WRONLY, 0644);
@@ -1495,12 +1496,12 @@ long long getInstantaneousMetric(int metric) {
 int clientsCronHandleTimeout(client *c, mstime_t now_ms) {
     time_t now = now_ms/1000;
 
-    if (server.maxidletime &&
+    if (cserver.maxidletime &&
         !(c->flags & CLIENT_SLAVE) &&    /* no timeout for slaves */
         !(c->flags & CLIENT_MASTER) &&   /* no timeout for masters */
         !(c->flags & CLIENT_BLOCKED) &&  /* no timeout for BLPOP */
         !(c->flags & CLIENT_PUBSUB) &&   /* no timeout for Pub/Sub clients */
-        (now - c->lastinteraction > server.maxidletime))
+        (now - c->lastinteraction > cserver.maxidletime))
     {
         serverLog(LL_VERBOSE,"Closing idle client");
         freeClient(c);
@@ -1694,7 +1695,7 @@ void databasesCron(void) {
     }
 
     /* Defrag keys gradually. */
-    if (server.active_defrag_enabled)
+    if (cserver.active_defrag_enabled)
         activeDefragCycle();
 
     /* Perform hash tables rehashing if needed, but only if there are no
@@ -1710,11 +1711,11 @@ void databasesCron(void) {
         int j;
 
         /* Don't test more DBs than we have. */
-        if (dbs_per_call > server.dbnum) dbs_per_call = server.dbnum;
+        if (dbs_per_call > cserver.dbnum) dbs_per_call = cserver.dbnum;
 
         /* Resize */
         for (j = 0; j < dbs_per_call; j++) {
-            tryResizeHashTables(resize_db % server.dbnum);
+            tryResizeHashTables(resize_db % cserver.dbnum);
             resize_db++;
         }
 
@@ -1729,7 +1730,7 @@ void databasesCron(void) {
                 } else {
                     /* If this db didn't need rehash, we'll try the next one. */
                     rehash_db++;
-                    rehash_db %= server.dbnum;
+                    rehash_db %= cserver.dbnum;
                 }
             }
         }
@@ -1867,7 +1868,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Show some info about non-empty databases */
     run_with_period(5000) {
-        for (j = 0; j < server.dbnum; j++) {
+        for (j = 0; j < cserver.dbnum; j++) {
             long long size, used, vkeys;
 
             size = dictSlots(server.db[j].pdict);
@@ -2256,13 +2257,13 @@ void createSharedObjects(void) {
 
 void initMasterInfo(redisMaster *master)
 {
-    if (server.default_masterauth)
-        master->masterauth = zstrdup(server.default_masterauth);
+    if (cserver.default_masterauth)
+        master->masterauth = zstrdup(cserver.default_masterauth);
     else
         master->masterauth = NULL;
 
-    if (server.default_masteruser)
-        master->masteruser = zstrdup(server.default_masteruser);
+    if (cserver.default_masteruser)
+        master->masteruser = zstrdup(cserver.default_masteruser);
     else
         master->masteruser = NULL;
 
@@ -2292,11 +2293,10 @@ void initServerConfig(void) {
     server.slaves = listCreate();
     server.monitors = listCreate();
     server.timezone = getTimeZone(); /* Initialized by tzset(). */
-    server.configfile = NULL;
-    server.executable = NULL;
+    cserver.configfile = NULL;
+    cserver.executable = NULL;
     server.hz = server.config_hz = CONFIG_DEFAULT_HZ;
     server.dynamic_hz = CONFIG_DEFAULT_DYNAMIC_HZ;
-    server.arch_bits = (sizeof(long) == 8) ? 64 : 32;
     server.port = CONFIG_DEFAULT_SERVER_PORT;
     server.tcp_backlog = CONFIG_DEFAULT_TCP_BACKLOG;
     server.bindaddr_count = 0;
@@ -2304,29 +2304,29 @@ void initServerConfig(void) {
     server.unixsocketperm = CONFIG_DEFAULT_UNIX_SOCKET_PERM;
     server.sofd = -1;
     server.protected_mode = CONFIG_DEFAULT_PROTECTED_MODE;
-    server.dbnum = CONFIG_DEFAULT_DBNUM;
-    server.verbosity = CONFIG_DEFAULT_VERBOSITY;
-    server.maxidletime = CONFIG_DEFAULT_CLIENT_TIMEOUT;
-    server.tcpkeepalive = CONFIG_DEFAULT_TCP_KEEPALIVE;
+    cserver.dbnum = CONFIG_DEFAULT_DBNUM;
+    cserver.verbosity = CONFIG_DEFAULT_VERBOSITY;
+    cserver.maxidletime = CONFIG_DEFAULT_CLIENT_TIMEOUT;
+    cserver.tcpkeepalive = CONFIG_DEFAULT_TCP_KEEPALIVE;
     server.active_expire_enabled = 1;
-    server.active_defrag_enabled = CONFIG_DEFAULT_ACTIVE_DEFRAG;
-    server.active_defrag_ignore_bytes = CONFIG_DEFAULT_DEFRAG_IGNORE_BYTES;
-    server.active_defrag_threshold_lower = CONFIG_DEFAULT_DEFRAG_THRESHOLD_LOWER;
-    server.active_defrag_threshold_upper = CONFIG_DEFAULT_DEFRAG_THRESHOLD_UPPER;
-    server.active_defrag_cycle_min = CONFIG_DEFAULT_DEFRAG_CYCLE_MIN;
-    server.active_defrag_cycle_max = CONFIG_DEFAULT_DEFRAG_CYCLE_MAX;
-    server.active_defrag_max_scan_fields = CONFIG_DEFAULT_DEFRAG_MAX_SCAN_FIELDS;
+    cserver.active_defrag_enabled = CONFIG_DEFAULT_ACTIVE_DEFRAG;
+    cserver.active_defrag_ignore_bytes = CONFIG_DEFAULT_DEFRAG_IGNORE_BYTES;
+    cserver.active_defrag_threshold_lower = CONFIG_DEFAULT_DEFRAG_THRESHOLD_LOWER;
+    cserver.active_defrag_threshold_upper = CONFIG_DEFAULT_DEFRAG_THRESHOLD_UPPER;
+    cserver.active_defrag_cycle_min = CONFIG_DEFAULT_DEFRAG_CYCLE_MIN;
+    cserver.active_defrag_cycle_max = CONFIG_DEFAULT_DEFRAG_CYCLE_MAX;
+    cserver.active_defrag_max_scan_fields = CONFIG_DEFAULT_DEFRAG_MAX_SCAN_FIELDS;
     server.proto_max_bulk_len = CONFIG_DEFAULT_PROTO_MAX_BULK_LEN;
-    server.client_max_querybuf_len = PROTO_MAX_QUERYBUF_LEN;
+    cserver.client_max_querybuf_len = PROTO_MAX_QUERYBUF_LEN;
     server.saveparams = NULL;
     server.loading = 0;
     server.logfile = zstrdup(CONFIG_DEFAULT_LOGFILE);
     server.syslog_enabled = CONFIG_DEFAULT_SYSLOG_ENABLED;
     server.syslog_ident = zstrdup(CONFIG_DEFAULT_SYSLOG_IDENT);
     server.syslog_facility = LOG_LOCAL0;
-    server.daemonize = CONFIG_DEFAULT_DAEMONIZE;
-    server.supervised = 0;
-    server.supervised_mode = SUPERVISED_NONE;
+    cserver.daemonize = CONFIG_DEFAULT_DAEMONIZE;
+    cserver.supervised = 0;
+    cserver.supervised_mode = SUPERVISED_NONE;
     server.aof_state = AOF_OFF;
     server.aof_fsync = CONFIG_DEFAULT_AOF_FSYNC;
     server.aof_no_fsync_on_rewrite = CONFIG_DEFAULT_AOF_NO_FSYNC_ON_REWRITE;
@@ -2346,7 +2346,7 @@ void initServerConfig(void) {
     server.rdb_save_incremental_fsync = CONFIG_DEFAULT_RDB_SAVE_INCREMENTAL_FSYNC;
     server.aof_load_truncated = CONFIG_DEFAULT_AOF_LOAD_TRUNCATED;
     server.aof_use_rdb_preamble = CONFIG_DEFAULT_AOF_USE_RDB_PREAMBLE;
-    server.pidfile = NULL;
+    cserver.pidfile = NULL;
     server.rdb_filename = NULL;
     server.rdb_s3bucketpath = NULL;
     server.aof_filename = zstrdup(CONFIG_DEFAULT_AOF_FILENAME);
@@ -2437,7 +2437,7 @@ void initServerConfig(void) {
 
     /* Client output buffer limits */
     for (j = 0; j < CLIENT_TYPE_OBUF_COUNT; j++)
-        server.client_obuf_limits[j] = clientBufferLimitsDefaults[j];
+        cserver.client_obuf_limits[j] = clientBufferLimitsDefaults[j];
 
     /* Double constants initialization */
     R_Zero = 0.0;
@@ -2451,20 +2451,20 @@ void initServerConfig(void) {
     server.commands = dictCreate(&commandTableDictType,NULL);
     server.orig_commands = dictCreate(&commandTableDictType,NULL);
     populateCommandTable();
-    server.delCommand = lookupCommandByCString("del");
-    server.multiCommand = lookupCommandByCString("multi");
-    server.lpushCommand = lookupCommandByCString("lpush");
-    server.lpopCommand = lookupCommandByCString("lpop");
-    server.rpopCommand = lookupCommandByCString("rpop");
-    server.zpopminCommand = lookupCommandByCString("zpopmin");
-    server.zpopmaxCommand = lookupCommandByCString("zpopmax");
-    server.sremCommand = lookupCommandByCString("srem");
-    server.execCommand = lookupCommandByCString("exec");
-    server.expireCommand = lookupCommandByCString("expire");
-    server.pexpireCommand = lookupCommandByCString("pexpire");
-    server.xclaimCommand = lookupCommandByCString("xclaim");
-    server.xgroupCommand = lookupCommandByCString("xgroup");
-    server.rreplayCommand = lookupCommandByCString("rreplay");
+    cserver.delCommand = lookupCommandByCString("del");
+    cserver.multiCommand = lookupCommandByCString("multi");
+    cserver.lpushCommand = lookupCommandByCString("lpush");
+    cserver.lpopCommand = lookupCommandByCString("lpop");
+    cserver.rpopCommand = lookupCommandByCString("rpop");
+    cserver.zpopminCommand = lookupCommandByCString("zpopmin");
+    cserver.zpopmaxCommand = lookupCommandByCString("zpopmax");
+    cserver.sremCommand = lookupCommandByCString("srem");
+    cserver.execCommand = lookupCommandByCString("exec");
+    cserver.expireCommand = lookupCommandByCString("expire");
+    cserver.pexpireCommand = lookupCommandByCString("pexpire");
+    cserver.xclaimCommand = lookupCommandByCString("xclaim");
+    cserver.xgroupCommand = lookupCommandByCString("xgroup");
+    cserver.rreplayCommand = lookupCommandByCString("rreplay");
 
     /* Slow log */
     server.slowlog_log_slower_than = CONFIG_DEFAULT_SLOWLOG_LOG_SLOWER_THAN;
@@ -2487,13 +2487,13 @@ void initServerConfig(void) {
     server.lua_always_replicate_commands = 1;
 
     /* Multithreading */
-    server.cthreads = CONFIG_DEFAULT_THREADS;
-    server.fThreadAffinity = CONFIG_DEFAULT_THREAD_AFFINITY;
+    cserver.cthreads = CONFIG_DEFAULT_THREADS;
+    cserver.fThreadAffinity = CONFIG_DEFAULT_THREAD_AFFINITY;
 
-    server.db = (redisDb*)zmalloc(sizeof(redisDb)*server.dbnum, MALLOC_LOCAL);
+    server.db = (redisDb*)zmalloc(sizeof(redisDb)*cserver.dbnum, MALLOC_LOCAL);
 
     /* Create the Redis databases, and initialize other internal state. */
-    for (int j = 0; j < server.dbnum; j++) {
+    for (int j = 0; j < cserver.dbnum; j++) {
         server.db[j].pdict = dictCreate(&dbDictType,NULL);
         server.db[j].expires = dictCreate(&keyptrDictType,NULL);
         server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
@@ -2527,16 +2527,16 @@ int restartServer(int flags, mstime_t delay) {
 
     /* Check if we still have accesses to the executable that started this
      * server instance. */
-    if (access(server.executable,X_OK) == -1) {
+    if (access(cserver.executable,X_OK) == -1) {
         serverLog(LL_WARNING,"Can't restart: this process has no "
-                             "permissions to execute %s", server.executable);
+                             "permissions to execute %s", cserver.executable);
         return C_ERR;
     }
 
     /* Config rewriting. */
     if (flags & RESTART_SERVER_CONFIG_REWRITE &&
-        server.configfile &&
-        rewriteConfig(server.configfile) == -1)
+        cserver.configfile &&
+        rewriteConfig(cserver.configfile) == -1)
     {
         serverLog(LL_WARNING,"Can't restart: configuration rewrite process "
                              "failed");
@@ -2561,9 +2561,9 @@ int restartServer(int flags, mstime_t delay) {
 
     /* Execute the server with the original command line. */
     if (delay) usleep(delay*1000);
-    zfree(server.exec_argv[0]);
-    server.exec_argv[0] = zstrdup(server.executable);
-    execve(server.executable,server.exec_argv,environ);
+    zfree(cserver.exec_argv[0]);
+    cserver.exec_argv[0] = zstrdup(cserver.executable);
+    execve(cserver.executable,cserver.exec_argv,environ);
 
     /* If an error occurred here, there is nothing we can do, but exit. */
     _exit(1);
@@ -2818,7 +2818,7 @@ static void initNetworkingThread(int iel, int fReusePort)
 
 static void initNetworking(int fReusePort)
 {
-    int celListen = (fReusePort) ? server.cthreads : 1;
+    int celListen = (fReusePort) ? cserver.cthreads : 1;
     for (int iel = 0; iel < celListen; ++iel)
         initNetworkingThread(iel, fReusePort);
 
@@ -2852,6 +2852,7 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     pvar->ipfd_count = 0;
     pvar->cclients = 0;
     pvar->el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
+    pvar->current_client = nullptr;
     if (pvar->el == NULL) {
         serverLog(LL_WARNING,
             "Failed creating the event loop. Error message: '%s'",
@@ -2883,8 +2884,7 @@ void initServer(void) {
     }
 
     server.hz = server.config_hz;
-    server.pid = getpid();
-    server.current_client = NULL;
+    cserver.pid = getpid();
     server.clients_index = raxNew();
     server.clients_to_close = listCreate();
     server.slaveseldb = -1; /* Force to emit the first SELECT command. */
@@ -2892,7 +2892,7 @@ void initServer(void) {
     server.clients_waiting_acks = listCreate();
     server.get_ack_from_slaves = 0;
     server.clients_paused = 0;
-    server.system_memory_size = zmalloc_get_memory_size();
+    cserver.system_memory_size = zmalloc_get_memory_size();
 
     createSharedObjects();
     adjustOpenFilesLimit();
@@ -2919,7 +2919,7 @@ void initServer(void) {
     server.dirty = 0;
     resetServerStats();
     /* A few stats we don't want to reset: server startup time, and peak mem. */
-    server.stat_starttime = time(NULL);
+    cserver.stat_starttime = time(NULL);
     server.stat_peak_memory = 0;
     server.stat_rdb_cow_bytes = 0;
     server.stat_aof_cow_bytes = 0;
@@ -2977,15 +2977,15 @@ void initServer(void) {
      * no explicit limit in the user provided configuration we set a limit
      * at 3 GB using maxmemory with 'noeviction' policy'. This avoids
      * useless crashes of the Redis instance for out of memory. */
-    if (server.arch_bits == 32 && server.maxmemory == 0) {
+    if (sizeof(void*) == 4 && server.maxmemory == 0) {
         serverLog(LL_WARNING,"Warning: 32 bit instance detected but no memory limit set. Setting 3 GB maxmemory limit with 'noeviction' policy now.");
         server.maxmemory = 3072LL*(1024*1024); /* 3 GB */
         server.maxmemory_policy = MAXMEMORY_NO_EVICTION;
     }
 
     /* Generate UUID */
-    static_assert(sizeof(uuid_t) == sizeof(server.uuid), "UUIDs are standardized at 16-bytes");
-    uuid_generate((unsigned char*)server.uuid);
+    static_assert(sizeof(uuid_t) == sizeof(cserver.uuid), "UUIDs are standardized at 16-bytes");
+    uuid_generate((unsigned char*)cserver.uuid);
 
     if (server.cluster_enabled) clusterInit();
     replicationScriptCacheInit();
@@ -3513,7 +3513,7 @@ int processCommand(client *c, int callFlags) {
         int out_of_memory = freeMemoryIfNeededAndSafe() == C_ERR;
         /* freeMemoryIfNeeded may flush slave output buffers. This may result
          * into a slave, that may be the active client, to be freed. */
-        if (server.current_client == NULL) return C_ERR;
+        if (serverTL->current_client == NULL) return C_ERR;
 
         /* It was impossible to free enough memory, and the command the client
          * is trying to execute is denied during OOM conditions or the client
@@ -3640,7 +3640,7 @@ int processCommand(client *c, int callFlags) {
 void closeListeningSockets(int unlink_unix_socket) {
     int j;
 
-    for (int iel = 0; iel < server.cthreads; ++iel)
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
     {
         for (j = 0; j < server.rgthreadvar[iel].ipfd_count; j++) 
             close(server.rgthreadvar[iel].ipfd[j]);
@@ -3709,9 +3709,9 @@ int prepareForShutdown(int flags) {
     }
 
     /* Remove the pid file if possible and needed. */
-    if (server.daemonize || server.pidfile) {
+    if (cserver.daemonize || cserver.pidfile) {
         serverLog(LL_NOTICE,"Removing the pid file.");
-        unlink(server.pidfile);
+        unlink(cserver.pidfile);
     }
 
     /* Best effort flush of slave output buffers, so that we hopefully
@@ -3936,7 +3936,7 @@ void bytesToHuman(char *s, unsigned long long n) {
  * on memory corruption problems. */
 sds genRedisInfoString(const char *section) {
     sds info = sdsempty();
-    time_t uptime = server.unixtime-server.stat_starttime;
+    time_t uptime = server.unixtime-cserver.stat_starttime;
     int j;
     struct rusage self_ru, c_ru;
     int allsections = 0, defsections = 0;
@@ -3997,7 +3997,7 @@ sds genRedisInfoString(const char *section) {
             (unsigned long long) redisBuildId(),
             mode,
             name.sysname, name.release, name.machine,
-            server.arch_bits,
+            (int)sizeof(void*)*8,
             aeGetApiName(),
             REDIS_ATOMIC_API,
 #ifdef __GNUC__
@@ -4013,8 +4013,8 @@ sds genRedisInfoString(const char *section) {
             server.hz,
             server.config_hz,
             (unsigned long) lruclock,
-            server.executable ? server.executable : "",
-            server.configfile ? server.configfile : "");
+            cserver.executable ? cserver.executable : "",
+            cserver.configfile ? cserver.configfile : "");
     }
 
     /* Clients */
@@ -4031,7 +4031,7 @@ sds genRedisInfoString(const char *section) {
             listLength(server.clients)-listLength(server.slaves),
             maxin, maxout,
             server.blocked_clients);
-        for (int ithread = 0; ithread < server.cthreads; ++ithread)
+        for (int ithread = 0; ithread < cserver.cthreads; ++ithread)
         {
             info = sdscatprintf(info,
                 "thread_%d_clients:%d\r\n",
@@ -4049,7 +4049,7 @@ sds genRedisInfoString(const char *section) {
         char used_memory_rss_hmem[64];
         char maxmemory_hmem[64];
         size_t zmalloc_used = zmalloc_used_memory();
-        size_t total_system_mem = server.system_memory_size;
+        size_t total_system_mem = cserver.system_memory_size;
         const char *evict_policy = evictPolicyToString();
         long long memory_lua = (long long)lua_gc(server.lua,LUA_GCCOUNT,0)*1024;
         struct redisMemOverhead *mh = getMemoryOverheadData();
@@ -4459,7 +4459,7 @@ sds genRedisInfoString(const char *section) {
         (long)self_ru.ru_utime.tv_sec, (long)self_ru.ru_utime.tv_usec,
         (long)c_ru.ru_stime.tv_sec, (long)c_ru.ru_stime.tv_usec,
         (long)c_ru.ru_utime.tv_sec, (long)c_ru.ru_utime.tv_usec,
-        server.cthreads,
+        cserver.cthreads,
         fastlock_getlongwaitcount());
     }
 
@@ -4496,7 +4496,7 @@ sds genRedisInfoString(const char *section) {
     if (allsections || defsections || !strcasecmp(section,"keyspace")) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, "# Keyspace\r\n");
-        for (j = 0; j < server.dbnum; j++) {
+        for (j = 0; j < cserver.dbnum; j++) {
             long long keys, vkeys;
 
             keys = dictSize(server.db[j].pdict);
@@ -4561,10 +4561,10 @@ void linuxMemoryWarnings(void) {
 void createPidFile(void) {
     /* If pidfile requested, but no pidfile defined, use
      * default pidfile path */
-    if (!server.pidfile) server.pidfile = zstrdup(CONFIG_DEFAULT_PID_FILE);
+    if (!cserver.pidfile) cserver.pidfile = zstrdup(CONFIG_DEFAULT_PID_FILE);
 
     /* Try to write the pid file in a best-effort way. */
-    FILE *fp = fopen(server.pidfile,"w");
+    FILE *fp = fopen(cserver.pidfile,"w");
     if (fp) {
         fprintf(fp,"%d\n",(int)getpid());
         fclose(fp);
@@ -4977,10 +4977,10 @@ int main(int argc, char **argv) {
 
     /* Store the executable path and arguments in a safe place in order
      * to be able to restart the server later. */
-    server.executable = getAbsolutePath(argv[0]);
-    server.exec_argv = (char**)zmalloc(sizeof(char*)*(argc+1), MALLOC_LOCAL);
-    server.exec_argv[argc] = NULL;
-    for (j = 0; j < argc; j++) server.exec_argv[j] = zstrdup(argv[j]);
+    cserver.executable = getAbsolutePath(argv[0]);
+    cserver.exec_argv = (char**)zmalloc(sizeof(char*)*(argc+1), MALLOC_LOCAL);
+    cserver.exec_argv[argc] = NULL;
+    for (j = 0; j < argc; j++) cserver.exec_argv[j] = zstrdup(argv[j]);
 
     /* We need to init sentinel right now as parsing the configuration file
      * in sentinel mode will have the effect of populating the sentinel
@@ -5022,11 +5022,11 @@ int main(int argc, char **argv) {
         /* First argument is the config file name? */
         if (argv[j][0] != '-' || argv[j][1] != '-') {
             configfile = argv[j];
-            server.configfile = getAbsolutePath(configfile);
+            cserver.configfile = getAbsolutePath(configfile);
             /* Replace the config file in server.exec_argv with
              * its absolute path. */
-            zfree(server.exec_argv[j]);
-            server.exec_argv[j] = zstrdup(server.configfile);
+            zfree(cserver.exec_argv[j]);
+            cserver.exec_argv[j] = zstrdup(cserver.configfile);
             j++;
         }
 
@@ -5079,20 +5079,20 @@ int main(int argc, char **argv) {
         serverLog(LL_WARNING, "Configuration loaded");
     }
 
-    if (server.cthreads > (int)std::thread::hardware_concurrency()) {
+    if (cserver.cthreads > (int)std::thread::hardware_concurrency()) {
         serverLog(LL_WARNING, "WARNING: server-threads is greater than this machine's core count.  Truncating to %u threads", std::thread::hardware_concurrency());
-	server.cthreads = (int)std::thread::hardware_concurrency();
-	server.cthreads = std::max(server.cthreads, 1);	// in case of any weird sign overflows
+	cserver.cthreads = (int)std::thread::hardware_concurrency();
+	cserver.cthreads = std::max(cserver.cthreads, 1);	// in case of any weird sign overflows
     }
 
-    server.supervised = redisIsSupervised(server.supervised_mode);
-    int background = server.daemonize && !server.supervised;
+    cserver.supervised = redisIsSupervised(cserver.supervised_mode);
+    int background = cserver.daemonize && !cserver.supervised;
     if (background) daemonize();
 
     initServer();
-    initNetworking(server.cthreads > 1 /* fReusePort */);
+    initNetworking(cserver.cthreads > 1 /* fReusePort */);
 
-    if (background || server.pidfile) createPidFile();
+    if (background || cserver.pidfile) createPidFile();
     redisSetProcTitle(argv[0]);
     redisAsciiArt();
     checkTcpBacklogSettings();
@@ -5130,8 +5130,8 @@ int main(int argc, char **argv) {
             server.repl_diskless_sync = TRUE;
     }
 
-    if (server.cthreads > 4) {
-        serverLog(LL_WARNING, "Warning: server-threads is set to %d.  This is above the maximum recommend value of 4, please ensure you've verified this is actually faster on your machine.", server.cthreads);
+    if (cserver.cthreads > 4) {
+        serverLog(LL_WARNING, "Warning: server-threads is set to %d.  This is above the maximum recommend value of 4, please ensure you've verified this is actually faster on your machine.", cserver.cthreads);
     }
 
     /* Warning the user about suspicious maxmemory setting. */
@@ -5141,12 +5141,12 @@ int main(int argc, char **argv) {
 
     aeReleaseLock();    //Finally we can dump the lock
 
-    serverAssert(server.cthreads > 0 && server.cthreads <= MAX_EVENT_LOOPS);
+    serverAssert(cserver.cthreads > 0 && cserver.cthreads <= MAX_EVENT_LOOPS);
     pthread_t rgthread[MAX_EVENT_LOOPS];
-    for (int iel = 0; iel < server.cthreads; ++iel)
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
     {
         pthread_create(rgthread + iel, NULL, workerThreadMain, (void*)((int64_t)iel));
-        if (server.fThreadAffinity)
+        if (cserver.fThreadAffinity)
         {
 #ifdef __linux__
             cpu_set_t cpuset;

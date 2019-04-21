@@ -262,7 +262,7 @@ public:
 #define LIMIT_PENDING_QUERYBUF (4*1024*1024) /* 4mb */
 
 /* When configuring the server eventloop, we setup it so that the total number
- * of file descriptors we can handle are server.maxclients + RESERVED_FDS +
+ * of file descriptors we can handle are g_pserver->maxclients + RESERVED_FDS +
  * a few more to stay safe. Since RESERVED_FDS defaults to 32, we add 96
  * in order to make sure of not over provisioning more than 128 fds. */
 #define CONFIG_FDSET_INCR (CONFIG_MIN_RESERVED_FDS+96)
@@ -329,7 +329,7 @@ public:
 #define CLIENT_DIRTY_CAS (1<<5) /* Watched keys modified. EXEC will fail. */
 #define CLIENT_CLOSE_AFTER_REPLY (1<<6) /* Close after writing entire reply. */
 #define CLIENT_UNBLOCKED (1<<7) /* This client was unblocked and is stored in
-                                  server.unblocked_clients */
+                                  g_pserver->unblocked_clients */
 #define CLIENT_LUA (1<<8) /* This is a non connected client used by Lua */
 #define CLIENT_ASKING (1<<9)     /* Client issued the ASKING command */
 #define CLIENT_CLOSE_ASAP (1<<10)/* Close this client ASAP */
@@ -379,7 +379,7 @@ public:
                                     buffer configuration. Just the first
                                     three: normal, slave, pubsub. */
 
-/* Slave replication state. Used in server.repl_state for slaves to remember
+/* Slave replication state. Used in g_pserver->repl_state for slaves to remember
  * what to do next. */
 #define REPL_STATE_NONE 0 /* No active replication */
 #define REPL_STATE_CONNECT 1 /* Must connect to master */
@@ -544,12 +544,12 @@ public:
 #define NOTIFY_ALL (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_EXPIRED | NOTIFY_EVICTED | NOTIFY_STREAM | NOTIFY_KEY_MISS) /* A flag */
 
 /* Get the first bind addr or NULL */
-#define NET_FIRST_BIND_ADDR (server.bindaddr_count ? server.bindaddr[0] : NULL)
+#define NET_FIRST_BIND_ADDR (g_pserver->bindaddr_count ? g_pserver->bindaddr[0] : NULL)
 
 /* Using the following macro you can run code inside serverCron() with the
  * specified period, specified in milliseconds.
- * The actual resolution depends on server.hz. */
-#define run_with_period(_ms_) if ((_ms_ <= 1000/server.hz) || !(server.cronloops%((_ms_)/(1000/server.hz))))
+ * The actual resolution depends on g_pserver->hz. */
+#define run_with_period(_ms_) if ((_ms_ <= 1000/g_pserver->hz) || !(g_pserver->cronloops%((_ms_)/(1000/g_pserver->hz))))
 
 /* We can print the stacktrace, so our assert is defined this way: */
 #define serverAssertWithInfo(_c,_o,_e) ((_e)?(void)0 : (_serverAssertWithInfo(_c,_o,#_e,__FILE__,__LINE__),_exit(1)))
@@ -827,17 +827,17 @@ typedef struct blockingState {
                                     handled in module.c. */
 } blockingState;
 
-/* The following structure represents a node in the server.ready_keys list,
+/* The following structure represents a node in the g_pserver->ready_keys list,
  * where we accumulate all the keys that had clients blocked with a blocking
  * operation such as B[LR]POP, but received new data in the context of the
  * last executed command.
  *
  * After the execution of every command or script, we run this list to check
  * if as a result we should serve data to clients blocked, unblocking them.
- * Note that server.ready_keys will not have duplicates as there dictionary
+ * Note that g_pserver->ready_keys will not have duplicates as there dictionary
  * also called ready_keys in every structure representing a Redis database,
  * where we make sure to remember if a given key was already added in the
- * server.ready_keys list. */
+ * g_pserver->ready_keys list. */
 typedef struct readyList {
     redisDb *db;
     robj *key;
@@ -1097,7 +1097,7 @@ struct redisMemOverhead {
  * top-level master. */
 typedef struct rdbSaveInfo {
     /* Used saving and loading. */
-    int repl_stream_db;  /* DB to select in server.master client. */
+    int repl_stream_db;  /* DB to select in g_pserver->master client. */
 
     /* Used only loading. */
     int repl_id_is_set;  /* True if repl_id field is set. */
@@ -1172,7 +1172,7 @@ struct redisMaster {
     time_t repl_down_since; /* Unix time at which link with master went down */
 
     unsigned char master_uuid[UUID_BINARY_LEN];  /* Used during sync with master, this is our master's UUID */
-                                                /* After we've connected with our master use the UUID in server.master */
+                                                /* After we've connected with our master use the UUID in g_pserver->master */
 };
 
 // Const vars are not changed after worker threads are launched
@@ -1254,7 +1254,7 @@ struct redisServer {
     int port;                   /* TCP listening port */
     int tcp_backlog;            /* TCP listen() backlog */
     char *bindaddr[CONFIG_BINDADDR_MAX]; /* Addresses we should bind to */
-    int bindaddr_count;         /* Number of addresses in server.bindaddr[] */
+    int bindaddr_count;         /* Number of addresses in g_pserver->bindaddr[] */
     char *unixsocket;           /* UNIX socket path */
     mode_t unixsocketperm;      /* UNIX socket permission */
     int sofd;                   /* Unix socket file descriptor */
@@ -1407,7 +1407,7 @@ struct redisServer {
     time_t repl_backlog_time_limit; /* Time without slaves after the backlog
                                        gets released. */
     time_t repl_no_slaves_since;    /* We have no slaves since that time.
-                                       Only valid if server.slaves len is 0. */
+                                       Only valid if g_pserver->slaves len is 0. */
     int repl_min_slaves_to_write;   /* Min number of slaves to write. */
     int repl_min_slaves_max_lag;    /* Max lag of <count> slaves to write. */
     int repl_good_slaves_count;     /* Number of slaves with lag <= max_lag. */
@@ -2503,7 +2503,7 @@ inline int ielFromEventLoop(const aeEventLoop *eventLoop)
     int iel = 0;
     for (; iel < cserver.cthreads; ++iel)
     {
-        if (server.rgthreadvar[iel].el == eventLoop)
+        if (g_pserver->rgthreadvar[iel].el == eventLoop)
             break;
     }
     serverAssert(iel < cserver.cthreads);
@@ -2512,7 +2512,7 @@ inline int ielFromEventLoop(const aeEventLoop *eventLoop)
 
 inline int FCorrectThread(client *c)
 {
-    return (serverTL != NULL && (server.rgthreadvar[c->iel].el == serverTL->el))
+    return (serverTL != NULL && (g_pserver->rgthreadvar[c->iel].el == serverTL->el))
         || (c->iel == IDX_EVENT_LOOP_MAIN && moduleGILAcquiredByModule())
         || (c->fd == -1);
 }

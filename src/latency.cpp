@@ -88,15 +88,15 @@ int THPGetAnonHugePagesSize(void) {
  * of time series, each time serie is craeted on demand in order to avoid
  * having a fixed list to maintain. */
 void latencyMonitorInit(void) {
-    server.latency_events = dictCreate(&latencyTimeSeriesDictType,NULL);
+    g_pserver->latency_events = dictCreate(&latencyTimeSeriesDictType,NULL);
 }
 
 /* Add the specified sample to the specified time series "event".
  * This function is usually called via latencyAddSampleIfNeeded(), that
  * is a macro that only adds the sample if the latency is higher than
- * server.latency_monitor_threshold. */
+ * g_pserver->latency_monitor_threshold. */
 void latencyAddSample(const char *event, mstime_t latency) {
-    struct latencyTimeSeries *ts = (latencyTimeSeries*)dictFetchValue(server.latency_events,event);
+    struct latencyTimeSeries *ts = (latencyTimeSeries*)dictFetchValue(g_pserver->latency_events,event);
     time_t now = time(NULL);
     int prev;
 
@@ -106,7 +106,7 @@ void latencyAddSample(const char *event, mstime_t latency) {
         ts->idx = 0;
         ts->max = 0;
         memset(ts->samples,0,sizeof(ts->samples));
-        dictAdd(server.latency_events,zstrdup(event),ts);
+        dictAdd(g_pserver->latency_events,zstrdup(event),ts);
     }
 
     if (latency > ts->max) ts->max = latency;
@@ -137,12 +137,12 @@ int latencyResetEvent(char *event_to_reset) {
     dictEntry *de;
     int resets = 0;
 
-    di = dictGetSafeIterator(server.latency_events);
+    di = dictGetSafeIterator(g_pserver->latency_events);
     while((de = dictNext(di)) != NULL) {
         char *event = (char*)dictGetKey(de);
 
         if (event_to_reset == NULL || strcasecmp(event,event_to_reset) == 0) {
-            dictDelete(server.latency_events, event);
+            dictDelete(g_pserver->latency_events, event);
             resets++;
         }
     }
@@ -158,7 +158,7 @@ int latencyResetEvent(char *event_to_reset) {
  * If the specified event has no elements the structure is populate with
  * zero values. */
 void analyzeLatencyForEvent(char *event, struct latencyStats *ls) {
-    struct latencyTimeSeries *ts = (latencyTimeSeries*)dictFetchValue(server.latency_events,event);
+    struct latencyTimeSeries *ts = (latencyTimeSeries*)dictFetchValue(g_pserver->latency_events,event);
     int j;
     uint64_t sum;
 
@@ -236,8 +236,8 @@ sds createLatencyReport(void) {
 
     /* Return ASAP if the latency engine is disabled and it looks like it
      * was never enabled so far. */
-    if (dictSize(server.latency_events) == 0 &&
-        server.latency_monitor_threshold == 0)
+    if (dictSize(g_pserver->latency_events) == 0 &&
+        g_pserver->latency_monitor_threshold == 0)
     {
         report = sdscat(report,"I'm sorry, Dave, I can't do that. Latency monitoring is disabled in this Redis instance. You may use \"CONFIG SET latency-monitor-threshold <milliseconds>.\" in order to enable it. If we weren't in a deep space mission I'd suggest to take a look at http://redis.io/topics/latency-monitor.\n");
         return report;
@@ -249,7 +249,7 @@ sds createLatencyReport(void) {
     dictEntry *de;
     int eventnum = 0;
 
-    di = dictGetSafeIterator(server.latency_events);
+    di = dictGetSafeIterator(g_pserver->latency_events);
     while((de = dictNext(di)) != NULL) {
         char *event = (char*)dictGetKey(de);
         struct latencyTimeSeries *ts = (latencyTimeSeries*)dictGetVal(de);
@@ -274,31 +274,31 @@ sds createLatencyReport(void) {
         /* Fork */
         if (!strcasecmp(event,"fork")) {
             const char *fork_quality;
-            if (server.stat_fork_rate < 10) {
+            if (g_pserver->stat_fork_rate < 10) {
                 fork_quality = "terrible";
                 advise_better_vm = 1;
                 advices++;
-            } else if (server.stat_fork_rate < 25) {
+            } else if (g_pserver->stat_fork_rate < 25) {
                 fork_quality = "poor";
                 advise_better_vm = 1;
                 advices++;
-            } else if (server.stat_fork_rate < 100) {
+            } else if (g_pserver->stat_fork_rate < 100) {
                 fork_quality = "good";
             } else {
                 fork_quality = "excellent";
             }
             report = sdscatprintf(report,
-                " Fork rate is %.2f GB/sec (%s).", server.stat_fork_rate,
+                " Fork rate is %.2f GB/sec (%s).", g_pserver->stat_fork_rate,
                 fork_quality);
         }
 
         /* Potentially commands. */
         if (!strcasecmp(event,"command")) {
-            if (server.slowlog_log_slower_than < 0) {
+            if (g_pserver->slowlog_log_slower_than < 0) {
                 advise_slowlog_enabled = 1;
                 advices++;
-            } else if (server.slowlog_log_slower_than/1000 >
-                       server.latency_monitor_threshold)
+            } else if (g_pserver->slowlog_log_slower_than/1000 >
+                       g_pserver->latency_monitor_threshold)
             {
                 advise_slowlog_tuning = 1;
                 advices++;
@@ -401,11 +401,11 @@ sds createLatencyReport(void) {
 
         /* Slow log. */
         if (advise_slowlog_enabled) {
-            report = sdscatprintf(report,"- There are latency issues with potentially slow commands you are using. Try to enable the Slow Log Redis feature using the command 'CONFIG SET slowlog-log-slower-than %llu'. If the Slow log is disabled Redis is not able to log slow commands execution for you.\n", (unsigned long long)server.latency_monitor_threshold*1000);
+            report = sdscatprintf(report,"- There are latency issues with potentially slow commands you are using. Try to enable the Slow Log Redis feature using the command 'CONFIG SET slowlog-log-slower-than %llu'. If the Slow log is disabled Redis is not able to log slow commands execution for you.\n", (unsigned long long)g_pserver->latency_monitor_threshold*1000);
         }
 
         if (advise_slowlog_tuning) {
-            report = sdscatprintf(report,"- Your current Slow Log configuration only logs events that are slower than your configured latency monitor threshold. Please use 'CONFIG SET slowlog-log-slower-than %llu'.\n", (unsigned long long)server.latency_monitor_threshold*1000);
+            report = sdscatprintf(report,"- Your current Slow Log configuration only logs events that are slower than your configured latency monitor threshold. Please use 'CONFIG SET slowlog-log-slower-than %llu'.\n", (unsigned long long)g_pserver->latency_monitor_threshold*1000);
         }
 
         if (advise_slowlog_inspect) {
@@ -443,7 +443,7 @@ sds createLatencyReport(void) {
             report = sdscat(report,"- Assuming from the point of view of data safety this is viable in your environment, you could try to enable the 'no-appendfsync-on-rewrite' option, so that fsync will not be performed while there is a child rewriting the AOF file or producing an RDB file (the moment where there is high disk contention).\n");
         }
 
-        if (advise_relax_fsync_policy && server.aof_fsync == AOF_FSYNC_ALWAYS) {
+        if (advise_relax_fsync_policy && g_pserver->aof_fsync == AOF_FSYNC_ALWAYS) {
             report = sdscat(report,"- Your fsync policy is set to 'always'. It is very hard to get good performances with such a setup, if possible try to relax the fsync policy to 'onesec'.\n");
         }
 
@@ -451,7 +451,7 @@ sds createLatencyReport(void) {
             report = sdscat(report,"- Latency during the AOF atomic rename operation or when the final difference is flushed to the AOF file at the end of the rewrite, sometimes is caused by very high write load, causing the AOF buffer to get very large. If possible try to send less commands to accomplish the same work, or use Lua scripts to group multiple operations into a single EVALSHA call.\n");
         }
 
-        if (advise_hz && server.hz < 100) {
+        if (advise_hz && g_pserver->hz < 100) {
             report = sdscat(report,"- In order to make the Redis keys expiring process more incremental, try to set the 'hz' configuration parameter to 100 using 'CONFIG SET hz 100'.\n");
         }
 
@@ -497,8 +497,8 @@ void latencyCommandReplyWithLatestEvents(client *c) {
     dictIterator *di;
     dictEntry *de;
 
-    addReplyArrayLen(c,dictSize(server.latency_events));
-    di = dictGetIterator(server.latency_events);
+    addReplyArrayLen(c,dictSize(g_pserver->latency_events));
+    di = dictGetIterator(g_pserver->latency_events);
     while((de = dictNext(di)) != NULL) {
         char *event = (char*)dictGetKey(de);
         struct latencyTimeSeries *ts = (latencyTimeSeries*)dictGetVal(de);
@@ -581,7 +581,7 @@ NULL
 
     if (!strcasecmp(szFromObj(c->argv[1]),"history") && c->argc == 3) {
         /* LATENCY HISTORY <event> */
-        ts = (latencyTimeSeries*)dictFetchValue(server.latency_events,ptrFromObj(c->argv[2]));
+        ts = (latencyTimeSeries*)dictFetchValue(g_pserver->latency_events,ptrFromObj(c->argv[2]));
         if (ts == NULL) {
             addReplyArrayLen(c,0);
         } else {
@@ -593,7 +593,7 @@ NULL
         dictEntry *de;
         char *event;
 
-        de = dictFind(server.latency_events,ptrFromObj(c->argv[2]));
+        de = dictFind(g_pserver->latency_events,ptrFromObj(c->argv[2]));
         if (de == NULL) goto nodataerr;
         ts = (latencyTimeSeries*)dictGetVal(de);
         event = (char*)dictGetKey(de);

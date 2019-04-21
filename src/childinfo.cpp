@@ -34,52 +34,52 @@
  * RDB / AOF saving process from the child to the parent (for instance
  * the amount of copy on write memory used) */
 void openChildInfoPipe(void) {
-    if (pipe(server.child_info_pipe) == -1) {
+    if (pipe(g_pserver->child_info_pipe) == -1) {
         /* On error our two file descriptors should be still set to -1,
          * but we call anyway cloesChildInfoPipe() since can't hurt. */
         closeChildInfoPipe();
-    } else if (anetNonBlock(NULL,server.child_info_pipe[0]) != ANET_OK) {
+    } else if (anetNonBlock(NULL,g_pserver->child_info_pipe[0]) != ANET_OK) {
         closeChildInfoPipe();
     } else {
-        memset(&server.child_info_data,0,sizeof(server.child_info_data));
+        memset(&g_pserver->child_info_data,0,sizeof(g_pserver->child_info_data));
     }
 }
 
 /* Close the pipes opened with openChildInfoPipe(). */
 void closeChildInfoPipe(void) {
-    if (server.child_info_pipe[0] != -1 ||
-        server.child_info_pipe[1] != -1)
+    if (g_pserver->child_info_pipe[0] != -1 ||
+        g_pserver->child_info_pipe[1] != -1)
     {
-        close(server.child_info_pipe[0]);
-        close(server.child_info_pipe[1]);
-        server.child_info_pipe[0] = -1;
-        server.child_info_pipe[1] = -1;
+        close(g_pserver->child_info_pipe[0]);
+        close(g_pserver->child_info_pipe[1]);
+        g_pserver->child_info_pipe[0] = -1;
+        g_pserver->child_info_pipe[1] = -1;
     }
 }
 
 /* Send COW data to parent. The child should call this function after populating
  * the corresponding fields it want to sent (according to the process type). */
 void sendChildInfo(int ptype) {
-    if (server.child_info_pipe[1] == -1) return;
-    server.child_info_data.magic = CHILD_INFO_MAGIC;
-    server.child_info_data.process_type = ptype;
-    ssize_t wlen = sizeof(server.child_info_data);
-    if (write(server.child_info_pipe[1],&server.child_info_data,wlen) != wlen) {
+    if (g_pserver->child_info_pipe[1] == -1) return;
+    g_pserver->child_info_data.magic = CHILD_INFO_MAGIC;
+    g_pserver->child_info_data.process_type = ptype;
+    ssize_t wlen = sizeof(g_pserver->child_info_data);
+    if (write(g_pserver->child_info_pipe[1],&g_pserver->child_info_data,wlen) != wlen) {
         /* Nothing to do on error, this will be detected by the other side. */
     }
 }
 
 /* Receive COW data from parent. */
 void receiveChildInfo(void) {
-    if (server.child_info_pipe[0] == -1) return;
-    ssize_t wlen = sizeof(server.child_info_data);
-    if (read(server.child_info_pipe[0],&server.child_info_data,wlen) == wlen &&
-        server.child_info_data.magic == CHILD_INFO_MAGIC)
+    if (g_pserver->child_info_pipe[0] == -1) return;
+    ssize_t wlen = sizeof(g_pserver->child_info_data);
+    if (read(g_pserver->child_info_pipe[0],&g_pserver->child_info_data,wlen) == wlen &&
+        g_pserver->child_info_data.magic == CHILD_INFO_MAGIC)
     {
-        if (server.child_info_data.process_type == CHILD_INFO_TYPE_RDB) {
-            server.stat_rdb_cow_bytes = server.child_info_data.cow_size;
-        } else if (server.child_info_data.process_type == CHILD_INFO_TYPE_AOF) {
-            server.stat_aof_cow_bytes = server.child_info_data.cow_size;
+        if (g_pserver->child_info_data.process_type == CHILD_INFO_TYPE_RDB) {
+            g_pserver->stat_rdb_cow_bytes = g_pserver->child_info_data.cow_size;
+        } else if (g_pserver->child_info_data.process_type == CHILD_INFO_TYPE_AOF) {
+            g_pserver->stat_aof_cow_bytes = g_pserver->child_info_data.cow_size;
         }
     }
 }

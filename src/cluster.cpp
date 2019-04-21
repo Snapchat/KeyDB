@@ -1362,7 +1362,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
         clusterNode *node;
         sds ci;
 
-        if (server.verbosity == LL_DEBUG) {
+        if (cserver.verbosity == LL_DEBUG) {
             ci = representClusterNodeFlags(sdsempty(), flags);
             serverLog(LL_DEBUG,"GOSSIP %.40s %s:%d@%d %s",
                 g->nodename,
@@ -3909,7 +3909,7 @@ int verifyClusterConfigWithData(void) {
     if (nodeIsSlave(myself)) return C_OK;
 
     /* Make sure we only have keys in DB0. */
-    for (j = 1; j < server.dbnum; j++) {
+    for (j = 1; j < cserver.dbnum; j++) {
         if (dictSize(server.db[j].pdict)) return C_ERR;
     }
 

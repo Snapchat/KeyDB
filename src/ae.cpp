@@ -46,10 +46,8 @@
 
 #include "ae.h"
 #include "fastlock.h"
-extern "C" {
 #include "zmalloc.h"
 #include "config.h"
-}
 
 #ifdef USE_MUTEX
 thread_local int cOwnLock = 0;
@@ -209,7 +207,7 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
     cmd.clientData = clientData;
     cmd.pctl = nullptr;
     if (fSynchronous)
-        cmd.pctl = new aeCommandControl();
+        cmd.pctl = new (MALLOC_LOCAL) aeCommandControl();
 
     std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::defer_lock);
     if (fSynchronous)
@@ -257,10 +255,10 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
 
     aeCommand cmd;
     cmd.op = AE_ASYNC_OP::PostCppFunction;
-    cmd.pfn = new std::function<void()>(fn);
+    cmd.pfn = new (MALLOC_LOCAL) std::function<void()>(fn);
     cmd.pctl = nullptr;
     if (fSynchronous)
-        cmd.pctl = new aeCommandControl();
+        cmd.pctl = new (MALLOC_LOCAL) aeCommandControl();
     std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::defer_lock);
     if (fSynchronous)
         cmd.pctl->mutexcv.lock();

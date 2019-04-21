@@ -385,8 +385,8 @@ void handleClientsBlockedOnKeys(void) {
                         /* Replicate the command. */
                         robj *argv[2];
                         struct redisCommand *cmd = where == ZSET_MIN ?
-                                                   server.zpopminCommand :
-                                                   server.zpopmaxCommand;
+                                                   cserver.zpopminCommand :
+                                                   cserver.zpopmaxCommand;
                         argv[0] = createStringObject(cmd->name,strlen(cmd->name));
                         argv[1] = rl->key;
                         incrRefCount(rl->key);

@@ -126,8 +126,8 @@ void activeExpireCycle(int type) {
      * 2) If last time we hit the time limit, we want to scan all DBs
      * in this iteration, as there is work to do in some DB and we don't want
      * expired keys to use memory for too much time. */
-    if (dbs_per_call > server.dbnum || timelimit_exit)
-        dbs_per_call = server.dbnum;
+    if (dbs_per_call > cserver.dbnum || timelimit_exit)
+        dbs_per_call = cserver.dbnum;
 
     /* We can use at max ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC percentage of CPU time
      * per iteration. Since this function gets called with a frequency of
@@ -148,7 +148,7 @@ void activeExpireCycle(int type) {
 
     for (j = 0; j < dbs_per_call && timelimit_exit == 0; j++) {
         int expired;
-        redisDb *db = server.db+(current_db % server.dbnum);
+        redisDb *db = server.db+(current_db % cserver.dbnum);
 
         /* Increment the DB now so we are sure if we run out of time
          * in the current DB we'll restart from the next. This allows to
@@ -297,7 +297,7 @@ void expireSlaveKeys(void) {
         /* Check the key against every database corresponding to the
          * bits set in the value bitmap. */
         int dbid = 0;
-        while(dbids && dbid < server.dbnum) {
+        while(dbids && dbid < cserver.dbnum) {
             if ((dbids & 1) != 0) {
                 redisDb *db = server.db+dbid;
                 dictEntry *expire = dictFind(db->expires,keyname);

@@ -120,4 +120,8 @@ int zmalloc_test(int argc, char **argv);
 }
 #endif
 
+#ifdef __cplusplus
+#include "new.h"
+#endif
+
 #endif /* __ZMALLOC_H */

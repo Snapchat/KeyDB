@@ -594,10 +594,10 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
         }
         serverAssert(!(exarg && pxarg));
         if (exarg)
-            buf = catAppendOnlyExpireAtCommand(buf,server.expireCommand,argv[1],
+            buf = catAppendOnlyExpireAtCommand(buf,cserver.expireCommand,argv[1],
                                                exarg);
         if (pxarg)
-            buf = catAppendOnlyExpireAtCommand(buf,server.pexpireCommand,argv[1],
+            buf = catAppendOnlyExpireAtCommand(buf,cserver.pexpireCommand,argv[1],
                                                pxarg);
     } else {
         /* All the other commands don't need translation or need the
@@ -798,7 +798,7 @@ int loadAppendOnlyFile(char *filename) {
             exit(1);
         }
 
-        if (cmd == server.multiCommand) valid_before_multi = valid_up_to;
+        if (cmd == cserver.multiCommand) valid_before_multi = valid_up_to;
 
         /* Run the command in the context of a fake client */
         fakeClient->cmd = cmd;
@@ -1279,7 +1279,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
     size_t processed = 0;
     int j;
 
-    for (j = 0; j < server.dbnum; j++) {
+    for (j = 0; j < cserver.dbnum; j++) {
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
         redisDb *db = server.db+j;
         dict *d = db->pdict;

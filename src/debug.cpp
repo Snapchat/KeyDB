@@ -266,7 +266,7 @@ void computeDatasetDigest(unsigned char *final) {
 
     memset(final,0,20); /* Start with a clean result */
 
-    for (j = 0; j < server.dbnum; j++) {
+    for (j = 0; j < cserver.dbnum; j++) {
         redisDb *db = server.db+j;
 
         if (dictSize(db->pdict) == 0) continue;
@@ -628,7 +628,7 @@ NULL
 
         if (getLongFromObjectOrReply(c, c->argv[2], &dbid, NULL) != C_OK)
             return;
-        if (dbid < 0 || dbid >= server.dbnum) {
+        if (dbid < 0 || dbid >= cserver.dbnum) {
             addReplyError(c,"Out of range database");
             return;
         }
@@ -1225,9 +1225,9 @@ void logStackTrace(ucontext_t *uc) {
  * currently being served by Redis. May be NULL if Redis is not serving a
  * client right now. */
 void logCurrentClient(void) {
-    if (server.current_client == NULL) return;
+    if (serverTL->current_client == NULL) return;
 
-    client *cc = server.current_client;
+    client *cc = serverTL->current_client;
     sds client;
     int j;
 
@@ -1445,7 +1445,7 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 );
 
     /* free(messages); Don't call free() with possibly corrupted memory. */
-    if (server.daemonize && server.supervised == 0) unlink(server.pidfile);
+    if (cserver.daemonize && cserver.supervised == 0) unlink(cserver.pidfile);
 
     /* Make sure we exit with the right signal at the end. So for instance
      * the core will be dumped if enabled. */

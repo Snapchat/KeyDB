@@ -514,7 +514,7 @@ long defragQuicklist(redisDb *db, dictEntry *kde) {
     serverAssert(ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST);
     if ((newql = (quicklist*)activeDefragAlloc(ql)))
         defragged++, ob->m_ptr = ql = newql;
-    if (ql->len > server.active_defrag_max_scan_fields)
+    if (ql->len > cserver.active_defrag_max_scan_fields)
         defragLater(db, kde);
     else
         defragged += activeDefragQuickListNodes(ql);
@@ -537,7 +537,7 @@ long defragZsetSkiplist(redisDb *db, dictEntry *kde) {
         defragged++, zs->zsl = newzsl;
     if ((newheader = (zskiplistNode*)activeDefragAlloc(zs->zsl->header)))
         defragged++, zs->zsl->header = newheader;
-    if (dictSize(zs->pdict) > server.active_defrag_max_scan_fields)
+    if (dictSize(zs->pdict) > cserver.active_defrag_max_scan_fields)
         defragLater(db, kde);
     else {
         dictIterator *di = dictGetIterator(zs->pdict);
@@ -560,7 +560,7 @@ long defragHash(redisDb *db, dictEntry *kde) {
     dict *d, *newd;
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HT);
     d = (dict*)ptrFromObj(ob);
-    if (dictSize(d) > server.active_defrag_max_scan_fields)
+    if (dictSize(d) > cserver.active_defrag_max_scan_fields)
         defragLater(db, kde);
     else
         defragged += activeDefragSdsDict(d, DEFRAG_SDS_DICT_VAL_IS_SDS);
@@ -578,7 +578,7 @@ long defragSet(redisDb *db, dictEntry *kde) {
     dict *d, *newd;
     serverAssert(ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HT);
     d = (dict*)ptrFromObj(ob);
-    if (dictSize(d) > server.active_defrag_max_scan_fields)
+    if (dictSize(d) > cserver.active_defrag_max_scan_fields)
         defragLater(db, kde);
     else
         defragged += activeDefragSdsDict(d, DEFRAG_SDS_DICT_NO_VAL);
@@ -742,7 +742,7 @@ long defragStream(redisDb *db, dictEntry *kde) {
     if ((news = (stream*)activeDefragAlloc(s)))
         defragged++, ob->m_ptr = s = news;
 
-    if (raxSize(s->prax) > server.active_defrag_max_scan_fields) {
+    if (raxSize(s->prax) > cserver.active_defrag_max_scan_fields) {
         rax *newrax = (rax*)activeDefragAlloc(s->prax);
         if (newrax)
             defragged++, s->prax = newrax;
@@ -997,19 +997,19 @@ void computeDefragCycles() {
     float frag_pct = getAllocatorFragmentation(&frag_bytes);
     /* If we're not already running, and below the threshold, exit. */
     if (!server.active_defrag_running) {
-        if(frag_pct < server.active_defrag_threshold_lower || frag_bytes < server.active_defrag_ignore_bytes)
+        if(frag_pct < cserver.active_defrag_threshold_lower || frag_bytes < cserver.active_defrag_ignore_bytes)
             return;
     }
 
     /* Calculate the adaptive aggressiveness of the defrag */
     int cpu_pct = INTERPOLATE(frag_pct,
-            server.active_defrag_threshold_lower,
-            server.active_defrag_threshold_upper,
-            server.active_defrag_cycle_min,
-            server.active_defrag_cycle_max);
+            cserver.active_defrag_threshold_lower,
+            cserver.active_defrag_threshold_upper,
+            cserver.active_defrag_cycle_min,
+            cserver.active_defrag_cycle_max);
     cpu_pct = LIMIT(cpu_pct,
-            server.active_defrag_cycle_min,
-            server.active_defrag_cycle_max);
+            cserver.active_defrag_cycle_min,
+            cserver.active_defrag_cycle_max);
      /* We allow increasing the aggressiveness during a scan, but don't
       * reduce it. */
     if (!server.active_defrag_running ||
@@ -1065,7 +1065,7 @@ void activeDefragCycle(void) {
             }
 
             /* Move on to next database, and stop if we reached the last one. */
-            if (++current_db >= server.dbnum) {
+            if (++current_db >= cserver.dbnum) {
                 /* defrag other items not part of the db / keys */
                 defragOtherGlobals();
 

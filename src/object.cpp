@@ -1049,7 +1049,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
     mh->lua_caches = mem;
     mem_total+=mem;
 
-    for (j = 0; j < server.dbnum; j++) {
+    for (j = 0; j < cserver.dbnum; j++) {
         redisDb *db = server.db+j;
         long long keyscount = dictSize(db->pdict);
         if (keyscount==0) continue;

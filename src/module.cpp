@@ -528,7 +528,7 @@ void moduleHandlePropagationAfterCommandCallback(RedisModuleCtx *ctx) {
     if (ctx->flags & REDISMODULE_CTX_MULTI_EMITTED) {
         robj *propargv[1];
         propargv[0] = createStringObject("EXEC",4);
-        alsoPropagate(server.execCommand,c->db->id,propargv,1,
+        alsoPropagate(cserver.execCommand,c->db->id,propargv,1,
             PROPAGATE_AOF|PROPAGATE_REPL);
         decrRefCount(propargv[0]);
     }
@@ -3507,7 +3507,7 @@ void RM_LogRaw(RedisModule *module, const char *levelstr, const char *fmt, va_li
     else if (!strcasecmp(levelstr,"warning")) level = LL_WARNING;
     else level = LL_VERBOSE; /* Default. */
 
-    if (level < server.verbosity) return;
+    if (level < cserver.verbosity) return;
 
     name_len = snprintf(msg, sizeof(msg),"<%s> ", module->name);
     vsnprintf(msg + name_len, sizeof(msg) - name_len, fmt, ap);

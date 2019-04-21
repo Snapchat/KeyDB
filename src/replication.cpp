@@ -345,7 +345,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     serverAssert(cchbuf > 0);
 
     char uuid[40] = {'\0'};
-    uuid_unparse(server.uuid, uuid);
+    uuid_unparse(cserver.uuid, uuid);
     char proto[1024];
     int cchProto = snprintf(proto, sizeof(proto), "*3\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
     cchProto = std::min((int)sizeof(proto), cchProto);    
@@ -357,7 +357,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
-        if (server.current_client && FSameHost(server.current_client, slave)) continue;
+        if (serverTL->current_client && FSameHost(serverTL->current_client, slave)) continue;
         std::unique_lock<decltype(slave->lock)> lock(slave->lock);
 
         if (!fSendRaw)
@@ -903,7 +903,7 @@ void processReplconfUuid(client *c, robj *arg)
 
     char szServerUUID[36 + 2]; // 1 for the '+', another for '\0'
     szServerUUID[0] = '+';
-    uuid_unparse(server.uuid, szServerUUID+1);
+    uuid_unparse(cserver.uuid, szServerUUID+1);
     addReplyProto(c, szServerUUID, 37);
     addReplyProto(c, "\r\n", 2);
     return;
@@ -1910,7 +1910,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
     if (mi->repl_state == REPL_STATE_SEND_UUID) {
         char szUUID[37] = {0};
         memset(mi->master_uuid, 0, UUID_BINARY_LEN);
-        uuid_unparse((unsigned char*)server.uuid, szUUID);
+        uuid_unparse((unsigned char*)cserver.uuid, szUUID);
         err = sendSynchronousCommand(mi, SYNC_CMD_WRITE,fd,"REPLCONF","uuid",szUUID,NULL);
         if (err) goto write_error;
         mi->repl_state = REPL_STATE_RECEIVE_UUID;
@@ -3187,7 +3187,7 @@ void replicaReplayCommand(client *c)
 {
     static thread_local ReplicaNestState *s_pstate = nullptr;
     if (s_pstate == nullptr)
-        s_pstate = new ReplicaNestState;
+        s_pstate = new (MALLOC_LOCAL) ReplicaNestState;
 
     // the replay command contains two arguments: 
     //  1: The UUID of the source
@@ -3224,7 +3224,7 @@ void replicaReplayCommand(client *c)
         return;
     }
 
-    if (FSameUuidNoNil(uuid, server.uuid))
+    if (FSameUuidNoNil(uuid, cserver.uuid))
     {
         addReply(c, shared.ok);
         s_pstate->Cancel();
@@ -3248,7 +3248,7 @@ void replicaReplayCommand(client *c)
 
     // call() will not propogate this for us, so we do so here
     if (!s_pstate->FCancelled() && s_pstate->FFirst())
-        alsoPropagate(server.rreplayCommand,c->db->id,c->argv,c->argc,PROPAGATE_AOF|PROPAGATE_REPL);
+        alsoPropagate(cserver.rreplayCommand,c->db->id,c->argv,c->argc,PROPAGATE_AOF|PROPAGATE_REPL);
     
     s_pstate->Pop();
     return;
@@ -3266,9 +3266,9 @@ void updateMasterAuth()
         zfree(mi->masterauth); mi->masterauth = nullptr;
         zfree(mi->masteruser); mi->masteruser = nullptr;
 
-        if (server.default_masterauth)
-            mi->masterauth = zstrdup(server.default_masterauth);
-        if (server.default_masteruser)
-            mi->masteruser = zstrdup(server.default_masteruser);
+        if (cserver.default_masterauth)
+            mi->masterauth = zstrdup(cserver.default_masterauth);
+        if (cserver.default_masteruser)
+            mi->masteruser = zstrdup(cserver.default_masteruser);
     }
 }

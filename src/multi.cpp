@@ -111,7 +111,7 @@ void discardCommand(client *c) {
 void execCommandPropagateMulti(client *c) {
     robj *multistring = createStringObject("MULTI",5);
 
-    propagate(server.multiCommand,c->db->id,&multistring,1,
+    propagate(cserver.multiCommand,c->db->id,&multistring,1,
               PROPAGATE_AOF|PROPAGATE_REPL);
     decrRefCount(multistring);
 }

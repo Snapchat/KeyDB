@@ -1144,6 +1144,7 @@ struct redisServerThreadVars {
     list *unblocked_clients;     /* list of clients to unblock before next loop NOT THREADSAFE */
     list *clients_pending_asyncwrite;
     int cclients;
+    client *current_client; /* Current client */
     struct fastlock lockPendingWrite;
 };
 
@@ -1174,12 +1175,53 @@ struct redisMaster {
                                                 /* After we've connected with our master use the UUID in server.master */
 };
 
-struct redisServer {
-    /* General */
+// Const vars are not changed after worker threads are launched
+struct redisServerConst {
     pid_t pid;                  /* Main process pid. */
+    time_t stat_starttime;          /* Server start time */
     char *configfile;           /* Absolute config file path, or NULL */
     char *executable;           /* Absolute executable file path. */
     char **exec_argv;           /* Executable argv vector (copy). */
+
+    int cthreads;               /* Number of main worker threads */
+    int fThreadAffinity;        /* Should we pin threads to cores? */
+    char *pidfile;              /* PID file path */
+
+    /* Fast pointers to often looked up command */
+    struct redisCommand *delCommand, *multiCommand, *lpushCommand,
+                        *lpopCommand, *rpopCommand, *zpopminCommand,
+                        *zpopmaxCommand, *sremCommand, *execCommand,
+                        *expireCommand, *pexpireCommand, *xclaimCommand,
+                        *xgroupCommand, *rreplayCommand;
+
+    /* Configuration */
+    char *default_masteruser;               /* AUTH with this user and masterauth with master */
+    char *default_masterauth;               /* AUTH with this password with master */
+    int verbosity;                  /* Loglevel in redis.conf */
+    int maxidletime;                /* Client timeout in seconds */
+    int tcpkeepalive;               /* Set SO_KEEPALIVE if non-zero. */
+    int active_defrag_enabled;
+    size_t active_defrag_ignore_bytes; /* minimum amount of fragmentation waste to start active defrag */
+    int active_defrag_threshold_lower; /* minimum percentage of fragmentation to start active defrag */
+    int active_defrag_threshold_upper; /* maximum percentage of fragmentation at which we use maximum effort */
+    int active_defrag_cycle_min;       /* minimal effort for defrag in CPU percentage */
+    int active_defrag_cycle_max;       /* maximal effort for defrag in CPU percentage */
+    unsigned long active_defrag_max_scan_fields; /* maximum number of fields of set/hash/zset/list to process from within the main dict scan */
+    size_t client_max_querybuf_len; /* Limit for client query buffer length */
+    int dbnum;                      /* Total number of configured DBs */
+    int supervised;                 /* 1 if supervised, 0 otherwise. */
+    int supervised_mode;            /* See SUPERVISED_* */
+    int daemonize;                  /* True if running as a daemon */
+    clientBufferLimitsConfig client_obuf_limits[CLIENT_TYPE_OBUF_COUNT];
+
+    /* System hardware info */
+    size_t system_memory_size;  /* Total memory in system as reported by OS */
+
+    unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
+};
+
+struct redisServer {
+    /* General */
     int dynamic_hz;             /* Change hz value depending on # of clients. */
     int config_hz;              /* Configured HZ value. May be different than
                                    the actual 'hz' field value if dynamic-hz
@@ -1189,16 +1231,12 @@ struct redisServer {
     dict *commands;             /* Command table */
     dict *orig_commands;        /* Command table before command renaming. */
 
-    int cthreads;               /* Number of main worker threads */
-    int fThreadAffinity;        /* Should we pin threads to cores? */
     struct redisServerThreadVars rgthreadvar[MAX_EVENT_LOOPS];
 
     unsigned int lruclock;      /* Clock for LRU eviction */
     int shutdown_asap;          /* SHUTDOWN needed ASAP */
     int activerehashing;        /* Incremental rehash in serverCron() */
     int active_defrag_running;  /* Active defragmentation running (holds current scan aggressiveness) */
-    char *pidfile;              /* PID file path */
-    int arch_bits;              /* 32 or 64 depending on sizeof(long) */
     int cronloops;              /* Number of times the cron function run */
     char runid[CONFIG_RUN_ID_SIZE+1];  /* ID always different at every exec. */
     int sentinel_mode;          /* True if this instance is a Sentinel. */
@@ -1225,7 +1263,6 @@ struct redisServer {
     list *clients;              /* List of active clients */
     list *clients_to_close;     /* Clients to close asynchronously */
     list *slaves, *monitors;    /* List of slaves and MONITORs */
-    client *current_client; /* Current client, only used on crash report */
     rax *clients_index;         /* Active clients dictionary by client ID. */
     int clients_paused;         /* True if clients are currently paused */
     mstime_t clients_pause_end_time; /* Time when we undo clients_paused */
@@ -1239,14 +1276,10 @@ struct redisServer {
     off_t loading_loaded_bytes;
     time_t loading_start_time;
     off_t loading_process_events_interval_bytes;
-    /* Fast pointers to often looked up command */
-    struct redisCommand *delCommand, *multiCommand, *lpushCommand,
-                        *lpopCommand, *rpopCommand, *zpopminCommand,
-                        *zpopmaxCommand, *sremCommand, *execCommand,
-                        *expireCommand, *pexpireCommand, *xclaimCommand,
-                        *xgroupCommand, *rreplayCommand;
+
+    int active_expire_enabled;      /* Can be disabled for testing purposes. */
+
     /* Fields used only for stats */
-    time_t stat_starttime;          /* Server start time */
     long long stat_numcommands;     /* Number of processed commands */
     long long stat_numconnections;  /* Number of connections received */
     long long stat_expiredkeys;     /* Number of expired keys */
@@ -1284,26 +1317,7 @@ struct redisServer {
         long long samples[STATS_METRIC_SAMPLES];
         int idx;
     } inst_metric[STATS_METRIC_COUNT];
-    /* Configuration */
-    char *default_masteruser;               /* AUTH with this user and masterauth with master */
-    char *default_masterauth;               /* AUTH with this password with master */
-    int verbosity;                  /* Loglevel in redis.conf */
-    int maxidletime;                /* Client timeout in seconds */
-    int tcpkeepalive;               /* Set SO_KEEPALIVE if non-zero. */
-    int active_expire_enabled;      /* Can be disabled for testing purposes. */
-    int active_defrag_enabled;
-    size_t active_defrag_ignore_bytes; /* minimum amount of fragmentation waste to start active defrag */
-    int active_defrag_threshold_lower; /* minimum percentage of fragmentation to start active defrag */
-    int active_defrag_threshold_upper; /* maximum percentage of fragmentation at which we use maximum effort */
-    int active_defrag_cycle_min;       /* minimal effort for defrag in CPU percentage */
-    int active_defrag_cycle_max;       /* maximal effort for defrag in CPU percentage */
-    unsigned long active_defrag_max_scan_fields; /* maximum number of fields of set/hash/zset/list to process from within the main dict scan */
-    size_t client_max_querybuf_len; /* Limit for client query buffer length */
-    int dbnum;                      /* Total number of configured DBs */
-    int supervised;                 /* 1 if supervised, 0 otherwise. */
-    int supervised_mode;            /* See SUPERVISED_* */
-    int daemonize;                  /* True if running as a daemon */
-    clientBufferLimitsConfig client_obuf_limits[CLIENT_TYPE_OBUF_COUNT];
+    
     /* AOF persistence */
     int aof_state;                  /* AOF_(ON|OFF|WAIT_REWRITE) */
     int aof_fsync;                  /* Kind of fsync() policy */
@@ -1511,8 +1525,6 @@ struct redisServer {
     int assert_line;
     int bug_report_start; /* True if bug report header was already logged. */
     int watchdog_period;  /* Software watchdog period in ms. 0 = off */
-    /* System hardware info */
-    size_t system_memory_size;  /* Total memory in system as reported by OS */
 
     /* Mutexes used to protect atomic variables when atomic builtins are
      * not available. */
@@ -1521,7 +1533,6 @@ struct redisServer {
     pthread_mutex_t unixtime_mutex;
 
     int fActiveReplica;                          /* Can this replica also be a master? */
-    unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
 
     struct fastlock flock;
 
@@ -1622,7 +1633,9 @@ typedef struct {
  * Extern declarations
  *----------------------------------------------------------------------------*/
 
-extern struct redisServer server;
+//extern struct redisServer server;
+extern redisServer *g_pserver;
+extern struct redisServerConst cserver;
 extern __thread struct redisServerThreadVars *serverTL;   // thread local server vars
 extern struct sharedObjectsStruct shared;
 extern dictType objectKeyPointerValueDictType;
@@ -2488,12 +2501,12 @@ static inline int GlobalLocksAcquired(void)  // Used in asserts to verify all gl
 inline int ielFromEventLoop(const aeEventLoop *eventLoop)
 {
     int iel = 0;
-    for (; iel < server.cthreads; ++iel)
+    for (; iel < cserver.cthreads; ++iel)
     {
         if (server.rgthreadvar[iel].el == eventLoop)
             break;
     }
-    serverAssert(iel < server.cthreads);
+    serverAssert(iel < cserver.cthreads);
     return iel;
 }
 

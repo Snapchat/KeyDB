@@ -504,14 +504,14 @@ void initSentinel(void) {
 void sentinelIsRunning(void) {
     int j;
 
-    if (server.configfile == NULL) {
+    if (cserver.configfile == NULL) {
         serverLog(LL_WARNING,
             "Sentinel started without a config file. Exiting...");
         exit(1);
-    } else if (access(server.configfile,W_OK) == -1) {
+    } else if (access(cserver.configfile,W_OK) == -1) {
         serverLog(LL_WARNING,
             "Sentinel config file %s is not writable: %s. Exiting...",
-            server.configfile,strerror(errno));
+            cserver.configfile,strerror(errno));
         exit(1);
     }
 
@@ -641,7 +641,7 @@ void sentinelEvent(int level, const char *type, sentinelRedisInstance *ri,
     }
 
     /* Log the message if the log level allows it to be logged. */
-    if (level >= server.verbosity)
+    if (level >= cserver.verbosity)
         serverLog(level,"%s %s",type,msg);
 
     /* Publish the message via Pub/Sub if it's not a debugging one. */
@@ -1930,11 +1930,11 @@ void sentinelFlushConfig(void) {
     int rewrite_status;
 
     server.hz = CONFIG_DEFAULT_HZ;
-    rewrite_status = rewriteConfig(server.configfile);
+    rewrite_status = rewriteConfig(cserver.configfile);
     server.hz = saved_hz;
 
     if (rewrite_status == -1) goto werr;
-    if ((fd = open(server.configfile,O_RDONLY)) == -1) goto werr;
+    if ((fd = open(cserver.configfile,O_RDONLY)) == -1) goto werr;
     if (fsync(fd) == -1) goto werr;
     if (close(fd) == EOF) goto werr;
     return;

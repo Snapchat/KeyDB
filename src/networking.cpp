@@ -154,8 +154,8 @@ client *createClient(int fd, int iel) {
     if (fd != -1) {
         anetNonBlock(NULL,fd);
         anetEnableTcpNoDelay(NULL,fd);
-        if (server.tcpkeepalive)
-            anetKeepAlive(NULL,fd,server.tcpkeepalive);
+        if (cserver.tcpkeepalive)
+            anetKeepAlive(NULL,fd,cserver.tcpkeepalive);
         if (aeCreateFileEvent(server.rgthreadvar[iel].el,fd,AE_READABLE|AE_READ_THREADSAFE,
             readQueryFromClient, c) == AE_ERR)
         {
@@ -1042,7 +1042,7 @@ static void acceptCommonHandler(int fd, int flags, char *ip, int iel) {
 
 #ifdef HAVE_SO_INCOMING_CPU
     // Set thread affinity
-    if (server.fThreadAffinity)
+    if (cserver.fThreadAffinity)
     {
         int cpu = iel;
         if (setsockopt(fd, SOL_SOCKET, SO_INCOMING_CPU, &cpu, sizeof(iel)) != 0)
@@ -1200,7 +1200,7 @@ void unlinkClient(client *c) {
     serverAssert(c->fd == -1 || c->lock.fOwnLock());
 
     /* If this is marked as current client unset it. */
-    if (server.current_client == c) server.current_client = NULL;
+    if (serverTL->current_client == c) serverTL->current_client = NULL;
 
     /* Certain operations must be done only if the client has an active socket.
      * If the client was already unlinked or if it's a "fake client" the
@@ -1254,7 +1254,7 @@ void unlinkClient(client *c) {
     if (c->fPendingAsyncWrite) {
         ln = NULL;
         bool fFound = false;
-        for (int iel = 0; iel < server.cthreads; ++iel)
+        for (int iel = 0; iel < cserver.cthreads; ++iel)
         {
             ln = listSearchKey(server.rgthreadvar[iel].clients_pending_asyncwrite,c);
             if (ln)
@@ -1779,7 +1779,7 @@ int processInlineBuffer(client *c) {
  * and set the client as CLIENT_CLOSE_AFTER_REPLY. */
 #define PROTO_DUMP_LEN 128
 static void setProtocolError(const char *errstr, client *c) {
-    if (server.verbosity <= LL_VERBOSE) {
+    if (cserver.verbosity <= LL_VERBOSE) {
         sds client = catClientInfoString(sdsempty(),c);
 
         /* Sample some protocol to given an idea about what was inside. */
@@ -2003,7 +2003,7 @@ void processInputBuffer(client *c, int callFlags) {
         } else {
             AeLocker locker;
             locker.arm(c);
-            server.current_client = c;
+            serverTL->current_client = c;
 
             /* Only reset the client when the command was executed. */
             if (processCommand(c, callFlags) == C_OK) {
@@ -2022,11 +2022,11 @@ void processInputBuffer(client *c, int callFlags) {
             /* freeMemoryIfNeeded may flush slave output buffers. This may
              * result into a slave, that may be the active client, to be
              * freed. */
-            if (server.current_client == NULL) {
+            if (serverTL->current_client == NULL) {
                 fFreed = true;
                 break;
             }
-            server.current_client = NULL;
+            serverTL->current_client = NULL;
         }
     }
 
@@ -2127,7 +2127,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     c->lastinteraction = server.unixtime;
     if (c->flags & CLIENT_MASTER) c->read_reploff += nread;
     server.stat_net_input_bytes += nread;
-    if (sdslen(c->querybuf) > server.client_max_querybuf_len) {
+    if (sdslen(c->querybuf) > cserver.client_max_querybuf_len) {
         sds ci = catClientInfoString(sdsempty(),c), bytes = sdsempty();
 
         bytes = sdscatrepr(bytes,c->querybuf,64);
@@ -2739,11 +2739,11 @@ int checkClientOutputBufferLimits(client *c) {
      * like normal clients. */
     if (clientType == CLIENT_TYPE_MASTER) clientType = CLIENT_TYPE_NORMAL;
 
-    if (server.client_obuf_limits[clientType].hard_limit_bytes &&
-        used_mem >= server.client_obuf_limits[clientType].hard_limit_bytes)
+    if (cserver.client_obuf_limits[clientType].hard_limit_bytes &&
+        used_mem >= cserver.client_obuf_limits[clientType].hard_limit_bytes)
         hard = 1;
-    if (server.client_obuf_limits[clientType].soft_limit_bytes &&
-        used_mem >= server.client_obuf_limits[clientType].soft_limit_bytes)
+    if (cserver.client_obuf_limits[clientType].soft_limit_bytes &&
+        used_mem >= cserver.client_obuf_limits[clientType].soft_limit_bytes)
         soft = 1;
 
     /* We need to check if the soft limit is reached continuously for the
@@ -2756,7 +2756,7 @@ int checkClientOutputBufferLimits(client *c) {
             time_t elapsed = server.unixtime - c->obuf_soft_limit_reached_time;
 
             if (elapsed <=
-                server.client_obuf_limits[clientType].soft_limit_seconds) {
+                cserver.client_obuf_limits[clientType].soft_limit_seconds) {
                 soft = 0; /* The client still did not reached the max number of
                              seconds for the soft limit to be considered
                              reached. */

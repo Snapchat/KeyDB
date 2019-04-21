@@ -488,7 +488,7 @@ int freeMemoryIfNeeded(void) {
                 /* We don't want to make local-db choices when expiring keys,
                  * so to start populate the eviction pool sampling keys from
                  * every DB. */
-                for (i = 0; i < server.dbnum; i++) {
+                for (i = 0; i < cserver.dbnum; i++) {
                     db = server.db+i;
                     dict = (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) ?
                             db->pdict : db->expires;
@@ -537,8 +537,8 @@ int freeMemoryIfNeeded(void) {
             /* When evicting a random key, we try to evict a key for
              * each DB, so we use the static 'next_db' variable to
              * incrementally visit all DBs. */
-            for (i = 0; i < server.dbnum; i++) {
-                j = (++next_db) % server.dbnum;
+            for (i = 0; i < cserver.dbnum; i++) {
+                j = (++next_db) % cserver.dbnum;
                 db = server.db+j;
                 dict = (server.maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM) ?
                         db->pdict : db->expires;

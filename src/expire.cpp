@@ -47,7 +47,7 @@
  * If the key is found to be expired, it is removed from the database and
  * 1 is returned. Otherwise no operation is performed and 0 is returned.
  *
- * When a key is expired, server.stat_expiredkeys is incremented.
+ * When a key is expired, g_pserver->stat_expiredkeys is incremented.
  *
  * The parameter 'now' is the current time in milliseconds as is passed
  * to the function to avoid too many gettimeofday() syscalls. */
@@ -57,15 +57,15 @@ int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
         sds key = (sds)dictGetKey(de);
         robj *keyobj = createStringObject(key,sdslen(key));
 
-        propagateExpire(db,keyobj,server.lazyfree_lazy_expire);
-        if (server.lazyfree_lazy_expire)
+        propagateExpire(db,keyobj,g_pserver->lazyfree_lazy_expire);
+        if (g_pserver->lazyfree_lazy_expire)
             dbAsyncDelete(db,keyobj);
         else
             dbSyncDelete(db,keyobj);
         notifyKeyspaceEvent(NOTIFY_EXPIRED,
             "expired",keyobj,db->id);
         decrRefCount(keyobj);
-        server.stat_expiredkeys++;
+        g_pserver->stat_expiredkeys++;
         return 1;
     } else {
         return 0;
@@ -131,9 +131,9 @@ void activeExpireCycle(int type) {
 
     /* We can use at max ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC percentage of CPU time
      * per iteration. Since this function gets called with a frequency of
-     * server.hz times per second, the following is the max amount of
+     * g_pserver->hz times per second, the following is the max amount of
      * microseconds we can spend in this function. */
-    timelimit = 1000000*ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC/server.hz/100;
+    timelimit = 1000000*ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC/g_pserver->hz/100;
     timelimit_exit = 0;
     if (timelimit <= 0) timelimit = 1;
 
@@ -148,7 +148,7 @@ void activeExpireCycle(int type) {
 
     for (j = 0; j < dbs_per_call && timelimit_exit == 0; j++) {
         int expired;
-        redisDb *db = server.db+(current_db % cserver.dbnum);
+        redisDb *db = g_pserver->db+(current_db % cserver.dbnum);
 
         /* Increment the DB now so we are sure if we run out of time
          * in the current DB we'll restart from the next. This allows to
@@ -220,7 +220,7 @@ void activeExpireCycle(int type) {
                 elapsed = ustime()-start;
                 if (elapsed > timelimit) {
                     timelimit_exit = 1;
-                    server.stat_expired_time_cap_reached_count++;
+                    g_pserver->stat_expired_time_cap_reached_count++;
                     break;
                 }
             }
@@ -239,8 +239,8 @@ void activeExpireCycle(int type) {
         current_perc = (double)total_expired/total_sampled;
     } else
         current_perc = 0;
-    server.stat_expired_stale_perc = (current_perc*0.05)+
-                                     (server.stat_expired_stale_perc*0.95);
+    g_pserver->stat_expired_stale_perc = (current_perc*0.05)+
+                                     (g_pserver->stat_expired_stale_perc*0.95);
 }
 
 /*-----------------------------------------------------------------------------
@@ -299,12 +299,12 @@ void expireSlaveKeys(void) {
         int dbid = 0;
         while(dbids && dbid < cserver.dbnum) {
             if ((dbids & 1) != 0) {
-                redisDb *db = server.db+dbid;
+                redisDb *db = g_pserver->db+dbid;
                 dictEntry *expire = dictFind(db->expires,keyname);
                 int expired = 0;
 
                 if (expire &&
-                    activeExpireCycleTryExpire(server.db+dbid,expire,start))
+                    activeExpireCycleTryExpire(g_pserver->db+dbid,expire,start))
                 {
                     expired = 1;
                 }
@@ -377,7 +377,7 @@ size_t getSlaveKeyWithExpireCount(void) {
 }
 
 /* Remove the keys in the hash table. We need to do that when data is
- * flushed from the server. We may receive new keys from the master with
+ * flushed from the g_pserver-> We may receive new keys from the master with
  * the same name/db and it is no longer a good idea to expire them.
  *
  * Note: technically we should handle the case of a single DB being flushed
@@ -424,16 +424,16 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
      *
      * Instead we take the other branch of the IF statement setting an expire
      * (possibly in the past) and wait for an explicit DEL from the master. */
-    if (when <= mstime() && !server.loading && !listLength(server.masters)) {
+    if (when <= mstime() && !g_pserver->loading && !listLength(g_pserver->masters)) {
         robj *aux;
 
-        int deleted = server.lazyfree_lazy_expire ? dbAsyncDelete(c->db,key) :
+        int deleted = g_pserver->lazyfree_lazy_expire ? dbAsyncDelete(c->db,key) :
                                                     dbSyncDelete(c->db,key);
         serverAssertWithInfo(c,key,deleted);
-        server.dirty++;
+        g_pserver->dirty++;
 
         /* Replicate/AOF this as an explicit DEL or UNLINK. */
-        aux = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
+        aux = g_pserver->lazyfree_lazy_expire ? shared.unlink : shared.del;
         rewriteClientCommandVector(c,2,aux,key);
         signalModifiedKey(c->db,key);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",key,c->db->id);
@@ -444,7 +444,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         addReply(c,shared.cone);
         signalModifiedKey(c->db,key);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"expire",key,c->db->id);
-        server.dirty++;
+        g_pserver->dirty++;
         return;
     }
 }
@@ -507,7 +507,7 @@ void persistCommand(client *c) {
     if (lookupKeyWrite(c->db,c->argv[1])) {
         if (removeExpire(c->db,c->argv[1])) {
             addReply(c,shared.cone);
-            server.dirty++;
+            g_pserver->dirty++;
         } else {
             addReply(c,shared.czero);
         }

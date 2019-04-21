@@ -59,14 +59,14 @@ void* activeDefragAlloc(void *ptr) {
     size_t size;
     void *newptr;
     if(!je_get_defrag_hint(ptr, &bin_util, &run_util)) {
-        server.stat_active_defrag_misses++;
+        g_pserver->stat_active_defrag_misses++;
         return NULL;
     }
     /* if this run is more utilized than the average utilization in this bin
      * (or it is full), skip it. This will eventually move all the allocations
      * from relatively empty runs into relatively full runs. */
     if (run_util > bin_util || run_util == 1<<16) {
-        server.stat_active_defrag_misses++;
+        g_pserver->stat_active_defrag_misses++;
         return NULL;
     }
     /* move this allocation to a new allocation.
@@ -442,7 +442,7 @@ long scanLaterList(robj *ob) {
     quicklist *ql = (quicklist*)ptrFromObj(ob);
     if (ob->type != OBJ_LIST || ob->encoding != OBJ_ENCODING_QUICKLIST)
         return 0;
-    server.stat_active_defrag_scanned+=ql->len;
+    g_pserver->stat_active_defrag_scanned+=ql->len;
     return activeDefragQuickListNodes(ql);
 }
 
@@ -455,7 +455,7 @@ void scanLaterZsetCallback(void *privdata, const dictEntry *_de) {
     dictEntry *de = (dictEntry*)_de;
     scanLaterZsetData *data = (scanLaterZsetData*)privdata;
     data->defragged += activeDefragZsetEntry(data->zs, de);
-    server.stat_active_defrag_scanned++;
+    g_pserver->stat_active_defrag_scanned++;
 }
 
 long scanLaterZset(robj *ob, unsigned long *cursor) {
@@ -474,7 +474,7 @@ void scanLaterSetCallback(void *privdata, const dictEntry *_de) {
     sds sdsele = (sds)dictGetKey(de), newsds;
     if ((newsds = activeDefragSds(sdsele)))
         (*defragged)++, de->key = newsds;
-    server.stat_active_defrag_scanned++;
+    g_pserver->stat_active_defrag_scanned++;
 }
 
 long scanLaterSet(robj *ob, unsigned long *cursor) {
@@ -495,7 +495,7 @@ void scanLaterHashCallback(void *privdata, const dictEntry *_de) {
     sdsele = (sds)dictGetVal(de);
     if ((newsds = activeDefragSds(sdsele)))
         (*defragged)++, de->v.val = newsds;
-    server.stat_active_defrag_scanned++;
+    g_pserver->stat_active_defrag_scanned++;
 }
 
 long scanLaterHash(robj *ob, unsigned long *cursor) {
@@ -837,12 +837,12 @@ long defragKey(redisDb *db, dictEntry *de) {
 /* Defrag scan callback for the main db dictionary. */
 void defragScanCallback(void *privdata, const dictEntry *de) {
     long defragged = defragKey((redisDb*)privdata, (dictEntry*)de);
-    server.stat_active_defrag_hits += defragged;
+    g_pserver->stat_active_defrag_hits += defragged;
     if(defragged)
-        server.stat_active_defrag_key_hits++;
+        g_pserver->stat_active_defrag_key_hits++;
     else
-        server.stat_active_defrag_key_misses++;
-    server.stat_active_defrag_scanned++;
+        g_pserver->stat_active_defrag_key_misses++;
+    g_pserver->stat_active_defrag_scanned++;
 }
 
 /* Defrag scan callback for each hash table bicket,
@@ -887,8 +887,8 @@ long defragOtherGlobals() {
     /* there are many more pointers to defrag (e.g. client argv, output / aof buffers, etc.
      * but we assume most of these are short lived, we only need to defrag allocations
      * that remain static for a long time */
-    defragged += activeDefragSdsDict(server.lua_scripts, DEFRAG_SDS_DICT_VAL_IS_STROB);
-    defragged += activeDefragSdsListAndDict(server.repl_scriptcache_fifo, server.repl_scriptcache_dict, DEFRAG_SDS_DICT_NO_VAL);
+    defragged += activeDefragSdsDict(g_pserver->lua_scripts, DEFRAG_SDS_DICT_VAL_IS_STROB);
+    defragged += activeDefragSdsListAndDict(g_pserver->repl_scriptcache_fifo, g_pserver->repl_scriptcache_dict, DEFRAG_SDS_DICT_NO_VAL);
     return defragged;
 }
 
@@ -898,16 +898,16 @@ int defragLaterItem(dictEntry *de, unsigned long *cursor, long long endtime) {
     if (de) {
         robj *ob = (robj*)dictGetVal(de);
         if (ob->type == OBJ_LIST) {
-            server.stat_active_defrag_hits += scanLaterList(ob);
+            g_pserver->stat_active_defrag_hits += scanLaterList(ob);
             *cursor = 0; /* list has no scan, we must finish it in one go */
         } else if (ob->type == OBJ_SET) {
-            server.stat_active_defrag_hits += scanLaterSet(ob, cursor);
+            g_pserver->stat_active_defrag_hits += scanLaterSet(ob, cursor);
         } else if (ob->type == OBJ_ZSET) {
-            server.stat_active_defrag_hits += scanLaterZset(ob, cursor);
+            g_pserver->stat_active_defrag_hits += scanLaterZset(ob, cursor);
         } else if (ob->type == OBJ_HASH) {
-            server.stat_active_defrag_hits += scanLaterHash(ob, cursor);
+            g_pserver->stat_active_defrag_hits += scanLaterHash(ob, cursor);
         } else if (ob->type == OBJ_STREAM) {
-            return scanLaterStraemListpacks(ob, cursor, endtime, &server.stat_active_defrag_hits);
+            return scanLaterStraemListpacks(ob, cursor, endtime, &g_pserver->stat_active_defrag_hits);
         } else {
             *cursor = 0; /* object type may have changed since we schedule it for later */
         }
@@ -922,8 +922,8 @@ int defragLaterStep(redisDb *db, long long endtime) {
     static sds current_key = NULL;
     static unsigned long cursor = 0;
     unsigned int iterations = 0;
-    unsigned long long prev_defragged = server.stat_active_defrag_hits;
-    unsigned long long prev_scanned = server.stat_active_defrag_scanned;
+    unsigned long long prev_defragged = g_pserver->stat_active_defrag_hits;
+    unsigned long long prev_scanned = g_pserver->stat_active_defrag_scanned;
     long long key_defragged;
 
     do {
@@ -952,7 +952,7 @@ int defragLaterStep(redisDb *db, long long endtime) {
 
         /* each time we enter this function we need to fetch the key from the dict again (if it still exists) */
         dictEntry *de = dictFind(db->pdict, current_key);
-        key_defragged = server.stat_active_defrag_hits;
+        key_defragged = g_pserver->stat_active_defrag_hits;
         do {
             int quit = 0;
             if (defragLaterItem(de, &cursor, endtime))
@@ -967,24 +967,24 @@ int defragLaterStep(redisDb *db, long long endtime) {
              * (if we have a lot of pointers in one hash bucket, or rehashing),
              * check if we reached the time limit. */
             if (quit || (++iterations > 16 ||
-                            server.stat_active_defrag_hits - prev_defragged > 512 ||
-                            server.stat_active_defrag_scanned - prev_scanned > 64)) {
+                            g_pserver->stat_active_defrag_hits - prev_defragged > 512 ||
+                            g_pserver->stat_active_defrag_scanned - prev_scanned > 64)) {
                 if (quit || ustime() > endtime) {
-                    if(key_defragged != server.stat_active_defrag_hits)
-                        server.stat_active_defrag_key_hits++;
+                    if(key_defragged != g_pserver->stat_active_defrag_hits)
+                        g_pserver->stat_active_defrag_key_hits++;
                     else
-                        server.stat_active_defrag_key_misses++;
+                        g_pserver->stat_active_defrag_key_misses++;
                     return 1;
                 }
                 iterations = 0;
-                prev_defragged = server.stat_active_defrag_hits;
-                prev_scanned = server.stat_active_defrag_scanned;
+                prev_defragged = g_pserver->stat_active_defrag_hits;
+                prev_scanned = g_pserver->stat_active_defrag_scanned;
             }
         } while(cursor);
-        if(key_defragged != server.stat_active_defrag_hits)
-            server.stat_active_defrag_key_hits++;
+        if(key_defragged != g_pserver->stat_active_defrag_hits)
+            g_pserver->stat_active_defrag_key_hits++;
         else
-            server.stat_active_defrag_key_misses++;
+            g_pserver->stat_active_defrag_key_misses++;
     } while(1);
 }
 
@@ -996,7 +996,7 @@ void computeDefragCycles() {
     size_t frag_bytes;
     float frag_pct = getAllocatorFragmentation(&frag_bytes);
     /* If we're not already running, and below the threshold, exit. */
-    if (!server.active_defrag_running) {
+    if (!g_pserver->active_defrag_running) {
         if(frag_pct < cserver.active_defrag_threshold_lower || frag_bytes < cserver.active_defrag_ignore_bytes)
             return;
     }
@@ -1012,10 +1012,10 @@ void computeDefragCycles() {
             cserver.active_defrag_cycle_max);
      /* We allow increasing the aggressiveness during a scan, but don't
       * reduce it. */
-    if (!server.active_defrag_running ||
-        cpu_pct > server.active_defrag_running)
+    if (!g_pserver->active_defrag_running ||
+        cpu_pct > g_pserver->active_defrag_running)
     {
-        server.active_defrag_running = cpu_pct;
+        g_pserver->active_defrag_running = cpu_pct;
         serverLog(LL_VERBOSE,
             "Starting active defrag, frag=%.0f%%, frag_bytes=%zu, cpu=%d%%",
             frag_pct, frag_bytes, cpu_pct);
@@ -1031,13 +1031,13 @@ void activeDefragCycle(void) {
     static redisDb *db = NULL;
     static long long start_scan, start_stat;
     unsigned int iterations = 0;
-    unsigned long long prev_defragged = server.stat_active_defrag_hits;
-    unsigned long long prev_scanned = server.stat_active_defrag_scanned;
+    unsigned long long prev_defragged = g_pserver->stat_active_defrag_hits;
+    unsigned long long prev_scanned = g_pserver->stat_active_defrag_scanned;
     long long start, timelimit, endtime;
     mstime_t latency;
     int quit = 0;
 
-    if (server.aof_child_pid!=-1 || server.rdb_child_pid!=-1)
+    if (g_pserver->aof_child_pid!=-1 || g_pserver->rdb_child_pid!=-1)
         return; /* Defragging memory while there's a fork will just do damage. */
 
     /* Once a second, check if we the fragmentation justfies starting a scan
@@ -1045,12 +1045,12 @@ void activeDefragCycle(void) {
     run_with_period(1000) {
         computeDefragCycles();
     }
-    if (!server.active_defrag_running)
+    if (!g_pserver->active_defrag_running)
         return;
 
     /* See activeExpireCycle for how timelimit is handled. */
     start = ustime();
-    timelimit = 1000000*server.active_defrag_running/server.hz/100;
+    timelimit = 1000000*g_pserver->active_defrag_running/g_pserver->hz/100;
     if (timelimit <= 0) timelimit = 1;
     endtime = start + timelimit;
     latencyStartMonitor(latency);
@@ -1074,26 +1074,26 @@ void activeDefragCycle(void) {
                 float frag_pct = getAllocatorFragmentation(&frag_bytes);
                 serverLog(LL_VERBOSE,
                     "Active defrag done in %dms, reallocated=%d, frag=%.0f%%, frag_bytes=%zu",
-                    (int)((now - start_scan)/1000), (int)(server.stat_active_defrag_hits - start_stat), frag_pct, frag_bytes);
+                    (int)((now - start_scan)/1000), (int)(g_pserver->stat_active_defrag_hits - start_stat), frag_pct, frag_bytes);
 
                 start_scan = now;
                 current_db = -1;
                 cursor = 0;
                 db = NULL;
-                server.active_defrag_running = 0;
+                g_pserver->active_defrag_running = 0;
 
                 computeDefragCycles(); /* if another scan is needed, start it right away */
-                if (server.active_defrag_running != 0 && ustime() < endtime)
+                if (g_pserver->active_defrag_running != 0 && ustime() < endtime)
                     continue;
                 break;
             }
             else if (current_db==0) {
                 /* Start a scan from the first database. */
                 start_scan = ustime();
-                start_stat = server.stat_active_defrag_hits;
+                start_stat = g_pserver->stat_active_defrag_hits;
             }
 
-            db = &server.db[current_db];
+            db = &g_pserver->db[current_db];
             cursor = 0;
         }
 
@@ -1112,15 +1112,15 @@ void activeDefragCycle(void) {
              * But regardless, don't start a new db in this loop, this is because after
              * the last db we call defragOtherGlobals, which must be done in once cycle */
             if (!cursor || (++iterations > 16 ||
-                            server.stat_active_defrag_hits - prev_defragged > 512 ||
-                            server.stat_active_defrag_scanned - prev_scanned > 64)) {
+                            g_pserver->stat_active_defrag_hits - prev_defragged > 512 ||
+                            g_pserver->stat_active_defrag_scanned - prev_scanned > 64)) {
                 if (!cursor || ustime() > endtime) {
                     quit = 1;
                     break;
                 }
                 iterations = 0;
-                prev_defragged = server.stat_active_defrag_hits;
-                prev_scanned = server.stat_active_defrag_scanned;
+                prev_defragged = g_pserver->stat_active_defrag_hits;
+                prev_scanned = g_pserver->stat_active_defrag_scanned;
             }
         } while(cursor && !quit);
     } while(!quit);

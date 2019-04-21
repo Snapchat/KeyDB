@@ -227,7 +227,7 @@ void ACLFreeUser(user *u) {
 void ACLFreeUserAndKillClients(user *u) {
     listIter li;
     listNode *ln;
-    listRewind(server.clients,&li);
+    listRewind(g_pserver->clients,&li);
     while ((ln = listNext(&li)) != NULL) {
         client *c = (client*)listNodeValue(ln);
         if (c->puser == u) {
@@ -334,7 +334,7 @@ void ACLSetUserCommandBit(user *u, unsigned long id, int value) {
 int ACLSetUserCommandBitsForCategory(user *u, const char *category, int value) {
     uint64_t cflag = ACLGetCommandCategoryFlagByName(category);
     if (!cflag) return C_ERR;
-    dictIterator *di = dictGetIterator(server.orig_commands);
+    dictIterator *di = dictGetIterator(g_pserver->orig_commands);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         struct redisCommand *cmd = (redisCommand*)dictGetVal(de);
@@ -359,7 +359,7 @@ int ACLCountCategoryBitsForUser(user *u, unsigned long *on, unsigned long *off,
     if (!cflag) return C_ERR;
 
     *on = *off = 0;
-    dictIterator *di = dictGetIterator(server.orig_commands);
+    dictIterator *di = dictGetIterator(g_pserver->orig_commands);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         struct redisCommand *cmd = (redisCommand*)dictGetVal(de);
@@ -428,7 +428,7 @@ sds ACLDescribeUserCommandRules(user *u) {
     }
 
     /* Fix the final ACLs with single commands differences. */
-    dictIterator *di = dictGetIterator(server.orig_commands);
+    dictIterator *di = dictGetIterator(g_pserver->orig_commands);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         struct redisCommand *cmd = (redisCommand*)dictGetVal(de);
@@ -533,7 +533,7 @@ sds ACLDescribeUser(user *u) {
 struct redisCommand *ACLLookupCommand(const char *name) {
     struct redisCommand *cmd;
     sds sdsname = sdsnew(name);
-    cmd = (redisCommand*)dictFetchValue(server.orig_commands, sdsname);
+    cmd = (redisCommand*)dictFetchValue(g_pserver->orig_commands, sdsname);
     sdsfree(sdsname);
     return cmd;
 }
@@ -1194,7 +1194,7 @@ sds ACLLoadFromFile(const char *filename) {
         if (argv == NULL) {
             errors = sdscatprintf(errors,
                      "%s:%d: unbalanced quotes in acl line. ",
-                     server.acl_filename, linenum);
+                     g_pserver->acl_filename, linenum);
             continue;
         }
 
@@ -1208,7 +1208,7 @@ sds ACLLoadFromFile(const char *filename) {
         if (strcmp(argv[0],"user") || argc < 2) {
             errors = sdscatprintf(errors,
                      "%s:%d should start with user keyword followed "
-                     "by the username. ", server.acl_filename,
+                     "by the username. ", g_pserver->acl_filename,
                      linenum);
             sdsfreesplitres(argv,argc);
             continue;
@@ -1223,7 +1223,7 @@ sds ACLLoadFromFile(const char *filename) {
                 const char *errmsg = ACLSetUserStringError();
                 errors = sdscatprintf(errors,
                          "%s:%d: %s. ",
-                         server.acl_filename, linenum, errmsg);
+                         g_pserver->acl_filename, linenum, errmsg);
                 continue;
             }
         }
@@ -1349,7 +1349,7 @@ cleanup:
  * The function will just exit with an error if the user is trying to mix
  * both the loading methods. */
 void ACLLoadUsersAtStartup(void) {
-    if (server.acl_filename[0] != '\0' && listLength(UsersToLoad) != 0) {
+    if (g_pserver->acl_filename[0] != '\0' && listLength(UsersToLoad) != 0) {
         serverLog(LL_WARNING,
             "Configuring Redis with users defined in redis.conf and at "
             "the same setting an ACL file path is invalid. This setup "
@@ -1365,8 +1365,8 @@ void ACLLoadUsersAtStartup(void) {
         exit(1);
     }
 
-    if (server.acl_filename[0] != '\0') {
-        sds errors = ACLLoadFromFile(server.acl_filename);
+    if (g_pserver->acl_filename[0] != '\0') {
+        sds errors = ACLLoadFromFile(g_pserver->acl_filename);
         if (errors) {
             serverLog(LL_WARNING,
                 "Aborting Redis startup because of ACL errors: %s", errors);
@@ -1526,13 +1526,13 @@ void aclCommand(client *c) {
         } else {
             addReplyNull(c);
         }
-    } else if (server.acl_filename[0] == '\0' &&
+    } else if (g_pserver->acl_filename[0] == '\0' &&
                (!strcasecmp(sub,"load") || !strcasecmp(sub,"save")))
     {
         addReplyError(c,"This Redis instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a Redis configuration file set) in order to store users in the Redis configuration.");
         return;
     } else if (!strcasecmp(sub,"load") && c->argc == 2) {
-        sds errors = ACLLoadFromFile(server.acl_filename);
+        sds errors = ACLLoadFromFile(g_pserver->acl_filename);
         if (errors == NULL) {
             addReply(c,shared.ok);
         } else {
@@ -1540,7 +1540,7 @@ void aclCommand(client *c) {
             sdsfree(errors);
         }
     } else if (!strcasecmp(sub,"save") && c->argc == 2) {
-        if (ACLSaveToFile(server.acl_filename) == C_OK) {
+        if (ACLSaveToFile(g_pserver->acl_filename) == C_OK) {
             addReply(c,shared.ok);
         } else {
             addReplyError(c,"There was an error trying to save the ACLs. "
@@ -1561,7 +1561,7 @@ void aclCommand(client *c) {
         }
         int arraylen = 0;
         void *dl = addReplyDeferredLen(c);
-        dictIterator *di = dictGetIterator(server.orig_commands);
+        dictIterator *di = dictGetIterator(g_pserver->orig_commands);
         dictEntry *de;
         while ((de = dictNext(di)) != NULL) {
             struct redisCommand *cmd = (redisCommand*)dictGetVal(de);

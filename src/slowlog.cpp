@@ -87,7 +87,7 @@ slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long dur
     }
     se->time = time(NULL);
     se->duration = duration;
-    se->id = server.slowlog_entry_id++;
+    se->id = g_pserver->slowlog_entry_id++;
     se->peerid = sdsnew(getClientPeerId(c));
     se->cname = c->name ? sdsnew(szFromObj(c->name)) : sdsempty();
     return se;
@@ -112,29 +112,29 @@ void slowlogFreeEntry(const void *septr) {
 /* Initialize the slow log. This function should be called a single time
  * at server startup. */
 void slowlogInit(void) {
-    server.slowlog = listCreate();
-    server.slowlog_entry_id = 0;
-    listSetFreeMethod(server.slowlog,slowlogFreeEntry);
+    g_pserver->slowlog = listCreate();
+    g_pserver->slowlog_entry_id = 0;
+    listSetFreeMethod(g_pserver->slowlog,slowlogFreeEntry);
 }
 
 /* Push a new entry into the slow log.
  * This function will make sure to trim the slow log accordingly to the
  * configured max length. */
 void slowlogPushEntryIfNeeded(client *c, robj **argv, int argc, long long duration) {
-    if (server.slowlog_log_slower_than < 0) return; /* Slowlog disabled */
-    if (duration >= server.slowlog_log_slower_than)
-        listAddNodeHead(server.slowlog,
+    if (g_pserver->slowlog_log_slower_than < 0) return; /* Slowlog disabled */
+    if (duration >= g_pserver->slowlog_log_slower_than)
+        listAddNodeHead(g_pserver->slowlog,
                         slowlogCreateEntry(c,argv,argc,duration));
 
     /* Remove old entries if needed. */
-    while (listLength(server.slowlog) > server.slowlog_max_len)
-        listDelNode(server.slowlog,listLast(server.slowlog));
+    while (listLength(g_pserver->slowlog) > g_pserver->slowlog_max_len)
+        listDelNode(g_pserver->slowlog,listLast(g_pserver->slowlog));
 }
 
 /* Remove all the entries from the current slow log. */
 void slowlogReset(void) {
-    while (listLength(server.slowlog) > 0)
-        listDelNode(server.slowlog,listLast(server.slowlog));
+    while (listLength(g_pserver->slowlog) > 0)
+        listDelNode(g_pserver->slowlog,listLast(g_pserver->slowlog));
 }
 
 /* The SLOWLOG command. Implements all the subcommands needed to handle the
@@ -154,7 +154,7 @@ NULL
         slowlogReset();
         addReply(c,shared.ok);
     } else if (c->argc == 2 && !strcasecmp(szFromObj(c->argv[1]),"len")) {
-        addReplyLongLong(c,listLength(server.slowlog));
+        addReplyLongLong(c,listLength(g_pserver->slowlog));
     } else if ((c->argc == 2 || c->argc == 3) &&
                !strcasecmp(szFromObj(c->argv[1]),"get"))
     {
@@ -168,7 +168,7 @@ NULL
             getLongFromObjectOrReply(c,c->argv[2],&count,NULL) != C_OK)
             return;
 
-        listRewind(server.slowlog,&li);
+        listRewind(g_pserver->slowlog,&li);
         totentries = addReplyDeferredLen(c);
         while(count-- && (ln = listNext(&li))) {
             int j;

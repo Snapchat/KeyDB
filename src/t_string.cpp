@@ -84,7 +84,7 @@ void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire,
         return;
     }
     setKey(c->db,key,val);
-    server.dirty++;
+    g_pserver->dirty++;
     if (expire) setExpire(c,c->db,key,mstime()+milliseconds);
     notifyKeyspaceEvent(NOTIFY_STRING,"set",key,c->db->id);
     if (expire) notifyKeyspaceEvent(NOTIFY_GENERIC,
@@ -178,7 +178,7 @@ void getsetCommand(client *c) {
     c->argv[2] = tryObjectEncoding(c->argv[2]);
     setKey(c->db,c->argv[1],c->argv[2]);
     notifyKeyspaceEvent(NOTIFY_STRING,"set",c->argv[1],c->db->id);
-    server.dirty++;
+    g_pserver->dirty++;
 }
 
 void setrangeCommand(client *c) {
@@ -236,7 +236,7 @@ void setrangeCommand(client *c) {
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STRING,
             "setrange",c->argv[1],c->db->id);
-        server.dirty++;
+        g_pserver->dirty++;
     }
     addReplyLongLong(c,sdslen((sds)ptrFromObj(o)));
 }
@@ -325,7 +325,7 @@ void msetGenericCommand(client *c, int nx) {
         setKey(c->db,c->argv[j],c->argv[j+1]);
         notifyKeyspaceEvent(NOTIFY_STRING,"set",c->argv[j],c->db->id);
     }
-    server.dirty += (c->argc-1)/2;
+    g_pserver->dirty += (c->argc-1)/2;
     addReply(c, nx ? shared.cone : shared.ok);
 }
 
@@ -369,7 +369,7 @@ void incrDecrCommand(client *c, long long incr) {
     }
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING,"incrby",c->argv[1],c->db->id);
-    server.dirty++;
+    g_pserver->dirty++;
     addReply(c,shared.colon);
     addReply(c,newObj);
     addReply(c,shared.crlf);
@@ -419,7 +419,7 @@ void incrbyfloatCommand(client *c) {
         dbAdd(c->db,c->argv[1],newObj);
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING,"incrbyfloat",c->argv[1],c->db->id);
-    server.dirty++;
+    g_pserver->dirty++;
     addReplyBulk(c,newObj);
 
     /* Always replicate INCRBYFLOAT as a SET command with the final value
@@ -460,7 +460,7 @@ void appendCommand(client *c) {
     }
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING,"append",c->argv[1],c->db->id);
-    server.dirty++;
+    g_pserver->dirty++;
     addReplyLongLong(c,totlen);
 }
 

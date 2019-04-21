@@ -44,7 +44,7 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
 
     for (i = start; i <= end; i++) {
         if (sdsEncodedObject(argv[i]) &&
-            sdslen(szFromObj(argv[i])) > server.hash_max_ziplist_value)
+            sdslen(szFromObj(argv[i])) > g_pserver->hash_max_ziplist_value)
         {
             hashTypeConvert(o, OBJ_ENCODING_HT);
             break;
@@ -234,7 +234,7 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
         o->m_ptr = zl;
 
         /* Check if the ziplist needs to be converted to a hash table */
-        if (hashTypeLength(o) > server.hash_max_ziplist_entries)
+        if (hashTypeLength(o) > g_pserver->hash_max_ziplist_entries)
             hashTypeConvert(o, OBJ_ENCODING_HT);
     } else if (o->encoding == OBJ_ENCODING_HT) {
         dictEntry *de = dictFind((dict*)ptrFromObj(o),field);
@@ -523,7 +523,7 @@ void hsetnxCommand(client *c) {
         addReply(c, shared.cone);
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_HASH,"hset",c->argv[1],c->db->id);
-        server.dirty++;
+        g_pserver->dirty++;
     }
 }
 
@@ -553,7 +553,7 @@ void hsetCommand(client *c) {
     }
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH,"hset",c->argv[1],c->db->id);
-    server.dirty++;
+    g_pserver->dirty++;
 }
 
 void hincrbyCommand(client *c) {
@@ -588,7 +588,7 @@ void hincrbyCommand(client *c) {
     addReplyLongLong(c,value);
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH,"hincrby",c->argv[1],c->db->id);
-    server.dirty++;
+    g_pserver->dirty++;
 }
 
 void hincrbyfloatCommand(client *c) {
@@ -627,7 +627,7 @@ void hincrbyfloatCommand(client *c) {
     addReplyBulkCBuffer(c,buf,len);
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH,"hincrbyfloat",c->argv[1],c->db->id);
-    server.dirty++;
+    g_pserver->dirty++;
 
     /* Always replicate HINCRBYFLOAT as an HSET command with the final value
      * in order to make sure that differences in float pricision or formatting
@@ -726,7 +726,7 @@ void hdelCommand(client *c) {
         if (keyremoved)
             notifyKeyspaceEvent(NOTIFY_GENERIC,"del",c->argv[1],
                                 c->db->id);
-        server.dirty += deleted;
+        g_pserver->dirty += deleted;
     }
     addReplyLongLong(c,deleted);
 }

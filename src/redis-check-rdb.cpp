@@ -297,7 +297,7 @@ int redis_check_rdb(const char *rdbfilename, FILE *fp) {
         expiretime = -1;
     }
     /* Verify the checksum if RDB version is >= 5 */
-    if (rdbver >= 5 && server.rdb_checksum) {
+    if (rdbver >= 5 && g_pserver->rdb_checksum) {
         uint64_t cksum, expected = rdb.cksum;
 
         rdbstate.doing = RDB_CHECK_DOING_CHECK_SUM;
@@ -349,7 +349,7 @@ int redis_check_rdb_main(int argc, const char **argv, FILE *fp) {
      * an already initialized Redis instance, check if we really need to. */
     if (shared.integers[0] == NULL)
         createSharedObjects();
-    server.loading_process_events_interval_bytes = 0;
+    g_pserver->loading_process_events_interval_bytes = 0;
     rdbCheckMode = 1;
     rdbCheckInfo("Checking RDB file %s", argv[1]);
     rdbCheckSetupSignals();

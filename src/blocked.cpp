@@ -110,8 +110,8 @@ void blockClient(client *c, int btype) {
     serverAssert(GlobalLocksAcquired());
     c->flags |= CLIENT_BLOCKED;
     c->btype = btype;
-    server.blocked_clients++;
-    server.blocked_clients_by_type[btype]++;
+    g_pserver->blocked_clients++;
+    g_pserver->blocked_clients_by_type[btype]++;
 }
 
 /* This function is called in the beforeSleep() function of the event loop
@@ -122,8 +122,8 @@ void processUnblockedClients(int iel) {
 
     listNode *ln;
     client *c;
-    list *unblocked_clients = server.rgthreadvar[iel].unblocked_clients;
-    serverAssert(iel == (serverTL - server.rgthreadvar));
+    list *unblocked_clients = g_pserver->rgthreadvar[iel].unblocked_clients;
+    serverAssert(iel == (serverTL - g_pserver->rgthreadvar));
 
     while (listLength(unblocked_clients)) {
         ln = listFirst(unblocked_clients);
@@ -171,7 +171,7 @@ void queueClientForReprocessing(client *c) {
     fastlock_lock(&c->lock);
     if (!(c->flags & CLIENT_UNBLOCKED)) {
         c->flags |= CLIENT_UNBLOCKED;
-        listAddNodeTail(server.rgthreadvar[c->iel].unblocked_clients,c);
+        listAddNodeTail(g_pserver->rgthreadvar[c->iel].unblocked_clients,c);
     }
     fastlock_unlock(&c->lock);
 }
@@ -193,8 +193,8 @@ void unblockClient(client *c) {
     }
     /* Clear the flags, and put the client in the unblocked list so that
      * we'll process new commands in its query buffer ASAP. */
-    server.blocked_clients--;
-    server.blocked_clients_by_type[c->btype]--;
+    g_pserver->blocked_clients--;
+    g_pserver->blocked_clients_by_type[c->btype]--;
     c->flags &= ~CLIENT_BLOCKED;
     c->btype = BLOCKED_NONE;
     queueClientForReprocessing(c);
@@ -229,7 +229,7 @@ void disconnectAllBlockedClients(void) {
     listNode *ln;
     listIter li;
 
-    listRewind(server.clients,&li);
+    listRewind(g_pserver->clients,&li);
     while((ln = listNext(&li))) {
         client *c = (client*)listNodeValue(ln);
         
@@ -252,7 +252,7 @@ void disconnectAllBlockedClients(void) {
  *
  * All the keys with at least one client blocked that received at least
  * one new element via some write operation are accumulated into
- * the server.ready_keys list. This function will run the list and will
+ * the g_pserver->ready_keys list. This function will run the list and will
  * serve clients accordingly. Note that the function will iterate again and
  * again as a result of serving BRPOPLPUSH we can have new blocking clients
  * to serve because of the PUSH side of BRPOPLPUSH.
@@ -268,15 +268,15 @@ void disconnectAllBlockedClients(void) {
  * do, the function is already fair. */
 void handleClientsBlockedOnKeys(void) {
     serverAssert(GlobalLocksAcquired());
-    while(listLength(server.ready_keys) != 0) {
+    while(listLength(g_pserver->ready_keys) != 0) {
         list *l;
 
-        /* Point server.ready_keys to a fresh list and save the current one
+        /* Point g_pserver->ready_keys to a fresh list and save the current one
          * locally. This way as we run the old list we are free to call
-         * signalKeyAsReady() that may push new elements in server.ready_keys
+         * signalKeyAsReady() that may push new elements in g_pserver->ready_keys
          * when handling clients blocked into BRPOPLPUSH. */
-        l = server.ready_keys;
-        server.ready_keys = listCreate();
+        l = g_pserver->ready_keys;
+        g_pserver->ready_keys = listCreate();
 
         while(listLength(l) != 0) {
             listNode *ln = listFirst(l);
@@ -613,7 +613,7 @@ void unblockClientWaitingData(client *c) {
 }
 
 /* If the specified key has clients blocked waiting for list pushes, this
- * function will put the key reference into the server.ready_keys list.
+ * function will put the key reference into the g_pserver->ready_keys list.
  * Note that db->ready_keys is a hash table that allows us to avoid putting
  * the same key again and again in the list in case of multiple pushes
  * made by a script or in the context of MULTI/EXEC.
@@ -628,12 +628,12 @@ void signalKeyAsReady(redisDb *db, robj *key) {
     /* Key was already signaled? No need to queue it again. */
     if (dictFind(db->ready_keys,key) != NULL) return;
 
-    /* Ok, we need to queue this key into server.ready_keys. */
+    /* Ok, we need to queue this key into g_pserver->ready_keys. */
     rl = (readyList*)zmalloc(sizeof(*rl), MALLOC_SHARED);
     rl->key = key;
     rl->db = db;
     incrRefCount(key);
-    listAddNodeTail(server.ready_keys,rl);
+    listAddNodeTail(g_pserver->ready_keys,rl);
 
     /* We also add the key in the db->ready_keys dictionary in order
      * to avoid adding it multiple times into a list with a simple O(1)

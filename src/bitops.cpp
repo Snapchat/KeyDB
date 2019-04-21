@@ -556,7 +556,7 @@ void setbitCommand(client *c) {
     ((uint8_t*)ptrFromObj(o))[byte] = byteval;
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING,"setbit",c->argv[1],c->db->id);
-    server.dirty++;
+    g_pserver->dirty++;
     addReply(c, bitval ? shared.cone : shared.czero);
 }
 
@@ -762,7 +762,7 @@ void bitopCommand(client *c) {
         signalModifiedKey(c->db,targetkey);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",targetkey,c->db->id);
     }
-    server.dirty++;
+    g_pserver->dirty++;
     addReplyLongLong(c,maxlen); /* Return the output string length in bytes. */
 }
 
@@ -1120,7 +1120,7 @@ void bitfieldCommand(client *c) {
     if (changes) {
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STRING,"setbit",c->argv[1],c->db->id);
-        server.dirty += changes;
+        g_pserver->dirty += changes;
     }
     zfree(ops);
 }

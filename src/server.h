@@ -2466,13 +2466,15 @@ struct redisMaster *MasterInfoFromClient(client *c);
 uint64_t getMvccTstamp();
 void incrementMvccTstamp();
 
-#if defined(__GNUC__)
-#ifndef __cplusplus
-void *calloc(size_t count, size_t size) __attribute__ ((deprecated));
-void free(void *ptr) __attribute__ ((deprecated));
-void *malloc(size_t size) __attribute__ ((deprecated));
-void *realloc(void *ptr, size_t size) __attribute__ ((deprecated));
-#endif
+#if defined(__GNUC__) && !defined(NO_DEPRECATE_FREE)
+ [[deprecated]]
+void *calloc(size_t count, size_t size);
+ [[deprecated]]
+void free(void *ptr);
+ [[deprecated]]
+void *malloc(size_t size);
+ [[deprecated]]
+void *realloc(void *ptr, size_t size);
 #endif
 
 /* Debugging stuff */

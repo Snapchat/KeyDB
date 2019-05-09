@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>  // std::size_t
 
 [[deprecated]]
 inline void *operator new(size_t size)

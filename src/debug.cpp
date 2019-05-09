@@ -781,7 +781,7 @@ void _serverPanic(const char *file, int line, const char *msg, ...) {
 void bugReportStart(void) {
     if (g_pserver->bug_report_start == 0) {
         serverLogRaw(LL_WARNING|LL_RAW,
-        "\n\n=== REDIS BUG REPORT START: Cut & paste starting from here ===\n");
+        "\n\n=== KEYDB BUG REPORT START: Cut & paste starting from here ===\n");
         g_pserver->bug_report_start = 1;
     }
 }
@@ -1362,7 +1362,7 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 
     bugReportStart();
     serverLog(LL_WARNING,
-        "Redis %s crashed by signal: %d", KEYDB_REAL_VERSION, sig);
+        "KeyDB %s crashed by signal: %d", KEYDB_REAL_VERSION, sig);
     if (eip != NULL) {
         serverLog(LL_WARNING,
         "Crashed running the instruction at: %p", eip);
@@ -1438,9 +1438,9 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
     }
 
     serverLogRaw(LL_WARNING|LL_RAW,
-"\n=== REDIS BUG REPORT END. Make sure to include from START to END. ===\n\n"
+"\n=== KEYDB BUG REPORT END. Make sure to include from START to END. ===\n\n"
 "       Please report the crash by opening an issue on github:\n\n"
-"           http://github.com/antirez/redis/issues\n\n"
+"           https://github.com/JohnSully/KeyDB/issues\n\n"
 "  Suspect RAM error? Use keydb-server --test-memory to verify it.\n\n"
 );
 

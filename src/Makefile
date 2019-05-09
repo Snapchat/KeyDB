@@ -21,7 +21,7 @@ NODEPS:=clean distclean
 
 # Default settings
 STD=-std=c99 -pedantic -DREDIS_STATIC=''
-CXX_STD=-std=c++14 -pedantic -fno-rtti -fno-exceptions 
+CXX_STD=-std=c++14 -pedantic -fno-rtti -fno-exceptions -D__STDC_FORMAT_MACROS  
 ifneq (,$(findstring clang,$(CC)))
 ifneq (,$(findstring FreeBSD,$(uname_S)))
   STD+=-Wno-c11-extensions

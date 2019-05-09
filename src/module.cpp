@@ -30,6 +30,8 @@
 #include "server.h"
 #include "cluster.h"
 #include <dlfcn.h>
+#include <mutex>
+#include <condition_variable>
 
 #define REDISMODULE_CORE 1
 #include "redismodule.h"
@@ -235,7 +237,6 @@ static list *moduleUnblockedClients;
 
 /* We need a mutex that is unlocked / relocked in beforeSleep() in order to
  * allow thread safe contexts to execute commands at a safe moment. */
-static pthread_rwlock_t moduleGIL = PTHREAD_RWLOCK_INITIALIZER;
 int fModuleGILWlocked = FALSE;
 
 /* Function pointer type for keyspace event notification subscriptions from modules. */
@@ -292,6 +293,12 @@ typedef struct RedisModuleCommandFilter {
 
 /* Registered filters */
 static list *moduleCommandFilters;
+
+/* Module GIL Variables */
+static int s_cAcquisitionsServer = 0;
+static int s_cAcquisitionsModule = 0;
+static std::mutex s_mutex;
+static std::condition_variable s_cv;
 
 /* --------------------------------------------------------------------------
  * Prototypes
@@ -2750,7 +2757,7 @@ RedisModuleCallReply *RM_Call(RedisModuleCtx *ctx, const char *cmdname, const ch
     int replicate = 0; /* Replicate this command? */
     int call_flags;
     sds proto = nullptr;
-
+        
     /* Create the client and dispatch the command. */
     va_start(ap, fmt);
     c = createClient(-1, IDX_EVENT_LOOP_MAIN);
@@ -3663,9 +3670,22 @@ int RM_UnblockClient(RedisModuleBlockedClient *bc, void *privdata) {
     pthread_mutex_lock(&moduleUnblockedClientsMutex);
     bc->privdata = privdata;
     listAddNodeTail(moduleUnblockedClients,bc);
-    if (write(g_pserver->module_blocked_pipe[1],"A",1) != 1) {
-        /* Ignore the error, this is best-effort. */
+    if (bc->client != nullptr)
+    {
+        if (write(g_pserver->rgthreadvar[bc->client->iel].module_blocked_pipe[1],"A",1) != 1) {
+            /* Ignore the error, this is best-effort. */
+        }
     }
+    else
+    {
+        for (int iel = 0; iel < cserver.cthreads; ++iel)
+        {
+            if (write(g_pserver->rgthreadvar[iel].module_blocked_pipe[1],"A",1) != 1) {
+                /* Ignore the error, this is best-effort. */
+            }
+        }
+    }
+    
     pthread_mutex_unlock(&moduleUnblockedClientsMutex);
     return REDISMODULE_OK;
 }
@@ -3706,8 +3726,7 @@ void RM_SetDisconnectCallback(RedisModuleBlockedClient *bc, RedisModuleDisconnec
  * blocked client, it was terminated by Redis (for timeout or other reasons).
  * When this happens the RedisModuleBlockedClient structure in the queue
  * will have the 'client' field set to NULL. */
-void moduleHandleBlockedClients(void) {
-    listNode *ln;
+void moduleHandleBlockedClients(int iel) {
     RedisModuleBlockedClient *bc;
     serverAssert(GlobalLocksAcquired());
 
@@ -3715,12 +3734,16 @@ void moduleHandleBlockedClients(void) {
     /* Here we unblock all the pending clients blocked in modules operations
      * so we can read every pending "awake byte" in the pipe. */
     char buf[1];
-    while (read(g_pserver->module_blocked_pipe[0],buf,1) == 1);
-    while (listLength(moduleUnblockedClients)) {
-        ln = listFirst(moduleUnblockedClients);
+    while (read(serverTL->module_blocked_pipe[0],buf,1) == 1);
+    listIter li;
+    listNode *ln;
+    listRewind(moduleUnblockedClients, &li);
+    while ((ln = listNext(&li))) {
         bc = (RedisModuleBlockedClient*)ln->value;
         client *c = bc->client;
-        serverAssert(c->iel == IDX_EVENT_LOOP_MAIN);
+        if ((c != nullptr) && (iel != c->iel))
+            continue;
+        
         listDelNode(moduleUnblockedClients,ln);
         pthread_mutex_unlock(&moduleUnblockedClientsMutex);
 
@@ -3919,23 +3942,36 @@ void RM_ThreadSafeContextUnlock(RedisModuleCtx *ctx) {
 }
 
 void moduleAcquireGIL(int fServerThread) {
+    std::unique_lock<std::mutex> lock(s_mutex);
+    int *pcheck = fServerThread ? &s_cAcquisitionsModule : &s_cAcquisitionsServer;
+
+    while (*pcheck > 0)
+        s_cv.wait(lock);
+
     if (fServerThread)
     {
-        pthread_rwlock_rdlock(&moduleGIL);
+        ++s_cAcquisitionsServer;
     }
     else
     {
-        pthread_rwlock_wrlock(&moduleGIL);
-        fModuleGILWlocked = TRUE;
+        ++s_cAcquisitionsModule;
+        fModuleGILWlocked++;
     }
 }
 
 void moduleReleaseGIL(int fServerThread) {
-    pthread_rwlock_unlock(&moduleGIL);
-    if (!fServerThread)
+    std::unique_lock<std::mutex> lock(s_mutex);
+
+    if (fServerThread)
     {
-        fModuleGILWlocked = FALSE;
+        --s_cAcquisitionsServer;
     }
+    else
+    {
+        --s_cAcquisitionsModule;
+        fModuleGILWlocked--;
+    }
+    s_cv.notify_all();
 }
 
 int moduleGILAcquiredByModule(void) {
@@ -5102,24 +5138,13 @@ void moduleInitModulesSystem(void) {
     moduleCommandFilters = listCreate();
 
     moduleRegisterCoreAPI();
-    if (pipe(g_pserver->module_blocked_pipe) == -1) {
-        serverLog(LL_WARNING,
-            "Can't create the pipe for module blocking commands: %s",
-            strerror(errno));
-        exit(1);
-    }
-    /* Make the pipe non blocking. This is just a best effort aware mechanism
-     * and we do not want to block not in the read nor in the write half. */
-    anetNonBlock(NULL,g_pserver->module_blocked_pipe[0]);
-    anetNonBlock(NULL,g_pserver->module_blocked_pipe[1]);
 
     /* Create the timers radix tree. */
     Timers = raxNew();
 
     /* Our thread-safe contexts GIL must start with already locked:
      * it is just unlocked when it's safe. */
-    pthread_rwlock_init(&moduleGIL, NULL);
-    pthread_rwlock_rdlock(&moduleGIL);
+    moduleAcquireGIL(true);
 }
 
 /* Load all the modules in the g_pserver->loadmodule_queue list, which is

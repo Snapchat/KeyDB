@@ -1200,7 +1200,7 @@ void unlinkClient(client *c) {
     serverAssert(c->fd == -1 || c->lock.fOwnLock());
 
     /* If this is marked as current client unset it. */
-    if (serverTL->current_client == c) serverTL->current_client = NULL;
+    if (serverTL && serverTL->current_client == c) serverTL->current_client = NULL;
 
     /* Certain operations must be done only if the client has an active socket.
      * If the client was already unlinked or if it's a "fake client" the

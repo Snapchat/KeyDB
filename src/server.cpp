@@ -2103,7 +2103,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Check if there are clients unblocked by modules that implement
      * blocking commands. */
-    moduleHandleBlockedClients();
+    moduleHandleBlockedClients(ielFromEventLoop(eventLoop));
 
     /* Try to process pending commands for clients that were just unblocked. */
     if (listLength(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].unblocked_clients))
@@ -2134,6 +2134,10 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
     if (listLength(g_pserver->rgthreadvar[iel].unblocked_clients)) {
         processUnblockedClients(iel);
     }
+
+    /* Check if there are clients unblocked by modules that implement
+     * blocking commands. */
+    moduleHandleBlockedClients(ielFromEventLoop(eventLoop));
     aeReleaseLock();
 
     /* Handle writes with pending output buffers. */
@@ -2872,6 +2876,37 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
             exit(1);
         }
     }
+
+    if (pipe(pvar->module_blocked_pipe) == -1) {
+        serverLog(LL_WARNING,
+            "Can't create the pipe for module blocking commands: %s",
+            strerror(errno));
+        exit(1);
+    }
+
+    /* Make the pipe non blocking. This is just a best effort aware mechanism
+     * and we do not want to block not in the read nor in the write half. */
+    anetNonBlock(NULL,pvar->module_blocked_pipe[0]);
+    anetNonBlock(NULL,pvar->module_blocked_pipe[1]);
+
+    /* Register a readable event for the pipe used to awake the event loop
+     * when a blocked client in a module needs attention. */
+    if (aeCreateFileEvent(pvar->el, pvar->module_blocked_pipe[0], AE_READABLE,
+        moduleBlockedClientPipeReadable,NULL) == AE_ERR) {
+            serverPanic(
+                "Error registering the readable event for the module "
+                "blocked clients subsystem.");
+    }
+
+
+    /* Register a readable event for the pipe used to awake the event loop
+     * when a blocked client in a module needs attention. */
+    if (aeCreateFileEvent(pvar->el, pvar->module_blocked_pipe[0], AE_READABLE,
+        moduleBlockedClientPipeReadable,NULL) == AE_ERR) {
+            serverPanic(
+                "Error registering the readable event for the module "
+                "blocked clients subsystem.");
+    }
 }
 
 void initServer(void) {
@@ -2944,25 +2979,6 @@ void initServer(void) {
     if (aeCreateTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, 1, serverCron, NULL, NULL) == AE_ERR) {
         serverPanic("Can't create event loop timers.");
         exit(1);
-    }
-
-    /* Register a readable event for the pipe used to awake the event loop
-     * when a blocked client in a module needs attention. */
-    if (aeCreateFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, g_pserver->module_blocked_pipe[0], AE_READABLE,
-        moduleBlockedClientPipeReadable,NULL) == AE_ERR) {
-            serverPanic(
-                "Error registering the readable event for the module "
-                "blocked clients subsystem.");
-    }
-
-
-    /* Register a readable event for the pipe used to awake the event loop
-     * when a blocked client in a module needs attention. */
-    if (aeCreateFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, g_pserver->module_blocked_pipe[0], AE_READABLE,
-        moduleBlockedClientPipeReadable,NULL) == AE_ERR) {
-            serverPanic(
-                "Error registering the readable event for the module "
-                "blocked clients subsystem.");
     }
 
     /* Open the AOF file if needed. */
@@ -4907,6 +4923,7 @@ void *workerThreadMain(void *parg)
     serverLog(LOG_INFO, "Thread %d alive.", iel);
     serverTL = g_pserver->rgthreadvar+iel;  // set the TLS threadsafe global
 
+    moduleAcquireGIL(true); // Normally afterSleep acquires this, but that won't be called on the first run
     int isMainThread = (iel == IDX_EVENT_LOOP_MAIN);
     aeEventLoop *el = g_pserver->rgthreadvar[iel].el;
     aeSetBeforeSleepProc(el, isMainThread ? beforeSleep : beforeSleepLite, isMainThread ? 0 : AE_SLEEP_THREADSAFE);
@@ -5143,6 +5160,7 @@ int main(int argc, char **argv) {
     }
 
     aeReleaseLock();    //Finally we can dump the lock
+    moduleReleaseGIL(true);
 
     serverAssert(cserver.cthreads > 0 && cserver.cthreads <= MAX_EVENT_LOOPS);
     pthread_t rgthread[MAX_EVENT_LOOPS];

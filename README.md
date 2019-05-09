@@ -60,7 +60,7 @@ All other configuration options behave as you'd expect.  Your existing configura
 Building KeyDB
 --------------
 
-KeyDB can be compiled and is tested for use on Linux.  KeyDB currently relies on SO_REUSEADDR's load balancing behavior which is available only in Linux.  When we support marshalling connections across threads we plan to support other operating systems such as FreeBSD.
+KeyDB can be compiled and is tested for use on Linux.  KeyDB currently relies on SO_REUSEPORT's load balancing behavior which is available only in Linux.  When we support marshalling connections across threads we plan to support other operating systems such as FreeBSD.
 
 Install dependencies:
 

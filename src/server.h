@@ -1145,6 +1145,9 @@ struct redisServerThreadVars {
     list *clients_pending_asyncwrite;
     int cclients;
     client *current_client; /* Current client */
+    int module_blocked_pipe[2]; /* Pipe used to awake the event loop if a
+                                client blocked on a module command needs
+                                to be processed. */
     struct fastlock lockPendingWrite;
 };
 
@@ -1247,9 +1250,6 @@ struct redisServer {
     dict *sharedapi;            /* Like moduleapi but containing the APIs that
                                    modules share with each other. */
     list *loadmodule_queue;     /* List of modules to load at startup. */
-    int module_blocked_pipe[2]; /* Pipe used to awake the event loop if a
-                                   client blocked on a module command needs
-                                   to be processed. */
     /* Networking */
     int port;                   /* TCP listening port */
     int tcp_backlog;            /* TCP listen() backlog */
@@ -1665,7 +1665,7 @@ moduleType *moduleTypeLookupModuleByID(uint64_t id);
 void moduleTypeNameByID(char *name, uint64_t moduleid);
 void moduleFreeContext(struct RedisModuleCtx *ctx);
 void unblockClientFromModule(client *c);
-void moduleHandleBlockedClients(void);
+void moduleHandleBlockedClients(int iel);
 void moduleBlockedClientTimedOut(client *c);
 void moduleBlockedClientPipeReadable(aeEventLoop *el, int fd, void *privdata, int mask);
 size_t moduleCount(void);

@@ -77,8 +77,8 @@ unsigned int getLRUClock(void) {
  * precomputed value, otherwise we need to resort to a system call. */
 unsigned int LRU_CLOCK(void) {
     unsigned int lruclock;
-    if (1000/server.hz <= LRU_CLOCK_RESOLUTION) {
-        atomicGet(server.lruclock,lruclock);
+    if (1000/g_pserver->hz <= LRU_CLOCK_RESOLUTION) {
+        atomicGet(g_pserver->lruclock,lruclock);
     } else {
         lruclock = getLRUClock();
     }
@@ -111,7 +111,7 @@ unsigned long long estimateObjectIdleTime(robj *o) {
  * If all the bytes needed to return back under the limit were freed the
  * function returns C_OK, otherwise C_ERR is returned, and the caller
  * should block the execution of commands that will result in more memory
- * used by the server.
+ * used by the g_pserver->
  *
  * ------------------------------------------------------------------------
  *
@@ -161,13 +161,13 @@ void evictionPoolAlloc(void) {
 
 void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evictionPoolEntry *pool) {
     int j, k, count;
-    dictEntry **samples = (dictEntry**)alloca(server.maxmemory_samples * sizeof(dictEntry*));
+    dictEntry **samples = (dictEntry**)alloca(g_pserver->maxmemory_samples * sizeof(dictEntry*));
 
-    count = dictGetSomeKeys(sampledict,samples,server.maxmemory_samples);
+    count = dictGetSomeKeys(sampledict,samples,g_pserver->maxmemory_samples);
     for (j = 0; j < count; j++) {
         unsigned long long idle;
         sds key;
-        robj *o;
+        robj *o = nullptr;
         dictEntry *de;
 
         de = samples[j];
@@ -176,7 +176,7 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
         /* If the dictionary we are sampling from is not the main
          * dictionary (but the expires one) we need to lookup the key
          * again in the key dictionary to obtain the value object. */
-        if (server.maxmemory_policy != MAXMEMORY_VOLATILE_TTL) {
+        if (g_pserver->maxmemory_policy != MAXMEMORY_VOLATILE_TTL) {
             if (sampledict != keydict) de = dictFind(keydict, key);
             o = (robj*)dictGetVal(de);
         }
@@ -184,9 +184,9 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
         /* Calculate the idle time according to the policy. This is called
          * idle just because the code initially handled LRU, but is in fact
          * just a score where an higher score means better candidate. */
-        if (server.maxmemory_policy & MAXMEMORY_FLAG_LRU) {
-            idle = estimateObjectIdleTime(o);
-        } else if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+        if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LRU) {
+            idle = (o != nullptr) ? estimateObjectIdleTime(o) : 0;
+        } else if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
             /* When we use an LRU policy, we sort the keys by idle time
              * so that we expire keys starting from greater idle time.
              * However when the policy is an LFU one, we have a frequency
@@ -195,7 +195,7 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
              * frequency subtracting the actual frequency to the maximum
              * frequency of 255. */
             idle = 255-LFUDecrAndReturn(o);
-        } else if (server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
+        } else if (g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
             /* In this case the sooner the expire the better. */
             idle = ULLONG_MAX - (long)dictGetVal(de);
         } else {
@@ -297,7 +297,7 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
  * 16 bits. The returned time is suitable to be stored as LDT (last decrement
  * time) for the LFU implementation. */
 unsigned long LFUGetTimeInMinutes(void) {
-    return (server.unixtime/60) & 65535;
+    return (g_pserver->unixtime/60) & 65535;
 }
 
 /* Given an object last access time, compute the minimum number of minutes
@@ -317,7 +317,7 @@ uint8_t LFULogIncr(uint8_t counter) {
     double r = (double)rand()/RAND_MAX;
     double baseval = counter - LFU_INIT_VAL;
     if (baseval < 0) baseval = 0;
-    double p = 1.0/(baseval*server.lfu_log_factor+1);
+    double p = 1.0/(baseval*g_pserver->lfu_log_factor+1);
     if (r < p) counter++;
     return counter;
 }
@@ -326,7 +326,7 @@ uint8_t LFULogIncr(uint8_t counter) {
  * do not update LFU fields of the object, we update the access time
  * and counter in an explicit way when the object is really accessed.
  * And we will times halve the counter according to the times of
- * elapsed time than server.lfu_decay_time.
+ * elapsed time than g_pserver->lfu_decay_time.
  * Return the object frequency counter.
  *
  * This function is used in order to scan the dataset for the best object
@@ -335,7 +335,7 @@ uint8_t LFULogIncr(uint8_t counter) {
 unsigned long LFUDecrAndReturn(robj *o) {
     unsigned long ldt = o->lru >> 8;
     unsigned long counter = o->lru & 255;
-    unsigned long num_periods = server.lfu_decay_time ? LFUTimeElapsed(ldt) / server.lfu_decay_time : 0;
+    unsigned long num_periods = g_pserver->lfu_decay_time ? LFUTimeElapsed(ldt) / g_pserver->lfu_decay_time : 0;
     if (num_periods)
         counter = (num_periods > counter) ? 0 : counter - num_periods;
     return counter;
@@ -352,20 +352,20 @@ unsigned long LFUDecrAndReturn(robj *o) {
 size_t freeMemoryGetNotCountedMemory(void) {
     serverAssert(GlobalLocksAcquired());
     size_t overhead = 0;
-    int slaves = listLength(server.slaves);
+    int slaves = listLength(g_pserver->slaves);
 
     if (slaves) {
         listIter li;
         listNode *ln;
 
-        listRewind(server.slaves,&li);
+        listRewind(g_pserver->slaves,&li);
         while((ln = listNext(&li))) {
             client *slave = (client*)listNodeValue(ln);
             overhead += getClientOutputBufferMemoryUsage(slave);
         }
     }
-    if (server.aof_state != AOF_OFF) {
-        overhead += sdsalloc(server.aof_buf)+aofRewriteBufferSize();
+    if (g_pserver->aof_state != AOF_OFF) {
+        overhead += sdsalloc(g_pserver->aof_buf)+aofRewriteBufferSize();
     }
     return overhead;
 }
@@ -403,7 +403,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     if (total) *total = mem_reported;
 
     /* We may return ASAP if there is no need to compute the level. */
-    int return_ok_asap = !server.maxmemory || mem_reported <= server.maxmemory;
+    int return_ok_asap = !g_pserver->maxmemory || mem_reported <= g_pserver->maxmemory;
     if (return_ok_asap && !level) return C_OK;
 
     /* Remove the size of slaves output buffers and AOF buffer from the
@@ -414,20 +414,20 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 
     /* Compute the ratio of memory usage. */
     if (level) {
-        if (!server.maxmemory) {
+        if (!g_pserver->maxmemory) {
             *level = 0;
         } else {
-            *level = (float)mem_used / (float)server.maxmemory;
+            *level = (float)mem_used / (float)g_pserver->maxmemory;
         }
     }
 
     if (return_ok_asap) return C_OK;
 
     /* Check if we are still over the memory limit. */
-    if (mem_used <= server.maxmemory) return C_OK;
+    if (mem_used <= g_pserver->maxmemory) return C_OK;
 
     /* Compute how much memory we need to free. */
-    mem_tofree = mem_used - server.maxmemory;
+    mem_tofree = mem_used - g_pserver->maxmemory;
 
     if (logical) *logical = mem_used;
     if (tofree) *tofree = mem_tofree;
@@ -448,12 +448,12 @@ int freeMemoryIfNeeded(void) {
     serverAssert(GlobalLocksAcquired());
     /* By default replicas should ignore maxmemory
      * and just be masters exact copies. */
-    if (listLength(server.masters) && server.repl_slave_ignore_maxmemory) return C_OK;
+    if (listLength(g_pserver->masters) && g_pserver->repl_slave_ignore_maxmemory) return C_OK;
 
     size_t mem_reported, mem_tofree, mem_freed;
     mstime_t latency, eviction_latency;
     long long delta;
-    int slaves = listLength(server.slaves);
+    int slaves = listLength(g_pserver->slaves);
 
     /* When clients are paused the dataset should be static not just from the
      * POV of clients not being able to write, but also from the POV of
@@ -464,7 +464,7 @@ int freeMemoryIfNeeded(void) {
 
     mem_freed = 0;
 
-    if (server.maxmemory_policy == MAXMEMORY_NO_EVICTION)
+    if (g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
         goto cant_free; /* We need to free memory, but policy forbids. */
 
     latencyStartMonitor(latency);
@@ -477,8 +477,8 @@ int freeMemoryIfNeeded(void) {
         dict *dict;
         dictEntry *de;
 
-        if (server.maxmemory_policy & (MAXMEMORY_FLAG_LRU|MAXMEMORY_FLAG_LFU) ||
-            server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL)
+        if (g_pserver->maxmemory_policy & (MAXMEMORY_FLAG_LRU|MAXMEMORY_FLAG_LFU) ||
+            g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_TTL)
         {
             struct evictionPoolEntry *pool = EvictionPoolLRU;
 
@@ -488,9 +488,9 @@ int freeMemoryIfNeeded(void) {
                 /* We don't want to make local-db choices when expiring keys,
                  * so to start populate the eviction pool sampling keys from
                  * every DB. */
-                for (i = 0; i < server.dbnum; i++) {
-                    db = server.db+i;
-                    dict = (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) ?
+                for (i = 0; i < cserver.dbnum; i++) {
+                    db = g_pserver->db+i;
+                    dict = (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) ?
                             db->pdict : db->expires;
                     if ((keys = dictSize(dict)) != 0) {
                         evictionPoolPopulate(i, dict, db->pdict, pool);
@@ -504,11 +504,11 @@ int freeMemoryIfNeeded(void) {
                     if (pool[k].key == NULL) continue;
                     bestdbid = pool[k].dbid;
 
-                    if (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
-                        de = dictFind(server.db[pool[k].dbid].pdict,
+                    if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
+                        de = dictFind(g_pserver->db[pool[k].dbid].pdict,
                             pool[k].key);
                     } else {
-                        de = dictFind(server.db[pool[k].dbid].expires,
+                        de = dictFind(g_pserver->db[pool[k].dbid].expires,
                             pool[k].key);
                     }
 
@@ -531,16 +531,16 @@ int freeMemoryIfNeeded(void) {
         }
 
         /* volatile-random and allkeys-random policy */
-        else if (server.maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM ||
-                 server.maxmemory_policy == MAXMEMORY_VOLATILE_RANDOM)
+        else if (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM ||
+                 g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_RANDOM)
         {
             /* When evicting a random key, we try to evict a key for
              * each DB, so we use the static 'next_db' variable to
              * incrementally visit all DBs. */
-            for (i = 0; i < server.dbnum; i++) {
-                j = (++next_db) % server.dbnum;
-                db = server.db+j;
-                dict = (server.maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM) ?
+            for (i = 0; i < cserver.dbnum; i++) {
+                j = (++next_db) % cserver.dbnum;
+                db = g_pserver->db+j;
+                dict = (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM) ?
                         db->pdict : db->expires;
                 if (dictSize(dict) != 0) {
                     de = dictGetRandomKey(dict);
@@ -553,9 +553,9 @@ int freeMemoryIfNeeded(void) {
 
         /* Finally remove the selected key. */
         if (bestkey) {
-            db = server.db+bestdbid;
+            db = g_pserver->db+bestdbid;
             robj *keyobj = createStringObject(bestkey,sdslen(bestkey));
-            propagateExpire(db,keyobj,server.lazyfree_lazy_eviction);
+            propagateExpire(db,keyobj,g_pserver->lazyfree_lazy_eviction);
             /* We compute the amount of memory freed by db*Delete() alone.
              * It is possible that actually the memory needed to propagate
              * the DEL in AOF and replication link is greater than the one
@@ -566,7 +566,7 @@ int freeMemoryIfNeeded(void) {
              * we only care about memory used by the key space. */
             delta = (long long) zmalloc_used_memory();
             latencyStartMonitor(eviction_latency);
-            if (server.lazyfree_lazy_eviction)
+            if (g_pserver->lazyfree_lazy_eviction)
                 dbAsyncDelete(db,keyobj);
             else
                 dbSyncDelete(db,keyobj);
@@ -575,7 +575,7 @@ int freeMemoryIfNeeded(void) {
             latencyRemoveNestedEvent(latency,eviction_latency);
             delta -= (long long) zmalloc_used_memory();
             mem_freed += delta;
-            server.stat_evictedkeys++;
+            g_pserver->stat_evictedkeys++;
             notifyKeyspaceEvent(NOTIFY_EVICTED, "evicted",
                 keyobj, db->id);
             decrRefCount(keyobj);
@@ -594,7 +594,7 @@ int freeMemoryIfNeeded(void) {
              * memory, since the "mem_freed" amount is computed only
              * across the dbAsyncDelete() call, while the thread can
              * release the memory all the time. */
-            if (server.lazyfree_lazy_eviction && !(keys_freed % 16)) {
+            if (g_pserver->lazyfree_lazy_eviction && !(keys_freed % 16)) {
                 if (getMaxmemoryState(NULL,NULL,NULL,NULL) == C_OK) {
                     /* Let's satisfy our stop condition. */
                     mem_freed = mem_tofree;
@@ -632,6 +632,6 @@ cant_free:
  *
  */
 int freeMemoryIfNeededAndSafe(void) {
-    if (server.lua_timedout || server.loading) return C_OK;
+    if (g_pserver->lua_timedout || g_pserver->loading) return C_OK;
     return freeMemoryIfNeeded();
 }

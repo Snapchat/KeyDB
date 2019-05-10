@@ -241,18 +241,18 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
      * if we need to switch to the next one. 'lp' will be set to NULL if
      * the current node is full. */
     if (lp != NULL) {
-        if (server.stream_node_max_bytes &&
-            lp_bytes > server.stream_node_max_bytes)
+        if (g_pserver->stream_node_max_bytes &&
+            lp_bytes > g_pserver->stream_node_max_bytes)
         {
             lp = NULL;
-        } else if (server.stream_node_max_entries) {
+        } else if (g_pserver->stream_node_max_entries) {
             int64_t count = lpGetInteger(lpFirst(lp));
-            if (count > server.stream_node_max_entries) lp = NULL;
+            if (count > g_pserver->stream_node_max_entries) lp = NULL;
         }
     }
 
     int flags = STREAM_ITEM_FLAG_NONE;
-    if (lp == NULL || lp_bytes > server.stream_node_max_bytes) {
+    if (lp == NULL || lp_bytes > g_pserver->stream_node_max_bytes) {
         master_id = id;
         streamEncodeID(rax_key,&id);
         /* Create the listpack having the master entry ID and fields. */
@@ -819,7 +819,7 @@ void streamPropagateXCLAIM(client *c, robj *key, streamCG *group, robj *groupnam
     argv[11] = createStringObject("JUSTID",6);
     argv[12] = createStringObject("LASTID",6);
     argv[13] = createObjectFromStreamID(&group->last_id);
-    propagate(server.xclaimCommand,c->db->id,argv,14,PROPAGATE_AOF|PROPAGATE_REPL);
+    propagate(cserver.xclaimCommand,c->db->id,argv,14,PROPAGATE_AOF|PROPAGATE_REPL);
     decrRefCount(argv[0]);
     decrRefCount(argv[3]);
     decrRefCount(argv[4]);
@@ -846,7 +846,7 @@ void streamPropagateGroupID(client *c, robj *key, streamCG *group, robj *groupna
     argv[2] = key;
     argv[3] = groupname;
     argv[4] = createObjectFromStreamID(&group->last_id);
-    propagate(server.xgroupCommand,c->db->id,argv,5,PROPAGATE_AOF|PROPAGATE_REPL);
+    propagate(cserver.xgroupCommand,c->db->id,argv,5,PROPAGATE_AOF|PROPAGATE_REPL);
     decrRefCount(argv[0]);
     decrRefCount(argv[1]);
     decrRefCount(argv[4]);
@@ -1242,7 +1242,7 @@ void xaddCommand(client *c) {
 
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STREAM,"xadd",c->argv[1],c->db->id);
-    server.dirty++;
+    g_pserver->dirty++;
 
     if (maxlen >= 0) {
         /* Notify xtrim event if needed. */
@@ -1260,7 +1260,7 @@ void xaddCommand(client *c) {
 
     /* We need to signal to blocked clients that there is new data on this
      * stream. */
-    if (server.blocked_clients_by_type[BLOCKED_STREAM])
+    if (g_pserver->blocked_clients_by_type[BLOCKED_STREAM])
         signalKeyAsReady(c->db, c->argv[1]);
 }
 
@@ -1534,7 +1534,7 @@ void xreadCommand(client *c) {
             streamReplyWithRange(c,s,&start,NULL,count,0,
                                  groups ? groups[i] : NULL,
                                  consumer, flags, &spi);
-            if (groups) server.dirty++;
+            if (groups) g_pserver->dirty++;
         }
     }
 
@@ -1798,7 +1798,7 @@ NULL
         streamCG *cg = streamCreateCG(s,grpname,sdslen(grpname),&id);
         if (cg) {
             addReply(c,shared.ok);
-            server.dirty++;
+            g_pserver->dirty++;
             notifyKeyspaceEvent(NOTIFY_STREAM,"xgroup-create",
                                 c->argv[2],c->db->id);
         } else {
@@ -1814,14 +1814,14 @@ NULL
         }
         cg->last_id = id;
         addReply(c,shared.ok);
-        server.dirty++;
+        g_pserver->dirty++;
         notifyKeyspaceEvent(NOTIFY_STREAM,"xgroup-setid",c->argv[2],c->db->id);
     } else if (!strcasecmp(opt,"DESTROY") && c->argc == 4) {
         if (cg) {
             raxRemove(s->cgroups,(unsigned char*)grpname,sdslen(grpname),NULL);
             streamFreeCG(cg);
             addReply(c,shared.cone);
-            server.dirty++;
+            g_pserver->dirty++;
             notifyKeyspaceEvent(NOTIFY_STREAM,"xgroup-destroy",
                                 c->argv[2],c->db->id);
         } else {
@@ -1832,7 +1832,7 @@ NULL
          * that were yet associated with such a consumer. */
         long long pending = streamDelConsumer(cg,szFromObj(c->argv[4]));
         addReplyLongLong(c,pending);
-        server.dirty++;
+        g_pserver->dirty++;
         notifyKeyspaceEvent(NOTIFY_STREAM,"xgroup-delconsumer",
                             c->argv[2],c->db->id);
     } else if (!strcasecmp(opt,"HELP")) {
@@ -1872,7 +1872,7 @@ void xsetidCommand(client *c) {
     }
     s->last_id = id;
     addReply(c,shared.ok);
-    server.dirty++;
+    g_pserver->dirty++;
     notifyKeyspaceEvent(NOTIFY_STREAM,"xsetid",c->argv[1],c->db->id);
 }
 
@@ -1915,7 +1915,7 @@ void xackCommand(client *c) {
             raxRemove(nack->consumer->pel,buf,sizeof(buf),NULL);
             streamFreeNACK(nack);
             acknowledged++;
-            server.dirty++;
+            g_pserver->dirty++;
         }
     }
     addReplyLongLong(c,acknowledged);
@@ -2309,12 +2309,12 @@ void xclaimCommand(client *c) {
             /* Propagate this change. */
             streamPropagateXCLAIM(c,c->argv[1],group,c->argv[2],c->argv[j],nack);
             propagate_last_id = 0; /* Will be propagated by XCLAIM itself. */
-            server.dirty++;
+            g_pserver->dirty++;
         }
     }
     if (propagate_last_id) {
         streamPropagateGroupID(c,c->argv[1],group,c->argv[2]);
-        server.dirty++;
+        g_pserver->dirty++;
     }
     setDeferredArrayLen(c,arraylenptr,arraylen);
     preventCommandPropagation(c);
@@ -2352,7 +2352,7 @@ void xdelCommand(client *c) {
     if (deleted) {
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STREAM,"xdel",c->argv[1],c->db->id);
-        server.dirty += deleted;
+        g_pserver->dirty += deleted;
     }
     addReplyLongLong(c,deleted);
 }
@@ -2429,7 +2429,7 @@ void xtrimCommand(client *c) {
     if (deleted) {
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STREAM,"xtrim",c->argv[1],c->db->id);
-        server.dirty += deleted;
+        g_pserver->dirty += deleted;
         if (approx_maxlen) streamRewriteApproxMaxlen(c,s,maxlen_arg_idx);
     }
     addReplyLongLong(c,deleted);

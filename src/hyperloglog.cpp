@@ -176,7 +176,7 @@
  * involved in updating the sparse representation is not justified by the
  * memory savings. The exact maximum length of the sparse representation
  * when this implementation switches to the dense representation is
- * configured via the define server.hll_sparse_max_bytes.
+ * configured via the define g_pserver->hll_sparse_max_bytes.
  */
 
 struct hllhdr {
@@ -652,7 +652,7 @@ int hllSparseToDense(robj *o) {
  * As a side effect the function may promote the HLL representation from
  * sparse to dense: this happens when a register requires to be set to a value
  * not representable with the sparse representation, or when the resulting
- * size would be greater than server.hll_sparse_max_bytes. */
+ * size would be greater than g_pserver->hll_sparse_max_bytes. */
 int hllSparseSet(robj *o, long index, uint8_t count) {
     struct hllhdr *hdr;
     uint8_t oldcount, *sparse, *end, *p, *prev, *next;
@@ -837,7 +837,7 @@ int hllSparseSet(robj *o, long index, uint8_t count) {
      deltalen = seqlen-oldlen;
 
      if (deltalen > 0 &&
-         sdslen(szFromObj(o))+deltalen > server.hll_sparse_max_bytes) goto promote;
+         sdslen(szFromObj(o))+deltalen > g_pserver->hll_sparse_max_bytes) goto promote;
      if (deltalen && next) memmove(next+deltalen,next,end-next);
      sdsIncrLen(szFromObj(o),deltalen);
      memcpy(p,seq,seqlen);
@@ -1221,7 +1221,7 @@ void pfaddCommand(client *c) {
     if (updated) {
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STRING,"pfadd",c->argv[1],c->db->id);
-        server.dirty++;
+        g_pserver->dirty++;
         HLL_INVALIDATE_CACHE(hdr);
     }
     addReply(c, updated ? shared.cone : shared.czero);
@@ -1311,7 +1311,7 @@ void pfcountCommand(client *c) {
              * may be modified and given that the HLL is a Redis string
              * we need to propagate the change. */
             signalModifiedKey(c->db,c->argv[1]);
-            server.dirty++;
+            g_pserver->dirty++;
         }
         addReplyLongLong(c,card);
     }
@@ -1387,7 +1387,7 @@ void pfmergeCommand(client *c) {
     /* We generate a PFADD event for PFMERGE for semantical simplicity
      * since in theory this is a mass-add of elements. */
     notifyKeyspaceEvent(NOTIFY_STRING,"pfadd",c->argv[1],c->db->id);
-    server.dirty++;
+    g_pserver->dirty++;
     addReply(c,shared.ok);
 }
 
@@ -1457,7 +1457,7 @@ void pfselftestCommand(client *c) {
 
         /* Make sure that for small cardinalities we use sparse
          * encoding. */
-        if (j == checkpoint && j < server.hll_sparse_max_bytes/2) {
+        if (j == checkpoint && j < g_pserver->hll_sparse_max_bytes/2) {
             hdr2 = (hllhdr*)ptrFromObj(o);
             if (hdr2->encoding != HLL_SPARSE) {
                 addReplyError(c, "TESTFAILED sparse encoding not used");
@@ -1528,7 +1528,7 @@ void pfdebugCommand(client *c) {
                 addReplySds(c,sdsnew(invalid_hll_err));
                 return;
             }
-            server.dirty++; /* Force propagation on encoding change. */
+            g_pserver->dirty++; /* Force propagation on encoding change. */
         }
 
         hdr = (hllhdr*)ptrFromObj(o);
@@ -1593,7 +1593,7 @@ void pfdebugCommand(client *c) {
                 return;
             }
             conv = 1;
-            server.dirty++; /* Force propagation on encoding change. */
+            g_pserver->dirty++; /* Force propagation on encoding change. */
         }
         addReply(c,conv ? shared.cone : shared.czero);
     } else {

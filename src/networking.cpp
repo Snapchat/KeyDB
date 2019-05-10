@@ -133,14 +133,14 @@ int listMatchObjects(void *a, void *b) {
 /* This function links the client to the global linked list of clients.
  * unlinkClient() does the opposite, among other things. */
 void linkClient(client *c) {
-    listAddNodeTail(server.clients,c);
+    listAddNodeTail(g_pserver->clients,c);
     /* Note that we remember the linked list node where the client is stored,
      * this way removing the client in unlinkClient() will not require
      * a linear scan, but just a constant time operation. */
-    c->client_list_node = listLast(server.clients);
-    if (c->fd != -1) atomicIncr(server.rgthreadvar[c->iel].cclients, 1);
+    c->client_list_node = listLast(g_pserver->clients);
+    if (c->fd != -1) atomicIncr(g_pserver->rgthreadvar[c->iel].cclients, 1);
     uint64_t id = htonu64(c->id);
-    raxInsert(server.clients_index,(unsigned char*)&id,sizeof(id),c,NULL);
+    raxInsert(g_pserver->clients_index,(unsigned char*)&id,sizeof(id),c,NULL);
 }
 
 client *createClient(int fd, int iel) {
@@ -154,9 +154,9 @@ client *createClient(int fd, int iel) {
     if (fd != -1) {
         anetNonBlock(NULL,fd);
         anetEnableTcpNoDelay(NULL,fd);
-        if (server.tcpkeepalive)
-            anetKeepAlive(NULL,fd,server.tcpkeepalive);
-        if (aeCreateFileEvent(server.rgthreadvar[iel].el,fd,AE_READABLE|AE_READ_THREADSAFE,
+        if (cserver.tcpkeepalive)
+            anetKeepAlive(NULL,fd,cserver.tcpkeepalive);
+        if (aeCreateFileEvent(g_pserver->rgthreadvar[iel].el,fd,AE_READABLE|AE_READ_THREADSAFE,
             readQueryFromClient, c) == AE_ERR)
         {
             close(fd);
@@ -167,7 +167,7 @@ client *createClient(int fd, int iel) {
 
     selectDb(c,0);
     uint64_t client_id;
-    atomicGetIncr(server.next_client_id,client_id,1);
+    atomicGetIncr(g_pserver->next_client_id,client_id,1);
     c->iel = iel;
     fastlock_init(&c->lock);
     c->id = client_id;
@@ -190,7 +190,7 @@ client *createClient(int fd, int iel) {
     c->sentlenAsync = 0;
     c->flags = 0;
     c->fPendingAsyncWrite = FALSE;
-    c->ctime = c->lastinteraction = server.unixtime;
+    c->ctime = c->lastinteraction = g_pserver->unixtime;
     /* If the default user does not require authentication, the user is
      * directly authenticated. */
     c->authenticated = (c->puser->flags & USER_FLAG_NOPASS) != 0;
@@ -260,8 +260,8 @@ void clientInstallWriteHandler(client *c) {
          * a system call. We'll only really install the write handler if
          * we'll not be able to write the whole reply at once. */
         c->flags |= CLIENT_PENDING_WRITE;
-        std::unique_lock<fastlock> lockf(server.rgthreadvar[c->iel].lockPendingWrite);
-        listAddNodeHead(server.rgthreadvar[c->iel].clients_pending_write,c);
+        std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[c->iel].lockPendingWrite);
+        listAddNodeHead(g_pserver->rgthreadvar[c->iel].clients_pending_write,c);
     }
 }
 
@@ -1042,7 +1042,7 @@ static void acceptCommonHandler(int fd, int flags, char *ip, int iel) {
 
 #ifdef HAVE_SO_INCOMING_CPU
     // Set thread affinity
-    if (server.fThreadAffinity)
+    if (cserver.fThreadAffinity)
     {
         int cpu = iel;
         if (setsockopt(fd, SOL_SOCKET, SO_INCOMING_CPU, &cpu, sizeof(iel)) != 0)
@@ -1056,14 +1056,14 @@ static void acceptCommonHandler(int fd, int flags, char *ip, int iel) {
      * connection. Note that we create the client instead to check before
      * for this condition, since now the socket is already set in non-blocking
      * mode and we can send an error for free using the Kernel I/O */
-    if (listLength(server.clients) > server.maxclients) {
+    if (listLength(g_pserver->clients) > g_pserver->maxclients) {
         const char *err = "-ERR max number of clients reached\r\n";
 
         /* That's a best effort error message, don't check write errors */
         if (write(c->fd,err,strlen(err)) == -1) {
             /* Nothing to do, Just to avoid the warning... */
         }
-        server.stat_rejected_conn++;
+        g_pserver->stat_rejected_conn++;
         freeClient(c);
         return;
     }
@@ -1072,8 +1072,8 @@ static void acceptCommonHandler(int fd, int flags, char *ip, int iel) {
      * is no password set, nor a specific interface is bound, we don't accept
      * requests from non loopback interfaces. Instead we try to explain the
      * user what to do to fix it if needed. */
-    if (server.protected_mode &&
-        server.bindaddr_count == 0 &&
+    if (g_pserver->protected_mode &&
+        g_pserver->bindaddr_count == 0 &&
         DefaultUser->flags & USER_FLAG_NOPASS &&
         !(flags & CLIENT_UNIX_SOCKET) &&
         ip != NULL)
@@ -1094,7 +1094,7 @@ static void acceptCommonHandler(int fd, int flags, char *ip, int iel) {
                 "change permanent. "
                 "2) Alternatively you can just disable the protected mode by "
                 "editing the Redis configuration file, and setting the protected "
-                "mode option to 'no', and then restarting the server. "
+                "mode option to 'no', and then restarting the g_pserver-> "
                 "3) If you started the server manually just for testing, restart "
                 "it with the '--protected-mode no' option. "
                 "4) Setup a bind address or an authentication password. "
@@ -1103,13 +1103,13 @@ static void acceptCommonHandler(int fd, int flags, char *ip, int iel) {
             if (write(c->fd,err,strlen(err)) == -1) {
                 /* Nothing to do, Just to avoid the warning... */
             }
-            server.stat_rejected_conn++;
+            g_pserver->stat_rejected_conn++;
             freeClient(c);
             return;
         }
     }
 
-    server.stat_numconnections++;
+    g_pserver->stat_numconnections++;
     c->flags |= flags;
 }
 
@@ -1120,11 +1120,11 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(privdata);
 
     while(max--) {
-        cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
+        cfd = anetTcpAccept(g_pserver->neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK)
                 serverLog(LL_WARNING,
-                    "Accepting client connection: %s", server.neterr);
+                    "Accepting client connection: %s", g_pserver->neterr);
             return;
         }
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
@@ -1144,15 +1144,15 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(privdata);
 
     while(max--) {
-        cfd = anetUnixAccept(server.neterr, fd);
+        cfd = anetUnixAccept(g_pserver->neterr, fd);
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK)
                 serverLog(LL_WARNING,
-                    "Accepting client connection: %s", server.neterr);
+                    "Accepting client connection: %s", g_pserver->neterr);
             return;
         }
         int ielCur = ielFromEventLoop(el);
-        serverLog(LL_VERBOSE,"Accepted connection to %s", server.unixsocket);
+        serverLog(LL_VERBOSE,"Accepted connection to %s", g_pserver->unixsocket);
 
         aeAcquireLock();
         acceptCommonHandler(cfd,CLIENT_UNIX_SOCKET,NULL, ielCur);
@@ -1175,7 +1175,7 @@ void disconnectSlavesExcept(unsigned char *uuid)
     listIter li;
     listNode *ln;
 
-    listRewind(server.slaves, &li);
+    listRewind(g_pserver->slaves, &li);
     while ((ln = listNext(&li))) {
         client *c = (client*)listNodeValue(ln);
         if (uuid == nullptr || !FUuidEqual(c->uuid, uuid))
@@ -1200,7 +1200,7 @@ void unlinkClient(client *c) {
     serverAssert(c->fd == -1 || c->lock.fOwnLock());
 
     /* If this is marked as current client unset it. */
-    if (server.current_client == c) server.current_client = NULL;
+    if (serverTL && serverTL->current_client == c) serverTL->current_client = NULL;
 
     /* Certain operations must be done only if the client has an active socket.
      * If the client was already unlinked or if it's a "fake client" the
@@ -1209,8 +1209,8 @@ void unlinkClient(client *c) {
         /* Remove from the list of active clients. */
         if (c->client_list_node) {
             uint64_t id = htonu64(c->id);
-            raxRemove(server.clients_index,(unsigned char*)&id,sizeof(id),NULL);
-            listDelNode(server.clients,c->client_list_node);
+            raxRemove(g_pserver->clients_index,(unsigned char*)&id,sizeof(id),NULL);
+            listDelNode(g_pserver->clients,c->client_list_node);
             c->client_list_node = NULL;
         }
 
@@ -1225,42 +1225,42 @@ void unlinkClient(client *c) {
         }
 
         /* Unregister async I/O handlers and close the socket. */
-        aeDeleteFileEvent(server.rgthreadvar[c->iel].el,c->fd,AE_READABLE);
-        aeDeleteFileEvent(server.rgthreadvar[c->iel].el,c->fd,AE_WRITABLE);
+        aeDeleteFileEvent(g_pserver->rgthreadvar[c->iel].el,c->fd,AE_READABLE);
+        aeDeleteFileEvent(g_pserver->rgthreadvar[c->iel].el,c->fd,AE_WRITABLE);
         close(c->fd);
         c->fd = -1;
 
-        atomicDecr(server.rgthreadvar[c->iel].cclients, 1);
+        atomicDecr(g_pserver->rgthreadvar[c->iel].cclients, 1);
     }
 
     /* Remove from the list of pending writes if needed. */
     if (c->flags & CLIENT_PENDING_WRITE) {
-        std::unique_lock<fastlock> lockf(server.rgthreadvar[c->iel].lockPendingWrite);
-        ln = listSearchKey(server.rgthreadvar[c->iel].clients_pending_write,c);
+        std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[c->iel].lockPendingWrite);
+        ln = listSearchKey(g_pserver->rgthreadvar[c->iel].clients_pending_write,c);
         serverAssert(ln != NULL);
-        listDelNode(server.rgthreadvar[c->iel].clients_pending_write,ln);
+        listDelNode(g_pserver->rgthreadvar[c->iel].clients_pending_write,ln);
         c->flags &= ~CLIENT_PENDING_WRITE;
     }
 
     /* When client was just unblocked because of a blocking operation,
      * remove it from the list of unblocked clients. */
     if (c->flags & CLIENT_UNBLOCKED) {
-        ln = listSearchKey(server.rgthreadvar[c->iel].unblocked_clients,c);
+        ln = listSearchKey(g_pserver->rgthreadvar[c->iel].unblocked_clients,c);
         serverAssert(ln != NULL);
-        listDelNode(server.rgthreadvar[c->iel].unblocked_clients,ln);
+        listDelNode(g_pserver->rgthreadvar[c->iel].unblocked_clients,ln);
         c->flags &= ~CLIENT_UNBLOCKED;
     }
 
     if (c->fPendingAsyncWrite) {
         ln = NULL;
         bool fFound = false;
-        for (int iel = 0; iel < server.cthreads; ++iel)
+        for (int iel = 0; iel < cserver.cthreads; ++iel)
         {
-            ln = listSearchKey(server.rgthreadvar[iel].clients_pending_asyncwrite,c);
+            ln = listSearchKey(g_pserver->rgthreadvar[iel].clients_pending_asyncwrite,c);
             if (ln)
             {
                 fFound = true;
-                listDelNode(server.rgthreadvar[iel].clients_pending_asyncwrite,ln);
+                listDelNode(g_pserver->rgthreadvar[iel].clients_pending_asyncwrite,ln);
             }
         }
         serverAssert(fFound);
@@ -1338,15 +1338,15 @@ void freeClient(client *c) {
             if (c->repldbfd != -1) close(c->repldbfd);
             if (c->replpreamble) sdsfree(c->replpreamble);
         }
-        list *l = (c->flags & CLIENT_MONITOR) ? server.monitors : server.slaves;
+        list *l = (c->flags & CLIENT_MONITOR) ? g_pserver->monitors : g_pserver->slaves;
         ln = listSearchKey(l,c);
         serverAssert(ln != NULL);
         listDelNode(l,ln);
         /* We need to remember the time when we started to have zero
          * attached slaves, as after some time we'll free the replication
          * backlog. */
-        if (c->flags & CLIENT_SLAVE && listLength(server.slaves) == 0)
-            server.repl_no_slaves_since = server.unixtime;
+        if (c->flags & CLIENT_SLAVE && listLength(g_pserver->slaves) == 0)
+            g_pserver->repl_no_slaves_since = g_pserver->unixtime;
         refreshGoodSlavesCount();
     }
 
@@ -1357,9 +1357,9 @@ void freeClient(client *c) {
     /* If this client was scheduled for async freeing we need to remove it
      * from the queue. */
     if (c->flags & CLIENT_CLOSE_ASAP) {
-        ln = listSearchKey(server.clients_to_close,c);
+        ln = listSearchKey(g_pserver->clients_to_close,c);
         serverAssert(ln != NULL);
-        listDelNode(server.clients_to_close,ln);
+        listDelNode(g_pserver->clients_to_close,ln);
     }
 
     /* Release other dynamically allocated client structure fields,
@@ -1384,13 +1384,13 @@ void freeClientAsync(client *c) {
     lock.arm(nullptr);
     std::lock_guard<decltype(c->lock)> clientlock(c->lock);
     c->flags |= CLIENT_CLOSE_ASAP;    
-    listAddNodeTail(server.clients_to_close,c);
+    listAddNodeTail(g_pserver->clients_to_close,c);
 }
 
 void freeClientsInAsyncFreeQueue(int iel) {
     listIter li;
     listNode *ln;
-    listRewind(server.clients_to_close,&li);
+    listRewind(g_pserver->clients_to_close,&li);
 
     while((ln = listNext(&li))) {
         client *c = (client*)listNodeValue(ln);
@@ -1399,8 +1399,8 @@ void freeClientsInAsyncFreeQueue(int iel) {
 
         c->flags &= ~CLIENT_CLOSE_ASAP;
         freeClient(c);
-        listDelNode(server.clients_to_close,ln);
-        listRewind(server.clients_to_close,&li);
+        listDelNode(g_pserver->clients_to_close,ln);
+        listRewind(g_pserver->clients_to_close,&li);
     }
 }
 
@@ -1409,7 +1409,7 @@ void freeClientsInAsyncFreeQueue(int iel) {
  * are not registered clients. */
 client *lookupClientByID(uint64_t id) {
     id = htonu64(id);
-    client *c = (client*)raxFind(server.clients_index,(unsigned char*)&id,sizeof(id));
+    client *c = (client*)raxFind(g_pserver->clients_index,(unsigned char*)&id,sizeof(id));
     return (c == raxNotFound) ? NULL : c;
 }
 
@@ -1475,12 +1475,12 @@ int writeToClient(int fd, client *c, int handler_installed) {
          * a slave (otherwise, on high-speed traffic, the replication
          * buffer will grow indefinitely) */
         if (totwritten > NET_MAX_WRITES_PER_EVENT &&
-            (server.maxmemory == 0 ||
-             zmalloc_used_memory() < server.maxmemory) &&
+            (g_pserver->maxmemory == 0 ||
+             zmalloc_used_memory() < g_pserver->maxmemory) &&
             !(c->flags & CLIENT_SLAVE)) break;
     }
     
-    __atomic_fetch_add(&server.stat_net_output_bytes, totwritten, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&g_pserver->stat_net_output_bytes, totwritten, __ATOMIC_RELAXED);
     if (nwritten == -1) {
         if (errno == EAGAIN) {
             nwritten = 0;
@@ -1506,11 +1506,11 @@ int writeToClient(int fd, client *c, int handler_installed) {
          * as an interaction, since we always send REPLCONF ACK commands
          * that take some time to just fill the socket output buffer.
          * We just rely on data / pings received for timeout detection. */
-        if (!(c->flags & CLIENT_MASTER)) c->lastinteraction = server.unixtime;
+        if (!(c->flags & CLIENT_MASTER)) c->lastinteraction = g_pserver->unixtime;
     }
     if (!clientHasPendingReplies(c)) {
         c->sentlen = 0;
-        if (handler_installed) aeDeleteFileEvent(server.rgthreadvar[c->iel].el,c->fd,AE_WRITABLE);
+        if (handler_installed) aeDeleteFileEvent(g_pserver->rgthreadvar[c->iel].el,c->fd,AE_WRITABLE);
 
         /* Close connection after entire reply has been sent. */
         if (c->flags & CLIENT_CLOSE_AFTER_REPLY) {
@@ -1578,8 +1578,8 @@ void ProcessPendingAsyncWrites()
             * so that in the middle of receiving the query, and serving it
             * to the client, we'll call beforeSleep() that will do the
             * actual fsync of AOF to disk. AE_BARRIER ensures that. */
-        if (server.aof_state == AOF_ON &&
-            server.aof_fsync == AOF_FSYNC_ALWAYS)
+        if (g_pserver->aof_state == AOF_ON &&
+            g_pserver->aof_fsync == AOF_FSYNC_ALWAYS)
         {
             ae_flags |= AE_BARRIER;
         }
@@ -1589,7 +1589,7 @@ void ProcessPendingAsyncWrites()
             continue;
 
         asyncCloseClientOnOutputBufferLimitReached(c);
-        if (aeCreateRemoteFileEvent(server.rgthreadvar[c->iel].el, c->fd, ae_flags, sendReplyToClient, c, FALSE) == AE_ERR)
+        if (aeCreateRemoteFileEvent(g_pserver->rgthreadvar[c->iel].el, c->fd, ae_flags, sendReplyToClient, c, FALSE) == AE_ERR)
             continue;   // We can retry later in the cron
     }
 }
@@ -1602,10 +1602,10 @@ int handleClientsWithPendingWrites(int iel) {
     listIter li;
     listNode *ln;
 
-    std::unique_lock<fastlock> lockf(server.rgthreadvar[iel].lockPendingWrite);
-    list *list = server.rgthreadvar[iel].clients_pending_write;
+    std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[iel].lockPendingWrite);
+    list *list = g_pserver->rgthreadvar[iel].clients_pending_write;
     int processed = listLength(list);
-    serverAssert(iel == (serverTL - server.rgthreadvar));
+    serverAssert(iel == (serverTL - g_pserver->rgthreadvar));
 
     listRewind(list,&li);
     while((ln = listNext(&li))) {
@@ -1635,13 +1635,13 @@ int handleClientsWithPendingWrites(int iel) {
              * so that in the middle of receiving the query, and serving it
              * to the client, we'll call beforeSleep() that will do the
              * actual fsync of AOF to disk. AE_BARRIER ensures that. */
-            if (server.aof_state == AOF_ON &&
-                server.aof_fsync == AOF_FSYNC_ALWAYS)
+            if (g_pserver->aof_state == AOF_ON &&
+                g_pserver->aof_fsync == AOF_FSYNC_ALWAYS)
             {
                 ae_flags |= AE_BARRIER;
             }
             
-            if (aeCreateFileEvent(server.rgthreadvar[c->iel].el, c->fd, ae_flags, sendReplyToClient, c) == AE_ERR)
+            if (aeCreateFileEvent(g_pserver->rgthreadvar[c->iel].el, c->fd, ae_flags, sendReplyToClient, c) == AE_ERR)
                 freeClientAsync(c);
         }
     }
@@ -1693,8 +1693,8 @@ void resetClient(client *c) {
 void protectClient(client *c) {
     c->flags |= CLIENT_PROTECTED;
     AssertCorrectThread(c);
-    aeDeleteFileEvent(server.rgthreadvar[c->iel].el,c->fd,AE_READABLE);
-    aeDeleteFileEvent(server.rgthreadvar[c->iel].el,c->fd,AE_WRITABLE);
+    aeDeleteFileEvent(g_pserver->rgthreadvar[c->iel].el,c->fd,AE_READABLE);
+    aeDeleteFileEvent(g_pserver->rgthreadvar[c->iel].el,c->fd,AE_WRITABLE);
 }
 
 /* This will undo the client protection done by protectClient() */
@@ -1702,7 +1702,7 @@ void unprotectClient(client *c) {
     AssertCorrectThread(c);
     if (c->flags & CLIENT_PROTECTED) {
         c->flags &= ~CLIENT_PROTECTED;
-        aeCreateFileEvent(server.rgthreadvar[c->iel].el,c->fd,AE_READABLE|AE_READ_THREADSAFE,readQueryFromClient,c);
+        aeCreateFileEvent(g_pserver->rgthreadvar[c->iel].el,c->fd,AE_READABLE|AE_READ_THREADSAFE,readQueryFromClient,c);
         if (clientHasPendingReplies(c)) clientInstallWriteHandler(c);
     }
 }
@@ -1751,7 +1751,7 @@ int processInlineBuffer(client *c) {
      * This is useful for a slave to ping back while loading a big
      * RDB file. */
     if (querylen == 0 && c->flags & CLIENT_SLAVE)
-        c->repl_ack_time = server.unixtime;
+        c->repl_ack_time = g_pserver->unixtime;
 
     /* Move querybuffer position to the next query in the buffer. */
     c->qb_pos += querylen+linefeed_chars;
@@ -1779,7 +1779,7 @@ int processInlineBuffer(client *c) {
  * and set the client as CLIENT_CLOSE_AFTER_REPLY. */
 #define PROTO_DUMP_LEN 128
 static void setProtocolError(const char *errstr, client *c) {
-    if (server.verbosity <= LL_VERBOSE) {
+    if (cserver.verbosity <= LL_VERBOSE) {
         sds client = catClientInfoString(sdsempty(),c);
 
         /* Sample some protocol to given an idea about what was inside. */
@@ -1888,7 +1888,7 @@ int processMultibulkBuffer(client *c) {
             }
 
             ok = string2ll(c->querybuf+c->qb_pos+1,newline-(c->querybuf+c->qb_pos+1),&ll);
-            if (!ok || ll < 0 || ll > server.proto_max_bulk_len) {
+            if (!ok || ll < 0 || ll > g_pserver->proto_max_bulk_len) {
                 addReplyError(c,"Protocol error: invalid bulk length");
                 setProtocolError("invalid bulk length",c);
                 return C_ERR;
@@ -1971,7 +1971,7 @@ void processInputBuffer(client *c, int callFlags) {
          * condition on the slave. We want just to accumulate the replication
          * stream (instead of replying -BUSY like we do with other clients) and
          * later resume the processing. */
-        if (server.lua_timedout && c->flags & CLIENT_MASTER) break;
+        if (g_pserver->lua_timedout && c->flags & CLIENT_MASTER) break;
 
         /* CLIENT_CLOSE_AFTER_REPLY closes the connection once the reply is
          * written to the client. Make sure to not let the reply grow after
@@ -2003,7 +2003,7 @@ void processInputBuffer(client *c, int callFlags) {
         } else {
             AeLocker locker;
             locker.arm(c);
-            server.current_client = c;
+            serverTL->current_client = c;
 
             /* Only reset the client when the command was executed. */
             if (processCommand(c, callFlags) == C_OK) {
@@ -2022,11 +2022,11 @@ void processInputBuffer(client *c, int callFlags) {
             /* freeMemoryIfNeeded may flush slave output buffers. This may
              * result into a slave, that may be the active client, to be
              * freed. */
-            if (server.current_client == NULL) {
+            if (serverTL->current_client == NULL) {
                 fFreed = true;
                 break;
             }
-            server.current_client = NULL;
+            serverTL->current_client = NULL;
         }
     }
 
@@ -2049,10 +2049,10 @@ void processInputBufferAndReplicate(client *c) {
         processInputBuffer(c, CMD_CALL_FULL);
         size_t applied = c->reploff - prev_offset;
         if (applied) {
-            if (!server.fActiveReplica)
+            if (!g_pserver->fActiveReplica)
             {
                 aeAcquireLock();
-                replicationFeedSlavesFromMasterStream(server.slaves,
+                replicationFeedSlavesFromMasterStream(g_pserver->slaves,
                         c->pending_querybuf, applied);
                 aeReleaseLock();
             }
@@ -2124,10 +2124,10 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 
     sdsIncrLen(c->querybuf,nread);
-    c->lastinteraction = server.unixtime;
+    c->lastinteraction = g_pserver->unixtime;
     if (c->flags & CLIENT_MASTER) c->read_reploff += nread;
-    server.stat_net_input_bytes += nread;
-    if (sdslen(c->querybuf) > server.client_max_querybuf_len) {
+    g_pserver->stat_net_input_bytes += nread;
+    if (sdslen(c->querybuf) > cserver.client_max_querybuf_len) {
         sds ci = catClientInfoString(sdsempty(),c), bytes = sdsempty();
 
         bytes = sdscatrepr(bytes,c->querybuf,64);
@@ -2158,7 +2158,7 @@ void getClientsMaxBuffers(unsigned long *longest_output_list,
     listIter li;
     unsigned long lol = 0, bib = 0;
 
-    listRewind(server.clients,&li);
+    listRewind(g_pserver->clients,&li);
     while ((ln = listNext(&li)) != NULL) {
         c = (client*)listNodeValue(ln);
 
@@ -2184,7 +2184,7 @@ void genClientPeerId(client *client, char *peerid,
                             size_t peerid_len) {
     if (client->flags & CLIENT_UNIX_SOCKET) {
         /* Unix socket client. */
-        snprintf(peerid,peerid_len,"%s:0",server.unixsocket);
+        snprintf(peerid,peerid_len,"%s:0",g_pserver->unixsocket);
     } else {
         /* TCP client. */
         anetFormatPeer(client->fd,peerid,peerid_len);
@@ -2231,7 +2231,7 @@ sds catClientInfoString(sds s, client *client) {
     if (p == flags) *p++ = 'N';
     *p++ = '\0';
 
-    emask = client->fd == -1 ? 0 : aeGetFileEvents(server.rgthreadvar[client->iel].el,client->fd);
+    emask = client->fd == -1 ? 0 : aeGetFileEvents(g_pserver->rgthreadvar[client->iel].el,client->fd);
     p = events;
     if (emask & AE_READABLE) *p++ = 'r';
     if (emask & AE_WRITABLE) *p++ = 'w';
@@ -2242,8 +2242,8 @@ sds catClientInfoString(sds s, client *client) {
         getClientPeerId(client),
         client->fd,
         client->name ? (char*)ptrFromObj(client->name) : "",
-        (long long)(server.unixtime - client->ctime),
-        (long long)(server.unixtime - client->lastinteraction),
+        (long long)(g_pserver->unixtime - client->ctime),
+        (long long)(g_pserver->unixtime - client->lastinteraction),
         flags,
         client->db->id,
         (int) dictSize(client->pubsub_channels),
@@ -2262,9 +2262,9 @@ sds getAllClientsInfoString(int type) {
     listNode *ln;
     listIter li;
     client *client;
-    sds o = sdsnewlen(SDS_NOINIT,200*listLength(server.clients));
+    sds o = sdsnewlen(SDS_NOINIT,200*listLength(g_pserver->clients));
     sdsclear(o);
-    listRewind(server.clients,&li);
+    listRewind(g_pserver->clients,&li);
     while ((ln = listNext(&li)) != NULL) {
         client = reinterpret_cast<struct client*>(listNodeValue(ln));
         if (type != -1 && getClientType(client) != type) continue;
@@ -2426,7 +2426,7 @@ NULL
         }
 
         /* Iterate clients killing all the matching clients. */
-        listRewind(server.clients,&li);
+        listRewind(g_pserver->clients,&li);
         while ((ln = listNext(&li)) != NULL) {
             client = (struct client*)listNodeValue(ln);
             if (addr && strcmp(getClientPeerId(client),addr) != 0) continue;
@@ -2557,7 +2557,7 @@ void helloCommand(client *c) {
     addReplyBulkCString(c,"redis");
 
     addReplyBulkCString(c,"version");
-    addReplyBulkCString(c,REDIS_VERSION);
+    addReplyBulkCString(c,KEYDB_SET_VERSION);
 
     addReplyBulkCString(c,"proto");
     addReplyLongLong(c,3);
@@ -2566,13 +2566,13 @@ void helloCommand(client *c) {
     addReplyLongLong(c,c->id);
 
     addReplyBulkCString(c,"mode");
-    if (server.sentinel_mode) addReplyBulkCString(c,"sentinel");
-    if (server.cluster_enabled) addReplyBulkCString(c,"cluster");
+    if (g_pserver->sentinel_mode) addReplyBulkCString(c,"sentinel");
+    if (g_pserver->cluster_enabled) addReplyBulkCString(c,"cluster");
     else addReplyBulkCString(c,"standalone");
 
-    if (!server.sentinel_mode) {
+    if (!g_pserver->sentinel_mode) {
         addReplyBulkCString(c,"role");
-        addReplyBulkCString(c,listLength(server.masters) ? "replica" : "master");
+        addReplyBulkCString(c,listLength(g_pserver->masters) ? "replica" : "master");
     }
 
     addReplyBulkCString(c,"modules");
@@ -2739,24 +2739,24 @@ int checkClientOutputBufferLimits(client *c) {
      * like normal clients. */
     if (clientType == CLIENT_TYPE_MASTER) clientType = CLIENT_TYPE_NORMAL;
 
-    if (server.client_obuf_limits[clientType].hard_limit_bytes &&
-        used_mem >= server.client_obuf_limits[clientType].hard_limit_bytes)
+    if (cserver.client_obuf_limits[clientType].hard_limit_bytes &&
+        used_mem >= cserver.client_obuf_limits[clientType].hard_limit_bytes)
         hard = 1;
-    if (server.client_obuf_limits[clientType].soft_limit_bytes &&
-        used_mem >= server.client_obuf_limits[clientType].soft_limit_bytes)
+    if (cserver.client_obuf_limits[clientType].soft_limit_bytes &&
+        used_mem >= cserver.client_obuf_limits[clientType].soft_limit_bytes)
         soft = 1;
 
     /* We need to check if the soft limit is reached continuously for the
      * specified amount of seconds. */
     if (soft) {
         if (c->obuf_soft_limit_reached_time == 0) {
-            c->obuf_soft_limit_reached_time = server.unixtime;
+            c->obuf_soft_limit_reached_time = g_pserver->unixtime;
             soft = 0; /* First time we see the soft limit reached */
         } else {
-            time_t elapsed = server.unixtime - c->obuf_soft_limit_reached_time;
+            time_t elapsed = g_pserver->unixtime - c->obuf_soft_limit_reached_time;
 
             if (elapsed <=
-                server.client_obuf_limits[clientType].soft_limit_seconds) {
+                cserver.client_obuf_limits[clientType].soft_limit_seconds) {
                 soft = 0; /* The client still did not reached the max number of
                              seconds for the soft limit to be considered
                              reached. */
@@ -2797,7 +2797,7 @@ void flushSlavesOutputBuffers(void) {
     listIter li;
     listNode *ln;
 
-    listRewind(server.slaves,&li);
+    listRewind(g_pserver->slaves,&li);
     while((ln = listNext(&li))) {
         client *slave = (client*)listNodeValue(ln);
         int events;
@@ -2811,7 +2811,7 @@ void flushSlavesOutputBuffers(void) {
          * of put_online_on_ack is to postpone the moment it is installed.
          * This is what we want since slaves in this state should not receive
          * writes before the first ACK. */
-        events = aeGetFileEvents(server.rgthreadvar[slave->iel].el,slave->fd);
+        events = aeGetFileEvents(g_pserver->rgthreadvar[slave->iel].el,slave->fd);
         if (events & AE_WRITABLE &&
             slave->replstate == SLAVE_STATE_ONLINE &&
             clientHasPendingReplies(slave))
@@ -2839,27 +2839,27 @@ void flushSlavesOutputBuffers(void) {
  * than the time left for the previous pause, no change is made to the
  * left duration. */
 void pauseClients(mstime_t end) {
-    if (!server.clients_paused || end > server.clients_pause_end_time)
-        server.clients_pause_end_time = end;
-    server.clients_paused = 1;
+    if (!g_pserver->clients_paused || end > g_pserver->clients_pause_end_time)
+        g_pserver->clients_pause_end_time = end;
+    g_pserver->clients_paused = 1;
 }
 
 /* Return non-zero if clients are currently paused. As a side effect the
  * function checks if the pause time was reached and clear it. */
 int clientsArePaused(void) {
-    if (server.clients_paused &&
-        server.clients_pause_end_time < server.mstime)
+    if (g_pserver->clients_paused &&
+        g_pserver->clients_pause_end_time < g_pserver->mstime)
     {
         aeAcquireLock();
         listNode *ln;
         listIter li;
         client *c;
 
-        server.clients_paused = 0;
+        g_pserver->clients_paused = 0;
 
         /* Put all the clients in the unblocked clients queue in order to
          * force the re-processing of the input buffer if any. */
-        listRewind(server.clients,&li);
+        listRewind(g_pserver->clients,&li);
         while ((ln = listNext(&li)) != NULL) {
             c = (client*)listNodeValue(ln);
 
@@ -2870,7 +2870,7 @@ int clientsArePaused(void) {
         }
         aeReleaseLock();
     }
-    return server.clients_paused;
+    return g_pserver->clients_paused;
 }
 
 /* This function is called by Redis in order to process a few events from
@@ -2892,7 +2892,7 @@ int processEventsWhileBlocked(int iel) {
     aeReleaseLock();
     while (iterations--) {
         int events = 0;
-        events += aeProcessEvents(server.rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
+        events += aeProcessEvents(g_pserver->rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
         events += handleClientsWithPendingWrites(iel);
         if (!events) break;
         count += events;

@@ -30,6 +30,8 @@
 #include "server.h"
 #include "cluster.h"
 #include <dlfcn.h>
+#include <mutex>
+#include <condition_variable>
 
 #define REDISMODULE_CORE 1
 #include "redismodule.h"
@@ -55,7 +57,7 @@ struct RedisModule {
 typedef struct RedisModule RedisModule;
 
 /* This represents a shared API. Shared APIs will be used to populate
- * the server.sharedapi dictionary, mapping names of APIs exported by
+ * the g_pserver->sharedapi dictionary, mapping names of APIs exported by
  * modules for other modules to use, to their structure specifying the
  * function pointer that can be called. */
 struct RedisModuleSharedAPI {
@@ -235,7 +237,6 @@ static list *moduleUnblockedClients;
 
 /* We need a mutex that is unlocked / relocked in beforeSleep() in order to
  * allow thread safe contexts to execute commands at a safe moment. */
-static pthread_rwlock_t moduleGIL = PTHREAD_RWLOCK_INITIALIZER;
 int fModuleGILWlocked = FALSE;
 
 /* Function pointer type for keyspace event notification subscriptions from modules. */
@@ -292,6 +293,12 @@ typedef struct RedisModuleCommandFilter {
 
 /* Registered filters */
 static list *moduleCommandFilters;
+
+/* Module GIL Variables */
+static int s_cAcquisitionsServer = 0;
+static int s_cAcquisitionsModule = 0;
+static std::mutex s_mutex;
+static std::condition_variable s_cv;
 
 /* --------------------------------------------------------------------------
  * Prototypes
@@ -427,8 +434,8 @@ int moduleCreateEmptyKey(RedisModuleKey *key, int type) {
     switch(type) {
     case REDISMODULE_KEYTYPE_LIST:
         obj = createQuicklistObject();
-        quicklistSetOptions((quicklist*)obj->m_ptr, server.list_max_ziplist_size,
-                            server.list_compress_depth);
+        quicklistSetOptions((quicklist*)obj->m_ptr, g_pserver->list_max_ziplist_size,
+                            g_pserver->list_compress_depth);
         break;
     case REDISMODULE_KEYTYPE_ZSET:
         obj = createZsetZiplistObject();
@@ -492,7 +499,7 @@ int moduleDelKeyIfEmpty(RedisModuleKey *key) {
  * This function is not meant to be used by modules developer, it is only
  * used implicitly by including redismodule.h. */
 int RM_GetApi(const char *funcname, void **targetPtrPtr) {
-    dictEntry *he = dictFind(server.moduleapi, funcname);
+    dictEntry *he = dictFind(g_pserver->moduleapi, funcname);
     if (!he) return REDISMODULE_ERR;
     *targetPtrPtr = dictGetVal(he);
     return REDISMODULE_OK;
@@ -528,7 +535,7 @@ void moduleHandlePropagationAfterCommandCallback(RedisModuleCtx *ctx) {
     if (ctx->flags & REDISMODULE_CTX_MULTI_EMITTED) {
         robj *propargv[1];
         propargv[0] = createStringObject("EXEC",4);
-        alsoPropagate(server.execCommand,c->db->id,propargv,1,
+        alsoPropagate(cserver.execCommand,c->db->id,propargv,1,
             PROPAGATE_AOF|PROPAGATE_REPL);
         decrRefCount(propargv[0]);
     }
@@ -700,7 +707,7 @@ int commandFlagsFromString(char *s) {
 int RM_CreateCommand(RedisModuleCtx *ctx, const char *name, RedisModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) {
     int flags = strflags ? commandFlagsFromString((char*)strflags) : 0;
     if (flags == -1) return REDISMODULE_ERR;
-    if ((flags & CMD_MODULE_NO_CLUSTER) && server.cluster_enabled)
+    if ((flags & CMD_MODULE_NO_CLUSTER) && g_pserver->cluster_enabled)
         return REDISMODULE_ERR;
 
     struct redisCommand *rediscmd;
@@ -734,8 +741,8 @@ int RM_CreateCommand(RedisModuleCtx *ctx, const char *name, RedisModuleCmdFunc c
     cp->rediscmd->keystep = keystep;
     cp->rediscmd->microseconds = 0;
     cp->rediscmd->calls = 0;
-    dictAdd(server.commands,sdsdup(cmdname),cp->rediscmd);
-    dictAdd(server.orig_commands,sdsdup(cmdname),cp->rediscmd);
+    dictAdd(g_pserver->commands,sdsdup(cmdname),cp->rediscmd);
+    dictAdd(g_pserver->orig_commands,sdsdup(cmdname),cp->rediscmd);
     cp->rediscmd->id = ACLGetCommandID(cmdname); /* ID used for ACL. */
     return REDISMODULE_OK;
 }
@@ -1355,7 +1362,7 @@ int RM_Replicate(RedisModuleCtx *ctx, const char *cmdname, const char *fmt, ...)
     /* Release the argv. */
     for (j = 0; j < argc; j++) decrRefCount(argv[j]);
     zfree(argv);
-    server.dirty++;
+    g_pserver->dirty++;
     return REDISMODULE_OK;
 }
 
@@ -1374,7 +1381,7 @@ int RM_ReplicateVerbatim(RedisModuleCtx *ctx) {
     alsoPropagate(ctx->client->cmd,ctx->client->db->id,
         ctx->client->argv,ctx->client->argc,
         PROPAGATE_AOF|PROPAGATE_REPL);
-    server.dirty++;
+    g_pserver->dirty++;
     return REDISMODULE_OK;
 }
 
@@ -1454,29 +1461,29 @@ int RM_GetContextFlags(RedisModuleCtx *ctx) {
          flags |= REDISMODULE_CTX_FLAGS_REPLICATED;
     }
 
-    if (server.cluster_enabled)
+    if (g_pserver->cluster_enabled)
         flags |= REDISMODULE_CTX_FLAGS_CLUSTER;
 
     /* Maxmemory and eviction policy */
-    if (server.maxmemory > 0) {
+    if (g_pserver->maxmemory > 0) {
         flags |= REDISMODULE_CTX_FLAGS_MAXMEMORY;
 
-        if (server.maxmemory_policy != MAXMEMORY_NO_EVICTION)
+        if (g_pserver->maxmemory_policy != MAXMEMORY_NO_EVICTION)
             flags |= REDISMODULE_CTX_FLAGS_EVICT;
     }
 
     /* Persistence flags */
-    if (server.aof_state != AOF_OFF)
+    if (g_pserver->aof_state != AOF_OFF)
         flags |= REDISMODULE_CTX_FLAGS_AOF;
-    if (server.saveparamslen > 0)
+    if (g_pserver->saveparamslen > 0)
         flags |= REDISMODULE_CTX_FLAGS_RDB;
 
     /* Replication flags */
-    if (listLength(server.masters) == 0) {
+    if (listLength(g_pserver->masters) == 0) {
         flags |= REDISMODULE_CTX_FLAGS_MASTER;
     } else {
         flags |= REDISMODULE_CTX_FLAGS_SLAVE;
-        if (server.repl_slave_ro)
+        if (g_pserver->repl_slave_ro)
             flags |= REDISMODULE_CTX_FLAGS_READONLY;
     }
 
@@ -2750,7 +2757,7 @@ RedisModuleCallReply *RM_Call(RedisModuleCtx *ctx, const char *cmdname, const ch
     int replicate = 0; /* Replicate this command? */
     int call_flags;
     sds proto = nullptr;
-
+        
     /* Create the client and dispatch the command. */
     va_start(ap, fmt);
     c = createClient(-1, IDX_EVENT_LOOP_MAIN);
@@ -2792,12 +2799,12 @@ RedisModuleCallReply *RM_Call(RedisModuleCtx *ctx, const char *cmdname, const ch
     /* If this is a Redis Cluster node, we need to make sure the module is not
      * trying to access non-local keys, with the exception of commands
      * received from our master. */
-    if (server.cluster_enabled && !(ctx->client->flags & CLIENT_MASTER)) {
+    if (g_pserver->cluster_enabled && !(ctx->client->flags & CLIENT_MASTER)) {
         /* Duplicate relevant flags in the module client. */
         c->flags &= ~(CLIENT_READONLY|CLIENT_ASKING);
         c->flags |= ctx->client->flags & (CLIENT_READONLY|CLIENT_ASKING);
         if (getNodeByQuery(c,c->cmd,c->argv,c->argc,NULL,NULL) !=
-                           server.cluster->myself)
+                           g_pserver->cluster->myself)
         {
             errno = EPERM;
             goto cleanup;
@@ -3507,7 +3514,7 @@ void RM_LogRaw(RedisModule *module, const char *levelstr, const char *fmt, va_li
     else if (!strcasecmp(levelstr,"warning")) level = LL_WARNING;
     else level = LL_VERBOSE; /* Default. */
 
-    if (level < server.verbosity) return;
+    if (level < cserver.verbosity) return;
 
     name_len = snprintf(msg, sizeof(msg),"<%s> ", module->name);
     vsnprintf(msg + name_len, sizeof(msg) - name_len, fmt, ap);
@@ -3663,9 +3670,22 @@ int RM_UnblockClient(RedisModuleBlockedClient *bc, void *privdata) {
     pthread_mutex_lock(&moduleUnblockedClientsMutex);
     bc->privdata = privdata;
     listAddNodeTail(moduleUnblockedClients,bc);
-    if (write(server.module_blocked_pipe[1],"A",1) != 1) {
-        /* Ignore the error, this is best-effort. */
+    if (bc->client != nullptr)
+    {
+        if (write(g_pserver->rgthreadvar[bc->client->iel].module_blocked_pipe[1],"A",1) != 1) {
+            /* Ignore the error, this is best-effort. */
+        }
     }
+    else
+    {
+        for (int iel = 0; iel < cserver.cthreads; ++iel)
+        {
+            if (write(g_pserver->rgthreadvar[iel].module_blocked_pipe[1],"A",1) != 1) {
+                /* Ignore the error, this is best-effort. */
+            }
+        }
+    }
+    
     pthread_mutex_unlock(&moduleUnblockedClientsMutex);
     return REDISMODULE_OK;
 }
@@ -3706,8 +3726,7 @@ void RM_SetDisconnectCallback(RedisModuleBlockedClient *bc, RedisModuleDisconnec
  * blocked client, it was terminated by Redis (for timeout or other reasons).
  * When this happens the RedisModuleBlockedClient structure in the queue
  * will have the 'client' field set to NULL. */
-void moduleHandleBlockedClients(void) {
-    listNode *ln;
+void moduleHandleBlockedClients(int iel) {
     RedisModuleBlockedClient *bc;
     serverAssert(GlobalLocksAcquired());
 
@@ -3715,12 +3734,16 @@ void moduleHandleBlockedClients(void) {
     /* Here we unblock all the pending clients blocked in modules operations
      * so we can read every pending "awake byte" in the pipe. */
     char buf[1];
-    while (read(server.module_blocked_pipe[0],buf,1) == 1);
-    while (listLength(moduleUnblockedClients)) {
-        ln = listFirst(moduleUnblockedClients);
+    while (read(serverTL->module_blocked_pipe[0],buf,1) == 1);
+    listIter li;
+    listNode *ln;
+    listRewind(moduleUnblockedClients, &li);
+    while ((ln = listNext(&li))) {
         bc = (RedisModuleBlockedClient*)ln->value;
         client *c = bc->client;
-        serverAssert(c->iel == IDX_EVENT_LOOP_MAIN);
+        if ((c != nullptr) && (iel != c->iel))
+            continue;
+        
         listDelNode(moduleUnblockedClients,ln);
         pthread_mutex_unlock(&moduleUnblockedClientsMutex);
 
@@ -3788,9 +3811,9 @@ void moduleHandleBlockedClients(void) {
                 c->flags |= CLIENT_PENDING_WRITE;
                 AssertCorrectThread(c);
                 
-                fastlock_lock(&server.rgthreadvar[c->iel].lockPendingWrite);
-                listAddNodeHead(server.rgthreadvar[c->iel].clients_pending_write,c);
-                fastlock_unlock(&server.rgthreadvar[c->iel].lockPendingWrite);
+                fastlock_lock(&g_pserver->rgthreadvar[c->iel].lockPendingWrite);
+                listAddNodeHead(g_pserver->rgthreadvar[c->iel].clients_pending_write,c);
+                fastlock_unlock(&g_pserver->rgthreadvar[c->iel].lockPendingWrite);
             }
         }
 
@@ -3919,23 +3942,36 @@ void RM_ThreadSafeContextUnlock(RedisModuleCtx *ctx) {
 }
 
 void moduleAcquireGIL(int fServerThread) {
+    std::unique_lock<std::mutex> lock(s_mutex);
+    int *pcheck = fServerThread ? &s_cAcquisitionsModule : &s_cAcquisitionsServer;
+
+    while (*pcheck > 0)
+        s_cv.wait(lock);
+
     if (fServerThread)
     {
-        pthread_rwlock_rdlock(&moduleGIL);
+        ++s_cAcquisitionsServer;
     }
     else
     {
-        pthread_rwlock_wrlock(&moduleGIL);
-        fModuleGILWlocked = TRUE;
+        ++s_cAcquisitionsModule;
+        fModuleGILWlocked++;
     }
 }
 
 void moduleReleaseGIL(int fServerThread) {
-    pthread_rwlock_unlock(&moduleGIL);
-    if (!fServerThread)
+    std::unique_lock<std::mutex> lock(s_mutex);
+
+    if (fServerThread)
     {
-        fModuleGILWlocked = FALSE;
+        --s_cAcquisitionsServer;
     }
+    else
+    {
+        --s_cAcquisitionsModule;
+        fModuleGILWlocked--;
+    }
+    s_cv.notify_all();
 }
 
 int moduleGILAcquiredByModule(void) {
@@ -4107,7 +4143,7 @@ void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8
  * is already a callback for this function, the callback is unregistered
  * (so this API call is also used in order to delete the receiver). */
 void RM_RegisterClusterMessageReceiver(RedisModuleCtx *ctx, uint8_t type, RedisModuleClusterMessageReceiver callback) {
-    if (!server.cluster_enabled) return;
+    if (!g_pserver->cluster_enabled) return;
 
     uint64_t module_id = moduleTypeEncodeId(ctx->module->name,0);
     moduleClusterReceiver *r = clusterReceivers[type], *prev = NULL;
@@ -4151,7 +4187,7 @@ void RM_RegisterClusterMessageReceiver(RedisModuleCtx *ctx, uint8_t type, RedisM
  * otherwise if the node is not connected or such node ID does not map to any
  * known cluster node, REDISMODULE_ERR is returned. */
 int RM_SendClusterMessage(RedisModuleCtx *ctx, char *target_id, uint8_t type, unsigned char *msg, uint32_t len) {
-    if (!server.cluster_enabled) return REDISMODULE_ERR;
+    if (!g_pserver->cluster_enabled) return REDISMODULE_ERR;
     uint64_t module_id = moduleTypeEncodeId(ctx->module->name,0);
     if (clusterSendModuleMessageToTarget(target_id,module_id,type,msg,len) == C_OK)
         return REDISMODULE_OK;
@@ -4184,10 +4220,10 @@ int RM_SendClusterMessage(RedisModuleCtx *ctx, char *target_id, uint8_t type, un
 char **RM_GetClusterNodesList(RedisModuleCtx *ctx, size_t *numnodes) {
     UNUSED(ctx);
 
-    if (!server.cluster_enabled) return NULL;
-    size_t count = dictSize(server.cluster->nodes);
+    if (!g_pserver->cluster_enabled) return NULL;
+    size_t count = dictSize(g_pserver->cluster->nodes);
     char **ids = (char**)zmalloc((count+1)*REDISMODULE_NODE_ID_LEN, MALLOC_LOCAL);
-    dictIterator *di = dictGetIterator(server.cluster->nodes);
+    dictIterator *di = dictGetIterator(g_pserver->cluster->nodes);
     dictEntry *de;
     int j = 0;
     while((de = dictNext(di)) != NULL) {
@@ -4214,8 +4250,8 @@ void RM_FreeClusterNodesList(char **ids) {
 /* Return this node ID (REDISMODULE_CLUSTER_ID_LEN bytes) or NULL if the cluster
  * is disabled. */
 const char *RM_GetMyClusterID(void) {
-    if (!server.cluster_enabled) return NULL;
-    return server.cluster->myself->name;
+    if (!g_pserver->cluster_enabled) return NULL;
+    return g_pserver->cluster->myself->name;
 }
 
 /* Return the number of nodes in the cluster, regardless of their state
@@ -4223,8 +4259,8 @@ const char *RM_GetMyClusterID(void) {
  * be smaller, but not greater than this number. If the instance is not in
  * cluster mode, zero is returned. */
 size_t RM_GetClusterSize(void) {
-    if (!server.cluster_enabled) return 0;
-    return dictSize(server.cluster->nodes);
+    if (!g_pserver->cluster_enabled) return 0;
+    return dictSize(g_pserver->cluster->nodes);
 }
 
 /* Populate the specified info for the node having as ID the specified 'id',
@@ -4304,9 +4340,9 @@ int RM_GetClusterNodeInfo(RedisModuleCtx *ctx, const char *id, char *ip, char *m
 void RM_SetClusterFlags(RedisModuleCtx *ctx, uint64_t flags) {
     UNUSED(ctx);
     if (flags & REDISMODULE_CLUSTER_FLAG_NO_FAILOVER)
-        server.cluster_module_flags |= CLUSTER_MODULE_FLAG_NO_FAILOVER;
+        g_pserver->cluster_module_flags |= CLUSTER_MODULE_FLAG_NO_FAILOVER;
     if (flags & REDISMODULE_CLUSTER_FLAG_NO_REDIRECTION)
-        server.cluster_module_flags |= CLUSTER_MODULE_FLAG_NO_REDIRECTION;
+        g_pserver->cluster_module_flags |= CLUSTER_MODULE_FLAG_NO_REDIRECTION;
 }
 
 /* --------------------------------------------------------------------------
@@ -4415,7 +4451,7 @@ RedisModuleTimerID RM_CreateTimer(RedisModuleCtx *ctx, mstime_t period, RedisMod
         if (memcmp(ri.key,&key,sizeof(key)) == 0) {
             /* This is the first key, we need to re-install the timer according
              * to the just added event. */
-            aeDeleteTimeEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,aeTimer);
+            aeDeleteTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,aeTimer);
             aeTimer = -1;
         }
         raxStop(&ri);
@@ -4424,7 +4460,7 @@ RedisModuleTimerID RM_CreateTimer(RedisModuleCtx *ctx, mstime_t period, RedisMod
     /* If we have no main timer (the old one was invalidated, or this is the
      * first module timer we have), install one. */
     if (aeTimer == -1)
-        aeTimer = aeCreateTimeEvent(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,period,moduleTimerHandler,NULL,NULL);
+        aeTimer = aeCreateTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,period,moduleTimerHandler,NULL,NULL);
 
     return key;
 }
@@ -4752,7 +4788,7 @@ int RM_ExportSharedAPI(RedisModuleCtx *ctx, const char *apiname, void *func) {
     RedisModuleSharedAPI *sapi = (RedisModuleSharedAPI*)zmalloc(sizeof(*sapi), MALLOC_LOCAL);
     sapi->module = ctx->module;
     sapi->func = func;
-    if (dictAdd(server.sharedapi, (char*)apiname, sapi) != DICT_OK) {
+    if (dictAdd(g_pserver->sharedapi, (char*)apiname, sapi) != DICT_OK) {
         zfree(sapi);
         return REDISMODULE_ERR;
     }
@@ -4793,7 +4829,7 @@ int RM_ExportSharedAPI(RedisModuleCtx *ctx, const char *apiname, void *func) {
  *     }
  */
 void *RM_GetSharedAPI(RedisModuleCtx *ctx, const char *apiname) {
-    dictEntry *de = dictFind(server.sharedapi, apiname);
+    dictEntry *de = dictFind(g_pserver->sharedapi, apiname);
     if (de == NULL) return NULL;
     RedisModuleSharedAPI *sapi = (RedisModuleSharedAPI*)dictGetVal(de);
     if (listSearchKey(sapi->module->usedby,ctx->module) == NULL) {
@@ -4811,13 +4847,13 @@ void *RM_GetSharedAPI(RedisModuleCtx *ctx, const char *apiname) {
  * The number of unregistered APIs is returned. */
 int moduleUnregisterSharedAPI(RedisModule *module) {
     int count = 0;
-    dictIterator *di = dictGetSafeIterator(server.sharedapi);
+    dictIterator *di = dictGetSafeIterator(g_pserver->sharedapi);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         const char *apiname = (const char*)dictGetKey(de);
         RedisModuleSharedAPI *sapi = (RedisModuleSharedAPI*)dictGetVal(de);
         if (sapi->module == module) {
-            dictDelete(server.sharedapi,apiname);
+            dictDelete(g_pserver->sharedapi,apiname);
             zfree(sapi);
             count++;
         }
@@ -5056,7 +5092,7 @@ int RM_CommandFilterArgDelete(RedisModuleCommandFilterCtx *fctx, int pos)
  * Modules API internals
  * -------------------------------------------------------------------------- */
 
-/* server.moduleapi dictionary type. Only uses plain C strings since
+/* g_pserver->moduleapi dictionary type. Only uses plain C strings since
  * this gets queries from modules. */
 
 uint64_t dictCStringKeyHash(const void *key) {
@@ -5078,7 +5114,7 @@ dictType moduleAPIDictType = {
 };
 
 extern "C" int moduleRegisterApi(const char *funcname, void *funcptr) {
-    return dictAdd(server.moduleapi, (char*)funcname, funcptr);
+    return dictAdd(g_pserver->moduleapi, (char*)funcname, funcptr);
 }
 
 #define REGISTER_API(name) \
@@ -5089,7 +5125,7 @@ void moduleRegisterCoreAPI(void);
 
 void moduleInitModulesSystem(void) {
     moduleUnblockedClients = listCreate();
-    server.loadmodule_queue = listCreate();
+    g_pserver->loadmodule_queue = listCreate();
     modules = dictCreate(&modulesDictType,NULL);
 
     /* Set up the keyspace notification susbscriber list and static client */
@@ -5102,27 +5138,16 @@ void moduleInitModulesSystem(void) {
     moduleCommandFilters = listCreate();
 
     moduleRegisterCoreAPI();
-    if (pipe(server.module_blocked_pipe) == -1) {
-        serverLog(LL_WARNING,
-            "Can't create the pipe for module blocking commands: %s",
-            strerror(errno));
-        exit(1);
-    }
-    /* Make the pipe non blocking. This is just a best effort aware mechanism
-     * and we do not want to block not in the read nor in the write half. */
-    anetNonBlock(NULL,server.module_blocked_pipe[0]);
-    anetNonBlock(NULL,server.module_blocked_pipe[1]);
 
     /* Create the timers radix tree. */
     Timers = raxNew();
 
     /* Our thread-safe contexts GIL must start with already locked:
      * it is just unlocked when it's safe. */
-    pthread_rwlock_init(&moduleGIL, NULL);
-    pthread_rwlock_rdlock(&moduleGIL);
+    moduleAcquireGIL(true);
 }
 
-/* Load all the modules in the server.loadmodule_queue list, which is
+/* Load all the modules in the g_pserver->loadmodule_queue list, which is
  * populated by `loadmodule` directives in the configuration file.
  * We can't load modules directly when processing the configuration file
  * because the server must be fully initialized before loading modules.
@@ -5135,7 +5160,7 @@ void moduleLoadFromQueue(void) {
     listIter li;
     listNode *ln;
 
-    listRewind(server.loadmodule_queue,&li);
+    listRewind(g_pserver->loadmodule_queue,&li);
     while((ln = listNext(&li))) {
         struct moduleLoadQueueEntry *loadmod = (moduleLoadQueueEntry*)ln->value;
         if (moduleLoad(loadmod->path,(void **)loadmod->argv,loadmod->argc)
@@ -5158,7 +5183,7 @@ void moduleFreeModuleStructure(struct RedisModule *module) {
 
 void moduleUnregisterCommands(struct RedisModule *module) {
     /* Unregister all the commands registered by this module. */
-    dictIterator *di = dictGetSafeIterator(server.commands);
+    dictIterator *di = dictGetSafeIterator(g_pserver->commands);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         struct redisCommand *cmd = (redisCommand*)dictGetVal(de);
@@ -5167,8 +5192,8 @@ void moduleUnregisterCommands(struct RedisModule *module) {
                 (RedisModuleCommandProxy*)(unsigned long)cmd->getkeys_proc;
             sds cmdname = (sds)cp->rediscmd->name;
             if (cp->module == module) {
-                dictDelete(server.commands,cmdname);
-                dictDelete(server.orig_commands,cmdname);
+                dictDelete(g_pserver->commands,cmdname);
+                dictDelete(g_pserver->orig_commands,cmdname);
                 sdsfree(cmdname);
                 zfree(cp->rediscmd);
                 zfree(cp);
@@ -5353,8 +5378,8 @@ size_t moduleCount(void) {
 /* Register all the APIs we export. Keep this function at the end of the
  * file so that's easy to seek it to add new entries. */
 void moduleRegisterCoreAPI(void) {
-    server.moduleapi = dictCreate(&moduleAPIDictType,NULL);
-    server.sharedapi = dictCreate(&moduleAPIDictType,NULL);
+    g_pserver->moduleapi = dictCreate(&moduleAPIDictType,NULL);
+    g_pserver->sharedapi = dictCreate(&moduleAPIDictType,NULL);
     REGISTER_API(Alloc);
     REGISTER_API(Calloc);
     REGISTER_API(Realloc);

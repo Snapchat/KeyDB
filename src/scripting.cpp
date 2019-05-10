@@ -191,7 +191,7 @@ char *redisProtocolToLuaType_MultiBulk(lua_State *lua, char *reply, int atype) {
     int j = 0;
 
     string2ll(reply+1,p-reply-1,&mbulklen);
-    if (server.lua_caller->resp == 2 || atype == '*') {
+    if (g_pserver->lua_caller->resp == 2 || atype == '*') {
         p += 2;
         if (mbulklen == -1) {
             lua_pushboolean(lua,0);
@@ -203,7 +203,7 @@ char *redisProtocolToLuaType_MultiBulk(lua_State *lua, char *reply, int atype) {
             p = redisProtocolToLuaType(lua,p);
             lua_settable(lua,-3);
         }
-    } else if (server.lua_caller->resp == 3) {
+    } else if (g_pserver->lua_caller->resp == 3) {
         /* Here we handle only Set and Map replies in RESP3 mode, since arrays
          * follow the above RESP2 code path. */
         p += 2;
@@ -371,14 +371,14 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     int acl_retval = 0;
     int call_flags = CMD_CALL_SLOWLOG | CMD_CALL_STATS;
     struct redisCommand *cmd;
-    client *c = server.lua_client;
+    client *c = g_pserver->lua_client;
     sds reply;
     
     // Ensure our client is on the right thread
     serverAssert(!(c->flags & CLIENT_PENDING_WRITE));
     serverAssert(!(c->flags & CLIENT_UNBLOCKED));
     serverAssert(GlobalLocksAcquired());
-    c->iel = serverTL - server.rgthreadvar;
+    c->iel = serverTL - g_pserver->rgthreadvar;
 
     /* Cached across calls. */
     static robj **argv = NULL;
@@ -388,7 +388,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     static int inuse = 0;   /* Recursive calls detection. */
 
     /* Reflect MULTI state */
-    if (server.lua_multi_emitted || (server.lua_caller->flags & CLIENT_MULTI)) {
+    if (g_pserver->lua_multi_emitted || (g_pserver->lua_caller->flags & CLIENT_MULTI)) {
         c->flags |= CLIENT_MULTI;
     } else {
         c->flags &= ~CLIENT_MULTI;
@@ -472,7 +472,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     /* Setup our fake client for command execution */
     c->argv = argv;
     c->argc = argc;
-    c->puser = server.lua_caller->puser;
+    c->puser = g_pserver->lua_caller->puser;
 
     /* Process module hooks */
     moduleCallCommandFilters(c);
@@ -533,13 +533,13 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
      * of this script. */
     if (cmd->flags & CMD_WRITE) {
         int deny_write_type = writeCommandsDeniedByDiskError();
-        if (server.lua_random_dirty && !server.lua_replicate_commands) {
+        if (g_pserver->lua_random_dirty && !g_pserver->lua_replicate_commands) {
             luaPushError(lua,
                 "Write commands not allowed after non deterministic commands. Call redis.replicate_commands() at the start of your script in order to switch to single commands replication mode.");
             goto cleanup;
-        } else if (listLength(server.masters) && server.repl_slave_ro &&
-                   !server.loading &&
-                   !(server.lua_caller->flags & CLIENT_MASTER))
+        } else if (listLength(g_pserver->masters) && g_pserver->repl_slave_ro &&
+                   !g_pserver->loading &&
+                   !(g_pserver->lua_caller->flags & CLIENT_MASTER))
         {
             luaPushError(lua, (char*)ptrFromObj(shared.roslaveerr));
             goto cleanup;
@@ -549,7 +549,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
             } else {
                 sds aof_write_err = sdscatfmt(sdsempty(),
                     "-MISCONF Errors writing to the AOF file: %s\r\n",
-                    strerror(server.aof_last_write_errno));
+                    strerror(g_pserver->aof_last_write_errno));
                 luaPushError(lua, aof_write_err);
                 sdsfree(aof_write_err);
             }
@@ -561,10 +561,10 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
      * could enlarge the memory usage are not allowed, but only if this is the
      * first write in the context of this script, otherwise we can't stop
      * in the middle. */
-    if (server.maxmemory &&             /* Maxmemory is actually enabled. */
-        !server.loading &&              /* Don't care about mem if loading. */
-        !listLength(server.masters) &&           /* Slave must execute the script. */
-        server.lua_write_dirty == 0 &&  /* Script had no side effects so far. */
+    if (g_pserver->maxmemory &&             /* Maxmemory is actually enabled. */
+        !g_pserver->loading &&              /* Don't care about mem if loading. */
+        !listLength(g_pserver->masters) &&           /* Slave must execute the script. */
+        g_pserver->lua_write_dirty == 0 &&  /* Script had no side effects so far. */
         (cmd->flags & CMD_DENYOOM))
     {
         if (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK) {
@@ -573,20 +573,20 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
         }
     }
 
-    if (cmd->flags & CMD_RANDOM) server.lua_random_dirty = 1;
-    if (cmd->flags & CMD_WRITE) server.lua_write_dirty = 1;
+    if (cmd->flags & CMD_RANDOM) g_pserver->lua_random_dirty = 1;
+    if (cmd->flags & CMD_WRITE) g_pserver->lua_write_dirty = 1;
 
     /* If this is a Redis Cluster node, we need to make sure Lua is not
      * trying to access non-local keys, with the exception of commands
      * received from our master or when loading the AOF back in memory. */
-    if (server.cluster_enabled && !server.loading &&
-        !(server.lua_caller->flags & CLIENT_MASTER))
+    if (g_pserver->cluster_enabled && !g_pserver->loading &&
+        !(g_pserver->lua_caller->flags & CLIENT_MASTER))
     {
         /* Duplicate relevant flags in the lua client. */
         c->flags &= ~(CLIENT_READONLY|CLIENT_ASKING);
-        c->flags |= server.lua_caller->flags & (CLIENT_READONLY|CLIENT_ASKING);
+        c->flags |= g_pserver->lua_caller->flags & (CLIENT_READONLY|CLIENT_ASKING);
         if (getNodeByQuery(c,c->cmd,c->argv,c->argc,NULL,NULL) !=
-                           server.cluster->myself)
+                           g_pserver->cluster->myself)
         {
             luaPushError(lua,
                 "Lua script attempted to access a non local key in a "
@@ -598,22 +598,22 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     /* If we are using single commands replication, we need to wrap what
      * we propagate into a MULTI/EXEC block, so that it will be atomic like
      * a Lua script in the context of AOF and slaves. */
-    if (server.lua_replicate_commands &&
-        !server.lua_multi_emitted &&
-        !(server.lua_caller->flags & CLIENT_MULTI) &&
-        server.lua_write_dirty &&
-        server.lua_repl != PROPAGATE_NONE)
+    if (g_pserver->lua_replicate_commands &&
+        !g_pserver->lua_multi_emitted &&
+        !(g_pserver->lua_caller->flags & CLIENT_MULTI) &&
+        g_pserver->lua_write_dirty &&
+        g_pserver->lua_repl != PROPAGATE_NONE)
     {
-        execCommandPropagateMulti(server.lua_caller);
-        server.lua_multi_emitted = 1;
+        execCommandPropagateMulti(g_pserver->lua_caller);
+        g_pserver->lua_multi_emitted = 1;
     }
 
     /* Run the command */
-    if (server.lua_replicate_commands) {
+    if (g_pserver->lua_replicate_commands) {
         /* Set flags according to redis.set_repl() settings. */
-        if (server.lua_repl & PROPAGATE_AOF)
+        if (g_pserver->lua_repl & PROPAGATE_AOF)
             call_flags |= CMD_CALL_PROPAGATE_AOF;
-        if (server.lua_repl & PROPAGATE_REPL)
+        if (g_pserver->lua_repl & PROPAGATE_REPL)
             call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
     call(c,call_flags);
@@ -648,7 +648,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     /* Sort the output array if needed, assuming it is a non-null multi bulk
      * reply as expected. */
     if ((cmd->flags & CMD_SORT_FOR_SCRIPT) &&
-        (server.lua_replicate_commands == 0) &&
+        (g_pserver->lua_replicate_commands == 0) &&
         (reply[0] == '*' && reply[1] != '-')) {
             luaSortArray(lua);
     }
@@ -764,10 +764,10 @@ int luaRedisStatusReplyCommand(lua_State *lua) {
  * already started to write, returns false and stick to whole scripts
  * replication, which is our default. */
 int luaRedisReplicateCommandsCommand(lua_State *lua) {
-    if (server.lua_write_dirty) {
+    if (g_pserver->lua_write_dirty) {
         lua_pushboolean(lua,0);
     } else {
-        server.lua_replicate_commands = 1;
+        g_pserver->lua_replicate_commands = 1;
         /* When we switch to single commands replication, we can provide
          * different math.random() sequences at every call, which is what
          * the user normally expects. */
@@ -817,7 +817,7 @@ int luaRedisSetReplCommand(lua_State *lua) {
     int argc = lua_gettop(lua);
     int flags;
 
-    if (server.lua_replicate_commands == 0) {
+    if (g_pserver->lua_replicate_commands == 0) {
         lua_pushstring(lua, "You can set the replication behavior only after turning on single commands replication with redis.replicate_commands().");
         return lua_error(lua);
     } else if (argc != 1) {
@@ -830,7 +830,7 @@ int luaRedisSetReplCommand(lua_State *lua) {
         lua_pushstring(lua, "Invalid replication flags. Use REPL_AOF, REPL_REPLICA, REPL_ALL or REPL_NONE.");
         return lua_error(lua);
     }
-    server.lua_repl = flags;
+    g_pserver->lua_repl = flags;
     return 0;
 }
 
@@ -966,9 +966,9 @@ void scriptingInit(int setup) {
     lua_State *lua = lua_open();
 
     if (setup) {
-        server.lua_client = NULL;
-        server.lua_caller = NULL;
-        server.lua_timedout = 0;
+        g_pserver->lua_client = NULL;
+        g_pserver->lua_caller = NULL;
+        g_pserver->lua_timedout = 0;
         ldbInit();
     }
 
@@ -978,8 +978,8 @@ void scriptingInit(int setup) {
     /* Initialize a dictionary we use to map SHAs to scripts.
      * This is useful for replication, as we need to replicate EVALSHA
      * as EVAL, so we need to remember the associated script. */
-    server.lua_scripts = dictCreate(&shaScriptObjectDictType,NULL);
-    server.lua_scripts_mem = 0;
+    g_pserver->lua_scripts = dictCreate(&shaScriptObjectDictType,NULL);
+    g_pserver->lua_scripts_mem = 0;
 
     /* Register the redis commands table and fields */
     lua_newtable(lua);
@@ -1121,9 +1121,9 @@ void scriptingInit(int setup) {
      * inside the Lua interpreter.
      * Note: there is no need to create it again when this function is called
      * by scriptingReset(). */
-    if (server.lua_client == NULL) {
-        server.lua_client = createClient(-1, IDX_EVENT_LOOP_MAIN);
-        server.lua_client->flags |= CLIENT_LUA;
+    if (g_pserver->lua_client == NULL) {
+        g_pserver->lua_client = createClient(-1, IDX_EVENT_LOOP_MAIN);
+        g_pserver->lua_client->flags |= CLIENT_LUA;
     }
 
     /* Lua beginners often don't use "local", this is likely to introduce
@@ -1131,15 +1131,15 @@ void scriptingInit(int setup) {
      * to global variables. */
     scriptingEnableGlobalsProtection(lua);
 
-    server.lua = lua;
+    g_pserver->lua = lua;
 }
 
 /* Release resources related to Lua scripting.
  * This function is used in order to reset the scripting environment. */
 void scriptingRelease(void) {
-    dictRelease(server.lua_scripts);
-    server.lua_scripts_mem = 0;
-    lua_close(server.lua);
+    dictRelease(g_pserver->lua_scripts);
+    g_pserver->lua_scripts_mem = 0;
+    lua_close(g_pserver->lua);
 }
 
 void scriptingReset(void) {
@@ -1233,7 +1233,7 @@ sds luaCreateFunction(client *c, lua_State *lua, robj *body) {
     sha1hex(funcname+2,(char*)ptrFromObj(body),sdslen((sds)ptrFromObj(body)));
 
     sds sha = sdsnewlen(funcname+2,40);
-    if ((de = dictFind(server.lua_scripts,sha)) != NULL) {
+    if ((de = dictFind(g_pserver->lua_scripts,sha)) != NULL) {
         sdsfree(sha);
         return (sds)dictGetKey(de);
     }
@@ -1271,33 +1271,33 @@ sds luaCreateFunction(client *c, lua_State *lua, robj *body) {
     /* We also save a SHA1 -> Original script map in a dictionary
      * so that we can replicate / write in the AOF all the
      * EVALSHA commands as EVAL using the original script. */
-    int retval = dictAdd(server.lua_scripts,sha,body);
-    serverAssertWithInfo(c ? c : server.lua_client,NULL,retval == DICT_OK);
-    server.lua_scripts_mem += sdsZmallocSize(sha) + getStringObjectSdsUsedMemory(body);
+    int retval = dictAdd(g_pserver->lua_scripts,sha,body);
+    serverAssertWithInfo(c ? c : g_pserver->lua_client,NULL,retval == DICT_OK);
+    g_pserver->lua_scripts_mem += sdsZmallocSize(sha) + getStringObjectSdsUsedMemory(body);
     incrRefCount(body);
     return sha;
 }
 
 /* This is the Lua script "count" hook that we use to detect scripts timeout. */
 void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
-    long long elapsed = mstime() - server.lua_time_start;
+    long long elapsed = mstime() - g_pserver->lua_time_start;
     UNUSED(ar);
     UNUSED(lua);
 
     /* Set the timeout condition if not already set and the maximum
      * execution time was reached. */
-    if (elapsed >= server.lua_time_limit && server.lua_timedout == 0) {
+    if (elapsed >= g_pserver->lua_time_limit && g_pserver->lua_timedout == 0) {
         serverLog(LL_WARNING,"Lua slow script detected: still in execution after %lld milliseconds. You can try killing the script using the SCRIPT KILL command.",elapsed);
-        server.lua_timedout = 1;
+        g_pserver->lua_timedout = 1;
         /* Once the script timeouts we reenter the event loop to permit others
          * to call SCRIPT KILL or SHUTDOWN NOSAVE if needed. For this reason
          * we need to mask the client executing the script from the event loop.
          * If we don't do that the client may disconnect and could no longer be
          * here when the EVAL command will return. */
-        protectClient(server.lua_caller);
+        protectClient(g_pserver->lua_caller);
     }
-    if (server.lua_timedout) processEventsWhileBlocked(serverTL - server.rgthreadvar);
-    if (server.lua_kill) {
+    if (g_pserver->lua_timedout) processEventsWhileBlocked(serverTL - g_pserver->rgthreadvar);
+    if (g_pserver->lua_kill) {
         serverLog(LL_WARNING,"Lua script killed by user with SCRIPT KILL.");
         lua_pushstring(lua,"Script killed by user with SCRIPT KILL...");
         lua_error(lua);
@@ -1305,10 +1305,10 @@ void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
 }
 
 void evalGenericCommand(client *c, int evalsha) {
-    lua_State *lua = server.lua;
+    lua_State *lua = g_pserver->lua;
     char funcname[43];
     long long numkeys;
-    long long initial_server_dirty = server.dirty;
+    long long initial_server_dirty = g_pserver->dirty;
     int delhook = 0, err;
 
     /* When we replicate whole scripts, we want the same PRNG sequence at
@@ -1323,11 +1323,11 @@ void evalGenericCommand(client *c, int evalsha) {
      *
      * Thanks to this flag we'll raise an error every time a write command
      * is called after a random command was used. */
-    server.lua_random_dirty = 0;
-    server.lua_write_dirty = 0;
-    server.lua_replicate_commands = server.lua_always_replicate_commands;
-    server.lua_multi_emitted = 0;
-    server.lua_repl = PROPAGATE_AOF|PROPAGATE_REPL;
+    g_pserver->lua_random_dirty = 0;
+    g_pserver->lua_write_dirty = 0;
+    g_pserver->lua_replicate_commands = g_pserver->lua_always_replicate_commands;
+    g_pserver->lua_multi_emitted = 0;
+    g_pserver->lua_repl = PROPAGATE_AOF|PROPAGATE_REPL;
 
     /* Get the number of arguments that are keys */
     if (getLongLongFromObjectOrReply(c,c->argv[2],&numkeys,NULL) != C_OK)
@@ -1393,7 +1393,7 @@ void evalGenericCommand(client *c, int evalsha) {
     luaSetGlobalArray(lua,"ARGV",c->argv+3+numkeys,c->argc-3-numkeys);
 
     /* Select the right DB in the context of the Lua client */
-    selectDb(server.lua_client,c->db->id);
+    selectDb(g_pserver->lua_client,c->db->id);
 
     /* Set a hook in order to be able to stop the script execution if it
      * is running for too much time.
@@ -1402,14 +1402,14 @@ void evalGenericCommand(client *c, int evalsha) {
      *
      * If we are debugging, we set instead a "line" hook so that the
      * debugger is call-back at every line executed by the script. */
-    server.lua_caller = c;
-    server.lua_time_start = mstime();
-    server.lua_kill = 0;
-    if (server.lua_time_limit > 0 && ldb.active == 0) {
+    g_pserver->lua_caller = c;
+    g_pserver->lua_time_start = mstime();
+    g_pserver->lua_kill = 0;
+    if (g_pserver->lua_time_limit > 0 && ldb.active == 0) {
         lua_sethook(lua,luaMaskCountHook,LUA_MASKCOUNT,100000);
         delhook = 1;
     } else if (ldb.active) {
-        lua_sethook(server.lua,luaLdbLineHook,LUA_MASKLINE|LUA_MASKCOUNT,100000);
+        lua_sethook(g_pserver->lua,luaLdbLineHook,LUA_MASKLINE|LUA_MASKCOUNT,100000);
         delhook = 1;
     }
 
@@ -1420,14 +1420,14 @@ void evalGenericCommand(client *c, int evalsha) {
 
     /* Perform some cleanup that we need to do both on error and success. */
     if (delhook) lua_sethook(lua,NULL,0,0); /* Disable hook */
-    if (server.lua_timedout) {
-        server.lua_timedout = 0;
+    if (g_pserver->lua_timedout) {
+        g_pserver->lua_timedout = 0;
         /* Restore the client that was protected when the script timeout
          * was detected. */
         unprotectClient(c);
         listIter li;
         listNode *ln;
-        listRewind(server.masters, &li);
+        listRewind(g_pserver->masters, &li);
         while ((ln = listNext(&li)))
         {
             struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
@@ -1435,7 +1435,7 @@ void evalGenericCommand(client *c, int evalsha) {
                 queueClientForReprocessing(mi->master);
         }
     }
-    server.lua_caller = NULL;
+    g_pserver->lua_caller = NULL;
 
     /* Call the Lua garbage collector from time to time to avoid a
      * full cycle performed by Lua, which adds too latency.
@@ -1467,12 +1467,12 @@ void evalGenericCommand(client *c, int evalsha) {
 
     /* If we are using single commands replication, emit EXEC if there
      * was at least a write. */
-    if (server.lua_replicate_commands) {
+    if (g_pserver->lua_replicate_commands) {
         preventCommandPropagation(c);
-        if (server.lua_multi_emitted) {
+        if (g_pserver->lua_multi_emitted) {
             robj *propargv[1];
             propargv[0] = createStringObject("EXEC",4);
-            alsoPropagate(server.execCommand,c->db->id,propargv,1,
+            alsoPropagate(cserver.execCommand,c->db->id,propargv,1,
                 PROPAGATE_AOF|PROPAGATE_REPL);
             decrRefCount(propargv[0]);
         }
@@ -1488,12 +1488,12 @@ void evalGenericCommand(client *c, int evalsha) {
      * For repliation, everytime a new slave attaches to the master, we need to
      * flush our cache of scripts that can be replicated as EVALSHA, while
      * for AOF we need to do so every time we rewrite the AOF file. */
-    if (evalsha && !server.lua_replicate_commands) {
+    if (evalsha && !g_pserver->lua_replicate_commands) {
         if (!replicationScriptCacheExists((sds)ptrFromObj(c->argv[1]))) {
             /* This script is not in our script cache, replicate it as
              * EVAL, then add it into the script cache, as from now on
              * slaves and AOF know about it. */
-            robj *script = (robj*)dictFetchValue(server.lua_scripts,ptrFromObj(c->argv[1]));
+            robj *script = (robj*)dictFetchValue(g_pserver->lua_scripts,ptrFromObj(c->argv[1]));
 
             replicationScriptCacheAdd((sds)ptrFromObj(c->argv[1]));
             serverAssertWithInfo(c,NULL,script != NULL);
@@ -1502,7 +1502,7 @@ void evalGenericCommand(client *c, int evalsha) {
              * just to replicate it as SCRIPT LOAD, otherwise we risk running
              * an aborted script on slaves (that may then produce results there)
              * or just running a CPU costly read-only script on the slaves. */
-            if (server.dirty == initial_server_dirty) {
+            if (g_pserver->dirty == initial_server_dirty) {
                 rewriteClientCommandVector(c,3,
                     resetRefCount(createStringObject("SCRIPT",6)),
                     resetRefCount(createStringObject("LOAD",4)),
@@ -1556,31 +1556,31 @@ NULL
         scriptingReset();
         addReply(c,shared.ok);
         replicationScriptCacheFlush();
-        server.dirty++; /* Propagating this command is a good idea. */
+        g_pserver->dirty++; /* Propagating this command is a good idea. */
     } else if (c->argc >= 2 && !strcasecmp((const char*)ptrFromObj(c->argv[1]),"exists")) {
         int j;
 
         addReplyArrayLen(c, c->argc-2);
         for (j = 2; j < c->argc; j++) {
-            if (dictFind(server.lua_scripts,ptrFromObj(c->argv[j])))
+            if (dictFind(g_pserver->lua_scripts,ptrFromObj(c->argv[j])))
                 addReply(c,shared.cone);
             else
                 addReply(c,shared.czero);
         }
     } else if (c->argc == 3 && !strcasecmp((const char*)ptrFromObj(c->argv[1]),"load")) {
-        sds sha = luaCreateFunction(c,server.lua,c->argv[2]);
+        sds sha = luaCreateFunction(c,g_pserver->lua,c->argv[2]);
         if (sha == NULL) return; /* The error was sent by luaCreateFunction(). */
         addReplyBulkCBuffer(c,sha,40);
         forceCommandPropagation(c,PROPAGATE_REPL|PROPAGATE_AOF);
     } else if (c->argc == 2 && !strcasecmp((const char*)ptrFromObj(c->argv[1]),"kill")) {
-        if (server.lua_caller == NULL) {
+        if (g_pserver->lua_caller == NULL) {
             addReplySds(c,sdsnew("-NOTBUSY No scripts in execution right now.\r\n"));
-        } else if (server.lua_caller->flags & CLIENT_MASTER) {
+        } else if (g_pserver->lua_caller->flags & CLIENT_MASTER) {
             addReplySds(c,sdsnew("-UNKILLABLE The busy script was sent by a master instance in the context of replication and cannot be killed.\r\n"));
-        } else if (server.lua_write_dirty) {
+        } else if (g_pserver->lua_write_dirty) {
             addReplySds(c,sdsnew("-UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command.\r\n"));
         } else {
-            server.lua_kill = 1;
+            g_pserver->lua_kill = 1;
             addReply(c,shared.ok);
         }
     } else if (c->argc == 3 && !strcasecmp((const char*)ptrFromObj(c->argv[1]),"debug")) {
@@ -2289,7 +2289,7 @@ void ldbEval(lua_State *lua, sds *argv, int argc) {
  * implementation, with ldb.step enabled, so as a side effect the Redis command
  * and its reply are logged. */
 void ldbRedis(lua_State *lua, sds *argv, int argc) {
-    int j, saved_rc = server.lua_replicate_commands;
+    int j, saved_rc = g_pserver->lua_replicate_commands;
 
     lua_getglobal(lua,"redis");
     lua_pushstring(lua,"call");
@@ -2297,10 +2297,10 @@ void ldbRedis(lua_State *lua, sds *argv, int argc) {
     for (j = 1; j < argc; j++)
         lua_pushlstring(lua,argv[j],sdslen(argv[j]));
     ldb.step = 1;               /* Force redis.call() to log. */
-    server.lua_replicate_commands = 1;
+    g_pserver->lua_replicate_commands = 1;
     lua_pcall(lua,argc-1,1,0);  /* Stack: redis, result */
     ldb.step = 0;               /* Disable logging. */
-    server.lua_replicate_commands = saved_rc;
+    g_pserver->lua_replicate_commands = saved_rc;
     lua_pop(lua,2);             /* Discard the result and clean the stack. */
 }
 
@@ -2474,9 +2474,9 @@ void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
 
     /* Check if a timeout occurred. */
     if (ar->event == LUA_HOOKCOUNT && ldb.step == 0 && bp == 0) {
-        mstime_t elapsed = mstime() - server.lua_time_start;
-        mstime_t timelimit = server.lua_time_limit ?
-                             server.lua_time_limit : 5000;
+        mstime_t elapsed = mstime() - g_pserver->lua_time_start;
+        mstime_t timelimit = g_pserver->lua_time_limit ?
+                             g_pserver->lua_time_limit : 5000;
         if (elapsed >= timelimit) {
             timeout = 1;
             ldb.step = 1;
@@ -2504,7 +2504,7 @@ void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
             lua_pushstring(lua, "timeout during Lua debugging with client closing connection");
             lua_error(lua);
         }
-        server.lua_time_start = mstime();
+        g_pserver->lua_time_start = mstime();
     }
 }
 

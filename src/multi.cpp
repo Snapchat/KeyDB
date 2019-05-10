@@ -111,7 +111,7 @@ void discardCommand(client *c) {
 void execCommandPropagateMulti(client *c) {
     robj *multistring = createStringObject("MULTI",5);
 
-    propagate(server.multiCommand,c->db->id,&multistring,1,
+    propagate(cserver.multiCommand,c->db->id,&multistring,1,
               PROPAGATE_AOF|PROPAGATE_REPL);
     decrRefCount(multistring);
 }
@@ -122,7 +122,7 @@ void execCommand(client *c) {
     int orig_argc;
     struct redisCommand *orig_cmd;
     int must_propagate = 0; /* Need to propagate MULTI/EXEC to AOF / slaves? */
-    int was_master = listLength(server.masters) == 0;
+    int was_master = listLength(g_pserver->masters) == 0;
 
     if (!(c->flags & CLIENT_MULTI)) {
         addReplyError(c,"EXEC without MULTI");
@@ -147,7 +147,7 @@ void execCommand(client *c) {
      * was initiated when the instance was a master or a writable replica and
      * then the configuration changed (for example instance was turned into
      * a replica). */
-    if (!server.loading && listLength(server.masters) && server.repl_slave_ro &&
+    if (!g_pserver->loading && listLength(g_pserver->masters) && g_pserver->repl_slave_ro &&
         !(c->flags & CLIENT_MASTER) && c->mstate.cmd_flags & CMD_WRITE)
     {
         addReplyError(c,
@@ -178,7 +178,7 @@ void execCommand(client *c) {
             must_propagate = 1;
         }
 
-        call(c,server.loading ? CMD_CALL_NONE : CMD_CALL_FULL);
+        call(c,g_pserver->loading ? CMD_CALL_NONE : CMD_CALL_FULL);
 
         /* Commands may alter argc/argv, restore mstate. */
         c->mstate.commands[j].argc = c->argc;
@@ -193,14 +193,14 @@ void execCommand(client *c) {
     /* Make sure the EXEC command will be propagated as well if MULTI
      * was already propagated. */
     if (must_propagate) {
-        int is_master = listLength(server.masters) == 0;
-        server.dirty++;
+        int is_master = listLength(g_pserver->masters) == 0;
+        g_pserver->dirty++;
         /* If inside the MULTI/EXEC block this instance was suddenly
          * switched from master to slave (using the SLAVEOF command), the
          * initial MULTI was propagated into the replication backlog, but the
          * rest was not. We need to make sure to at least terminate the
          * backlog with the final EXEC. */
-        if (server.repl_backlog && was_master && !is_master) {
+        if (g_pserver->repl_backlog && was_master && !is_master) {
             const char *execcmd = "*1\r\n$4\r\nEXEC\r\n";
             feedReplicationBacklog(execcmd,strlen(execcmd));
         }
@@ -212,8 +212,8 @@ handle_monitor:
      * MUTLI, EXEC, ... commands inside transaction ...
      * Instead EXEC is flagged as CMD_SKIP_MONITOR in the command
      * table, and we do it here with correct ordering. */
-    if (listLength(server.monitors) && !server.loading)
-        replicationFeedMonitors(c,server.monitors,c->db->id,c->argv,c->argc);
+    if (listLength(g_pserver->monitors) && !g_pserver->loading)
+        replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
 }
 
 /* ===================== WATCH (CAS alike for MULTI/EXEC) ===================
@@ -323,7 +323,7 @@ void touchWatchedKeysOnFlush(int dbid) {
     serverAssert(GlobalLocksAcquired());
 
     /* For every client, check all the waited keys */
-    listRewind(server.clients,&li1);
+    listRewind(g_pserver->clients,&li1);
     while((ln = listNext(&li1))) {
         client *c = (client*)listNodeValue(ln);
         listRewind(c->watched_keys,&li2);

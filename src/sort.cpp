@@ -143,7 +143,7 @@ int sortCompare(const void *s1, const void *s2) {
     const redisSortObject *so1 = (redisSortObject*)s1, *so2 = (redisSortObject*)s2;
     int cmp;
 
-    if (!server.sort_alpha) {
+    if (!g_pserver->sort_alpha) {
         /* Numeric sorting. Here it's trivial as we precomputed scores */
         if (so1->u.score > so2->u.score) {
             cmp = 1;
@@ -157,7 +157,7 @@ int sortCompare(const void *s1, const void *s2) {
         }
     } else {
         /* Alphanumeric sorting */
-        if (server.sort_bypattern) {
+        if (g_pserver->sort_bypattern) {
             if (!so1->u.cmpobj || !so2->u.cmpobj) {
                 /* At least one compare object is NULL */
                 if (so1->u.cmpobj == so2->u.cmpobj)
@@ -168,7 +168,7 @@ int sortCompare(const void *s1, const void *s2) {
                     cmp = 1;
             } else {
                 /* We have both the objects, compare them. */
-                if (server.sort_store) {
+                if (g_pserver->sort_store) {
                     cmp = compareStringObjects(so1->u.cmpobj,so2->u.cmpobj);
                 } else {
                     /* Here we can use strcoll() directly as we are sure that
@@ -178,14 +178,14 @@ int sortCompare(const void *s1, const void *s2) {
             }
         } else {
             /* Compare elements directly. */
-            if (server.sort_store) {
+            if (g_pserver->sort_store) {
                 cmp = compareStringObjects(so1->obj,so2->obj);
             } else {
                 cmp = collateStringObjects(so1->obj,so2->obj);
             }
         }
     }
-    return server.sort_desc ? -cmp : cmp;
+    return g_pserver->sort_desc ? -cmp : cmp;
 }
 
 /* The SORT command is the most complex command in Redis. Warning: this code
@@ -239,7 +239,7 @@ void sortCommand(client *c) {
             } else {
                 /* If BY is specified with a real patter, we can't accept
                  * it in cluster mode. */
-                if (server.cluster_enabled) {
+                if (g_pserver->cluster_enabled) {
                     addReplyError(c,"BY option of SORT denied in Cluster mode.");
                     syntax_error++;
                     break;
@@ -247,7 +247,7 @@ void sortCommand(client *c) {
             }
             j++;
         } else if (!strcasecmp(szFromObj(c->argv[j]),"get") && leftargs >= 1) {
-            if (server.cluster_enabled) {
+            if (g_pserver->cluster_enabled) {
                 addReplyError(c,"GET option of SORT denied in Cluster mode.");
                 syntax_error++;
                 break;
@@ -496,10 +496,10 @@ void sortCommand(client *c) {
             }
         }
 
-        server.sort_desc = desc;
-        server.sort_alpha = alpha;
-        server.sort_bypattern = sortby ? 1 : 0;
-        server.sort_store = storekey ? 1 : 0;
+        g_pserver->sort_desc = desc;
+        g_pserver->sort_alpha = alpha;
+        g_pserver->sort_bypattern = sortby ? 1 : 0;
+        g_pserver->sort_store = storekey ? 1 : 0;
         if (sortby && (start != 0 || end != vectorlen-1))
             pqsort(vector,vectorlen,sizeof(redisSortObject),sortCompare, start,end);
         else
@@ -574,11 +574,11 @@ void sortCommand(client *c) {
             setKey(c->db,storekey,sobj);
             notifyKeyspaceEvent(NOTIFY_LIST,"sortstore",storekey,
                                 c->db->id);
-            server.dirty += outputlen;
+            g_pserver->dirty += outputlen;
         } else if (dbDelete(c->db,storekey)) {
             signalModifiedKey(c->db,storekey);
             notifyKeyspaceEvent(NOTIFY_GENERIC,"del",storekey,c->db->id);
-            server.dirty++;
+            g_pserver->dirty++;
         }
         decrRefCount(sobj);
         addReplyLongLong(c,outputlen);

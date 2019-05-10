@@ -44,13 +44,11 @@ robj *createObject(int type, void *ptr) {
     o->encoding = OBJ_ENCODING_RAW;
     o->m_ptr = ptr;
     o->refcount = 1;
-#ifdef ENABLE_MVCC
     o->mvcc_tstamp = OBJ_MVCC_INVALID;
-#endif
 
     /* Set the LRU to the current lruclock (minutes resolution), or
      * alternatively the LFU counter. */
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+    if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
     } else {
         o->lru = LRU_CLOCK();
@@ -94,10 +92,9 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     o->type = OBJ_STRING;
     o->encoding = OBJ_ENCODING_EMBSTR;
     o->refcount = 1;
-#ifdef ENABLE_MVCC
     o->mvcc_tstamp = OBJ_MVCC_INVALID;
-#endif
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+
+    if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
     } else {
         o->lru = LRU_CLOCK();
@@ -141,8 +138,8 @@ robj *createStringObject(const char *ptr, size_t len) {
 robj *createStringObjectFromLongLongWithOptions(long long value, int valueobj) {
     robj *o;
 
-    if (server.maxmemory == 0 ||
-        !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS))
+    if (g_pserver->maxmemory == 0 ||
+        !(g_pserver->maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS))
     {
         /* If the maxmemory policy permits, we can still return shared integers
          * even if valueobj is true. */
@@ -466,8 +463,8 @@ robj *tryObjectEncoding(robj *o) {
          * Note that we avoid using shared integers when maxmemory is used
          * because every object needs to have a private LRU field for the LRU
          * algorithm to work well. */
-        if ((server.maxmemory == 0 ||
-            !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS)) &&
+        if ((g_pserver->maxmemory == 0 ||
+            !(g_pserver->maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS)) &&
             value >= 0 &&
             value < OBJ_SHARED_INTEGERS)
         {
@@ -969,39 +966,39 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
     struct redisMemOverhead *mh = (redisMemOverhead*)zcalloc(sizeof(*mh), MALLOC_LOCAL);
 
     mh->total_allocated = zmalloc_used;
-    mh->startup_allocated = server.initial_memory_usage;
-    mh->peak_allocated = server.stat_peak_memory;
+    mh->startup_allocated = g_pserver->initial_memory_usage;
+    mh->peak_allocated = g_pserver->stat_peak_memory;
     mh->total_frag =
-        (float)server.cron_malloc_stats.process_rss / server.cron_malloc_stats.zmalloc_used;
+        (float)g_pserver->cron_malloc_stats.process_rss / g_pserver->cron_malloc_stats.zmalloc_used;
     mh->total_frag_bytes =
-        server.cron_malloc_stats.process_rss - server.cron_malloc_stats.zmalloc_used;
+        g_pserver->cron_malloc_stats.process_rss - g_pserver->cron_malloc_stats.zmalloc_used;
     mh->allocator_frag =
-        (float)server.cron_malloc_stats.allocator_active / server.cron_malloc_stats.allocator_allocated;
+        (float)g_pserver->cron_malloc_stats.allocator_active / g_pserver->cron_malloc_stats.allocator_allocated;
     mh->allocator_frag_bytes =
-        server.cron_malloc_stats.allocator_active - server.cron_malloc_stats.allocator_allocated;
+        g_pserver->cron_malloc_stats.allocator_active - g_pserver->cron_malloc_stats.allocator_allocated;
     mh->allocator_rss =
-        (float)server.cron_malloc_stats.allocator_resident / server.cron_malloc_stats.allocator_active;
+        (float)g_pserver->cron_malloc_stats.allocator_resident / g_pserver->cron_malloc_stats.allocator_active;
     mh->allocator_rss_bytes =
-        server.cron_malloc_stats.allocator_resident - server.cron_malloc_stats.allocator_active;
+        g_pserver->cron_malloc_stats.allocator_resident - g_pserver->cron_malloc_stats.allocator_active;
     mh->rss_extra =
-        (float)server.cron_malloc_stats.process_rss / server.cron_malloc_stats.allocator_resident;
+        (float)g_pserver->cron_malloc_stats.process_rss / g_pserver->cron_malloc_stats.allocator_resident;
     mh->rss_extra_bytes =
-        server.cron_malloc_stats.process_rss - server.cron_malloc_stats.allocator_resident;
+        g_pserver->cron_malloc_stats.process_rss - g_pserver->cron_malloc_stats.allocator_resident;
 
-    mem_total += server.initial_memory_usage;
+    mem_total += g_pserver->initial_memory_usage;
 
     mem = 0;
-    if (server.repl_backlog)
-        mem += zmalloc_size(server.repl_backlog);
+    if (g_pserver->repl_backlog)
+        mem += zmalloc_size(g_pserver->repl_backlog);
     mh->repl_backlog = mem;
     mem_total += mem;
 
     mem = 0;
-    if (listLength(server.slaves)) {
+    if (listLength(g_pserver->slaves)) {
         listIter li;
         listNode *ln;
 
-        listRewind(server.slaves,&li);
+        listRewind(g_pserver->slaves,&li);
         while((ln = listNext(&li))) {
             client *c = (client*)listNodeValue(ln);
             if (c->flags & CLIENT_CLOSE_ASAP)
@@ -1015,11 +1012,11 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
     mem_total+=mem;
 
     mem = 0;
-    if (listLength(server.clients)) {
+    if (listLength(g_pserver->clients)) {
         listIter li;
         listNode *ln;
 
-        listRewind(server.clients,&li);
+        listRewind(g_pserver->clients,&li);
         while((ln = listNext(&li))) {
             client *c = (client*)listNodeValue(ln);
             if (c->flags & CLIENT_SLAVE && !(c->flags & CLIENT_MONITOR))
@@ -1033,27 +1030,27 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
     mem_total+=mem;
 
     mem = 0;
-    if (server.aof_state != AOF_OFF) {
-        mem += sdsalloc(server.aof_buf);
+    if (g_pserver->aof_state != AOF_OFF) {
+        mem += sdsalloc(g_pserver->aof_buf);
         mem += aofRewriteBufferSize();
     }
     mh->aof_buffer = mem;
     mem_total+=mem;
 
-    mem = server.lua_scripts_mem;
-    mem += dictSize(server.lua_scripts) * sizeof(dictEntry) +
-        dictSlots(server.lua_scripts) * sizeof(dictEntry*);
-    mem += dictSize(server.repl_scriptcache_dict) * sizeof(dictEntry) +
-        dictSlots(server.repl_scriptcache_dict) * sizeof(dictEntry*);
-    if (listLength(server.repl_scriptcache_fifo) > 0) {
-        mem += listLength(server.repl_scriptcache_fifo) * (sizeof(listNode) + 
-            sdsZmallocSize((sds)listNodeValue(listFirst(server.repl_scriptcache_fifo))));
+    mem = g_pserver->lua_scripts_mem;
+    mem += dictSize(g_pserver->lua_scripts) * sizeof(dictEntry) +
+        dictSlots(g_pserver->lua_scripts) * sizeof(dictEntry*);
+    mem += dictSize(g_pserver->repl_scriptcache_dict) * sizeof(dictEntry) +
+        dictSlots(g_pserver->repl_scriptcache_dict) * sizeof(dictEntry*);
+    if (listLength(g_pserver->repl_scriptcache_fifo) > 0) {
+        mem += listLength(g_pserver->repl_scriptcache_fifo) * (sizeof(listNode) + 
+            sdsZmallocSize((sds)listNodeValue(listFirst(g_pserver->repl_scriptcache_fifo))));
     }
     mh->lua_caches = mem;
     mem_total+=mem;
 
-    for (j = 0; j < server.dbnum; j++) {
-        redisDb *db = server.db+j;
+    for (j = 0; j < cserver.dbnum; j++) {
+        redisDb *db = g_pserver->db+j;
         long long keyscount = dictSize(db->pdict);
         if (keyscount==0) continue;
 
@@ -1149,8 +1146,8 @@ sds getMemoryDoctorReport(void) {
         }
 
         /* Clients using more than 200k each average? */
-        long numslaves = listLength(server.slaves);
-        long numclients = listLength(server.clients)-numslaves;
+        long numslaves = listLength(g_pserver->slaves);
+        long numclients = listLength(g_pserver->clients)-numslaves;
         if ((numclients > 0) && mh->clients_normal / numclients > (1024*200)) {
             big_client_buf = 1;
             num_reports++;
@@ -1163,7 +1160,7 @@ sds getMemoryDoctorReport(void) {
         }
 
         /* Too many scripts are cached? */
-        if (dictSize(server.lua_scripts) > 1000) {
+        if (dictSize(g_pserver->lua_scripts) > 1000) {
             many_scripts = 1;
             num_reports++;
         }
@@ -1213,14 +1210,14 @@ sds getMemoryDoctorReport(void) {
     return s;
 }
 
-/* Set the object LRU/LFU depending on server.maxmemory_policy.
+/* Set the object LRU/LFU depending on g_pserver->maxmemory_policy.
  * The lfu_freq arg is only relevant if policy is MAXMEMORY_FLAG_LFU.
  * The lru_idle and lru_clock args are only relevant if policy
  * is MAXMEMORY_FLAG_LRU.
  * Either or both of them may be <0, in that case, nothing is set. */
 void objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
                        long long lru_clock) {
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+    if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         if (lfu_freq >= 0) {
             serverAssert(lfu_freq <= 255);
             val->lru = (LFUGetTimeInMinutes()<<8) | lfu_freq;
@@ -1286,7 +1283,7 @@ NULL
     } else if (!strcasecmp(szFromObj(c->argv[1]),"idletime") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
                 == NULL) return;
-        if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+        if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
             addReplyError(c,"An LFU maxmemory policy is selected, idle time not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.");
             return;
         }
@@ -1294,7 +1291,7 @@ NULL
     } else if (!strcasecmp(szFromObj(c->argv[1]),"freq") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
                 == NULL) return;
-        if (!(server.maxmemory_policy & MAXMEMORY_FLAG_LFU)) {
+        if (!(g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU)) {
             addReplyError(c,"An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.");
             return;
         }
@@ -1318,7 +1315,7 @@ void memoryCommand(client *c) {
 "DOCTOR - Return memory problems reports.",
 "MALLOC-STATS -- Return internal statistics report from the memory allocator.",
 "PURGE -- Attempt to purge dirty pages for reclamation by the allocator.",
-"STATS -- Return information about the memory usage of the server.",
+"STATS -- Return information about the memory usage of the g_pserver->",
 "USAGE <key> [SAMPLES <count>] -- Return memory in bytes used by <key> and its value. Nested values are sampled up to <count> times (default: 5).",
 NULL
         };
@@ -1412,13 +1409,13 @@ NULL
         addReplyDouble(c,mh->peak_perc);
 
         addReplyBulkCString(c,"allocator.allocated");
-        addReplyLongLong(c,server.cron_malloc_stats.allocator_allocated);
+        addReplyLongLong(c,g_pserver->cron_malloc_stats.allocator_allocated);
 
         addReplyBulkCString(c,"allocator.active");
-        addReplyLongLong(c,server.cron_malloc_stats.allocator_active);
+        addReplyLongLong(c,g_pserver->cron_malloc_stats.allocator_active);
 
         addReplyBulkCString(c,"allocator.resident");
-        addReplyLongLong(c,server.cron_malloc_stats.allocator_resident);
+        addReplyLongLong(c,g_pserver->cron_malloc_stats.allocator_resident);
 
         addReplyBulkCString(c,"allocator-fragmentation.ratio");
         addReplyDouble(c,mh->allocator_frag);

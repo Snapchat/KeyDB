@@ -83,7 +83,7 @@ int dbAsyncDelete(redisDb *db, robj *key) {
      * field to NULL in order to lazy free it later. */
     if (de) {
         dictFreeUnlinkedEntry(db->pdict,de);
-        if (server.cluster_enabled) slotToKeyDel(key);
+        if (g_pserver->cluster_enabled) slotToKeyDel(key);
         return 1;
     } else {
         return 0;
@@ -115,11 +115,11 @@ void emptyDbAsync(redisDb *db) {
 /* Empty the slots-keys map of Redis CLuster by creating a new empty one
  * and scheduiling the old for lazy freeing. */
 void slotToKeyFlushAsync(void) {
-    rax *old = server.cluster->slots_to_keys;
+    rax *old = g_pserver->cluster->slots_to_keys;
 
-    server.cluster->slots_to_keys = raxNew();
-    memset(server.cluster->slots_keys_count,0,
-           sizeof(server.cluster->slots_keys_count));
+    g_pserver->cluster->slots_to_keys = raxNew();
+    memset(g_pserver->cluster->slots_keys_count,0,
+           sizeof(g_pserver->cluster->slots_keys_count));
     atomicIncr(lazyfree_objects,old->numele);
     bioCreateBackgroundJob(BIO_LAZY_FREE,NULL,NULL,old);
 }

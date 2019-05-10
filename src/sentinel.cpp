@@ -460,8 +460,8 @@ struct redisCommand sentinelcmds[] = {
 /* This function overwrites a few normal Redis config default with Sentinel
  * specific defaults. */
 void initSentinelConfig(void) {
-    server.port = REDIS_SENTINEL_PORT;
-    server.protected_mode = 0; /* Sentinel must be exposed. */
+    g_pserver->port = REDIS_SENTINEL_PORT;
+    g_pserver->protected_mode = 0; /* Sentinel must be exposed. */
 }
 
 /* Perform the Sentinel mode initialization. */
@@ -470,12 +470,12 @@ void initSentinel(void) {
 
     /* Remove usual Redis commands from the command table, then just add
      * the SENTINEL command. */
-    dictEmpty(server.commands,NULL);
+    dictEmpty(g_pserver->commands,NULL);
     for (j = 0; j < sizeof(sentinelcmds)/sizeof(sentinelcmds[0]); j++) {
         int retval;
         struct redisCommand *cmd = sentinelcmds+j;
 
-        retval = dictAdd(server.commands, sdsnew(cmd->name), cmd);
+        retval = dictAdd(g_pserver->commands, sdsnew(cmd->name), cmd);
         serverAssert(retval == DICT_OK);
 
         /* Translate the command string flags description into an actual
@@ -504,14 +504,14 @@ void initSentinel(void) {
 void sentinelIsRunning(void) {
     int j;
 
-    if (server.configfile == NULL) {
+    if (cserver.configfile == NULL) {
         serverLog(LL_WARNING,
             "Sentinel started without a config file. Exiting...");
         exit(1);
-    } else if (access(server.configfile,W_OK) == -1) {
+    } else if (access(cserver.configfile,W_OK) == -1) {
         serverLog(LL_WARNING,
             "Sentinel config file %s is not writable: %s. Exiting...",
-            server.configfile,strerror(errno));
+            cserver.configfile,strerror(errno));
         exit(1);
     }
 
@@ -641,7 +641,7 @@ void sentinelEvent(int level, const char *type, sentinelRedisInstance *ri,
     }
 
     /* Log the message if the log level allows it to be logged. */
-    if (level >= server.verbosity)
+    if (level >= cserver.verbosity)
         serverLog(level,"%s %s",type,msg);
 
     /* Publish the message via Pub/Sub if it's not a debugging one. */
@@ -1926,15 +1926,15 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
  * On failure the function logs a warning on the Redis log. */
 void sentinelFlushConfig(void) {
     int fd = -1;
-    int saved_hz = server.hz;
+    int saved_hz = g_pserver->hz;
     int rewrite_status;
 
-    server.hz = CONFIG_DEFAULT_HZ;
-    rewrite_status = rewriteConfig(server.configfile);
-    server.hz = saved_hz;
+    g_pserver->hz = CONFIG_DEFAULT_HZ;
+    rewrite_status = rewriteConfig(cserver.configfile);
+    g_pserver->hz = saved_hz;
 
     if (rewrite_status == -1) goto werr;
-    if ((fd = open(server.configfile,O_RDONLY)) == -1) goto werr;
+    if ((fd = open(cserver.configfile,O_RDONLY)) == -1) goto werr;
     if (fsync(fd) == -1) goto werr;
     if (close(fd) == EOF) goto werr;
     return;
@@ -2018,7 +2018,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
             link->pending_commands = 0;
             link->cc_conn_time = mstime();
             link->cc->data = link;
-            redisAeAttach(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,link->cc);
+            redisAeAttach(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,link->cc);
             redisAsyncSetConnectCallback(link->cc,
                     sentinelLinkEstablishedCallback);
             redisAsyncSetDisconnectCallback(link->cc,
@@ -2042,7 +2042,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
 
             link->pc_conn_time = mstime();
             link->pc->data = link;
-            redisAeAttach(server.rgthreadvar[IDX_EVENT_LOOP_MAIN].el,link->pc);
+            redisAeAttach(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,link->pc);
             redisAsyncSetConnectCallback(link->pc,
                     sentinelLinkEstablishedCallback);
             redisAsyncSetDisconnectCallback(link->pc,
@@ -2585,7 +2585,7 @@ int sentinelSendHello(sentinelRedisInstance *ri) {
         announce_ip = ip;
     }
     announce_port = sentinel.announce_port ?
-                    sentinel.announce_port : server.port;
+                    sentinel.announce_port : g_pserver->port;
 
     /* Format and send the Hello message. */
     snprintf(payload,sizeof(payload),
@@ -4521,6 +4521,6 @@ void sentinelTimer(void) {
      * exactly continue to stay synchronized asking to be voted at the
      * same time again and again (resulting in nobody likely winning the
      * election because of split brain voting). */
-    server.hz = CONFIG_DEFAULT_HZ + rand() % CONFIG_DEFAULT_HZ;
+    g_pserver->hz = CONFIG_DEFAULT_HZ + rand() % CONFIG_DEFAULT_HZ;
 }
 

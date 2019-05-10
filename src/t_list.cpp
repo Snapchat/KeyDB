@@ -181,8 +181,8 @@ void listTypeConvert(robj *subject, int enc) {
     serverAssertWithInfo(NULL,subject,subject->encoding==OBJ_ENCODING_ZIPLIST);
 
     if (enc == OBJ_ENCODING_QUICKLIST) {
-        size_t zlen = server.list_max_ziplist_size;
-        int depth = server.list_compress_depth;
+        size_t zlen = g_pserver->list_max_ziplist_size;
+        int depth = g_pserver->list_compress_depth;
         subject->m_ptr = quicklistCreateFromZiplist(zlen, depth, (unsigned char*)ptrFromObj(subject));
         subject->encoding = OBJ_ENCODING_QUICKLIST;
     } else {
@@ -206,8 +206,8 @@ void pushGenericCommand(client *c, int where) {
     for (j = 2; j < c->argc; j++) {
         if (!lobj) {
             lobj = createQuicklistObject();
-            quicklistSetOptions((quicklist*)ptrFromObj(lobj), server.list_max_ziplist_size,
-                                server.list_compress_depth);
+            quicklistSetOptions((quicklist*)ptrFromObj(lobj), g_pserver->list_max_ziplist_size,
+                                g_pserver->list_compress_depth);
             dbAdd(c->db,c->argv[1],lobj);
         }
         listTypePush(lobj,c->argv[j],where);
@@ -220,7 +220,7 @@ void pushGenericCommand(client *c, int where) {
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST,event,c->argv[1],c->db->id);
     }
-    server.dirty += pushed;
+    g_pserver->dirty += pushed;
 }
 
 void lpushCommand(client *c) {
@@ -250,7 +250,7 @@ void pushxGenericCommand(client *c, int where) {
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST,event,c->argv[1],c->db->id);
     }
-    server.dirty += pushed;
+    g_pserver->dirty += pushed;
 }
 
 void lpushxCommand(client *c) {
@@ -295,7 +295,7 @@ void linsertCommand(client *c) {
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST,"linsert",
                             c->argv[1],c->db->id);
-        server.dirty++;
+        g_pserver->dirty++;
     } else {
         /* Notify client of a failed insert */
         addReplyLongLong(c,-1);
@@ -357,7 +357,7 @@ void lsetCommand(client *c) {
             addReply(c,shared.ok);
             signalModifiedKey(c->db,c->argv[1]);
             notifyKeyspaceEvent(NOTIFY_LIST,"lset",c->argv[1],c->db->id);
-            server.dirty++;
+            g_pserver->dirty++;
         }
     } else {
         serverPanic("Unknown list encoding");
@@ -383,7 +383,7 @@ void popGenericCommand(client *c, int where) {
             dbDelete(c->db,c->argv[1]);
         }
         signalModifiedKey(c->db,c->argv[1]);
-        server.dirty++;
+        g_pserver->dirty++;
     }
 }
 
@@ -483,7 +483,7 @@ void ltrimCommand(client *c) {
         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",c->argv[1],c->db->id);
     }
     signalModifiedKey(c->db,c->argv[1]);
-    server.dirty++;
+    g_pserver->dirty++;
     addReply(c,shared.ok);
 }
 
@@ -511,7 +511,7 @@ void lremCommand(client *c) {
     while (listTypeNext(li,&entry)) {
         if (listTypeEqual(&entry,obj)) {
             listTypeDelete(li, &entry);
-            server.dirty++;
+            g_pserver->dirty++;
             removed++;
             if (toremove && removed == toremove) break;
         }
@@ -551,8 +551,8 @@ static void rpoplpushHandlePush(client *c, robj *dstkey, robj *dstobj, robj *val
     /* Create the list if the key does not exist */
     if (!dstobj) {
         dstobj = createQuicklistObject();
-        quicklistSetOptions((quicklist*)ptrFromObj(dstobj), server.list_max_ziplist_size,
-                            server.list_compress_depth);
+        quicklistSetOptions((quicklist*)ptrFromObj(dstobj), g_pserver->list_max_ziplist_size,
+                            g_pserver->list_compress_depth);
         dbAdd(c->db,dstkey,dstobj);
     }
     signalModifiedKey(c->db,dstkey);
@@ -595,7 +595,7 @@ void rpoplpushCommand(client *c) {
         }
         signalModifiedKey(c->db,touchedkey);
         decrRefCount(touchedkey);
-        server.dirty++;
+        g_pserver->dirty++;
         if (c->cmd->proc == brpoplpushCommand) {
             rewriteClientCommandVector(c,3,shared.rpoplpush,c->argv[1],c->argv[2]);
         }
@@ -636,7 +636,7 @@ int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb 
                                           shared.rpop;
         argv[1] = key;
         propagate((where == LIST_HEAD) ?
-            server.lpopCommand : server.rpopCommand,
+            cserver.lpopCommand : cserver.rpopCommand,
             db->id,argv,2,PROPAGATE_AOF|PROPAGATE_REPL);
        
         /* BRPOP/BLPOP */
@@ -659,7 +659,7 @@ int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb 
             /* Propagate the RPOP operation. */
             argv[0] = shared.rpop;
             argv[1] = key;
-            propagate(server.rpopCommand,
+            propagate(cserver.rpopCommand,
                 db->id,argv,2,
                 PROPAGATE_AOF|
                 PROPAGATE_REPL);
@@ -669,7 +669,7 @@ int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb 
             argv[0] = shared.lpush;
             argv[1] = dstkey;
             argv[2] = value;
-            propagate(server.lpushCommand,
+            propagate(cserver.lpushCommand,
                 db->id,argv,3,
                 PROPAGATE_AOF|
                 PROPAGATE_REPL);
@@ -721,7 +721,7 @@ void blockingPopGenericCommand(client *c, int where) {
                                             c->argv[j],c->db->id);
                     }
                     signalModifiedKey(c->db,c->argv[j]);
-                    server.dirty++;
+                    g_pserver->dirty++;
 
                     /* Replicate it as an [LR]POP instead of B[LR]POP. */
                     rewriteClientCommandVector(c,2,

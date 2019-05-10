@@ -109,12 +109,12 @@ void notifyKeyspaceEvent(int type, const char *event, robj *key, int dbid) {
      moduleNotifyKeyspaceEvent(type, event, key, dbid);
 
     /* If notifications for this class of events are off, return ASAP. */
-    if (!(server.notify_keyspace_events & type)) return;
+    if (!(g_pserver->notify_keyspace_events & type)) return;
 
     eventobj = createStringObject(event,strlen(event));
 
     /* __keyspace@<db>__:<key> <event> notifications. */
-    if (server.notify_keyspace_events & NOTIFY_KEYSPACE) {
+    if (g_pserver->notify_keyspace_events & NOTIFY_KEYSPACE) {
         chan = sdsnewlen("__keyspace@",11);
         len = ll2string(buf,sizeof(buf),dbid);
         chan = sdscatlen(chan, buf, len);
@@ -126,7 +126,7 @@ void notifyKeyspaceEvent(int type, const char *event, robj *key, int dbid) {
     }
 
     /* __keyevent@<db>__:<event> <key> notifications. */
-    if (server.notify_keyspace_events & NOTIFY_KEYEVENT) {
+    if (g_pserver->notify_keyspace_events & NOTIFY_KEYEVENT) {
         chan = sdsnewlen("__keyevent@",11);
         if (len == -1) len = ll2string(buf,sizeof(buf),dbid);
         chan = sdscatlen(chan, buf, len);

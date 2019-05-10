@@ -27,6 +27,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#define NO_DEPRECATE_FREE 1 // we are required to call the real free() in this CU
 #include "server.h"
 #include "sha1.h"   /* SHA1 is used for DEBUG DIGEST */
 #include "crc64.h"
@@ -266,8 +267,8 @@ void computeDatasetDigest(unsigned char *final) {
 
     memset(final,0,20); /* Start with a clean result */
 
-    for (j = 0; j < server.dbnum; j++) {
-        redisDb *db = server.db+j;
+    for (j = 0; j < cserver.dbnum; j++) {
+        redisDb *db = g_pserver->db+j;
 
         if (dictSize(db->pdict) == 0) continue;
         di = dictGetSafeIterator(db->pdict);
@@ -345,7 +346,7 @@ NULL
             (RESTART_SERVER_GRACEFULLY|RESTART_SERVER_CONFIG_REWRITE) :
              RESTART_SERVER_NONE;
         restartServer(flags,delay);
-        addReplyError(c,"failed to restart the server. Check server logs.");
+        addReplyError(c,"failed to restart the g_pserver-> Check server logs.");
     } else if (!strcasecmp(szFromObj(c->argv[1]),"oom")) {
         void *ptr = zmalloc(ULONG_MAX, MALLOC_LOCAL); /* Should trigger an out of memory. */
         zfree(ptr);
@@ -374,16 +375,16 @@ NULL
         serverLog(LL_WARNING,"DB reloaded by DEBUG RELOAD");
         addReply(c,shared.ok);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"loadaof")) {
-        if (server.aof_state != AOF_OFF) flushAppendOnlyFile(1);
+        if (g_pserver->aof_state != AOF_OFF) flushAppendOnlyFile(1);
         emptyDb(-1,EMPTYDB_NO_FLAGS,NULL);
         protectClient(c);
-        int ret = loadAppendOnlyFile(server.aof_filename);
+        int ret = loadAppendOnlyFile(g_pserver->aof_filename);
         unprotectClient(c);
         if (ret != C_OK) {
             addReply(c,shared.err);
             return;
         }
-        server.dirty = 0; /* Prevent AOF / replication */
+        g_pserver->dirty = 0; /* Prevent AOF / replication */
         serverLog(LL_WARNING,"Append Only File loaded by DEBUG LOADAOF");
         addReply(c,shared.ok);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"object") && c->argc == 3) {
@@ -596,12 +597,12 @@ NULL
     } else if (!strcasecmp(szFromObj(c->argv[1]),"set-active-expire") &&
                c->argc == 3)
     {
-        server.active_expire_enabled = atoi(szFromObj(c->argv[2]));
+        g_pserver->active_expire_enabled = atoi(szFromObj(c->argv[2]));
         addReply(c,shared.ok);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"lua-always-replicate-commands") &&
                c->argc == 3)
     {
-        server.lua_always_replicate_commands = atoi(szFromObj(c->argv[2]));
+        g_pserver->lua_always_replicate_commands = atoi(szFromObj(c->argv[2]));
         addReply(c,shared.ok);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"error") && c->argc == 3) {
         sds errstr = sdsnewlen("-",1);
@@ -628,17 +629,17 @@ NULL
 
         if (getLongFromObjectOrReply(c, c->argv[2], &dbid, NULL) != C_OK)
             return;
-        if (dbid < 0 || dbid >= server.dbnum) {
+        if (dbid < 0 || dbid >= cserver.dbnum) {
             addReplyError(c,"Out of range database");
             return;
         }
 
         stats = sdscatprintf(stats,"[Dictionary HT]\n");
-        dictGetStats(buf,sizeof(buf),server.db[dbid].pdict);
+        dictGetStats(buf,sizeof(buf),g_pserver->db[dbid].pdict);
         stats = sdscat(stats,buf);
 
         stats = sdscatprintf(stats,"[Expires HT]\n");
-        dictGetStats(buf,sizeof(buf),server.db[dbid].expires);
+        dictGetStats(buf,sizeof(buf),g_pserver->db[dbid].expires);
         stats = sdscat(stats,buf);
 
         addReplyBulkSds(c,stats);
@@ -692,9 +693,9 @@ void _serverAssert(const char *estr, const char *file, int line) {
     serverLog(LL_WARNING,"=== ASSERTION FAILED ===");
     serverLog(LL_WARNING,"==> %s:%d '%s' is not true",file,line,estr);
 #ifdef HAVE_BACKTRACE
-    server.assert_failed = estr;
-    server.assert_file = file;
-    server.assert_line = line;
+    g_pserver->assert_failed = estr;
+    g_pserver->assert_file = file;
+    g_pserver->assert_line = line;
     serverLog(LL_WARNING,"(forcing SIGSEGV to print the bug report.)");
 #endif
     *((char*)-1) = 'x';
@@ -779,10 +780,10 @@ void _serverPanic(const char *file, int line, const char *msg, ...) {
 }
 
 void bugReportStart(void) {
-    if (server.bug_report_start == 0) {
+    if (g_pserver->bug_report_start == 0) {
         serverLogRaw(LL_WARNING|LL_RAW,
-        "\n\n=== REDIS BUG REPORT START: Cut & paste starting from here ===\n");
-        server.bug_report_start = 1;
+        "\n\n=== KEYDB BUG REPORT START: Cut & paste starting from here ===\n");
+        g_pserver->bug_report_start = 1;
     }
 }
 
@@ -1126,16 +1127,16 @@ void logRegisters(ucontext_t *uc) {
  *
  * Close it with closeDirectLogFiledes(). */
 int openDirectLogFiledes(void) {
-    int log_to_stdout = server.logfile[0] == '\0';
+    int log_to_stdout = g_pserver->logfile[0] == '\0';
     int fd = log_to_stdout ?
         STDOUT_FILENO :
-        open(server.logfile, O_APPEND|O_CREAT|O_WRONLY, 0644);
+        open(g_pserver->logfile, O_APPEND|O_CREAT|O_WRONLY, 0644);
     return fd;
 }
 
 /* Used to close what closeDirectLogFiledes() returns. */
 void closeDirectLogFiledes(int fd) {
-    int log_to_stdout = server.logfile[0] == '\0';
+    int log_to_stdout = g_pserver->logfile[0] == '\0';
     if (!log_to_stdout) close(fd);
 }
 
@@ -1225,9 +1226,9 @@ void logStackTrace(ucontext_t *uc) {
  * currently being served by Redis. May be NULL if Redis is not serving a
  * client right now. */
 void logCurrentClient(void) {
-    if (server.current_client == NULL) return;
+    if (serverTL->current_client == NULL) return;
 
-    client *cc = server.current_client;
+    client *cc = serverTL->current_client;
     sds client;
     int j;
 
@@ -1362,7 +1363,7 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 
     bugReportStart();
     serverLog(LL_WARNING,
-        "Redis %s crashed by signal: %d", REDIS_VERSION, sig);
+        "KeyDB %s crashed by signal: %d", KEYDB_REAL_VERSION, sig);
     if (eip != NULL) {
         serverLog(LL_WARNING,
         "Crashed running the instruction at: %p", eip);
@@ -1372,8 +1373,8 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
         "Accessing address: %p", (void*)info->si_addr);
     }
     serverLog(LL_WARNING,
-        "Failed assertion: %s (%s:%d)", server.assert_failed,
-                        server.assert_file, server.assert_line);
+        "Failed assertion: %s (%s:%d)", g_pserver->assert_failed,
+                        g_pserver->assert_file, g_pserver->assert_line);
 
     /* Log the stack trace */
     serverLogRaw(LL_WARNING|LL_RAW, "\n------ STACK TRACE ------\n");
@@ -1438,14 +1439,14 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
     }
 
     serverLogRaw(LL_WARNING|LL_RAW,
-"\n=== REDIS BUG REPORT END. Make sure to include from START to END. ===\n\n"
+"\n=== KEYDB BUG REPORT END. Make sure to include from START to END. ===\n\n"
 "       Please report the crash by opening an issue on github:\n\n"
-"           http://github.com/antirez/redis/issues\n\n"
+"           https://github.com/JohnSully/KeyDB/issues\n\n"
 "  Suspect RAM error? Use keydb-server --test-memory to verify it.\n\n"
 );
 
     /* free(messages); Don't call free() with possibly corrupted memory. */
-    if (server.daemonize && server.supervised == 0) unlink(server.pidfile);
+    if (cserver.daemonize && cserver.supervised == 0) unlink(cserver.pidfile);
 
     /* Make sure we exit with the right signal at the end. So for instance
      * the core will be dumped if enabled. */
@@ -1521,7 +1522,7 @@ void watchdogScheduleSignal(int period) {
 void enableWatchdog(int period) {
     int min_period;
 
-    if (server.watchdog_period == 0) {
+    if (g_pserver->watchdog_period == 0) {
         struct sigaction act;
 
         /* Watchdog was actually disabled, so we have to setup the signal
@@ -1534,16 +1535,16 @@ void enableWatchdog(int period) {
     /* If the configured period is smaller than twice the timer period, it is
      * too short for the software watchdog to work reliably. Fix it now
      * if needed. */
-    min_period = (1000/server.hz)*2;
+    min_period = (1000/g_pserver->hz)*2;
     if (period < min_period) period = min_period;
     watchdogScheduleSignal(period); /* Adjust the current timer. */
-    server.watchdog_period = period;
+    g_pserver->watchdog_period = period;
 }
 
 /* Disable the software watchdog. */
 void disableWatchdog(void) {
     struct sigaction act;
-    if (server.watchdog_period == 0) return; /* Already disabled. */
+    if (g_pserver->watchdog_period == 0) return; /* Already disabled. */
     watchdogScheduleSignal(0); /* Stop the current timer. */
 
     /* Set the signal handler to SIG_IGN, this will also remove pending
@@ -1552,5 +1553,5 @@ void disableWatchdog(void) {
     act.sa_flags = 0;
     act.sa_handler = SIG_IGN;
     sigaction(SIGALRM, &act, NULL);
-    server.watchdog_period = 0;
+    g_pserver->watchdog_period = 0;
 }

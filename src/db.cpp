@@ -60,15 +60,19 @@ static robj *lookupKey(redisDb *db, robj *key, int flags) {
         /* Update the access time for the ageing algorithm.
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
-        if (server.rdb_child_pid == -1 &&
-            server.aof_child_pid == -1 &&
+        if (g_pserver->rdb_child_pid == -1 &&
+            g_pserver->aof_child_pid == -1 &&
             !(flags & LOOKUP_NOTOUCH))
         {
-            if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+            if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
                 updateLFU(val);
             } else {
                 val->lru = LRU_CLOCK();
             }
+        }
+
+        if (flags & LOOKUP_UPDATEMVCC) {
+            val->mvcc_tstamp = getMvccTstamp();
         }
         return val;
     } else {
@@ -106,8 +110,8 @@ robj_roptr lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
         /* Key expired. If we are in the context of a master, expireIfNeeded()
          * returns 0 only when the key does not exist at all, so it's safe
          * to return NULL ASAP. */
-        if (listLength(server.masters) == 0) {
-            server.stat_keyspace_misses++;
+        if (listLength(g_pserver->masters) == 0) {
+            g_pserver->stat_keyspace_misses++;
             notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
             return NULL;
         }
@@ -124,23 +128,23 @@ robj_roptr lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
          * will say the key as non existing.
          *
          * Notably this covers GETs when slaves are used to scale reads. */
-        if (server.current_client &&
-            !FActiveMaster(server.current_client) &&
-            server.current_client->cmd &&
-            server.current_client->cmd->flags & CMD_READONLY)
+        if (serverTL->current_client &&
+            !FActiveMaster(serverTL->current_client) &&
+            serverTL->current_client->cmd &&
+            serverTL->current_client->cmd->flags & CMD_READONLY)
         {
-            server.stat_keyspace_misses++;
+            g_pserver->stat_keyspace_misses++;
             notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
             return NULL;
         }
     }
     val = lookupKey(db,key,flags);
     if (val == NULL) {
-        server.stat_keyspace_misses++;
+        g_pserver->stat_keyspace_misses++;
         notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
     }
     else
-        server.stat_keyspace_hits++;
+        g_pserver->stat_keyspace_hits++;
     return val;
 }
 
@@ -157,7 +161,7 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key) {
  * does not exist in the specified DB. */
 robj *lookupKeyWrite(redisDb *db, robj *key) {
     expireIfNeeded(db,key);
-    return lookupKey(db,key,LOOKUP_NONE);
+    return lookupKey(db,key,LOOKUP_UPDATEMVCC);
 }
 
 robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply) {
@@ -175,16 +179,14 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
 int dbAddCore(redisDb *db, robj *key, robj *val) {
     sds copy = sdsdup(szFromObj(key));
     int retval = dictAdd(db->pdict, copy, val);
-#ifdef ENABLE_MVCC
     val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
-#endif
 
     if (retval == DICT_OK)
     {
         if (val->type == OBJ_LIST ||
             val->type == OBJ_ZSET)
             signalKeyAsReady(db, key);
-        if (server.cluster_enabled) slotToKeyAdd(key);
+        if (g_pserver->cluster_enabled) slotToKeyAdd(key);
     }
     else
     {
@@ -204,18 +206,24 @@ void dbAdd(redisDb *db, robj *key, robj *val)
     serverAssertWithInfo(NULL,key,retval == DICT_OK);
 }
 
-/* Insert a key, handling duplicate keys according to fReplace */
-int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
+void dbOverwriteCore(redisDb *db, dictEntry *de, robj *val, bool fUpdateMvcc)
 {
-    if (fReplace)
-    {
-        setKey(db, key, val);
-        return TRUE;
+    dictEntry auxentry = *de;
+    robj *old = (robj*)dictGetVal(de);
+    if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+        val->lru = old->lru;
     }
-    else
-    {
-        return (dbAddCore(db, key, val) == DICT_OK);
+    if (fUpdateMvcc)
+        val->mvcc_tstamp = getMvccTstamp();
+
+    dictSetVal(db->pdict, de, val);
+
+    if (g_pserver->lazyfree_lazy_server_del) {
+        freeObjAsync(old);
+        dictSetVal(db->pdict, &auxentry, NULL);
     }
+
+    dictFreeVal(db->pdict, &auxentry);
 }
 
 /* Overwrite an existing key with a new value. Incrementing the reference
@@ -227,22 +235,31 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
     dictEntry *de = dictFind(db->pdict,ptrFromObj(key));
 
     serverAssertWithInfo(NULL,key,de != NULL);
-    dictEntry auxentry = *de;
-    robj *old = (robj*)dictGetVal(de);
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-        val->lru = old->lru;
-    }
-#ifdef ENABLE_MVCC
-    val->mvcc_tstamp = getMvccTstamp();
-#endif
-    dictSetVal(db->pdict, de, val);
+    dbOverwriteCore(db, de, val, true);
+}
 
-    if (server.lazyfree_lazy_server_del) {
-        freeObjAsync(old);
-        dictSetVal(db->pdict, &auxentry, NULL);
-    }
+/* Insert a key, handling duplicate keys according to fReplace */
+int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
+{
+    if (fReplace)
+    {
+        dictEntry *de = dictFind(db->pdict, ptrFromObj(key));
+        if (de == nullptr)
+            return (dbAddCore(db, key, val) == DICT_OK);
 
-    dictFreeVal(db->pdict, &auxentry);
+        robj *old = (robj*)dictGetVal(de);
+        if (old->mvcc_tstamp <= val->mvcc_tstamp)
+        {
+            dbOverwriteCore(db, de, val, false);
+            return true;
+        }
+        
+        return false;
+    }
+    else
+    {
+        return (dbAddCore(db, key, val) == DICT_OK);
+    }
 }
 
 /* High level Set operation. This function can be used in order to set
@@ -287,7 +304,7 @@ robj *dbRandomKey(redisDb *db) {
         key = (sds)dictGetKey(de);
         keyobj = createStringObject(key,sdslen(key));
         if (dictFind(db->expires,key)) {
-            if (allvolatile && listLength(server.masters) && --maxtries == 0) {
+            if (allvolatile && listLength(g_pserver->masters) && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
                  * it could happen that all the keys are already logically
                  * expired in the slave, so the function cannot stop because
@@ -313,7 +330,7 @@ int dbSyncDelete(redisDb *db, robj *key) {
      * the key, because it is shared with the main dictionary. */
     if (dictSize(db->expires) > 0) dictDelete(db->expires,ptrFromObj(key));
     if (dictDelete(db->pdict,ptrFromObj(key)) == DICT_OK) {
-        if (server.cluster_enabled) slotToKeyDel(key);
+        if (g_pserver->cluster_enabled) slotToKeyDel(key);
         return 1;
     } else {
         return 0;
@@ -323,7 +340,7 @@ int dbSyncDelete(redisDb *db, robj *key) {
 /* This is a wrapper whose behavior depends on the Redis lazy free
  * configuration. Deletes the key synchronously or asynchronously. */
 int dbDelete(redisDb *db, robj *key) {
-    return server.lazyfree_lazy_server_del ? dbAsyncDelete(db,key) :
+    return g_pserver->lazyfree_lazy_server_del ? dbAsyncDelete(db,key) :
                                              dbSyncDelete(db,key);
 }
 
@@ -365,7 +382,7 @@ robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
     return o;
 }
 
-/* Remove all keys from all the databases in a Redis server.
+/* Remove all keys from all the databases in a Redis g_pserver->
  * If callback is given the function is called from time to time to
  * signal that work is in progress.
  *
@@ -383,7 +400,7 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
     int async = (flags & EMPTYDB_ASYNC);
     long long removed = 0;
 
-    if (dbnum < -1 || dbnum >= server.dbnum) {
+    if (dbnum < -1 || dbnum >= cserver.dbnum) {
         errno = EINVAL;
         return -1;
     }
@@ -391,21 +408,21 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
     int startdb, enddb;
     if (dbnum == -1) {
         startdb = 0;
-        enddb = server.dbnum-1;
+        enddb = cserver.dbnum-1;
     } else {
         startdb = enddb = dbnum;
     }
 
     for (int j = startdb; j <= enddb; j++) {
-        removed += dictSize(server.db[j].pdict);
+        removed += dictSize(g_pserver->db[j].pdict);
         if (async) {
-            emptyDbAsync(&server.db[j]);
+            emptyDbAsync(&g_pserver->db[j]);
         } else {
-            dictEmpty(server.db[j].pdict,callback);
-            dictEmpty(server.db[j].expires,callback);
+            dictEmpty(g_pserver->db[j].pdict,callback);
+            dictEmpty(g_pserver->db[j].expires,callback);
         }
     }
-    if (server.cluster_enabled) {
+    if (g_pserver->cluster_enabled) {
         if (async) {
             slotToKeyFlushAsync();
         } else {
@@ -417,9 +434,9 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
 }
 
 int selectDb(client *c, int id) {
-    if (id < 0 || id >= server.dbnum)
+    if (id < 0 || id >= cserver.dbnum)
         return C_ERR;
-    c->db = &server.db[id];
+    c->db = &g_pserver->db[id];
     return C_OK;
 }
 
@@ -474,7 +491,7 @@ void flushdbCommand(client *c) {
 
     if (getFlushCommandFlags(c,&flags) == C_ERR) return;
     signalFlushedDb(c->db->id);
-    server.dirty += emptyDb(c->db->id,flags,NULL);
+    g_pserver->dirty += emptyDb(c->db->id,flags,NULL);
     addReply(c,shared.ok);
 }
 
@@ -486,19 +503,19 @@ void flushallCommand(client *c) {
 
     if (getFlushCommandFlags(c,&flags) == C_ERR) return;
     signalFlushedDb(-1);
-    server.dirty += emptyDb(-1,flags,NULL);
+    g_pserver->dirty += emptyDb(-1,flags,NULL);
     addReply(c,shared.ok);
-    if (server.rdb_child_pid != -1) killRDBChild();
-    if (server.saveparamslen > 0) {
+    if (g_pserver->rdb_child_pid != -1) killRDBChild();
+    if (g_pserver->saveparamslen > 0) {
         /* Normally rdbSave() will reset dirty, but we don't want this here
          * as otherwise FLUSHALL will not be replicated nor put into the AOF. */
-        int saved_dirty = server.dirty;
+        int saved_dirty = g_pserver->dirty;
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
         rdbSave(rsiptr);
-        server.dirty = saved_dirty;
+        g_pserver->dirty = saved_dirty;
     }
-    server.dirty++;
+    g_pserver->dirty++;
 }
 
 /* This command implements DEL and LAZYDEL. */
@@ -513,7 +530,7 @@ void delGenericCommand(client *c, int lazy) {
             signalModifiedKey(c->db,c->argv[j]);
             notifyKeyspaceEvent(NOTIFY_GENERIC,
                 "del",c->argv[j],c->db->id);
-            server.dirty++;
+            g_pserver->dirty++;
             numdel++;
         }
     }
@@ -547,7 +564,7 @@ void selectCommand(client *c) {
         "invalid DB index") != C_OK)
         return;
 
-    if (server.cluster_enabled && id != 0) {
+    if (g_pserver->cluster_enabled && id != 0) {
         addReplyError(c,"SELECT is not allowed in cluster mode");
         return;
     }
@@ -847,7 +864,7 @@ void dbsizeCommand(client *c) {
 }
 
 void lastsaveCommand(client *c) {
-    addReplyLongLong(c,server.lastsave);
+    addReplyLongLong(c,g_pserver->lastsave);
 }
 
 void typeCommand(client *c) {
@@ -896,7 +913,7 @@ void shutdownCommand(client *c) {
      * with half-read data).
      *
      * Also when in Sentinel mode clear the SAVE flag and force NOSAVE. */
-    if (server.loading || server.sentinel_mode)
+    if (g_pserver->loading || g_pserver->sentinel_mode)
         flags = (flags & ~SHUTDOWN_SAVE) | SHUTDOWN_NOSAVE;
     if (prepareForShutdown(flags) == C_OK) exit(0);
     addReplyError(c,"Errors trying to SHUTDOWN. Check logs.");
@@ -940,7 +957,7 @@ void renameGenericCommand(client *c, int nx) {
         c->argv[1],c->db->id);
     notifyKeyspaceEvent(NOTIFY_GENERIC,"rename_to",
         c->argv[2],c->db->id);
-    server.dirty++;
+    g_pserver->dirty++;
     addReply(c,nx ? shared.cone : shared.ok);
 }
 
@@ -958,7 +975,7 @@ void moveCommand(client *c) {
     int srcid;
     long long dbid, expire;
 
-    if (server.cluster_enabled) {
+    if (g_pserver->cluster_enabled) {
         addReplyError(c,"MOVE is not allowed in cluster mode");
         return;
     }
@@ -1003,7 +1020,7 @@ void moveCommand(client *c) {
 
     /* OK! key moved, free the entry in the source DB */
     dbDelete(src,c->argv[1]);
-    server.dirty++;
+    g_pserver->dirty++;
     addReply(c,shared.cone);
 }
 
@@ -1034,11 +1051,11 @@ void scanDatabaseForReadyLists(redisDb *db) {
  * Returns C_ERR if at least one of the DB ids are out of range, otherwise
  * C_OK is returned. */
 int dbSwapDatabases(int id1, int id2) {
-    if (id1 < 0 || id1 >= server.dbnum ||
-        id2 < 0 || id2 >= server.dbnum) return C_ERR;
+    if (id1 < 0 || id1 >= cserver.dbnum ||
+        id2 < 0 || id2 >= cserver.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
-    redisDb aux = server.db[id1];
-    redisDb *db1 = &server.db[id1], *db2 = &server.db[id2];
+    redisDb aux = g_pserver->db[id1];
+    redisDb *db1 = &g_pserver->db[id1], *db2 = &g_pserver->db[id2];
 
     /* Swap hash tables. Note that we don't swap blocking_keys,
      * ready_keys and watched_keys, since we want clients to
@@ -1070,7 +1087,7 @@ void swapdbCommand(client *c) {
     long id1, id2;
 
     /* Not allowed in cluster mode: we have just DB 0 there. */
-    if (server.cluster_enabled) {
+    if (g_pserver->cluster_enabled) {
         addReplyError(c,"SWAPDB is not allowed in cluster mode");
         return;
     }
@@ -1089,7 +1106,7 @@ void swapdbCommand(client *c) {
         addReplyError(c,"DB index is out of range");
         return;
     } else {
-        server.dirty++;
+        g_pserver->dirty++;
         addReply(c,shared.ok);
     }
 }
@@ -1119,7 +1136,7 @@ void setExpire(client *c, redisDb *db, robj *key, long long when) {
     de = dictAddOrFind(db->expires,dictGetKey(kde));
     dictSetSignedIntegerVal(de,when);
 
-    int writable_slave = listLength(server.masters) && server.repl_slave_ro == 0;
+    int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
     if (c && writable_slave && !(c->flags & CLIENT_MASTER))
         rememberSlaveKeyWithExpire(db,key);
 }
@@ -1156,9 +1173,9 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
     incrRefCount(argv[0]);
     incrRefCount(argv[1]);
 
-    if (server.aof_state != AOF_OFF)
-        feedAppendOnlyFile(server.delCommand,db->id,argv,2);
-    replicationFeedSlaves(server.slaves,db->id,argv,2);
+    if (g_pserver->aof_state != AOF_OFF)
+        feedAppendOnlyFile(cserver.delCommand,db->id,argv,2);
+    replicationFeedSlaves(g_pserver->slaves,db->id,argv,2);
 
     decrRefCount(argv[0]);
     decrRefCount(argv[1]);
@@ -1171,14 +1188,14 @@ int keyIsExpired(redisDb *db, robj *key) {
     if (when < 0) return 0; /* No expire for this key */
 
     /* Don't expire anything while loading. It will be done later. */
-    if (server.loading) return 0;
+    if (g_pserver->loading) return 0;
 
     /* If we are in the context of a Lua script, we pretend that time is
      * blocked to when the Lua script started. This way a key can expire
      * only the first time it is accessed and not in the middle of the
      * script execution, making propagation to slaves / AOF consistent.
      * See issue #1525 on Github for more information. */
-    mstime_t now = server.lua_caller ? server.lua_time_start : mstime();
+    mstime_t now = g_pserver->lua_caller ? g_pserver->lua_time_start : mstime();
 
     return now > when;
 }
@@ -1213,14 +1230,14 @@ int expireIfNeeded(redisDb *db, robj *key) {
      * Still we try to return the right information to the caller,
      * that is, 0 if we think the key should be still valid, 1 if
      * we think the key is expired at this time. */
-    if (listLength(server.masters)) return 1;
+    if (listLength(g_pserver->masters)) return 1;
 
     /* Delete the key */
-    server.stat_expiredkeys++;
-    propagateExpire(db,key,server.lazyfree_lazy_expire);
+    g_pserver->stat_expiredkeys++;
+    propagateExpire(db,key,g_pserver->lazyfree_lazy_expire);
     notifyKeyspaceEvent(NOTIFY_EXPIRED,
         "expired",key,db->id);
-    return server.lazyfree_lazy_expire ? dbAsyncDelete(db,key) :
+    return g_pserver->lazyfree_lazy_expire ? dbAsyncDelete(db,key) :
                                          dbSyncDelete(db,key);
 }
 
@@ -1511,15 +1528,15 @@ void slotToKeyUpdateKey(robj *key, int add) {
     unsigned char buf[64];
     unsigned char *indexed = buf;
 
-    server.cluster->slots_keys_count[hashslot] += add ? 1 : -1;
+    g_pserver->cluster->slots_keys_count[hashslot] += add ? 1 : -1;
     if (keylen+2 > 64) indexed = (unsigned char*)zmalloc(keylen+2, MALLOC_SHARED);
     indexed[0] = (hashslot >> 8) & 0xff;
     indexed[1] = hashslot & 0xff;
     memcpy(indexed+2,ptrFromObj(key),keylen);
     if (add) {
-        raxInsert(server.cluster->slots_to_keys,indexed,keylen+2,NULL,NULL);
+        raxInsert(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL,NULL);
     } else {
-        raxRemove(server.cluster->slots_to_keys,indexed,keylen+2,NULL);
+        raxRemove(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL);
     }
     if (indexed != buf) zfree(indexed);
 }
@@ -1533,10 +1550,10 @@ void slotToKeyDel(robj *key) {
 }
 
 void slotToKeyFlush(void) {
-    raxFree(server.cluster->slots_to_keys);
-    server.cluster->slots_to_keys = raxNew();
-    memset(server.cluster->slots_keys_count,0,
-           sizeof(server.cluster->slots_keys_count));
+    raxFree(g_pserver->cluster->slots_to_keys);
+    g_pserver->cluster->slots_to_keys = raxNew();
+    memset(g_pserver->cluster->slots_keys_count,0,
+           sizeof(g_pserver->cluster->slots_keys_count));
 }
 
 /* Pupulate the specified array of objects with keys in the specified slot.
@@ -1549,7 +1566,7 @@ unsigned int getKeysInSlot(unsigned int hashslot, robj **keys, unsigned int coun
 
     indexed[0] = (hashslot >> 8) & 0xff;
     indexed[1] = hashslot & 0xff;
-    raxStart(&iter,server.cluster->slots_to_keys);
+    raxStart(&iter,g_pserver->cluster->slots_to_keys);
     raxSeek(&iter,">=",indexed,2);
     while(count-- && raxNext(&iter)) {
         if (iter.key[0] != indexed[0] || iter.key[1] != indexed[1]) break;
@@ -1568,13 +1585,13 @@ unsigned int delKeysInSlot(unsigned int hashslot) {
 
     indexed[0] = (hashslot >> 8) & 0xff;
     indexed[1] = hashslot & 0xff;
-    raxStart(&iter,server.cluster->slots_to_keys);
-    while(server.cluster->slots_keys_count[hashslot]) {
+    raxStart(&iter,g_pserver->cluster->slots_to_keys);
+    while(g_pserver->cluster->slots_keys_count[hashslot]) {
         raxSeek(&iter,">=",indexed,2);
         raxNext(&iter);
 
         robj *key = createStringObject((char*)iter.key+2,iter.key_len-2);
-        dbDelete(&server.db[0],key);
+        dbDelete(&g_pserver->db[0],key);
         decrRefCount(key);
         j++;
     }
@@ -1583,5 +1600,5 @@ unsigned int delKeysInSlot(unsigned int hashslot) {
 }
 
 unsigned int countKeysInSlot(unsigned int hashslot) {
-    return server.cluster->slots_keys_count[hashslot];
+    return g_pserver->cluster->slots_keys_count[hashslot];
 }

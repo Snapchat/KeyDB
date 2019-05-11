@@ -78,7 +78,7 @@ unsigned int getLRUClock(void) {
 unsigned int LRU_CLOCK(void) {
     unsigned int lruclock;
     if (1000/g_pserver->hz <= LRU_CLOCK_RESOLUTION) {
-        atomicGet(g_pserver->lruclock,lruclock);
+        lruclock = g_pserver->lruclock;
     } else {
         lruclock = getLRUClock();
     }

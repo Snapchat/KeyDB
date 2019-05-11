@@ -2146,8 +2146,10 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
     /* Handle writes with pending output buffers. */
     handleClientsWithPendingWrites(iel);
 
+    aeAcquireLock();
     /* Close clients that need to be closed asynchronous */
     freeClientsInAsyncFreeQueue(iel);
+    aeReleaseLock();
 
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this

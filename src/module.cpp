@@ -763,6 +763,7 @@ void RM_SetModuleAttribs(RedisModuleCtx *ctx, const char *name, int ver, int api
     module->usedby = listCreate();
     module->usingMods = listCreate();
     module->filters = listCreate();
+    module->in_call = 0;
     ctx->module = module;
 }
 
@@ -3786,14 +3787,7 @@ void moduleHandleBlockedClients(int iel) {
          * replies to send to the client in a thread safe context.
          * We need to glue such replies to the client output buffer and
          * free the temporary client we just used for the replies. */
-        if (c) {
-            if (bc->reply_client->bufpos)
-                addReplyProto(c,bc->reply_client->buf,
-                                bc->reply_client->bufpos);
-            if (listLength(bc->reply_client->reply))
-                listJoin(c->reply,bc->reply_client->reply);
-            c->reply_bytes += bc->reply_client->reply_bytes;
-        }
+        if (c) AddReplyFromClient(c, bc->reply_client);
         freeClient(bc->reply_client);
 
         if (c != NULL) {
@@ -3917,7 +3911,10 @@ RedisModuleCtx *RM_GetThreadSafeContext(RedisModuleBlockedClient *bc) {
      * in order to keep things like the currently selected database and similar
      * things. */
     ctx->client = createClient(-1, IDX_EVENT_LOOP_MAIN);
-    if (bc) selectDb(ctx->client,bc->dbid);
+    if (bc) {
+        selectDb(ctx->client,bc->dbid);
+        ctx->client->id = bc->client->id;
+    }
     return ctx;
 }
 

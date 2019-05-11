@@ -36,4 +36,7 @@ const char *ascii_logo =
 "                                        Port: %d\n"
 "                                        PID: %ld\n"
 "                                                                     \n"
+"                     Like KeyDB? Star us on GitHub!                  \n"
+"                                                                     \n"
+"                     https://github.com/JohnSully/KeyDB              \n"
 "                                                                     \n\n";

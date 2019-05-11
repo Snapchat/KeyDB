@@ -1745,16 +1745,17 @@ void databasesCron(void) {
  * every object access, and accuracy is not needed. To access a global var is
  * a lot faster than calling time(NULL) */
 void updateCachedTime(void) {
-    time_t unixtime = time(NULL);
-    atomicSet(g_pserver->unixtime,unixtime);
+    g_pserver->unixtime = time(NULL);
     g_pserver->mstime = mstime();
 
-    /* To get information about daylight saving time, we need to call localtime_r
-     * and cache the result. However calling localtime_r in this context is safe
-     * since we will never fork() while here, in the main thread. The logging
-     * function will call a thread safe version of localtime that has no locks. */
+    /* To get information about daylight saving time, we need to call
+     * localtime_r and cache the result. However calling localtime_r in this
+     * context is safe since we will never fork() while here, in the main
+     * thread. The logging function will call a thread safe version of
+     * localtime that has no locks. */
     struct tm tm;
-    localtime_r(&g_pserver->unixtime,&tm);
+    time_t ut = g_pserver->unixtime;
+    localtime_r(&ut,&tm);
     g_pserver->daylight_active = tm.tm_isdst;
 }
 
@@ -1826,8 +1827,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      *
      * Note that you can change the resolution altering the
      * LRU_CLOCK_RESOLUTION define. */
-    unsigned long lruclock = getLRUClock();
-    atomicSet(g_pserver->lruclock,lruclock);
+    g_pserver->lruclock = getLRUClock();
 
     /* Record the max memory used since the server was started. */
     if (zmalloc_used_memory() > g_pserver->stat_peak_memory)
@@ -2119,6 +2119,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     handleClientsWithPendingWrites(IDX_EVENT_LOOP_MAIN);
     aeAcquireLock();
 
+    /* Close clients that need to be closed asynchronous */
+    freeClientsInAsyncFreeQueue(IDX_EVENT_LOOP_MAIN);
+
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
      * time. */
@@ -2142,6 +2145,9 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
 
     /* Handle writes with pending output buffers. */
     handleClientsWithPendingWrites(iel);
+
+    /* Close clients that need to be closed asynchronous */
+    freeClientsInAsyncFreeQueue(iel);
 
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
@@ -2287,10 +2293,6 @@ void initMasterInfo(redisMaster *master)
 void initServerConfig(void) {
     int j;
 
-    serverAssert(pthread_mutex_init(&g_pserver->next_client_id_mutex,NULL) == 0);
-    serverAssert(pthread_mutex_init(&g_pserver->lruclock_mutex,NULL) == 0);
-    serverAssert(pthread_mutex_init(&g_pserver->unixtime_mutex,NULL) == 0);
-
     updateCachedTime();
     getRandomHexChars(g_pserver->runid,CONFIG_RUN_ID_SIZE);
     g_pserver->runid[CONFIG_RUN_ID_SIZE] = '\0';
@@ -2405,8 +2407,7 @@ void initServerConfig(void) {
     g_pserver->lua_time_limit = LUA_SCRIPT_TIME_LIMIT;
     g_pserver->fActiveReplica = CONFIG_DEFAULT_ACTIVE_REPLICA;
 
-    unsigned int lruclock = getLRUClock();
-    atomicSet(g_pserver->lruclock,lruclock);
+    g_pserver->lruclock = getLRUClock();
     resetServerSaveParams();
 
     appendServerSaveParams(60*60,1);  /* save after 1 hour and 1 change */
@@ -3986,8 +3987,7 @@ sds genRedisInfoString(const char *section) {
             call_uname = 0;
         }
 
-        unsigned int lruclock;
-        atomicGet(g_pserver->lruclock,lruclock);
+        unsigned int lruclock = g_pserver->lruclock.load();
         info = sdscatprintf(info,
             "# Server\r\n"
             "redis_version:%s\r\n"
@@ -4299,8 +4299,8 @@ sds genRedisInfoString(const char *section) {
             g_pserver->stat_numconnections,
             g_pserver->stat_numcommands,
             getInstantaneousMetric(STATS_METRIC_COMMAND),
-            g_pserver->stat_net_input_bytes,
-            g_pserver->stat_net_output_bytes,
+            g_pserver->stat_net_input_bytes.load(),
+            g_pserver->stat_net_output_bytes.load(),
             (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT)/1024,
             (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT)/1024,
             g_pserver->stat_rejected_conn,
@@ -4955,8 +4955,6 @@ int main(int argc, char **argv) {
             return sha1Test(argc, argv);
         } else if (!strcasecmp(argv[2], "util")) {
             return utilTest(argc, argv);
-        } else if (!strcasecmp(argv[2], "sds")) {
-            return sdsTest(argc, argv);
         } else if (!strcasecmp(argv[2], "endianconv")) {
             return endianconvTest(argc, argv);
         } else if (!strcasecmp(argv[2], "crc64")) {

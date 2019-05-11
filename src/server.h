@@ -49,6 +49,7 @@
 #include <pthread.h>
 #include <syslog.h>
 #include <netinet/in.h>
+#include <atomic>
 #ifdef __cplusplus
 extern "C" {
 #include <lua.h>
@@ -150,6 +151,8 @@ public:
 #define CONFIG_DEFAULT_TCP_BACKLOG       511    /* TCP listen backlog. */
 #define CONFIG_DEFAULT_CLIENT_TIMEOUT       0   /* Default client timeout: infinite */
 #define CONFIG_DEFAULT_DBNUM     16
+#define CONFIG_DEFAULT_IO_THREADS_NUM 1         /* Single threaded by default */
+#define CONFIG_DEFAULT_IO_THREADS_DO_READS 0    /* Read + parse from threads? */
 #define CONFIG_MAX_LINE    1024
 #define CRON_DBS_PER_CALL 16
 #define NET_MAX_WRITES_PER_EVENT (1024*64)
@@ -1236,7 +1239,7 @@ struct redisServer {
 
     struct redisServerThreadVars rgthreadvar[MAX_EVENT_LOOPS];
 
-    unsigned int lruclock;      /* Clock for LRU eviction */
+    std::atomic<unsigned int> lruclock;      /* Clock for LRU eviction */
     int shutdown_asap;          /* SHUTDOWN needed ASAP */
     int activerehashing;        /* Incremental rehash in serverCron() */
     int active_defrag_running;  /* Active defragmentation running (holds current scan aggressiveness) */
@@ -1268,7 +1271,7 @@ struct redisServer {
     mstime_t clients_pause_end_time; /* Time when we undo clients_paused */
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     dict *migrate_cached_sockets;/* MIGRATE cached sockets */
-    uint64_t next_client_id;    /* Next client unique ID. Incremental. */
+    std::atomic<uint64_t> next_client_id; /* Next client unique ID. Incremental. */
     int protected_mode;         /* Don't accept external connections. */
     /* RDB / AOF loading information */
     int loading;                /* We are loading data from disk if true */
@@ -1305,8 +1308,8 @@ struct redisServer {
     long long slowlog_log_slower_than; /* SLOWLOG time limit (to get logged) */
     unsigned long slowlog_max_len;     /* SLOWLOG max number of items logged */
     struct malloc_stats cron_malloc_stats; /* sampled in serverCron(). */
-    long long stat_net_input_bytes; /* Bytes read from network. */
-    long long stat_net_output_bytes; /* Bytes written to network. */
+    std::atomic<long long> stat_net_input_bytes; /* Bytes read from network. */
+    std::atomic<long long> stat_net_output_bytes; /* Bytes written to network. */
     size_t stat_rdb_cow_bytes;      /* Copy on write bytes during RDB saving. */
     size_t stat_aof_cow_bytes;      /* Copy on write bytes during AOF rewrite. */
     /* The following two are used to track instantaneous metrics, like
@@ -1317,7 +1320,6 @@ struct redisServer {
         long long samples[STATS_METRIC_SAMPLES];
         int idx;
     } inst_metric[STATS_METRIC_COUNT];
-    
     /* AOF persistence */
     int aof_state;                  /* AOF_(ON|OFF|WAIT_REWRITE) */
     int aof_fsync;                  /* Kind of fsync() policy */
@@ -1327,6 +1329,7 @@ struct redisServer {
     off_t aof_rewrite_min_size;     /* the AOF file is at least N bytes. */
     off_t aof_rewrite_base_size;    /* AOF size on latest startup or rewrite. */
     off_t aof_current_size;         /* AOF current size. */
+    off_t aof_fsync_offset;         /* AOF offset which is already synced to disk. */
     int aof_rewrite_scheduled;      /* Rewrite once BGSAVE terminates. */
     pid_t aof_child_pid;            /* PID if rewriting process */
     list *aof_rewrite_buf_blocks;   /* Hold changes during an AOF rewrite. */
@@ -1464,10 +1467,10 @@ struct redisServer {
     int list_max_ziplist_size;
     int list_compress_depth;
     /* time cache */
-    time_t unixtime;    /* Unix time sampled every cron cycle. */
-    time_t timezone;    /* Cached timezone. As set by tzset(). */
-    int daylight_active;    /* Currently in daylight saving time. */
-    long long mstime;   /* Like 'unixtime' but with milliseconds resolution. */
+    std::atomic<time_t> unixtime;    /* Unix time sampled every cron cycle. */
+    time_t timezone;            /* Cached timezone. As set by tzset(). */
+    int daylight_active;        /* Currently in daylight saving time. */
+    long long mstime;           /* 'unixtime' with milliseconds resolution. */
     /* Pubsub */
     dict *pubsub_channels;  /* Map channels to list of subscribed clients */
     list *pubsub_patterns;  /* A list of pubsub_patterns */
@@ -1526,12 +1529,6 @@ struct redisServer {
     int bug_report_start; /* True if bug report header was already logged. */
     int watchdog_period;  /* Software watchdog period in ms. 0 = off */
 
-    /* Mutexes used to protect atomic variables when atomic builtins are
-     * not available. */
-    pthread_mutex_t lruclock_mutex;
-    pthread_mutex_t next_client_id_mutex;
-    pthread_mutex_t unixtime_mutex;
-
     int fActiveReplica;                          /* Can this replica also be a master? */
 
     struct fastlock flock;
@@ -1540,6 +1537,9 @@ struct redisServer {
     //  Lower 20 bits: a counter incrementing for each command executed in the same millisecond
     //  Upper 44 bits: mstime (least significant 44-bits) enough for ~500 years before rollover from date of addition
     uint64_t mvcc_tstamp;
+
+    /* System hardware info */
+    size_t system_memory_size;  /* Total memory in system as reported by OS */
 };
 
 typedef struct pubsubPattern {
@@ -1709,6 +1709,7 @@ void addReplyBool(client *c, int b);
 void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext);
 void addReplyProto(client *c, const char *s, size_t len);
 void addReplyBulk(client *c, robj_roptr obj);
+void AddReplyFromClient(client *c, client *src);
 void addReplyBulkCString(client *c, const char *s);
 void addReplyBulkCBuffer(client *c, const void *p, size_t len);
 void addReplyBulkLongLong(client *c, long long ll);
@@ -1764,6 +1765,7 @@ int writeToClient(int fd, client *c, int handler_installed);
 void linkClient(client *c);
 void protectClient(client *c);
 void unprotectClient(client *c);
+void initThreadedIO(void);
 
 // Special Thread-safe addReply() commands for posting messages to clients from a different thread
 void addReplyAsync(client *c, robj_roptr obj);

@@ -30,6 +30,7 @@
 
 #include "server.h"
 #include "atomicvar.h"
+#include <sys/socket.h>
 #include <sys/uio.h>
 #include <math.h>
 #include <ctype.h>
@@ -167,7 +168,7 @@ client *createClient(int fd, int iel) {
 
     selectDb(c,0);
     uint64_t client_id;
-    atomicGetIncr(g_pserver->next_client_id,client_id,1);
+    client_id = g_pserver->next_client_id.fetch_add(1);
     c->iel = iel;
     fastlock_init(&c->lock);
     c->id = client_id;
@@ -1011,6 +1012,19 @@ void addReplySubcommandSyntaxError(client *c) {
     sdsfree(cmd);
 }
 
+/* Append 'src' client output buffers into 'dst' client output buffers. 
+ * This function clears the output buffers of 'src' */
+void AddReplyFromClient(client *dst, client *src) {
+    if (prepareClientToWrite(dst, false) != C_OK)
+        return;
+    addReplyProto(dst,src->buf, src->bufpos);
+    if (listLength(src->reply))
+        listJoin(dst->reply,src->reply);
+    dst->reply_bytes += src->reply_bytes;
+    src->reply_bytes = 0;
+    src->bufpos = 0;
+}
+
 /* Copy 'src' client output buffers into 'dst' client output buffers.
  * The function takes care of freeing the old output buffers of the
  * destination client. */
@@ -1379,6 +1393,11 @@ void freeClient(client *c) {
  * a context where calling freeClient() is not possible, because the client
  * should be valid for the continuation of the flow of the program. */
 void freeClientAsync(client *c) {
+    /* We need to handle concurrent access to the server.clients_to_close list
+     * only in the freeClientAsync() function, since it's the only function that
+     * may access the list while Redis uses I/O threads. All the other accesses
+     * are in the context of the main thread while the other threads are
+     * idle. */
     if (c->flags & CLIENT_CLOSE_ASAP || c->flags & CLIENT_LUA) return;
     AeLocker lock;
     lock.arm(nullptr);
@@ -1414,7 +1433,12 @@ client *lookupClientByID(uint64_t id) {
 }
 
 /* Write data in output buffers to client. Return C_OK if the client
- * is still valid after the call, C_ERR if it was freed. */
+ * is still valid after the call, C_ERR if it was freed because of some
+ * error.
+ *
+ * This function is called by threads, but always with handler_installed
+ * set to 0. So when handler_installed is set to 0 the function must be
+ * thread safe. */
 int writeToClient(int fd, client *c, int handler_installed) {
     ssize_t nwritten = 0, totwritten = 0;
     clientReplyBlock *o;
@@ -1480,7 +1504,7 @@ int writeToClient(int fd, client *c, int handler_installed) {
             !(c->flags & CLIENT_SLAVE)) break;
     }
     
-    __atomic_fetch_add(&g_pserver->stat_net_output_bytes, totwritten, __ATOMIC_RELAXED);
+    g_pserver->stat_net_output_bytes += totwritten;
     if (nwritten == -1) {
         if (errno == EAGAIN) {
             nwritten = 0;
@@ -1951,13 +1975,48 @@ int processMultibulkBuffer(client *c) {
     return C_ERR;
 }
 
+/* This function calls processCommand(), but also performs a few sub tasks
+ * that are useful in that context:
+ *
+ * 1. It sets the current client to the client 'c'.
+ * 2. In the case of master clients, the replication offset is updated.
+ * 3. The client is reset unless there are reasons to avoid doing it.
+ *
+ * The function returns C_ERR in case the client was freed as a side effect
+ * of processing the command, otherwise C_OK is returned. */
+int processCommandAndResetClient(client *c, int flags) {
+    int deadclient = 0;
+    serverTL->current_client = c;
+    if (processCommand(c, flags) == C_OK) {
+        if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
+            /* Update the applied replication offset of our master. */
+            c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
+        }
+
+        /* Don't reset the client structure for clients blocked in a
+         * module blocking command, so that the reply callback will
+         * still be able to access the client argv and argc field.
+         * The client will be reset in unblockClientFromModule(). */
+        if (!(c->flags & CLIENT_BLOCKED) ||
+            c->btype != BLOCKED_MODULE)
+        {
+            resetClient(c);
+        }
+    }
+    if (serverTL->current_client == NULL) deadclient = 1;
+    serverTL->current_client = NULL;
+    /* freeMemoryIfNeeded may flush slave output buffers. This may
+     * result into a slave, that may be the active client, to be
+     * freed. */
+    return deadclient ? C_ERR : C_OK;
+}
+
 /* This function is called every time, in the client structure 'c', there is
  * more query buffer to process, because we read more data from the socket
  * or because a client was blocked and later reactivated, so there could be
  * pending query buffer, already representing a full command, to process. */
 void processInputBuffer(client *c, int callFlags) {
     AssertCorrectThread(c);
-    bool fFreed = false;
     
     /* Keep processing while there is something in the input buffer */
     while(c->qb_pos < sdslen(c->querybuf)) {
@@ -2003,48 +2062,38 @@ void processInputBuffer(client *c, int callFlags) {
         } else {
             AeLocker locker;
             locker.arm(c);
-            serverTL->current_client = c;
 
-            /* Only reset the client when the command was executed. */
-            if (processCommand(c, callFlags) == C_OK) {
-                if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
-                    /* Update the applied replication offset of our master. */
-                    c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
-                }
-
-                /* Don't reset the client structure for clients blocked in a
-                 * module blocking command, so that the reply callback will
-                 * still be able to access the client argv and argc field.
-                 * The client will be reset in unblockClientFromModule(). */
-                if (!(c->flags & CLIENT_BLOCKED) || c->btype != BLOCKED_MODULE)
-                    resetClient(c);
+            /* We are finally ready to execute the command. */
+            if (processCommandAndResetClient(c, callFlags) == C_ERR) {
+                /* If the client is no longer valid, we avoid exiting this
+                 * loop and trimming the client buffer later. So we return
+                 * ASAP in that case. */
+                return;
             }
-            /* freeMemoryIfNeeded may flush slave output buffers. This may
-             * result into a slave, that may be the active client, to be
-             * freed. */
-            if (serverTL->current_client == NULL) {
-                fFreed = true;
-                break;
-            }
-            serverTL->current_client = NULL;
         }
     }
 
     /* Trim to pos */
-    if (!fFreed && c->qb_pos) {
+    if (c->qb_pos) {
         sdsrange(c->querybuf,c->qb_pos,-1);
         c->qb_pos = 0;
     }
 }
 
 /* This is a wrapper for processInputBuffer that also cares about handling
- * the replication forwarding to the sub-slaves, in case the client 'c'
+ * the replication forwarding to the sub-replicas, in case the client 'c'
  * is flagged as master. Usually you want to call this instead of the
  * raw processInputBuffer(). */
 void processInputBufferAndReplicate(client *c) {
     if (!(c->flags & CLIENT_MASTER)) {
         processInputBuffer(c, CMD_CALL_FULL);
     } else {
+        /* If the client is a master we need to compute the difference
+         * between the applied offset before and after processing the buffer,
+         * to understand how much of the replication stream was actually
+         * applied to the master state: this quantity, and its corresponding
+         * part of the replication stream, will be propagated to the
+         * sub-replicas and to the replication backlog. */
         size_t prev_offset = c->reploff;
         processInputBuffer(c, CMD_CALL_FULL);
         size_t applied = c->reploff - prev_offset;
@@ -2104,16 +2153,12 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         } else {
             serverLog(LL_VERBOSE, "Reading from client: %s",strerror(errno));
-            lock.unlock();
-            aelock.arm(nullptr);
-            freeClient(c);
+            freeClientAsync(c);
             return;
         }
     } else if (nread == 0) {
         serverLog(LL_VERBOSE, "Client closed connection");
-        lock.unlock();
-        aelock.arm(nullptr);
-        freeClient(c);
+        freeClientAsync(c);
         return;
     } else if (c->flags & CLIENT_MASTER) {
         /* Append the query buffer to the pending (not applied) buffer
@@ -2133,10 +2178,8 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
         bytes = sdscatrepr(bytes,c->querybuf,64);
         serverLog(LL_WARNING,"Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci, bytes);
         sdsfree(ci);
-        sdsfree(bytes);
-        lock.unlock();
-        aelock.arm(nullptr);
-        freeClient(c);
+        sdsfree(bytes);       
+        freeClientAsync(c);
         return;
     }
 
@@ -2900,3 +2943,4 @@ int processEventsWhileBlocked(int iel) {
     aeAcquireLock();
     return count;
 }
+

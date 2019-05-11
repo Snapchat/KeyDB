@@ -20,7 +20,7 @@ DEPENDENCY_TARGETS=hiredis linenoise lua
 NODEPS:=clean distclean
 
 # Default settings
-STD=-std=c99 -pedantic -DREDIS_STATIC=''
+STD=-std=c11 -pedantic -DREDIS_STATIC=''
 CXX_STD=-std=c++14 -pedantic -fno-rtti -fno-exceptions -D__STDC_FORMAT_MACROS  
 ifneq (,$(findstring clang,$(CC)))
 ifneq (,$(findstring FreeBSD,$(uname_S)))

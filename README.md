@@ -4,7 +4,7 @@
 What is KeyDB?
 --------------
 
-KeyDB is a high performance fork of Redis focusing on multithreading, memory efficiency, and high throughput.  In addition to multithreading KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/KeyDB-(Redis-Fork):-Active-Replica-Support), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3.
+KeyDB is a high performance fork of Redis focusing on multithreading, memory efficiency, and high throughput.  In addition to multithreading KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/Active-Replication), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3.
 
 On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency.
 
@@ -19,7 +19,7 @@ Management GUI: We recommend [FastoNoSQL](https://fastonosql.com/) which has off
 New: Active Replica Support
 ---------------------------
 
-New! KeyDB now has support for Active Replicas.  This feature greatly simplifies hot-spare failover and allows you to distribute writes over replicas instead of just a single master.  For more information [see the wiki page](https://github.com/JohnSully/KeyDB/wiki/KeyDB-(Redis-Fork):-Active-Replica-Support).
+New! KeyDB now has support for Active Replicas.  This feature greatly simplifies hot-spare failover and allows you to distribute writes over replicas instead of just a single master.  For more information [see the wiki page](https://github.com/JohnSully/KeyDB/wiki/Active-Replication).
 
 Why fork Redis?
 ---------------
@@ -248,5 +248,4 @@ source distribution.
 
 Please see the CONTRIBUTING file in this source distribution for more
 information.
-
 

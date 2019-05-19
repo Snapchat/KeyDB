@@ -2465,7 +2465,7 @@ struct redisMaster *MasterInfoFromClient(client *c);
 uint64_t getMvccTstamp();
 void incrementMvccTstamp();
 
-#if defined(__GNUC__) && !defined(NO_DEPRECATE_FREE)
+#if __GNUC__ >= 7 && !defined(NO_DEPRECATE_FREE)
  [[deprecated]]
 void *calloc(size_t count, size_t size);
  [[deprecated]]

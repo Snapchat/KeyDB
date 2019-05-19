@@ -4917,6 +4917,16 @@ void incrementMvccTstamp()
     }
 }
 
+void OnTerminate()
+{
+    /* Any uncaught exception will call std::terminate().
+        We want this handled like a segfault (printing the stack trace etc).
+        The easiest way to achieve that is to acutally segfault, so we assert
+        here.
+    */
+    serverAssert(false);
+}
+
 void *workerThreadMain(void *parg)
 {
     int iel = (int)((int64_t)parg);
@@ -4936,6 +4946,8 @@ void *workerThreadMain(void *parg)
 int main(int argc, char **argv) {
     struct timeval tv;
     int j;
+
+    std::set_terminate(OnTerminate);
 
 #ifdef USE_MEMKIND
     storage_init(NULL, 0);

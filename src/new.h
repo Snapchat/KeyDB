@@ -12,12 +12,12 @@ inline void *operator new(size_t size, enum MALLOC_CLASS mclass)
     return zmalloc(size, mclass);
 } 
 
-inline void operator delete(void * p)
+inline void operator delete(void * p) noexcept
 {
     zfree(p);
 }
 
-inline void operator delete(void *p, std::size_t)
+inline void operator delete(void *p, std::size_t) noexcept
 {
     zfree(p);
 }

@@ -1522,7 +1522,6 @@ int writeToClient(int fd, client *c, int handler_installed) {
             }
             else
             {
-                lock.unlock();
                 freeClientAsync(c);
             }
             return C_ERR;

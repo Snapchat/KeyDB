@@ -839,8 +839,11 @@ void addReplyNullCore(client *c, bool fAsync) {
     }
 }
 
-void addReplyNull(client *c) {
-    addReplyNullCore(c, false);
+void addReplyNull(client *c, robj_roptr objOldProtocol) {
+    if (c->resp < 3 && objOldProtocol != nullptr)
+        addReply(c, objOldProtocol);
+    else
+        addReplyNullCore(c, false);
 }
 
 void addReplyNullAsync(client *c) {
@@ -932,7 +935,10 @@ void addReplyBulkSdsAsync(client *c, sds s) {
 /* Add a C null term string as bulk reply */
 void addReplyBulkCStringCore(client *c, const char *s, bool fAsync) {
     if (s == NULL) {
-        addReplyNullCore(c,fAsync);
+        if (c->resp < 3)
+            addReplyCore(c,shared.nullbulk, fAsync);
+        else
+            addReplyNullCore(c,fAsync);
     } else {
         addReplyBulkCBufferCore(c,s,strlen(s),fAsync);
     }
@@ -2540,7 +2546,7 @@ NULL
         if (c->name)
             addReplyBulk(c,c->name);
         else
-            addReplyNull(c);
+            addReplyNull(c, shared.nullbulk);
     } else if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"pause") && c->argc == 3) {
         long long duration;
 

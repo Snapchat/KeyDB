@@ -331,7 +331,7 @@ void lindexCommand(client *c) {
             addReplyBulk(c,value);
             decrRefCount(value);
         } else {
-            addReplyNull(c);
+            addReplyNull(c,shared.nullbulk);
         }
     } else {
         serverPanic("Unknown list encoding");
@@ -414,7 +414,7 @@ void lrangeCommand(client *c) {
     /* Invariant: start >= 0, so this test will be true when end < 0.
      * The range is empty when start > end or start >= length. */
     if (start > end || start >= llen) {
-        addReplyNull(c);
+        addReplyNull(c,shared.emptymultibulk);
         return;
     }
     if (end >= llen) end = llen-1;

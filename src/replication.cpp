@@ -2240,7 +2240,8 @@ struct redisMaster *replicationAddMaster(char *ip, int port) {
     while ((ln = listNext(&li)))
     {
         redisMaster *miCheck = (redisMaster*)listNodeValue(ln);
-        serverAssert(strcasecmp(miCheck->masterhost, ip) || miCheck->masterport != port);
+        if (strcasecmp(miCheck->masterhost, ip)==0 && miCheck->masterport == port)
+            return nullptr;
     }
 
     // Pre-req satisfied, lets continue
@@ -2380,26 +2381,18 @@ void replicaofCommand(client *c) {
         if ((getLongFromObjectOrReply(c, c->argv[2], &port, NULL) != C_OK))
             return;
 
-        /* Check if we are already attached to the specified slave */
-        listIter li;
-        listNode *ln;
-        listRewind(g_pserver->masters, &li);
-        while ((ln = listNext(&li)))
-        {
-            redisMaster *mi = (redisMaster*)listNodeValue(ln);
-            if (!strcasecmp(mi->masterhost,(const char*)ptrFromObj(c->argv[1]))
-                && mi->masterport == port) {
-                serverLog(LL_NOTICE,"REPLICAOF would result into synchronization "
-                                    "with the master we are already connected "
-                                    "with. No operation performed.");
-                addReplySds(c,sdsnew("+OK Already connected to specified "
-                                    "master\r\n"));
-                return;
-            }
-        }
-        /* There was no previous master or the user specified a different one,
-         * we can continue. */
         redisMaster *miNew = replicationAddMaster((char*)ptrFromObj(c->argv[1]), port);
+        if (miNew == nullptr)
+        {
+            // We have a duplicate
+            serverLog(LL_NOTICE,"REPLICAOF would result into synchronization "
+                                "with the master we are already connected "
+                                "with. No operation performed.");
+            addReplySds(c,sdsnew("+OK Already connected to specified "
+                                "master\r\n"));
+            return;
+        }
+
         sds client = catClientInfoString(sdsempty(),c);
         serverLog(LL_NOTICE,"REPLICAOF %s:%d enabled (user request from '%s')",
             miNew->masterhost, miNew->masterport, client);

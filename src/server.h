@@ -721,7 +721,6 @@ typedef struct redisObject {
     void *m_ptr;
 } robj;
 
-
 __attribute__((always_inline)) inline const void *ptrFromObj(robj_roptr &o)
 {
     if (o->encoding == OBJ_ENCODING_EMBSTR)
@@ -745,6 +744,13 @@ __attribute__((always_inline)) inline char *szFromObj(const robj *o)
 {
     return (char*)ptrFromObj(o);
 }
+
+
+/* The 'cannonical' name for a type as enumerated above is given by the
+ * below function. Native types are checked against the OBJ_STRING,
+ * OBJ_LIST, OBJ_* defines, and Module types have their registered name
+ * returned.*/
+char* typeNameCanonicalize(robj*);
 
 /* Macro used to initialize a Redis object allocated on the stack.
  * Note that this macro is taken near the structure definition to make sure

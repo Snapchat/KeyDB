@@ -818,26 +818,8 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
 
         /* Filter an element if it isn't the type we want. */
         if (!filter && o == NULL && typename){
-            robj* typecheck;
-            char *type;
-            typecheck = lookupKeyReadWithFlags(c->db, kobj, LOOKUP_NOTOUCH);
-            if (typecheck == NULL) {
-                type = "none";
-            } else {
-                switch(typecheck->type) {
-                case OBJ_STRING: type = "string"; break;
-                case OBJ_LIST: type = "list"; break;
-                case OBJ_SET: type = "set"; break;
-                case OBJ_ZSET: type = "zset"; break;
-                case OBJ_HASH: type = "hash"; break;
-                case OBJ_STREAM: type = "stream"; break;
-                case OBJ_MODULE: {
-                    moduleValue *mv = typecheck->ptr;
-                    type = mv->type->name;
-                }; break;
-                default: type = "unknown"; break;
-                }
-            }
+            robj* typecheck = lookupKeyReadWithFlags(c->db, kobj, LOOKUP_NOTOUCH);
+            char* type = typeNameCanonicalize(typecheck);
             if (strcasecmp((char*) typename, type)) filter = 1;
         }
 
@@ -897,11 +879,9 @@ void lastsaveCommand(client *c) {
     addReplyLongLong(c,g_pserver->lastsave);
 }
 
-void typeCommand(client *c) {
-    const char *type;
-
-    robj_roptr o = lookupKeyReadWithFlags(c->db,c->argv[1],LOOKUP_NOTOUCH);
-    if (o == nullptr) {
+const char* typeNameCanonicalize(robj *o) {
+    const char* type;
+    if (o == NULL) {
         type = "none";
     } else {
         switch(o->type) {
@@ -918,7 +898,12 @@ void typeCommand(client *c) {
         default: type = "unknown"; break;
         }
     }
-    addReplyStatus(c,type);
+    return type;
+}
+
+void typeCommand(client *c) {
+    robj_roptr o = lookupKeyReadWithFlags(c->db,c->argv[1],LOOKUP_NOTOUCH);
+    addReplyStatus(c, typeNameCanonicalize(o));
 }
 
 void shutdownCommand(client *c) {

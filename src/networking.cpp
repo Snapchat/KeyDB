@@ -1175,7 +1175,17 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         serverLog(LL_VERBOSE,"Accepted connection to %s", g_pserver->unixsocket);
 
         aeAcquireLock();
-        acceptCommonHandler(cfd,CLIENT_UNIX_SOCKET,NULL, ielCur);
+        int ielTarget = rand() % cserver.cthreads;
+        if (ielTarget == ielCur)
+        {
+            acceptCommonHandler(cfd,CLIENT_UNIX_SOCKET,NULL, ielCur);
+        }
+        else
+        {
+            aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [cfd, ielTarget]{
+                acceptCommonHandler(cfd,CLIENT_UNIX_SOCKET,NULL, ielTarget);
+            });
+        }
         aeReleaseLock();
         
     }

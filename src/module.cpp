@@ -4988,6 +4988,12 @@ int RM_UnregisterCommandFilter(RedisModuleCtx *ctx, RedisModuleCommandFilter *fi
     return REDISMODULE_OK;
 }
 
+int moduleHasCommandFilters()
+{
+    // Note: called outside the global lock
+    return listLength(moduleCommandFilters);   
+}
+
 void moduleCallCommandFilters(client *c) {
     if (listLength(moduleCommandFilters) == 0) return;
 

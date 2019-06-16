@@ -1671,6 +1671,7 @@ void moduleAcquireGIL(int fServerThread);
 void moduleReleaseGIL(int fServerThread);
 void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid);
 void moduleCallCommandFilters(client *c);
+int moduleHasCommandFilters();
 
 /* Utils */
 long long ustime(void);

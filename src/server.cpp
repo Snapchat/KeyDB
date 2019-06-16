@@ -59,6 +59,7 @@
 #include <sys/socket.h>
 #include <algorithm>
 #include <uuid/uuid.h>
+#include "aelocker.h"
 
 /* Our shared "common" objects */
 
@@ -3434,8 +3435,14 @@ void call(client *c, int flags) {
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c, int callFlags) {
-    serverAssert(GlobalLocksAcquired());
-    moduleCallCommandFilters(c);
+    AeLocker locker;
+    AssertCorrectThread(c);
+
+    if (moduleHasCommandFilters())
+    {
+        locker.arm(c);
+        moduleCallCommandFilters(c);
+    }
 
     /* The QUIT command is handled separately. Normal command procs will
      * go through checking for replication and QUIT will cause trouble
@@ -3446,10 +3453,6 @@ int processCommand(client *c, int callFlags) {
         c->flags |= CLIENT_CLOSE_AFTER_REPLY;
         return C_ERR;
     }
-
-    AssertCorrectThread(c);
-    serverAssert(GlobalLocksAcquired());
-    incrementMvccTstamp();
 
     /* Now lookup the command and check ASAP about trivial error conditions
      * such as wrong arity, bad command name and so forth. */
@@ -3487,6 +3490,8 @@ int processCommand(client *c, int callFlags) {
 
     /* Check if the user can run this command according to the current
      * ACLs. */
+    if (c->puser && !(c->puser->flags & USER_FLAG_ALLCOMMANDS))
+        locker.arm(c);  // ACLs require the lock
     int acl_retval = ACLCheckCommandPerm(c);
     if (acl_retval != ACL_OK) {
         flagTransaction(c);
@@ -3512,6 +3517,7 @@ int processCommand(client *c, int callFlags) {
         !(c->cmd->getkeys_proc == NULL && c->cmd->firstkey == 0 &&
           c->cmd->proc != execCommand))
     {
+        locker.arm(c);
         int hashslot;
         int error_code;
         clusterNode *n = getNodeByQuery(c,c->cmd,c->argv,c->argc,
@@ -3526,6 +3532,11 @@ int processCommand(client *c, int callFlags) {
             return C_OK;
         }
     }
+
+    incrementMvccTstamp();
+    
+    if (!locker.isArmed())
+        locker.arm(c);
 
     /* Handle the maxmemory directive.
      *
@@ -4917,7 +4928,7 @@ void incrementMvccTstamp()
     }
     else
     {
-        g_pserver->mvcc_tstamp = ((uint64_t)g_pserver->mstime) << 20;
+        atomicSet(g_pserver->mvcc_tstamp, ((uint64_t)g_pserver->mstime) << 20);
     }
 }
 

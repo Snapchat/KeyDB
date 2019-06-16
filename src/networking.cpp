@@ -36,65 +36,11 @@
 #include <ctype.h>
 #include <vector>
 #include <mutex>
+#include "aelocker.h"
 
 static void setProtocolError(const char *errstr, client *c);
 void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool fAsync);
 void addReplyBulkCStringCore(client *c, const char *s, bool fAsync);
-
-class AeLocker
-{
-    bool m_fArmed = false;
-
-public:
-    AeLocker()
-    {
-    }
-
-    void arm(client *c) // if a client is passed, then the client is already locked
-    {
-        if (c != nullptr)
-        {
-            serverAssert(!m_fArmed);
-            serverAssert(c->lock.fOwnLock());
-
-            bool fClientLocked = true;
-            while (!aeTryAcquireLock())
-            {
-                if (fClientLocked) c->lock.unlock();
-                fClientLocked = false;
-                aeAcquireLock();
-                if (!c->lock.try_lock())
-                {
-                    aeReleaseLock();
-                }
-                else
-                {
-                    break;
-                }
-            }
-            
-            m_fArmed = true;
-        }
-        else if (!m_fArmed)
-        {
-            m_fArmed = true;
-            aeAcquireLock();
-        }
-    }
-
-    void disarm()
-    {
-        serverAssert(m_fArmed);
-        m_fArmed = false;
-        aeReleaseLock();
-    }
-
-    ~AeLocker()
-    {
-        if (m_fArmed)
-            aeReleaseLock();
-    }
-};
 
 /* Return the size consumed from the allocator, for the specified SDS string,
  * including internal fragmentation. This function is used in order to compute
@@ -2078,9 +2024,6 @@ void processInputBuffer(client *c, int callFlags) {
         if (c->argc == 0) {
             resetClient(c);
         } else {
-            AeLocker locker;
-            locker.arm(c);
-
             /* We are finally ready to execute the command. */
             if (processCommandAndResetClient(c, callFlags) == C_ERR) {
                 /* If the client is no longer valid, we avoid exiting this

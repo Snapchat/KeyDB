@@ -44,11 +44,7 @@ ALIGN 16
 	;	But the compiler doesn't know that we rarely hit this, and when we do we know the lock is
 	;	taking a long time to be released anyways.  We optimize for the common case of short
 	;	lock intervals.  That's why we're using a spinlock in the first place
-	inc edx
-	cmp dx, ax
-	je .LLoop
-	dec edx					; restore the current ticket
-.LFutexWait:
+	; If we get here we're going to sleep in the kernel with a futex
 	push rsi
 	push rax
 	; Setup the syscall args

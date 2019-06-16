@@ -121,12 +121,9 @@ extern "C" void fastlock_lock(struct fastlock *lock)
 #endif
         if ((++cloops % 1024*1024) == 0)
         {
-            if (static_cast<uint16_t>(ticketT.m_active+1U) != myticket)
-            {
-                __atomic_fetch_or(&lock->futex, mask, __ATOMIC_ACQUIRE);
-                futex(&lock->m_ticket.u, FUTEX_WAIT_BITSET_PRIVATE, ticketT.u, nullptr, mask);
-                __atomic_fetch_and(&lock->futex, ~mask, __ATOMIC_RELEASE);
-            }
+            __atomic_fetch_or(&lock->futex, mask, __ATOMIC_ACQUIRE);
+            futex(&lock->m_ticket.u, FUTEX_WAIT_BITSET_PRIVATE, ticketT.u, nullptr, mask);
+            __atomic_fetch_and(&lock->futex, ~mask, __ATOMIC_RELEASE);
             ++g_longwaits;
         }
     }

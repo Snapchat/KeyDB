@@ -36,6 +36,8 @@
 #include <assert.h>
 #include <pthread.h>
 #include <limits.h>
+#include <linux/futex.h>
+#include <string.h>
 
 #ifdef __APPLE__
 #include <TargetConditionals.h>
@@ -64,6 +66,14 @@ uint64_t fastlock_getlongwaitcount()
     return g_longwaits;
 }
 
+#ifndef ASM_SPINLOCK
+static int futex(volatile unsigned *uaddr, int futex_op, int val,
+    const struct timespec *timeout, int val3)
+{
+    return syscall(SYS_futex, uaddr, futex_op, val,
+                    timeout, uaddr, val3);
+}
+#endif
 
 extern "C" pid_t gettid()
 {
@@ -88,6 +98,7 @@ extern "C" void fastlock_init(struct fastlock *lock)
     lock->m_ticket.m_avail = 0;
     lock->m_depth = 0;
     lock->m_pidOwner = -1;
+    lock->futex = 0;
 }
 
 #ifndef ASM_SPINLOCK
@@ -100,18 +111,24 @@ extern "C" void fastlock_lock(struct fastlock *lock)
     }
 
     unsigned myticket = __atomic_fetch_add(&lock->m_ticket.m_avail, 1, __ATOMIC_RELEASE);
-
+    unsigned mask = (1U << (myticket % 32));
     int cloops = 0;
-    while (__atomic_load_2(&lock->m_ticket.m_active, __ATOMIC_ACQUIRE) != myticket)
+    ticket ticketT;
+    while (((ticketT.u = __atomic_load_4(&lock->m_ticket.m_active, __ATOMIC_ACQUIRE)) & 0xffff) != myticket)
     {
-        if ((++cloops % 1024*1024) == 0)
-        {
-            sched_yield();
-            ++g_longwaits;
-        }
 #if defined(__i386__) || defined(__amd64__)
         __asm__ ("pause");
 #endif
+        if ((++cloops % 1024*1024) == 0)
+        {
+            if (static_cast<uint16_t>(ticketT.m_active+1U) != myticket)
+            {
+                __atomic_fetch_or(&lock->futex, mask, __ATOMIC_ACQUIRE);
+                futex(&lock->m_ticket.u, FUTEX_WAIT_BITSET_PRIVATE, ticketT.u, nullptr, mask);
+                __atomic_fetch_and(&lock->futex, ~mask, __ATOMIC_RELEASE);
+            }
+            ++g_longwaits;
+        }
     }
 
     lock->m_depth = 1;
@@ -145,6 +162,21 @@ extern "C" int fastlock_trylock(struct fastlock *lock)
     return false;
 }
 
+#define ROL32(v, shift) ((v << shift) | (v >> (32-shift)))
+void unlock_futex(struct fastlock *lock, uint16_t ifutex)
+{
+    unsigned mask = (1U << (ifutex % 32));
+    unsigned futexT = __atomic_load_4(&lock->futex, __ATOMIC_RELAXED) & mask;
+    
+    if (futexT == 0)
+        return;
+    
+    while (__atomic_load_4(&lock->futex, __ATOMIC_ACQUIRE) & mask)
+    {
+        if (futex(&lock->m_ticket.u, FUTEX_WAKE_BITSET_PRIVATE, INT_MAX, nullptr, mask) == 1)
+            break;
+    }
+}
 extern "C" void fastlock_unlock(struct fastlock *lock)
 {
     --lock->m_depth;
@@ -153,7 +185,8 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
         assert((int)__atomic_load_4(&lock->m_pidOwner, __ATOMIC_RELAXED) >= 0);  // unlock after free
         lock->m_pidOwner = -1;
         std::atomic_thread_fence(std::memory_order_acquire);
-        __atomic_fetch_add(&lock->m_ticket.m_active, 1, __ATOMIC_ACQ_REL);  // on x86 the atomic is not required here, but ASM handles that case
+        uint16_t activeNew = __atomic_add_fetch(&lock->m_ticket.m_active, 1, __ATOMIC_ACQ_REL);  // on x86 the atomic is not required here, but ASM handles that case
+        unlock_futex(lock, activeNew);
     }
 }
 #endif

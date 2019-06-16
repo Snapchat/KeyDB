@@ -20,17 +20,29 @@ uint64_t fastlock_getlongwaitcount();   // this is a global value
 }
 #endif
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
 struct ticket
 {
-    uint16_t m_active;
-    uint16_t m_avail;
+    union
+    {
+        struct
+        {
+            uint16_t m_active;
+            uint16_t m_avail;
+        };
+        unsigned u;
+    };
 };
+#pragma GCC diagnostic pop
+
 struct fastlock
 {
     volatile struct ticket m_ticket;
 
     volatile int m_pidOwner;
     volatile int m_depth;
+    unsigned futex;
 
 #ifdef __cplusplus
     fastlock()

@@ -22,7 +22,7 @@ fastlock_lock:
 	push rdi                ; we need our struct pointer (also balance the stack for the call)
 	call gettid             ; get our thread ID (TLS is nasty in ASM so don't bother inlining)
 	mov esi, eax            ; back it up in esi
-	mov rdi, [rsp]          ; get our pointer back
+	pop rdi                 ; get our pointer back
 
 	cmp [rdi+4], esi        ; Is the TID we got back the owner of the lock?
 	je .LLocked             ; Don't spin in that case
@@ -30,11 +30,11 @@ fastlock_lock:
 	xor eax, eax            ; eliminate partial register dependency
 	inc eax                 ; we want to add one
 	lock xadd [rdi+2], ax   ; do the xadd, ax contains the value before the addition
-	; eax now contains the ticket
-	xor ecx, ecx
+	; ax now contains the ticket
 ALIGN 16
 .LLoop:
-	cmp [rdi], ax           ; is our ticket up?
+	mov edx, [rdi]
+	cmp dx, ax              ; is our ticket up?
 	je .LLocked             ; leave the loop
 	pause
 	add ecx, 1000h          ; Have we been waiting a long time? (oflow if we have)
@@ -44,22 +44,38 @@ ALIGN 16
 	;	But the compiler doesn't know that we rarely hit this, and when we do we know the lock is
 	;	taking a long time to be released anyways.  We optimize for the common case of short
 	;	lock intervals.  That's why we're using a spinlock in the first place
+	inc edx
+	cmp dx, ax
+	je .LLoop
+	dec edx					; restore the current ticket
+.LFutexWait:
 	push rsi
 	push rax
-	mov rax, 24             ; sys_sched_yield
-	syscall                 ; give up our timeslice we'll be here a while
-	pop rax
-	pop rsi
+	; Setup the syscall args
+                            ; rdi ARG1 futex (already in rdi)
+	mov esi, (9 | 128)      ; rsi ARG2 FUTEX_WAIT_BITSET_PRIVATE
+                            ; rdx ARG3 ticketT.u (already in edx)
+	xor r10d, r10d          ; r10 ARG4 NULL
+	mov r8, rdi	            ; r8 ARG5 dup rdi
+	xor r9d, r9d
+	bts r9d, eax            ; r9 ARG6 mask
+	mov eax, 202            ; sys_futex
+	; Do the syscall
+	lock or [rdi+12], r9d   ; inform the unlocking thread we're waiting
+	syscall	                ; wait for the futex
+	not r9d	                ; convert our flag into a mask of bits not to touch
+	lock and [rdi+12], r9d  ; clear the flag in the futex control mask
+	; cleanup and continue
 	mov rcx, g_longwaits
 	inc qword [rcx]         ; increment our long wait counter
-	mov rdi, [rsp]          ; our struct pointer is on the stack already
+	pop rax
+	pop rsi
 	xor ecx, ecx            ; Reset our loop counter
 	jmp .LLoop              ; Get back in the game
 ALIGN 16
 .LLocked:
 	mov [rdi+4], esi        ; lock->m_pidOwner = gettid()
 	inc dword [rdi+8]       ; lock->m_depth++
-	add rsp, 8              ; fix stack
 	ret
 
 ALIGN 16
@@ -114,9 +130,32 @@ fastlock_unlock:
 	;	uint16_t avail
 	;	int32_t m_pidOwner
 	;	int32_t m_depth
+	push r11
 	sub dword [rdi+8], 1         ; decrement m_depth, don't use dec because it partially writes the flag register and we don't know its state
 	jnz .LDone                   ; if depth is non-zero this is a recursive unlock, and we still hold it
 	mov dword [rdi+4], -1        ; pidOwner = -1 (we don't own it anymore)
-	inc word [rdi]               ; give up our ticket (note: lock is not required here because the spinlock itself guards this variable)
+	mov ecx, [rdi]               ; get current active (this one)
+	inc ecx                      ; bump it to the next thread
+	mov [rdi], cx                ; give up our ticket (note: lock is not required here because the spinlock itself guards this variable)
+	; At this point the lock is removed, however we must wake up any pending futexs
+	mov r9d, 1                   ; eax is the bitmask for 2 threads
+	rol r9d, cl                  ; place the mask in the right spot for the next 2 threads
+ALIGN 16
+.LRetryWake:
+	mov r11d, [rdi+12]           ; load the futex mask
+	and r11d, r9d                ; are any threads waiting on a futex?
+	jz .LDone                    ; if not we're done.
+	; we have to wake the futexs
+                                 ; rdi ARG1 futex (already in rdi)
+	mov esi, (10 | 128)          ; rsi ARG2 FUTEX_WAKE_BITSET_PRIVATE
+	mov edx, 0x7fffffff          ; rdx ARG3 INT_MAX (number of threads to wake)
+	xor r10d, r10d               ; r10 ARG4 NULL
+	mov r8, rdi                  ; r8 ARG5 dup rdi
+                                 ; r9 ARG6 mask (already set above)
+	mov eax, 202                 ; sys_futex
+	syscall
+	cmp eax, 1                   ; did we wake as many as we expected?
+	jnz .LRetryWake
 .LDone:
+	pop r11
 	ret

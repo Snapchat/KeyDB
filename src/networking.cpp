@@ -1685,9 +1685,12 @@ int handleClientsWithPendingWrites(int iel) {
         }
     }
 
-    AeLocker locker;
-    locker.arm(nullptr);
-    ProcessPendingAsyncWrites();
+    if (listLength(serverTL->clients_pending_asyncwrite))
+    {
+        AeLocker locker;
+        locker.arm(nullptr);
+        ProcessPendingAsyncWrites();
+    }
 
     return processed;
 }
@@ -2205,8 +2208,11 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
      * corresponding part of the replication stream, will be propagated to
      * the sub-slaves and to the replication backlog. */
     processInputBufferAndReplicate(c);
-    aelock.arm(c);
-    ProcessPendingAsyncWrites();
+    if (listLength(serverTL->clients_pending_asyncwrite))
+    {
+        aelock.arm(c);
+        ProcessPendingAsyncWrites();
+    }
 }
 
 void getClientsMaxBuffers(unsigned long *longest_output_list,

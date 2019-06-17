@@ -5134,7 +5134,7 @@ int main(int argc, char **argv) {
     if (background) daemonize();
 
     initServer();
-    initNetworking(/*cserver.cthreads >*/ 1 /* fReusePort */);
+    initNetworking(cserver.cthreads > 1 /* fReusePort */);
 
     if (background || cserver.pidfile) createPidFile();
     redisSetProcTitle(argv[0]);

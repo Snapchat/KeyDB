@@ -208,7 +208,7 @@ void clientInstallWriteHandler(client *c) {
          * we'll not be able to write the whole reply at once. */
         c->flags |= CLIENT_PENDING_WRITE;
         std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[c->iel].lockPendingWrite);
-        listAddNodeHead(g_pserver->rgthreadvar[c->iel].clients_pending_write,c);
+        g_pserver->rgthreadvar[c->iel].clients_pending_write.push_back(c);
     }
 }
 
@@ -1212,9 +1212,10 @@ void unlinkClient(client *c) {
     /* Remove from the list of pending writes if needed. */
     if (c->flags & CLIENT_PENDING_WRITE) {
         std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[c->iel].lockPendingWrite);
-        ln = listSearchKey(g_pserver->rgthreadvar[c->iel].clients_pending_write,c);
-        serverAssert(ln != NULL);
-        listDelNode(g_pserver->rgthreadvar[c->iel].clients_pending_write,ln);
+        auto itr = std::find(g_pserver->rgthreadvar[c->iel].clients_pending_write.begin(),
+            g_pserver->rgthreadvar[c->iel].clients_pending_write.end(), c);
+        serverAssert(itr != g_pserver->rgthreadvar[c->iel].clients_pending_write.end());
+        g_pserver->rgthreadvar[c->iel].clients_pending_write.erase(itr);
         c->flags &= ~CLIENT_PENDING_WRITE;
     }
 
@@ -1584,21 +1585,17 @@ void ProcessPendingAsyncWrites()
  * need to use a syscall in order to install the writable event handler,
  * get it called, and so forth. */
 int handleClientsWithPendingWrites(int iel) {
-    listIter li;
-    listNode *ln;
-
     std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[iel].lockPendingWrite);
-    list *list = g_pserver->rgthreadvar[iel].clients_pending_write;
-    int processed = listLength(list);
+    auto &vec = g_pserver->rgthreadvar[iel].clients_pending_write;
+    int processed = (int)vec.size();
     serverAssert(iel == (serverTL - g_pserver->rgthreadvar));
 
-    listRewind(list,&li);
-    while((ln = listNext(&li))) {
-        client *c = (client*)listNodeValue(ln);
+    while(!vec.empty()) {
+        client *c = vec.back();
         std::unique_lock<decltype(c->lock)> lock(c->lock);
 
         c->flags &= ~CLIENT_PENDING_WRITE;
-        listDelNode(list,ln);
+        vec.pop_back();
         AssertCorrectThread(c);
 
         /* If a client is protected, don't do anything,

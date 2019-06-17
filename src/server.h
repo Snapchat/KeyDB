@@ -50,6 +50,8 @@
 #include <syslog.h>
 #include <netinet/in.h>
 #include <atomic>
+#include <vector>
+#include <algorithm>
 #ifdef __cplusplus
 extern "C" {
 #include <lua.h>
@@ -1141,7 +1143,7 @@ struct redisServerThreadVars {
     aeEventLoop *el;
     int ipfd[CONFIG_BINDADDR_MAX]; /* TCP socket file descriptors */
     int ipfd_count;             /* Used slots in ipfd[] */
-    list *clients_pending_write; /* There is to write or install handler. */
+    std::vector<client*> clients_pending_write; /* There is to write or install handler. */
     list *unblocked_clients;     /* list of clients to unblock before next loop NOT THREADSAFE */
     list *clients_pending_asyncwrite;
     int cclients;

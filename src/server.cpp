@@ -2859,7 +2859,6 @@ static void initNetworking(int fReusePort)
 
 static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
 {
-    pvar->clients_pending_write = listCreate();
     pvar->unblocked_clients = listCreate();
     pvar->clients_pending_asyncwrite = listCreate();
     pvar->ipfd_count = 0;
@@ -5135,7 +5134,7 @@ int main(int argc, char **argv) {
     if (background) daemonize();
 
     initServer();
-    initNetworking(cserver.cthreads > 1 /* fReusePort */);
+    initNetworking(/*cserver.cthreads >*/ 1 /* fReusePort */);
 
     if (background || cserver.pidfile) createPidFile();
     redisSetProcTitle(argv[0]);

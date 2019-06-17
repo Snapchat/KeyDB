@@ -3806,7 +3806,7 @@ void moduleHandleBlockedClients(int iel) {
                 AssertCorrectThread(c);
                 
                 fastlock_lock(&g_pserver->rgthreadvar[c->iel].lockPendingWrite);
-                listAddNodeHead(g_pserver->rgthreadvar[c->iel].clients_pending_write,c);
+                g_pserver->rgthreadvar[c->iel].clients_pending_write.push_back(c);
                 fastlock_unlock(&g_pserver->rgthreadvar[c->iel].lockPendingWrite);
             }
         }

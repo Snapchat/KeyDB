@@ -82,7 +82,6 @@ void discardTransaction(client *c) {
 /* Flag the transacation as DIRTY_EXEC so that EXEC will fail.
  * Should be called every time there is an error while queueing a command. */
 void flagTransaction(client *c) {
-    serverAssert(GlobalLocksAcquired());
     if (c->flags & CLIENT_MULTI)
         c->flags |= CLIENT_DIRTY_EXEC;
 }

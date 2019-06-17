@@ -2055,12 +2055,10 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
     int iel = ielFromEventLoop(eventLoop);
     serverAssert(iel != IDX_EVENT_LOOP_MAIN);
     
-    aeAcquireLock();
     ProcessPendingAsyncWrites();    // A bug but leave for now, events should clean up after themselves
     clientsCron(iel);
 
     freeClientsInAsyncFreeQueue(iel);
-    aeReleaseLock();
 
     return 1000/g_pserver->hz;
 }

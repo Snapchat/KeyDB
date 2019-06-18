@@ -4,11 +4,11 @@ matrix:
   include:
     - os: linux
       script: make
-      env: COMPILER_NAME=gcc CXX=g++-5 CC=gcc-5
+      env: COMPILER_NAME=g++-6 CXX=g++-6 CC=gcc-6
       addons:
         apt:
           packages:
-            - g++-5
+            - g++-6
             - nasm
             - uuid-dev
           sources: &sources

@@ -9,7 +9,7 @@ extern "C" {
 struct fastlock;
 void fastlock_init(struct fastlock *lock);
 void fastlock_lock(struct fastlock *lock);
-int fastlock_trylock(struct fastlock *lock);
+int fastlock_trylock(struct fastlock *lock, int fWeak);
 void fastlock_unlock(struct fastlock *lock);
 void fastlock_free(struct fastlock *lock);
 
@@ -55,9 +55,9 @@ struct fastlock
         fastlock_lock(this);
     }
 
-    bool try_lock()
+    bool try_lock(bool fWeak = false)
     {
-        return !!fastlock_trylock(this);
+        return !!fastlock_trylock(this, fWeak);
     }
 
     void unlock()

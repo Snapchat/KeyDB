@@ -133,7 +133,7 @@ extern "C" void fastlock_lock(struct fastlock *lock)
     std::atomic_thread_fence(std::memory_order_acquire);
 }
 
-extern "C" int fastlock_trylock(struct fastlock *lock)
+extern "C" int fastlock_trylock(struct fastlock *lock, int fWeak)
 {
     if ((int)__atomic_load_4(&lock->m_pidOwner, __ATOMIC_ACQUIRE) == gettid())
     {
@@ -150,7 +150,7 @@ extern "C" int fastlock_trylock(struct fastlock *lock)
 
     struct ticket ticket_expect { active, active };
     struct ticket ticket_setiflocked { active, next };
-    if (__atomic_compare_exchange(&lock->m_ticket, &ticket_expect, &ticket_setiflocked, false /*weak*/, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
+    if (__atomic_compare_exchange(&lock->m_ticket, &ticket_expect, &ticket_setiflocked, fWeak /*weak*/, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
     {
         lock->m_depth = 1;
         __atomic_store_4(&lock->m_pidOwner, gettid(), __ATOMIC_RELEASE);
@@ -181,8 +181,8 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
     {
         assert((int)__atomic_load_4(&lock->m_pidOwner, __ATOMIC_RELAXED) >= 0);  // unlock after free
         lock->m_pidOwner = -1;
-        std::atomic_thread_fence(std::memory_order_acquire);
-        uint16_t activeNew = __atomic_add_fetch(&lock->m_ticket.m_active, 1, __ATOMIC_ACQ_REL);  // on x86 the atomic is not required here, but ASM handles that case
+        std::atomic_thread_fence(std::memory_order_release);
+        uint16_t activeNew = __atomic_add_fetch(&lock->m_ticket.m_active, 1, __ATOMIC_RELEASE);  // on x86 the atomic is not required here, but ASM handles that case
         unlock_futex(lock, activeNew);
     }
 }

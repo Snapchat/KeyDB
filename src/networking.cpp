@@ -1475,7 +1475,7 @@ int writeToClient(int fd, client *c, int handler_installed) {
             serverLog(LL_VERBOSE,
                 "Error writing to client: %s", strerror(errno));
             lock.unlock();
-            if (aeTryAcquireLock())
+            if (aeTryAcquireLock(true /*fWeak*/))
             {
                 freeClient(c);
                 aeReleaseLock();
@@ -1502,7 +1502,7 @@ int writeToClient(int fd, client *c, int handler_installed) {
         /* Close connection after entire reply has been sent. */
         if (c->flags & CLIENT_CLOSE_AFTER_REPLY) {
             lock.unlock();
-            if (aeTryAcquireLock())
+            if (aeTryAcquireLock(true /*fWeak*/))
             {
                 freeClient(c);
                 aeReleaseLock();

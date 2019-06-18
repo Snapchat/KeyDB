@@ -16,19 +16,25 @@ public:
             serverAssert(!m_fArmed);
             serverAssert(c->lock.fOwnLock());
 
-            bool fClientLocked = true;
-            while (!aeTryAcquireLock())
+            if (!aeTryAcquireLock(true /*fWeak*/))    // avoid locking the client if we can
             {
-                if (fClientLocked) c->lock.unlock();
-                fClientLocked = false;
-                aeAcquireLock();
-                if (!c->lock.try_lock())
+                bool fOwnClientLock = true;
+                for (;;)
                 {
-                    aeReleaseLock();
-                }
-                else
-                {
-                    break;
+                    if (fOwnClientLock)
+                    {
+                        c->lock.unlock();
+                        fOwnClientLock = false;
+                    }
+                    aeAcquireLock();
+                    if (!c->lock.try_lock(false))   // ensure a strong try because aeAcquireLock is expensive
+                    {
+                        aeReleaseLock();
+                    }
+                    else
+                    {
+                        break;
+                    }
                 }
             }
             

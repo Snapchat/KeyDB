@@ -803,9 +803,9 @@ void aeAcquireLock()
     g_lock.lock();
 }
 
-int aeTryAcquireLock()
+int aeTryAcquireLock(bool fWeak)
 {
-    return g_lock.try_lock();
+    return g_lock.try_lock(fWeak);
 }
 
 void aeReleaseLock()

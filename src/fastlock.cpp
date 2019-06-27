@@ -53,6 +53,10 @@
 #endif
 #endif
 
+#ifndef UNUSED
+#define UNUSED(x) ((void)x)
+#endif
+
 /****************************************************
  *
  *      Implementation of a fair spinlock.  To promote fairness we
@@ -115,7 +119,9 @@ extern "C" void fastlock_lock(struct fastlock *lock)
     }
 
     unsigned myticket = __atomic_fetch_add(&lock->m_ticket.m_avail, 1, __ATOMIC_RELEASE);
+#ifdef __linux__
     unsigned mask = (1U << (myticket % 32));
+#endif
     int cloops = 0;
     ticket ticketT;
     while (((ticketT.u = __atomic_load_4(&lock->m_ticket.m_active, __ATOMIC_ACQUIRE)) & 0xffff) != myticket)
@@ -154,8 +160,8 @@ extern "C" int fastlock_trylock(struct fastlock *lock, int fWeak)
     uint16_t active = __atomic_load_2(&lock->m_ticket.m_active, __ATOMIC_RELAXED);
     uint16_t next = active + 1;
 
-    struct ticket ticket_expect { active, active };
-    struct ticket ticket_setiflocked { active, next };
+    struct ticket ticket_expect { { { active, active } } };
+    struct ticket ticket_setiflocked { { { active, next } } };
     if (__atomic_compare_exchange(&lock->m_ticket, &ticket_expect, &ticket_setiflocked, fWeak /*weak*/, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
     {
         lock->m_depth = 1;
@@ -194,6 +200,8 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
         uint16_t activeNew = __atomic_add_fetch(&lock->m_ticket.m_active, 1, __ATOMIC_RELEASE);  // on x86 the atomic is not required here, but ASM handles that case
 #ifdef __linux__
         unlock_futex(lock, activeNew);
+#else
+		UNUSED(activeNew);
 #endif
     }
 }

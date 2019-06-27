@@ -140,6 +140,7 @@ else
 	# All the other OSes (notably Linux)
 	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+=-ldl -pthread -lrt -luuid
+	FINAL_CFLAGS += -DMOTD
 endif
 endif
 endif

@@ -36,7 +36,9 @@
 #include <assert.h>
 #include <pthread.h>
 #include <limits.h>
+#ifdef __linux__
 #include <linux/futex.h>
+#endif
 #include <string.h>
 
 #ifdef __APPLE__
@@ -67,12 +69,14 @@ uint64_t fastlock_getlongwaitcount()
 }
 
 #ifndef ASM_SPINLOCK
+#ifdef __linux__
 static int futex(volatile unsigned *uaddr, int futex_op, int val,
     const struct timespec *timeout, int val3)
 {
     return syscall(SYS_futex, uaddr, futex_op, val,
                     timeout, uaddr, val3);
 }
+#endif
 #endif
 
 extern "C" pid_t gettid()
@@ -121,9 +125,11 @@ extern "C" void fastlock_lock(struct fastlock *lock)
 #endif
         if ((++cloops % 1024*1024) == 0)
         {
+#ifdef __linux__
             __atomic_fetch_or(&lock->futex, mask, __ATOMIC_ACQUIRE);
             futex(&lock->m_ticket.u, FUTEX_WAIT_BITSET_PRIVATE, ticketT.u, nullptr, mask);
             __atomic_fetch_and(&lock->futex, ~mask, __ATOMIC_RELEASE);
+#endif
             ++g_longwaits;
         }
     }
@@ -159,6 +165,7 @@ extern "C" int fastlock_trylock(struct fastlock *lock, int fWeak)
     return false;
 }
 
+#ifdef __linux__
 #define ROL32(v, shift) ((v << shift) | (v >> (32-shift)))
 void unlock_futex(struct fastlock *lock, uint16_t ifutex)
 {
@@ -174,6 +181,8 @@ void unlock_futex(struct fastlock *lock, uint16_t ifutex)
             break;
     }
 }
+#endif
+
 extern "C" void fastlock_unlock(struct fastlock *lock)
 {
     --lock->m_depth;
@@ -183,7 +192,9 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
         lock->m_pidOwner = -1;
         std::atomic_thread_fence(std::memory_order_release);
         uint16_t activeNew = __atomic_add_fetch(&lock->m_ticket.m_active, 1, __ATOMIC_RELEASE);  // on x86 the atomic is not required here, but ASM handles that case
+#ifdef __linux__
         unlock_futex(lock, activeNew);
+#endif
     }
 }
 #endif

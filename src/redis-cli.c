@@ -6537,7 +6537,7 @@ static void intrinsicLatencyMode(void) {
 /*------------------------------------------------------------------------------
  * Message of the day
  *--------------------------------------------------------------------------- */
-#ifndef NO_MOTD
+#ifdef MOTD
 #include <curl/curl.h> 
 
 static const char *szMotdCachePath()

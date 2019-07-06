@@ -752,7 +752,7 @@ int loadAppendOnlyFile(char *filename) {
 
         serverLog(LL_NOTICE,"Reading RDB preamble from AOF file...");
         if (fseek(fp,0,SEEK_SET) == -1) goto readerr;
-        rioInitWithFile(&rdb,fileno(fp));
+        rioInitWithFile(&rdb,fp);
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
         if (rdbLoadRio(&rdb,&rsi,1) != C_OK) {
             serverLog(LL_WARNING,"Error reading the RDB preamble of the AOF file, AOF loading aborted");
@@ -1400,7 +1400,7 @@ int rewriteAppendOnlyFile(char *filename) {
     }
 
     g_pserver->aof_child_diff = sdsempty();
-    rioInitWithFile(&aof,fileno(fp));
+    rioInitWithFile(&aof,fp);
 
     if (g_pserver->aof_rewrite_incremental_fsync)
         rioSetAutoSync(&aof,REDIS_AUTOSYNC_BYTES);

@@ -33,12 +33,19 @@ int rdbSaveS3(char *s3bucket, rdbSaveInfo *rsi)
     else
     {
         close(fd[0]);
-        if (rdbSaveFd(fd[1], rsi) != C_OK)
+        FILE *fp = fdopen(fd[1], "w");
+        if (fp == NULL)
         {
-            close(fd[1]);
+            close (fd[1]);
             return C_ERR;
         }
-        close(fd[1]);
+
+        if (rdbSaveFp(fp, rsi) != C_OK)
+        {
+            fclose(fp);
+            return C_ERR;
+        }
+        fclose(fp);
         waitpid(pid, &status, 0);
     }
     
@@ -59,7 +66,7 @@ int rdbLoadS3Core(int fd, rdbSaveInfo *rsi)
 
     if ((fp = fdopen(fd, "rb")) == NULL) return C_ERR;
     startLoading(fp);
-    rioInitWithFile(&rdb,fileno(fp));
+    rioInitWithFile(&rdb,fp);
     retval = rdbLoadRio(&rdb,rsi,0);
     fclose(fp);
     stopLoading();

@@ -186,7 +186,7 @@ int redis_check_rdb(const char *rdbfilename, FILE *fp) {
     int closefile = (fp == NULL);
     if (fp == NULL && (fp = fopen(rdbfilename,"r")) == NULL) return 1;
 
-    rioInitWithFile(&rdb,fileno(fp));
+    rioInitWithFile(&rdb,fp);
     rdbstate.rio = &rdb;
     rdb.update_cksum = rdbLoadProgressCallback;
     if (rioRead(&rdb,buf,9) == 0) goto eoferr;

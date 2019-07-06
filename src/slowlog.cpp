@@ -72,7 +72,7 @@ slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long dur
                     (unsigned long)
                     sdslen(szFromObj(argv[j])) - SLOWLOG_ENTRY_MAX_STRING);
                 se->argv[j] = createObject(OBJ_STRING,s);
-            } else if (argv[j]->refcount == OBJ_SHARED_REFCOUNT) {
+            } else if (argv[j]->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT) {
                 se->argv[j] = argv[j];
             } else {
                 /* Here we need to dupliacate the string objects composing the

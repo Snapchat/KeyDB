@@ -12,10 +12,17 @@
  * 
  *************************************************/
 
+<<<<<<< HEAD
 template<typename T, bool MEMMOVE_SAFE=false>
 class compactvector
 {
     static_assert(MEMMOVE_SAFE || std::is_trivially_copyable<T>::value, "compactvector requires trivially copyable types");
+=======
+template<typename T>
+class compactvector
+{
+    static_assert(std::is_trivially_copyable<T>::value, "compactvector requires trivially copyable types");
+>>>>>>> New expire datastructure and algorithm.  Allows us to expire in sublinear time
     T *m_data = nullptr;
     unsigned m_celem = 0;
     unsigned m_max = 0;
@@ -26,7 +33,10 @@ public:
     compactvector() noexcept = default;
     ~compactvector() noexcept
     {
+<<<<<<< HEAD
         clear();    // call dtors
+=======
+>>>>>>> New expire datastructure and algorithm.  Allows us to expire in sublinear time
         zfree(m_data);
     }
 
@@ -78,7 +88,11 @@ public:
         assert(idx < m_max);
         where = m_data + idx;
         memmove(m_data + idx + 1, m_data + idx, (m_celem - idx)*sizeof(T));
+<<<<<<< HEAD
         new(m_data + idx) T(std::move(val));
+=======
+        m_data[idx] = val;
+>>>>>>> New expire datastructure and algorithm.  Allows us to expire in sublinear time
         ++m_celem;
         return where;
     }
@@ -102,7 +116,10 @@ public:
         assert(where >= m_data);
         size_t idx = where - m_data;
         assert(idx < m_celem);
+<<<<<<< HEAD
         where->~T();
+=======
+>>>>>>> New expire datastructure and algorithm.  Allows us to expire in sublinear time
         memmove(where, where+1, ((m_celem - idx - 1)*sizeof(T)));
         --m_celem;
 
@@ -129,8 +146,11 @@ public:
 
     void clear()
     {
+<<<<<<< HEAD
         for (size_t idx = 0; idx < m_celem; ++idx)
             m_data[idx].~T();
+=======
+>>>>>>> New expire datastructure and algorithm.  Allows us to expire in sublinear time
         zfree(m_data);
         m_data = nullptr;
         m_celem = 0;

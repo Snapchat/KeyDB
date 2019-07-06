@@ -458,6 +458,7 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
             dictEmpty(g_pserver->db[j].pdict,callback);
             delete g_pserver->db[j].setexpire;
             g_pserver->db[j].setexpire = new (MALLOC_LOCAL) semiorderedset<expireEntry, const char*>();
+            g_pserver->db[j].expireitr = g_pserver->db[j].setexpire->end();
         }
     }
     if (g_pserver->cluster_enabled) {
@@ -1119,10 +1120,12 @@ int dbSwapDatabases(int id1, int id2) {
      * remain in the same DB they were. */
     db1->pdict = db2->pdict;
     db1->setexpire = db2->setexpire;
+    db1->expireitr = db2->expireitr->end();
     db1->avg_ttl = db2->avg_ttl;
 
     db2->pdict = aux.pdict;
     db2->setexpire = aux.setexpire;
+    db2->expireitr = aux.expireitr->end();
     db2->avg_ttl = aux.avg_ttl;
 
     /* Now we need to handle clients blocked on lists: as an effect

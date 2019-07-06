@@ -19,14 +19,13 @@ start_server {tags {"lazyfree"}} {
     }
 
     test "FLUSHDB ASYNC can reclaim memory in background" {
-        after 500   # Sometimes Redis is busy with a prior operation
         set orig_mem [s used_memory]
         set args {}
-        for {set i 0} {$i < 100000} {incr i} {
+        for {set i 0} {$i < 200000} {incr i} {
             lappend args $i
         }
         r sadd myset {*}$args
-        assert {[r scard myset] == 100000}
+        assert {[r scard myset] == 200000}
         set peak_mem [s used_memory]
         r flushdb async
         assert {$peak_mem > $orig_mem+1000000}

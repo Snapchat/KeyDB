@@ -2001,9 +2001,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             flushAppendOnlyFile(0);
     }
 
-    /* Close clients that need to be closed asynchronous */
-    freeClientsInAsyncFreeQueue(IDX_EVENT_LOOP_MAIN);
-
     /* Clear the paused clients flag if needed. */
     clientsArePaused(); /* Don't check return value, just use the side effect.*/
 
@@ -2057,8 +2054,6 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
     
     ProcessPendingAsyncWrites();    // A bug but leave for now, events should clean up after themselves
     clientsCron(iel);
-
-    freeClientsInAsyncFreeQueue(iel);
 
     return 1000/g_pserver->hz;
 }

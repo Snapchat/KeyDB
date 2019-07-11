@@ -992,7 +992,7 @@ void replconfCommand(client *c) {
             if ((getLongLongFromObject(c->argv[j+1], &offset) != C_OK))
                 return;
             if (offset > c->repl_ack_off)
-                c->repl_ack_off = offset + c->reploff_skipped;
+                c->repl_ack_off = offset;
             c->repl_ack_time = g_pserver->unixtime;
             /* If this was a diskless replication, we need to really put
              * the slave online when the first ACK is received (which
@@ -2435,7 +2435,7 @@ void roleCommand(client *c) {
             addReplyArrayLen(c,3);
             addReplyBulkCString(c,slaveip);
             addReplyBulkLongLong(c,slave->slave_listening_port);
-            addReplyBulkLongLong(c,slave->repl_ack_off);
+            addReplyBulkLongLong(c,slave->repl_ack_off+slave->reploff_skipped);
             slaves++;
         }
         setDeferredArrayLen(c,mbcount,slaves);
@@ -2780,7 +2780,7 @@ int replicationCountAcksByOffset(long long offset) {
         client *slave = (client*)ln->value;
 
         if (slave->replstate != SLAVE_STATE_ONLINE) continue;
-        if (slave->repl_ack_off >= offset) count++;
+        if ((slave->repl_ack_off + slave->reploff_skipped) >= offset) count++;
     }
     return count;
 }

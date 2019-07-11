@@ -144,6 +144,7 @@ client *createClient(int fd, int iel) {
     c->replstate = REPL_STATE_NONE;
     c->repl_put_online_on_ack = 0;
     c->reploff = 0;
+    c->reploff_skipped = 0;
     c->read_reploff = 0;
     c->repl_ack_off = 0;
     c->repl_ack_time = 0;

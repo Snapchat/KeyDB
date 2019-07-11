@@ -932,6 +932,7 @@ typedef struct client {
     sds replpreamble;       /* Replication DB preamble. */
     long long read_reploff; /* Read replication offset if this is a master. */
     long long reploff;      /* Applied replication offset if this is a master. */
+    long long reploff_skipped;  /* Repl backlog we did not send to this client */
     long long repl_ack_off; /* Replication ack offset, if this is a slave. */
     long long repl_ack_time;/* Replication ack time, if this is a slave. */
     long long psync_initial_offset; /* FULLRESYNC reply offset other slaves
@@ -1160,7 +1161,7 @@ struct redisMaster {
     char *masterauth;               /* AUTH with this password with master */
     char *masterhost;               /* Hostname of master */
     int masterport;                 /* Port of master */
-    client *cached_master; /* Cached master to be reused for PSYNC. */
+    client *cached_master;          /* Cached master to be reused for PSYNC. */
     client *master;
     /* The following two fields is where we store master PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into

@@ -4337,7 +4337,8 @@ sds genRedisInfoString(const char *section) {
         info = sdscatprintf(info,
             "# Replication\r\n"
             "role:%s\r\n",
-            listLength(g_pserver->masters) == 0 ? "master" : "slave");
+            listLength(g_pserver->masters) == 0 ? "master" 
+                : g_pserver->fActiveReplica ? "active-replica" : "slave");
         if (listLength(g_pserver->masters)) {
             listIter li;
             listNode *ln;

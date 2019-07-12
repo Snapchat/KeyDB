@@ -28,7 +28,7 @@
  */
 
 #include "server.h"
-#include <math.h> /* isnan(), isinf() */
+#include <cmath> /* isnan(), isinf() */
 
 /*-----------------------------------------------------------------------------
  * String Commands
@@ -408,7 +408,7 @@ void incrbyfloatCommand(client *c) {
         return;
 
     value += incr;
-    if (isnan(value) || isinf(value)) {
+    if (std::isnan(value) || std::isinf(value)) {
         addReplyError(c,"increment would produce NaN or Infinity");
         return;
     }

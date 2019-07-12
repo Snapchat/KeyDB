@@ -40,7 +40,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
+#include <cmath>
 #include <string.h>
 #include <time.h>
 #include <limits.h>

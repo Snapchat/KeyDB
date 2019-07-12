@@ -623,7 +623,7 @@ void setDeferredPushLen(client *c, void *node, long length) {
 
 /* Add a double as a bulk reply */
 void addReplyDoubleCore(client *c, double d, bool fAsync) {
-    if (isinf(d)) {
+    if (std::isinf(d)) {
         /* Libc in odd systems (Hi Solaris!) will format infinite in a
          * different way, so better to handle it in an explicit way. */
         if (c->resp == 2) {

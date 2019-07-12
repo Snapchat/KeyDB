@@ -624,7 +624,7 @@ int getDoubleFromObject(const robj *o, double *target) {
                 (size_t)(eptr-(char*)szFromObj(o)) != sdslen(szFromObj(o)) ||
                 (errno == ERANGE &&
                     (value == HUGE_VAL || value == -HUGE_VAL || value == 0)) ||
-                isnan(value))
+                std::isnan(value))
                 return C_ERR;
         } else if (o->encoding == OBJ_ENCODING_INT) {
             value = (long)ptrFromObj(o);
@@ -666,7 +666,7 @@ int getLongDoubleFromObject(robj *o, long double *target) {
                 (size_t)(eptr-(char*)szFromObj(o)) != sdslen(szFromObj(o)) ||
                 (errno == ERANGE &&
                     (value == HUGE_VAL || value == -HUGE_VAL || value == 0)) ||
-                isnan(value))
+                std::isnan(value))
                 return C_ERR;
         } else if (o->encoding == OBJ_ENCODING_INT) {
             value = (long)szFromObj(o);

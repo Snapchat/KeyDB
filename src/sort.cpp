@@ -475,7 +475,7 @@ void sortCommand(client *c) {
 
                     vector[j].u.score = strtod(szFromObj(byval),&eptr);
                     if (eptr[0] != '\0' || errno == ERANGE ||
-                        isnan(vector[j].u.score))
+                        std::isnan(vector[j].u.score))
                     {
                         int_conversion_error = 1;
                     }

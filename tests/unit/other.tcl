@@ -1,3 +1,10 @@
+start_server {tags {"other"} overrides {databases 64}} {
+    test {CONF-DATABASES - ensure the databases config option is respected} {
+        r select 63
+        r set testkey {foo}
+    } {OK}
+}
+
 start_server {tags {"other"}} {
     if {$::force_failure} {
         # This is used just for test suite development purposes.

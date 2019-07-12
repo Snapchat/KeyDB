@@ -2495,20 +2495,6 @@ void initServerConfig(void) {
     /* Multithreading */
     cserver.cthreads = CONFIG_DEFAULT_THREADS;
     cserver.fThreadAffinity = CONFIG_DEFAULT_THREAD_AFFINITY;
-
-    g_pserver->db = (redisDb*)zmalloc(sizeof(redisDb)*cserver.dbnum, MALLOC_LOCAL);
-
-    /* Create the Redis databases, and initialize other internal state. */
-    for (int j = 0; j < cserver.dbnum; j++) {
-        g_pserver->db[j].pdict = dictCreate(&dbDictType,NULL);
-        g_pserver->db[j].expires = dictCreate(&keyptrDictType,NULL);
-        g_pserver->db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
-        g_pserver->db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
-        g_pserver->db[j].watched_keys = dictCreate(&keylistDictType,NULL);
-        g_pserver->db[j].id = j;
-        g_pserver->db[j].avg_ttl = 0;
-        g_pserver->db[j].defrag_later = listCreate();
-    }
 }
 
 extern char **environ;
@@ -2913,6 +2899,20 @@ void initServer(void) {
     setupSignalHandlers();
 
     fastlock_init(&g_pserver->flock);
+
+    g_pserver->db = (redisDb*)zmalloc(sizeof(redisDb)*cserver.dbnum, MALLOC_LOCAL);
+
+    /* Create the Redis databases, and initialize other internal state. */
+    for (int j = 0; j < cserver.dbnum; j++) {
+        g_pserver->db[j].pdict = dictCreate(&dbDictType,NULL);
+        g_pserver->db[j].expires = dictCreate(&keyptrDictType,NULL);
+        g_pserver->db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
+        g_pserver->db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
+        g_pserver->db[j].watched_keys = dictCreate(&keylistDictType,NULL);
+        g_pserver->db[j].id = j;
+        g_pserver->db[j].avg_ttl = 0;
+        g_pserver->db[j].defrag_later = listCreate();
+    }
 
     if (g_pserver->syslog_enabled) {
         openlog(g_pserver->syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,

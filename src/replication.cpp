@@ -2342,12 +2342,15 @@ void replicationUnsetMaster(redisMaster *mi) {
 /* This function is called when the slave lose the connection with the
  * master into an unexpected way. */
 void replicationHandleMasterDisconnection(redisMaster *mi) {
-    mi->master = NULL;
-    mi->repl_state = REPL_STATE_CONNECT;
-    mi->repl_down_since = g_pserver->unixtime;
-    /* We lost connection with our master, don't disconnect slaves yet,
-     * maybe we'll be able to PSYNC with our master later. We'll disconnect
-     * the slaves only if we'll have to do a full resync with our master. */
+    if (mi != nullptr)
+    {
+        mi->master = NULL;
+        mi->repl_state = REPL_STATE_CONNECT;
+        mi->repl_down_since = g_pserver->unixtime;
+        /* We lost connection with our master, don't disconnect slaves yet,
+        * maybe we'll be able to PSYNC with our master later. We'll disconnect
+        * the slaves only if we'll have to do a full resync with our master. */
+    }
 }
 
 void replicaofCommand(client *c) {
@@ -2449,7 +2452,10 @@ void roleCommand(client *c) {
             redisMaster *mi = (redisMaster*)listNodeValue(ln);
             const char *slavestate = NULL;
             addReplyArrayLen(c,5);
-            addReplyBulkCBuffer(c,"slave",5);
+            if (g_pserver->fActiveReplica)
+                addReplyBulkCBuffer(c,"active-replica",14);
+            else
+                addReplyBulkCBuffer(c,"slave",5);
             addReplyBulkCString(c,mi->masterhost);
             addReplyLongLong(c,mi->masterport);
             if (slaveIsInHandshakeState(mi)) {

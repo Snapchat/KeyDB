@@ -2577,7 +2577,9 @@ void helloCommand(client *c) {
 
     if (!g_pserver->sentinel_mode) {
         addReplyBulkCString(c,"role");
-        addReplyBulkCString(c,listLength(g_pserver->masters) ? "replica" : "master");
+        addReplyBulkCString(c,listLength(g_pserver->masters) ? 
+            g_pserver->fActiveReplica ? "active-replica" : "replica" 
+            : "master");
     }
 
     addReplyBulkCString(c,"modules");

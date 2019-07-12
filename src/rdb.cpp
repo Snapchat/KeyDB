@@ -543,10 +543,10 @@ int rdbSaveDoubleValue(rio *rdb, double val) {
     unsigned char buf[128];
     int len;
 
-    if (isnan(val)) {
+    if (std::isnan(val)) {
         buf[0] = 253;
         len = 1;
-    } else if (!isfinite(val)) {
+    } else if (!std::isfinite(val)) {
         len = 1;
         buf[0] = (val < 0) ? 255 : 254;
     } else {

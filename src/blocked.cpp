@@ -64,6 +64,7 @@
  */
 
 #include "server.h"
+#include <mutex>
 
 int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb *db, robj *value, int where);
 
@@ -180,6 +181,7 @@ void queueClientForReprocessing(client *c) {
  * of operation the client is blocking for. */
 void unblockClient(client *c) {
     serverAssert(GlobalLocksAcquired());
+    serverAssert(c->lock.fOwnLock());
     if (c->btype == BLOCKED_LIST ||
         c->btype == BLOCKED_ZSET ||
         c->btype == BLOCKED_STREAM) {
@@ -301,6 +303,7 @@ void handleClientsBlockedOnKeys(void) {
                     while(numclients--) {
                         listNode *clientnode = listFirst(clients);
                         client *receiver = (client*)clientnode->value;
+                        std::unique_lock<decltype(client::lock)> lock(receiver->lock);
 
                         if (receiver->btype != BLOCKED_LIST) {
                             /* Put at the tail, so that at the next call

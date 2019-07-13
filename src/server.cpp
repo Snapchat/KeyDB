@@ -1785,6 +1785,15 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(id);
     UNUSED(clientData);
 
+    /* If another threads unblocked one of our clients, and this thread has been idle
+        then beforeSleep won't have a chance to process the unblocking.  So we also
+        process them here in the cron job to ensure they don't starve.
+    */
+    if (listLength(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].unblocked_clients))
+    {
+        processUnblockedClients(IDX_EVENT_LOOP_MAIN);
+    }
+
     ProcessPendingAsyncWrites();    // This is really a bug, but for now catch any laggards that didn't clean up
         
     /* Software watchdog: deliver the SIGALRM that will reach the signal
@@ -2051,6 +2060,15 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
 
     int iel = ielFromEventLoop(eventLoop);
     serverAssert(iel != IDX_EVENT_LOOP_MAIN);
+
+    /* If another threads unblocked one of our clients, and this thread has been idle
+        then beforeSleep won't have a chance to process the unblocking.  So we also
+        process them here in the cron job to ensure they don't starve.
+    */
+    if (listLength(g_pserver->rgthreadvar[iel].unblocked_clients))
+    {
+        processUnblockedClients(iel);
+    }
     
     ProcessPendingAsyncWrites();    // A bug but leave for now, events should clean up after themselves
     clientsCron(iel);

@@ -220,3 +220,17 @@ bool fastlock::fOwnLock()
 {
     return gettid() == m_pidOwner;
 }
+
+int fastlock_unlock_recursive(struct fastlock *lock)
+{
+    int rval = lock->m_depth;
+    lock->m_depth = 1;
+    fastlock_unlock(lock);
+    return rval;
+}
+
+void fastlock_lock_recursive(struct fastlock *lock, int nesting)
+{
+    fastlock_lock(lock);
+    lock->m_depth = nesting;
+}

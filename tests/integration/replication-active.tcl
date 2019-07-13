@@ -51,13 +51,16 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
             # Test that wait succeeds since replicas should be syncronized
             $master set testkey foo
             $slave set testkey2 test
-            assert_equal {1} [$master wait 1 10]
-            assert_equal {1} [$slave wait 1 10]
+            assert_equal {1} [$master wait 1 1000] { "value should propogate
+                within 1 second" }
+            assert_equal {1} [$slave wait 1 1000] { "value should propogate
+                within 1 second" }
 
             # Now setup a situation where wait should fail
             exec kill -SIGSTOP $slave_pid
             $master set testkey fee
-            assert_equal {0} [$master wait 1 1]
+            assert_equal {0} [$master wait 1 1000] { "slave shouldn't be
+                synchronized since its stopped" }
         }
         # Resume the replica we paused in the prior test
         exec kill -SIGCONT $slave_pid
@@ -71,8 +74,8 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
             }
             $master pexpire testkey1 200
             after 1000
-            assert_equal {0} [$master del testkey1]
-            assert_equal {0} [$slave del testkey1]
+            assert_equal {0} [$master del testkey1] {"master expired"}
+            assert_equal {0} [$slave del testkey1]  {"slave expired"}
 
             $slave set testkey1 foo px 200
             after 1000

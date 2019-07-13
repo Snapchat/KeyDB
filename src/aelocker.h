@@ -19,11 +19,12 @@ public:
             if (!aeTryAcquireLock(true /*fWeak*/))    // avoid locking the client if we can
             {
                 bool fOwnClientLock = true;
+                int clientNesting = 1;
                 for (;;)
                 {
                     if (fOwnClientLock)
                     {
-                        c->lock.unlock();
+                        clientNesting = c->lock.unlock_recursive();
                         fOwnClientLock = false;
                     }
                     aeAcquireLock();
@@ -36,6 +37,7 @@ public:
                         break;
                     }
                 }
+                c->lock.lock_recursive(clientNesting);
             }
             
             m_fArmed = true;

@@ -1363,9 +1363,9 @@ void freeClientAsync(client *c) {
      * are in the context of the main thread while the other threads are
      * idle. */
     if (c->flags & CLIENT_CLOSE_ASAP || c->flags & CLIENT_LUA) return;
-    AeLocker lock;
-    lock.arm(nullptr);
     std::lock_guard<decltype(c->lock)> clientlock(c->lock);
+    AeLocker lock;
+    lock.arm(c);
     c->flags |= CLIENT_CLOSE_ASAP;    
     listAddNodeTail(g_pserver->clients_to_close,c);
 }
@@ -2059,10 +2059,10 @@ void processInputBufferAndReplicate(client *c) {
         if (applied) {
             if (!g_pserver->fActiveReplica)
             {
-                aeAcquireLock();
+                AeLocker ae;
+                ae.arm(c);
                 replicationFeedSlavesFromMasterStream(g_pserver->slaves,
                         c->pending_querybuf, applied);
-                aeReleaseLock();
             }
             sdsrange(c->pending_querybuf,applied,-1);
         }

@@ -371,7 +371,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     int acl_retval = 0;
     int call_flags = CMD_CALL_SLOWLOG | CMD_CALL_STATS;
     struct redisCommand *cmd;
-    client *c = g_pserver->lua_client;
+    client *c = serverTL->lua_client;
     sds reply;
     
     // Ensure our client is on the right thread
@@ -966,8 +966,11 @@ void scriptingInit(int setup) {
     lua_State *lua = lua_open();
 
     if (setup) {
-        g_pserver->lua_client = NULL;
-        g_pserver->lua_caller = NULL;
+        for (int iel = 0; iel < cserver.cthreads; ++iel)
+        {
+            g_pserver->rgthreadvar[iel].lua_client = createClient(-1, iel);
+            g_pserver->rgthreadvar[iel].lua_client->flags |= CLIENT_LUA;
+        }
         g_pserver->lua_timedout = 0;
         ldbInit();
     }
@@ -1117,15 +1120,6 @@ void scriptingInit(int setup) {
         lua_pcall(lua,0,0,0);
     }
 
-    /* Create the (non connected) client that we use to execute Redis commands
-     * inside the Lua interpreter.
-     * Note: there is no need to create it again when this function is called
-     * by scriptingReset(). */
-    if (g_pserver->lua_client == NULL) {
-        g_pserver->lua_client = createClient(-1, IDX_EVENT_LOOP_MAIN);
-        g_pserver->lua_client->flags |= CLIENT_LUA;
-    }
-
     /* Lua beginners often don't use "local", this is likely to introduce
      * subtle bugs in their code. To prevent problems we protect accesses
      * to global variables. */
@@ -1272,7 +1266,7 @@ sds luaCreateFunction(client *c, lua_State *lua, robj *body) {
      * so that we can replicate / write in the AOF all the
      * EVALSHA commands as EVAL using the original script. */
     int retval = dictAdd(g_pserver->lua_scripts,sha,body);
-    serverAssertWithInfo(c ? c : g_pserver->lua_client,NULL,retval == DICT_OK);
+    serverAssertWithInfo(c ? c : serverTL->lua_client,NULL,retval == DICT_OK);
     g_pserver->lua_scripts_mem += sdsZmallocSize(sha) + getStringObjectSdsUsedMemory(body);
     incrRefCount(body);
     return sha;
@@ -1393,7 +1387,7 @@ void evalGenericCommand(client *c, int evalsha) {
     luaSetGlobalArray(lua,"ARGV",c->argv+3+numkeys,c->argc-3-numkeys);
 
     /* Select the right DB in the context of the Lua client */
-    selectDb(g_pserver->lua_client,c->db->id);
+    selectDb(serverTL->lua_client,c->db->id);
 
     /* Set a hook in order to be able to stop the script execution if it
      * is running for too much time.

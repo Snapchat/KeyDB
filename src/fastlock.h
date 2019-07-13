@@ -12,6 +12,8 @@ void fastlock_lock(struct fastlock *lock);
 int fastlock_trylock(struct fastlock *lock, int fWeak);
 void fastlock_unlock(struct fastlock *lock);
 void fastlock_free(struct fastlock *lock);
+int fastlock_unlock_recursive(struct fastlock *lock);
+void fastlock_lock_recursive(struct fastlock *lock, int nesting);
 
 uint64_t fastlock_getlongwaitcount();   // this is a global value
 
@@ -63,6 +65,16 @@ struct fastlock
     void unlock()
     {
         fastlock_unlock(this);
+    }
+
+    int unlock_recursive()
+    {
+        return fastlock_unlock_recursive(this);
+    }
+
+    void lock_recursive(int nesting)
+    {
+        fastlock_lock_recursive(this, nesting);
     }
 
     bool fOwnLock();   // true if this thread owns the lock, NOTE: not 100% reliable, use for debugging only

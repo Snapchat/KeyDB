@@ -68,7 +68,10 @@ void activeExpireCycleExpireFullKey(redisDb *db, const char *key) {
  * to the function to avoid too many gettimeofday() syscalls. */
 void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
     if (!e.FFat())
+    {
         activeExpireCycleExpireFullKey(db, e.key());
+        return;
+    }
 
     expireEntryFat *pfat = e.pfatentry();
     dictEntry *de = dictFind(db->pdict, e.key());

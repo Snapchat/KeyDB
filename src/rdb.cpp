@@ -1031,12 +1031,13 @@ size_t rdbSavedObjectLen(robj *o) {
  * On error -1 is returned.
  * On success if the key was actually saved 1 is returned, otherwise 0
  * is returned (the key was already expired). */
-int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
+int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, expireEntry *pexpire) {
     int savelru = g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LRU;
     int savelfu = g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU;
 
     /* Save the expire time */
-    if (expiretime != -1) {
+    long long expiretime = -1;
+    if (pexpire != nullptr && pexpire->FGetPrimaryExpire(&expiretime)) {
         if (rdbSaveType(rdb,RDB_OPCODE_EXPIRETIME_MS) == -1) return -1;
         if (rdbSaveMillisecondTime(rdb,expiretime) == -1) return -1;
     }
@@ -1061,9 +1062,21 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
         if (rdbWriteRaw(rdb,buf,1) == -1) return -1;
     }
 
-    char szMvcc[32];
-    snprintf(szMvcc, 32, "%" PRIu64, val->mvcc_tstamp);
-    if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szMvcc) == -1) return -1;
+    char szT[32];
+    snprintf(szT, 32, "%" PRIu64, val->mvcc_tstamp);
+    if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szT) == -1) return -1;
+
+    if (pexpire != nullptr)
+    {
+        for (auto itr : *pexpire)
+        {
+            if (itr.subkey() == nullptr)
+                continue;   // already saved
+            snprintf(szT, 32, "%lld", itr.when());
+            rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-key",itr.subkey());
+            rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-when",szT);
+        }
+    }
 
     /* Save type, key, value */
     if (rdbSaveObjectType(rdb,val) == -1) return -1;
@@ -1099,12 +1112,11 @@ int rdbSaveInfoAuxFields(rio *rdb, int flags, rdbSaveInfo *rsi) {
 int saveKey(rio *rdb, redisDb *db, int flags, size_t *processed, const char *keystr, robj *o)
 {    
     robj key;
-    long long expire;
 
     initStaticStringObject(key,(char*)keystr);
-    expire = getExpire(db, &key);
+    expireEntry *pexpire = getExpire(db, &key);
 
-    if (rdbSaveKeyValuePair(rdb,&key,o,expire) == -1)
+    if (rdbSaveKeyValuePair(rdb,&key,o,pexpire) == -1)
         return 0;
 
     /* When this RDB is produced as part of an AOF rewrite, move

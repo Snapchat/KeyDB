@@ -4949,7 +4949,7 @@ void restoreCommand(client *c) {
     dbAdd(c->db,c->argv[1],obj);
     if (ttl) {
         if (!absttl) ttl+=mstime();
-        setExpire(c,c->db,c->argv[1],ttl);
+        setExpire(c,c->db,c->argv[1],nullptr,ttl);
     }
     objectSetLRUOrLFU(obj,lfu_freq,lru_idle,lru_clock);
     signalModifiedKey(c->db,c->argv[1]);

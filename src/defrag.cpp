@@ -48,7 +48,7 @@ extern "C" int je_get_defrag_hint(void* ptr, int *bin_util, int *run_util);
 /* forward declarations*/
 void defragDictBucketCallback(void *privdata, dictEntry **bucketref);
 dictEntry* replaceSateliteDictKeyPtrAndOrDefragDictEntry(dict *d, sds oldkey, sds newkey, uint64_t hash, long *defragged);
-void replaceSateliteOSetKeyPtr(semiorderedset<expireEntry, const char*> &set, sds oldkey, sds newkey);
+void replaceSateliteOSetKeyPtr(expireset &set, sds oldkey, sds newkey);
 
 /* Defrag helper for generic allocations.
  *
@@ -407,11 +407,12 @@ dictEntry* replaceSateliteDictKeyPtrAndOrDefragDictEntry(dict *d, sds oldkey, sd
     return NULL;
 }
 
-void replaceSateliteOSetKeyPtr(semiorderedset<expireEntry, const char*> &set, sds oldkey, sds newkey) {
+void replaceSateliteOSetKeyPtr(expireset &set, sds oldkey, sds newkey) {
     auto itr = set.find(oldkey);
+    serverAssert(false);
     if (itr != set.end())
     {
-        expireEntry eNew(newkey, itr->when());
+        expireEntry eNew(newkey, nullptr, itr->when());
         set.erase(itr);
         set.insert(eNew);
     }

@@ -53,6 +53,7 @@
 #include <atomic>
 #include <vector>
 #include <algorithm>
+#include <memory>
 #ifdef __cplusplus
 extern "C" {
 #include <lua.h>
@@ -767,38 +768,150 @@ __attribute__((always_inline)) inline char *szFromObj(const robj *o)
     return (char*)ptrFromObj(o);
 }
 
-class expireEntry {
-    sds m_key;
-    long long m_when;
+class expireEntryFat
+{
+public:
+    struct subexpireEntry
+    {
+        long long when;
+        std::unique_ptr<const char, void(*)(const char*)> spsubkey;
+
+        subexpireEntry(long long when, const char *subkey)
+            : when(when), spsubkey(subkey, sdsfree)
+        {}
+
+        bool operator<(long long when) const noexcept { return this->when < when; }
+        bool operator<(const subexpireEntry &se) { return this->when < se.when; }
+    };
+
+private:
+    sds m_keyPrimary;
+    std::vector<subexpireEntry> m_vecexpireEntries;  // Note a NULL for the sds portion means the expire is for the primary key
 
 public:
-    expireEntry(sds key, long long when)
+    expireEntryFat(sds keyPrimary)
+        : m_keyPrimary(keyPrimary)
+        {}
+    long long when() const noexcept { return m_vecexpireEntries.front().when; }
+    const char *key() const noexcept { return m_keyPrimary; }
+
+    bool operator<(long long when) const noexcept { return this->when() <  when; }
+
+    void expireSubKey(const char *szSubkey, long long when)
     {
-        m_key = key;
-        m_when = when;
+        auto itrInsert = std::lower_bound(m_vecexpireEntries.begin(), m_vecexpireEntries.end(), when);
+        m_vecexpireEntries.emplace(itrInsert, when, sdsdup(szSubkey));
     }
 
-    bool operator!=(const expireEntry &e) const noexcept
-    {
-        return m_when != e.m_when || m_key != e.m_key;
-    }
-    bool operator==(const expireEntry &e) const noexcept
-    {
-        return m_when == e.m_when && m_key == e.m_key;
-    }
-    bool operator==(const char *key) const noexcept { return m_key == key; }
+    bool FEmpty() const noexcept { return m_vecexpireEntries.empty(); }
+    const subexpireEntry &nextExpireEntry() const noexcept { return m_vecexpireEntries.front(); }
+    void popfrontExpireEntry() { m_vecexpireEntries.erase(m_vecexpireEntries.begin()); }
 
-    bool operator<(const expireEntry &e) const noexcept { return m_when < e.m_when; }
-    bool operator<(const char *key) const noexcept { return m_key < key; }
-    bool operator<(long long when) const noexcept { return m_when < when; }
+};
 
-    const char *key() const noexcept { return m_key; }
-    long long when() const noexcept { return m_when; }
+class expireEntry {
+    union
+    {
+        sds m_key;
+        expireEntryFat *m_pfatentry;
+    } u;
+    long long m_when;   // LLONG_MIN means this is a fat entry and we should use the pointer
+
+public:
+    expireEntry(sds key, const char *subkey, long long when)
+    {
+        if (subkey != nullptr)
+        {
+            m_when = LLONG_MIN;
+            u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(key);
+            u.m_pfatentry->expireSubKey(subkey, when);
+        }
+        else
+        {
+            u.m_key = key;
+            m_when = when;
+        }
+    }
+
+    expireEntry(expireEntryFat *pfatentry)
+    {
+        u.m_pfatentry = pfatentry;
+        m_when = LLONG_MIN;
+    }
+
+    expireEntry(expireEntry &&e)
+    {
+        u.m_key = e.u.m_key;
+        m_when = e.m_when;
+        e.u.m_key = nullptr;
+        e.m_when = 0;
+    }
+
+    ~expireEntry()
+    {
+        if (FFat())
+            delete u.m_pfatentry;
+    }
+
+    inline bool FFat() const noexcept { return m_when == LLONG_MIN; }
+    expireEntryFat *pfatentry() { assert(FFat()); return u.m_pfatentry; }
+
+
+    bool operator==(const char *key) const noexcept
+    { 
+        return this->key() == key; 
+    }
+
+    bool operator<(const expireEntry &e) const noexcept
+    { 
+        return when() < e.when(); 
+    }
+    bool operator<(long long when) const noexcept
+    { 
+        return this->when() < when;
+    }
+
+    const char *key() const noexcept
+    { 
+        if (FFat())
+            return u.m_pfatentry->key();
+        return u.m_key;
+    }
+    long long when() const noexcept
+    { 
+        if (FFat())
+            return u.m_pfatentry->when();
+        return m_when; 
+    }
+
+    void update(const char *subkey, long long when)
+    {
+        if (!FFat())
+        {
+            if (subkey == nullptr)
+            {
+                m_when = when;
+                return;
+            }
+            else
+            {
+                // we have to upgrade to a fat entry
+                long long whenT = m_when;
+                sds keyPrimary = u.m_key;
+                m_when = LLONG_MIN;
+                u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(keyPrimary);
+                u.m_pfatentry->expireSubKey(nullptr, whenT);
+                // at this point we're fat so fall through
+            }
+        }
+        u.m_pfatentry->expireSubKey(subkey, when);
+    }
     
 
-    explicit operator const char*() const noexcept { return m_key; }
-    explicit operator long long() const noexcept { return m_when; }
+    explicit operator const char*() const noexcept { return key(); }
+    explicit operator long long() const noexcept { return when(); }
 };
+typedef semiorderedset<expireEntry, const char *, true /*expireEntry can be memmoved*/> expireset;
 
 /* The a string name for an object's type as listed above
  * Native types are checked against the OBJ_STRING, OBJ_LIST, OBJ_* defines,
@@ -837,8 +950,8 @@ typedef struct clientReplyBlock {
  * database. The database number is the 'id' field in the structure. */
 typedef struct redisDb {
     dict *pdict;                 /* The keyspace for this DB */
-    semiorderedset<expireEntry, const char*> *setexpire;
-    semiorderedset<expireEntry, const char*>::setiter expireitr;
+    expireset *setexpire;
+    expireset::setiter expireitr;
 
     dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
     dict *ready_keys;           /* Blocked keys that received a PUSH */
@@ -2225,7 +2338,7 @@ int removeExpireCore(redisDb *db, robj *key, dictEntry *de);
 void propagateExpire(redisDb *db, robj *key, int lazy);
 int expireIfNeeded(redisDb *db, robj *key);
 long long getExpire(redisDb *db, robj_roptr key);
-void setExpire(client *c, redisDb *db, robj *key, long long when);
+void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when);
 robj_roptr lookupKeyRead(redisDb *db, robj *key);
 robj *lookupKeyWrite(redisDb *db, robj *key);
 robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply);
@@ -2420,6 +2533,7 @@ void mgetCommand(client *c);
 void monitorCommand(client *c);
 void expireCommand(client *c);
 void expireatCommand(client *c);
+void expireMemberCommand(client *c);
 void pexpireCommand(client *c);
 void pexpireatCommand(client *c);
 void getsetCommand(client *c);

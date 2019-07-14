@@ -2096,7 +2096,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
             {
                 /* Set the expire time if needed */
                 if (expiretime != -1)
-                    setExpire(NULL,db,key,expiretime);
+                    setExpire(NULL,db,key,nullptr,expiretime);
 
                 /* Set usage information (for eviction). */
                 objectSetLRUOrLFU(val,lfu_freq,lru_idle,lru_clock);

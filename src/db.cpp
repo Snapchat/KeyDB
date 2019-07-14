@@ -457,7 +457,7 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
         } else {
             dictEmpty(g_pserver->db[j].pdict,callback);
             delete g_pserver->db[j].setexpire;
-            g_pserver->db[j].setexpire = new (MALLOC_LOCAL) semiorderedset<expireEntry, const char*>();
+            g_pserver->db[j].setexpire = new (MALLOC_LOCAL) expireset();
             g_pserver->db[j].expireitr = g_pserver->db[j].setexpire->end();
         }
     }
@@ -1006,7 +1006,7 @@ void renameGenericCommand(client *c, int nx) {
     dbDelete(c->db,c->argv[1]);
     dbAdd(c->db,c->argv[2],o);
     if (expire != -1) 
-        setExpire(c,c->db,c->argv[2],expire);
+        setExpire(c,c->db,c->argv[2],nullptr,expire);
     signalModifiedKey(c->db,c->argv[1]);
     signalModifiedKey(c->db,c->argv[2]);
     notifyKeyspaceEvent(NOTIFY_GENERIC,"rename_from",
@@ -1077,7 +1077,7 @@ void moveCommand(client *c) {
         return;
     }
     dbAdd(dst,c->argv[1],o);
-    if (expire != -1) setExpire(c,dst,c->argv[1],expire);
+    if (expire != -1) setExpire(c,dst,c->argv[1],nullptr,expire);
 
     addReply(c,shared.cone);
 }
@@ -1201,7 +1201,7 @@ int removeExpireCore(redisDb *db, robj *key, dictEntry *de) {
  * of an user calling a command 'c' is the client, otherwise 'c' is set
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds
  * after which the key will no longer be considered valid. */
-void setExpire(client *c, redisDb *db, robj *key, long long when) {
+void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when) {
     dictEntry *kde;
 
     serverAssert(GlobalLocksAcquired());
@@ -1216,12 +1216,6 @@ void setExpire(client *c, redisDb *db, robj *key, long long when) {
         dictSetVal(db->pdict, kde, dupStringObject((robj*)dictGetVal(kde)));
     }
 
-    if (((robj*)dictGetVal(kde))->FExpires())
-        removeExpire(db, key);  // should we optimize for when this is called with an already set expiry?
-
-    expireEntry e((sds)dictGetKey(kde), when);
-    ((robj*)dictGetVal(kde))->SetFExpires(true);
-
     /* Update TTL stats (exponential moving average) */
     /*  Note: We never have to update this on expiry since we reduce it by the current elapsed time here */
     long long now = g_pserver->mstime;
@@ -1235,7 +1229,19 @@ void setExpire(client *c, redisDb *db, robj *key, long long when) {
     db->avg_ttl += (double)(when-now) / (db->setexpire->size()+1);    // add the new entry
     db->last_expire_set = now;
 
-    db->setexpire->insert(e);
+    /* Update the expire set */
+    const char *szSubKey = (subkey != nullptr) ? szFromObj(subkey) : nullptr;
+    if (((robj*)dictGetVal(kde))->FExpires()) {
+        auto itr = db->setexpire->find((sds)dictGetKey(kde));
+        serverAssert(itr != db->setexpire->end());
+        itr->update(szSubKey, when);
+    }
+    else
+    {
+        expireEntry e((sds)dictGetKey(kde), szSubKey, when);
+        ((robj*)dictGetVal(kde))->SetFExpires(true);
+        db->setexpire->insert(e);
+    }
 
     int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
     if (c && writable_slave && !(c->flags & CLIENT_MASTER))

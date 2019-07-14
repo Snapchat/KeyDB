@@ -1234,7 +1234,10 @@ void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when) 
     if (((robj*)dictGetVal(kde))->FExpires()) {
         auto itr = db->setexpire->find((sds)dictGetKey(kde));
         serverAssert(itr != db->setexpire->end());
-        itr->update(szSubKey, when);
+        expireEntry eNew(std::move(*itr));
+        eNew.update(szSubKey, when);
+        db->setexpire->erase(itr);
+        db->setexpire->insert(eNew);
     }
     else
     {

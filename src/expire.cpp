@@ -32,6 +32,21 @@
 
 #include "server.h"
 
+void activeExpireCycleExpireFullKey(redisDb *db, const char *key) {
+    robj *keyobj = createStringObject(key,sdslen(key));
+
+    propagateExpire(db,keyobj,g_pserver->lazyfree_lazy_expire);
+    if (g_pserver->lazyfree_lazy_expire)
+        dbAsyncDelete(db,keyobj);
+    else
+        dbSyncDelete(db,keyobj);
+    notifyKeyspaceEvent(NOTIFY_EXPIRED,
+        "expired",keyobj,db->id);
+    if (g_pserver->tracking_clients) trackingInvalidateKey(keyobj);
+    decrRefCount(keyobj);
+    g_pserver->stat_expiredkeys++;
+}
+
 /*-----------------------------------------------------------------------------
  * Incremental collection of expired keys.
  *
@@ -51,19 +66,99 @@
  *
  * The parameter 'now' is the current time in milliseconds as is passed
  * to the function to avoid too many gettimeofday() syscalls. */
-void activeExpireCycleExpire(redisDb *db, const char *key) {
-    robj *keyobj = createStringObject(key,sdslen(key));
+void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
+    if (!e.FFat())
+        activeExpireCycleExpireFullKey(db, e.key());
 
-    propagateExpire(db,keyobj,g_pserver->lazyfree_lazy_expire);
-    if (g_pserver->lazyfree_lazy_expire)
-        dbAsyncDelete(db,keyobj);
-    else
-        dbSyncDelete(db,keyobj);
-    notifyKeyspaceEvent(NOTIFY_EXPIRED,
-        "expired",keyobj,db->id);
-    if (g_pserver->tracking_clients) trackingInvalidateKey(keyobj);
-    decrRefCount(keyobj);
-    g_pserver->stat_expiredkeys++;
+    expireEntryFat *pfat = e.pfatentry();
+    dictEntry *de = dictFind(db->pdict, e.key());
+    robj *val = (robj*)dictGetVal(de);
+    int deleted = 0;
+    while (!pfat->FEmpty())
+    {
+        if (pfat->nextExpireEntry().when > now)
+            break;
+
+        // Is it the full key expiration?
+        if (pfat->nextExpireEntry().spsubkey == nullptr)
+        {
+            activeExpireCycleExpireFullKey(db, e.key());
+            return;
+        }
+
+        switch (val->type)
+        {
+        case OBJ_SET:
+            if (setTypeRemove(val,pfat->nextExpireEntry().spsubkey.get())) {
+                deleted++;
+                if (setTypeSize(val) == 0) {
+                    activeExpireCycleExpireFullKey(db, e.key());
+                    return;
+                }
+            }
+            break;
+        case OBJ_LIST:
+        case OBJ_ZSET:
+        case OBJ_HASH:
+        default:
+            serverAssert(false);
+        }
+        pfat->popfrontExpireEntry();
+    }
+
+    if (deleted)
+    {
+        robj objT;
+        switch (val->type)
+        {
+        case OBJ_SET:
+            initStaticStringObject(objT, (char*)e.key());
+            signalModifiedKey(db,&objT);
+            notifyKeyspaceEvent(NOTIFY_SET,"srem",&objT,db->id);
+            break;
+        }
+    }
+
+    if (pfat->FEmpty())
+    {
+        robj *keyobj = createStringObject(e.key(),sdslen(e.key()));
+        removeExpire(db, keyobj);
+        decrRefCount(keyobj);
+    }
+}
+
+void expireMemberCommand(client *c)
+{
+    long long when;
+    if (getLongLongFromObjectOrReply(c, c->argv[3], &when, NULL) != C_OK)
+        return;
+
+    when *= 1000;
+    when += mstime();
+
+    /* No key, return zero. */
+    dictEntry *de = dictFind(c->db->pdict, szFromObj(c->argv[1]));
+    if (de == NULL) {
+        addReply(c,shared.czero);
+        return;
+    }
+
+    robj *val = (robj*)dictGetVal(de);
+
+    switch (val->type)
+    {
+    case OBJ_SET:
+        // these types are safe
+        break;
+
+    default:
+        addReplyError(c, "object type is unsupported");
+        return;
+    }
+
+    setExpire(c, c->db, c->argv[1], c->argv[2], when);
+
+    addReply(c, shared.ok);
 }
 
 /* Try to expire a few timed out keys. The algorithm used is adaptive and
@@ -162,10 +257,10 @@ void activeExpireCycle(int type) {
         
         size_t expired = 0;
         size_t tried = 0;
-        db->expireitr = db->setexpire->enumerate(db->expireitr, now, [&](const expireEntry &e) __attribute__((always_inline)) {
+        db->expireitr = db->setexpire->enumerate(db->expireitr, now, [&](expireEntry &e) __attribute__((always_inline)) {
             if (e.when() < now)
             {
-                activeExpireCycleExpire(db, e.key());
+                activeExpireCycleExpire(db, e, now);
                 ++expired;
             }
             ++tried;
@@ -270,7 +365,7 @@ void expireSlaveKeys(void) {
                 if (itr != db->setexpire->end())
                 {
                     if (itr->when() < start) {
-                        activeExpireCycleExpire(g_pserver->db+dbid,itr->key());
+                        activeExpireCycleExpire(g_pserver->db+dbid,*itr,start);
                         expired = 1;
                     }
                 }
@@ -406,7 +501,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         addReply(c, shared.cone);
         return;
     } else {
-        setExpire(c,c->db,key,when);
+        setExpire(c,c->db,key,nullptr,when);
         addReply(c,shared.cone);
         signalModifiedKey(c->db,key);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"expire",key,c->db->id);

@@ -409,10 +409,10 @@ dictEntry* replaceSateliteDictKeyPtrAndOrDefragDictEntry(dict *d, sds oldkey, sd
 
 void replaceSateliteOSetKeyPtr(expireset &set, sds oldkey, sds newkey) {
     auto itr = set.find(oldkey);
-    serverAssert(false);
     if (itr != set.end())
     {
-        expireEntry eNew(newkey, nullptr, itr->when());
+        expireEntry eNew(std::move(*itr));
+        eNew.setKeyUnsafe(newkey);
         set.erase(itr);
         set.insert(eNew);
     }

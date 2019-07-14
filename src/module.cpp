@@ -1664,7 +1664,7 @@ int RM_SetExpire(RedisModuleKey *key, mstime_t expire) {
         return REDISMODULE_ERR;
     if (expire != REDISMODULE_NO_EXPIRE) {
         expire += mstime();
-        setExpire(key->ctx->client,key->db,key->key,expire);
+        setExpire(key->ctx->client,key->db,key->key,nullptr,expire);
     } else {
         removeExpire(key->db,key->key);
     }

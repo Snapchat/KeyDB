@@ -618,6 +618,10 @@ struct redisCommand redisCommandTable[] = {
      "write fast @keyspace",
      0,NULL,1,1,1,0,0,0},
 
+    {"expiremember", expireMemberCommand, 4,
+     "write fast @keyspace",
+     0,NULL,1,1,1,0,0,0},
+
     {"pexpire",pexpireCommand,3,
      "write fast @keyspace",
      0,NULL,1,1,1,0,0,0},
@@ -2919,7 +2923,7 @@ void initServer(void) {
     /* Create the Redis databases, and initialize other internal state. */
     for (int j = 0; j < cserver.dbnum; j++) {
         g_pserver->db[j].pdict = dictCreate(&dbDictType,NULL);
-        g_pserver->db[j].setexpire = new(MALLOC_LOCAL) semiorderedset<expireEntry, const char*>;
+        g_pserver->db[j].setexpire = new(MALLOC_LOCAL) expireset();
         g_pserver->db[j].expireitr = g_pserver->db[j].setexpire->end();
         g_pserver->db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
         g_pserver->db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);

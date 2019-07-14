@@ -15,11 +15,11 @@
 
 extern uint64_t dictGenHashFunction(const void *key, int len);
 
-template<typename T, typename T_KEY = T>
+template<typename T, typename T_KEY = T, bool MEMMOVE_SAFE = false>
 class semiorderedset
 {
     friend struct setiter;
-    std::vector<compactvector<T>> m_data;
+    std::vector<compactvector<T, MEMMOVE_SAFE>> m_data;
     size_t celem = 0;
     static const size_t bits_min = 8;
     size_t bits = bits_min;
@@ -109,7 +109,7 @@ public:
         if (!fRehash)
             ++celem;
         
-        typename compactvector<T>::iterator itrInsert;
+        typename compactvector<T, MEMMOVE_SAFE>::iterator itrInsert;
         if (!m_data[idx].empty() && !(e < m_data[idx].back()))
             itrInsert = m_data[idx].end();
         else
@@ -292,7 +292,7 @@ private:
         int steps = 0;
         for (; idxRehash < (m_data.size()/2); ++idxRehash)
         {
-            compactvector<T> vecT;
+            compactvector<T, MEMMOVE_SAFE> vecT;
             std::swap(m_data[idxRehash], vecT); 
 
             for (auto &v : vecT)

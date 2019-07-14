@@ -770,6 +770,7 @@ __attribute__((always_inline)) inline char *szFromObj(const robj *o)
 
 class expireEntryFat
 {
+    friend class expireEntry;
 public:
     struct subexpireEntry
     {
@@ -806,7 +807,8 @@ public:
     bool FEmpty() const noexcept { return m_vecexpireEntries.empty(); }
     const subexpireEntry &nextExpireEntry() const noexcept { return m_vecexpireEntries.front(); }
     void popfrontExpireEntry() { m_vecexpireEntries.erase(m_vecexpireEntries.begin()); }
-
+    const subexpireEntry &operator[](size_t idx) { return m_vecexpireEntries[idx]; }
+    size_t size() const noexcept { return m_vecexpireEntries.size(); }
 };
 
 class expireEntry {
@@ -818,6 +820,39 @@ class expireEntry {
     long long m_when;   // LLONG_MIN means this is a fat entry and we should use the pointer
 
 public:
+    class iter
+    {
+        expireEntry *m_pentry = nullptr;
+        size_t m_idx = 0;
+
+    public:
+        iter(expireEntry *pentry, size_t idx)
+            : m_pentry(pentry), m_idx(idx)
+        {}
+
+        iter &operator++() { ++m_idx; return *this; }
+        
+        const char *subkey() const
+        {
+            if (m_pentry->FFat())
+                return (*m_pentry->pfatentry())[m_idx].spsubkey.get();
+            return nullptr;
+        }
+        long long when() const
+        {
+            if (m_pentry->FFat())
+                return (*m_pentry->pfatentry())[m_idx].when;
+            return m_pentry->when();
+        }
+
+        bool operator!=(const iter &other)
+        {
+            return m_idx != other.m_idx;
+        }
+
+        const iter &operator*() const { return *this; }
+    };
+
     expireEntry(sds key, const char *subkey, long long when)
     {
         if (subkey != nullptr)
@@ -843,7 +878,7 @@ public:
     {
         u.m_key = e.u.m_key;
         m_when = e.m_when;
-        e.u.m_key = nullptr;
+        e.u.m_key = (char*)key();  // we do this so it can still be found in the set
         e.m_when = 0;
     }
 
@@ -851,6 +886,14 @@ public:
     {
         if (FFat())
             delete u.m_pfatentry;
+    }
+
+    void setKeyUnsafe(sds key)
+    {
+        if (FFat())
+            u.m_pfatentry->m_keyPrimary = key;
+        else
+            u.m_key = key;
     }
 
     inline bool FFat() const noexcept { return m_when == LLONG_MIN; }
@@ -907,6 +950,27 @@ public:
         u.m_pfatentry->expireSubKey(subkey, when);
     }
     
+    iter begin() { return iter(this, 0); }
+    iter end()
+    {
+        if (FFat())
+            return iter(this, u.m_pfatentry->size());
+        return iter(this, 1);
+    }
+
+    bool FGetPrimaryExpire(long long *pwhen)
+    {
+        *pwhen = -1;
+        for (auto itr : *this)
+        {
+            if (itr.subkey() == nullptr)
+            {
+                *pwhen = itr.when();
+                return true;
+            }
+        }
+        return false;
+    }
 
     explicit operator const char*() const noexcept { return key(); }
     explicit operator long long() const noexcept { return when(); }
@@ -2337,8 +2401,9 @@ int removeExpire(redisDb *db, robj *key);
 int removeExpireCore(redisDb *db, robj *key, dictEntry *de);
 void propagateExpire(redisDb *db, robj *key, int lazy);
 int expireIfNeeded(redisDb *db, robj *key);
-long long getExpire(redisDb *db, robj_roptr key);
+expireEntry *getExpire(redisDb *db, robj_roptr key);
 void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when);
+void setExpire(client *c, redisDb *db, robj *key, expireEntry &&entry);
 robj_roptr lookupKeyRead(redisDb *db, robj *key);
 robj *lookupKeyWrite(redisDb *db, robj *key);
 robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply);

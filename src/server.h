@@ -88,6 +88,8 @@ typedef long long mstime_t; /* millisecond time type. */
 #include "endianconv.h"
 #include "crc64.h"
 
+extern int g_fTestMode;
+
 struct redisObject;
 class robj_roptr
 {

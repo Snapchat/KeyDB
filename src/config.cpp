@@ -864,6 +864,8 @@ void loadServerConfigFromString(char *config) {
         } else if (!strcasecmp(argv[0], "version-override") && argc == 2) {
             KEYDB_SET_VERSION = zstrdup(argv[1]);
             serverLog(LL_WARNING, "Warning version is overriden to: %s\n", KEYDB_SET_VERSION);
+        } else if (!strcasecmp(argv[0],"testmode") && argc == 2){
+            g_fTestMode = yesnotoi(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }

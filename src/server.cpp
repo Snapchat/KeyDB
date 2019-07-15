@@ -61,6 +61,8 @@
 #include <uuid/uuid.h>
 #include "aelocker.h"
 
+int g_fTestMode = false;
+
 /* Our shared "common" objects */
 
 struct sharedObjectsStruct shared;

@@ -1097,10 +1097,30 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
         int ielCur = ielFromEventLoop(el);
 
-        // We always accept on the same thread
-        aeAcquireLock();
-        acceptCommonHandler(cfd,0,cip, ielCur);
-        aeReleaseLock();
+        if (!g_fTestMode)
+        {
+            // We always accept on the same thread
+        LLocalThread:
+            aeAcquireLock();
+            acceptCommonHandler(cfd,0,cip, ielCur);
+            aeReleaseLock();
+        }
+        else
+        {
+            // In test mode we want a good distribution among threads and avoid the main thread
+            //  since the main thread is most likely to work
+            int iel = IDX_EVENT_LOOP_MAIN;
+            while (cserver.cthreads > 1 && iel == IDX_EVENT_LOOP_MAIN)
+                iel = rand() % cserver.cthreads;
+            if (iel == ielFromEventLoop(el))
+                goto LLocalThread;
+            char *szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
+            memcpy(szT, cip, NET_IP_STR_LEN);
+            aePostFunction(g_pserver->rgthreadvar[iel].el, [cfd, iel, szT]{
+                acceptCommonHandler(cfd,0,szT, iel);
+                zfree(szT);
+            });
+        }
     }
 }
 

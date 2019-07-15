@@ -2198,8 +2198,10 @@ int connectWithMaster(redisMaster *mi) {
 void undoConnectWithMaster(redisMaster *mi) {
     int fd = mi->repl_transfer_s;
 
-    aeDeleteFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,fd,AE_READABLE|AE_WRITABLE);
-    close(fd);
+    aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [fd]{
+        aeDeleteFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,fd,AE_READABLE|AE_WRITABLE);
+        close(fd);
+    });
     mi->repl_transfer_s = -1;
 }
 

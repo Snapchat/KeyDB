@@ -30,70 +30,17 @@
 
 #include "server.h"
 #include "atomicvar.h"
+#include <sys/socket.h>
 #include <sys/uio.h>
 #include <math.h>
 #include <ctype.h>
 #include <vector>
 #include <mutex>
+#include "aelocker.h"
 
 static void setProtocolError(const char *errstr, client *c);
 void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool fAsync);
 void addReplyBulkCStringCore(client *c, const char *s, bool fAsync);
-
-class AeLocker
-{
-    bool m_fArmed = false;
-
-public:
-    AeLocker()
-    {
-    }
-
-    void arm(client *c) // if a client is passed, then the client is already locked
-    {
-        if (c != nullptr)
-        {
-            serverAssert(!m_fArmed);
-            serverAssert(c->lock.fOwnLock());
-
-            bool fClientLocked = true;
-            while (!aeTryAcquireLock())
-            {
-                if (fClientLocked) c->lock.unlock();
-                fClientLocked = false;
-                aeAcquireLock();
-                if (!c->lock.try_lock())
-                {
-                    aeReleaseLock();
-                }
-                else
-                {
-                    break;
-                }
-            }
-            
-            m_fArmed = true;
-        }
-        else if (!m_fArmed)
-        {
-            m_fArmed = true;
-            aeAcquireLock();
-        }
-    }
-
-    void disarm()
-    {
-        serverAssert(m_fArmed);
-        m_fArmed = false;
-        aeReleaseLock();
-    }
-
-    ~AeLocker()
-    {
-        if (m_fArmed)
-            aeReleaseLock();
-    }
-};
 
 /* Return the size consumed from the allocator, for the specified SDS string,
  * including internal fragmentation. This function is used in order to compute
@@ -167,7 +114,7 @@ client *createClient(int fd, int iel) {
 
     selectDb(c,0);
     uint64_t client_id;
-    atomicGetIncr(g_pserver->next_client_id,client_id,1);
+    client_id = g_pserver->next_client_id.fetch_add(1);
     c->iel = iel;
     fastlock_init(&c->lock);
     c->id = client_id;
@@ -197,6 +144,7 @@ client *createClient(int fd, int iel) {
     c->replstate = REPL_STATE_NONE;
     c->repl_put_online_on_ack = 0;
     c->reploff = 0;
+    c->reploff_skipped = 0;
     c->read_reploff = 0;
     c->repl_ack_off = 0;
     c->repl_ack_time = 0;
@@ -261,7 +209,7 @@ void clientInstallWriteHandler(client *c) {
          * we'll not be able to write the whole reply at once. */
         c->flags |= CLIENT_PENDING_WRITE;
         std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[c->iel].lockPendingWrite);
-        listAddNodeHead(g_pserver->rgthreadvar[c->iel].clients_pending_write,c);
+        g_pserver->rgthreadvar[c->iel].clients_pending_write.push_back(c);
     }
 }
 
@@ -675,7 +623,7 @@ void setDeferredPushLen(client *c, void *node, long length) {
 
 /* Add a double as a bulk reply */
 void addReplyDoubleCore(client *c, double d, bool fAsync) {
-    if (isinf(d)) {
+    if (std::isinf(d)) {
         /* Libc in odd systems (Hi Solaris!) will format infinite in a
          * different way, so better to handle it in an explicit way. */
         if (c->resp == 2) {
@@ -838,8 +786,11 @@ void addReplyNullCore(client *c, bool fAsync) {
     }
 }
 
-void addReplyNull(client *c) {
-    addReplyNullCore(c, false);
+void addReplyNull(client *c, robj_roptr objOldProtocol) {
+    if (c->resp < 3 && objOldProtocol != nullptr)
+        addReply(c, objOldProtocol);
+    else
+        addReplyNullCore(c, false);
 }
 
 void addReplyNullAsync(client *c) {
@@ -931,7 +882,10 @@ void addReplyBulkSdsAsync(client *c, sds s) {
 /* Add a C null term string as bulk reply */
 void addReplyBulkCStringCore(client *c, const char *s, bool fAsync) {
     if (s == NULL) {
-        addReplyNullCore(c,fAsync);
+        if (c->resp < 3)
+            addReplyCore(c,shared.nullbulk, fAsync);
+        else
+            addReplyNullCore(c,fAsync);
     } else {
         addReplyBulkCBufferCore(c,s,strlen(s),fAsync);
     }
@@ -1009,6 +963,19 @@ void addReplySubcommandSyntaxError(client *c) {
         "Unknown subcommand or wrong number of arguments for '%s'. Try %s HELP.",
         (char*)ptrFromObj(c->argv[1]),cmd);
     sdsfree(cmd);
+}
+
+/* Append 'src' client output buffers into 'dst' client output buffers. 
+ * This function clears the output buffers of 'src' */
+void AddReplyFromClient(client *dst, client *src) {
+    if (prepareClientToWrite(dst, false) != C_OK)
+        return;
+    addReplyProto(dst,src->buf, src->bufpos);
+    if (listLength(src->reply))
+        listJoin(dst->reply,src->reply);
+    dst->reply_bytes += src->reply_bytes;
+    src->reply_bytes = 0;
+    src->bufpos = 0;
 }
 
 /* Copy 'src' client output buffers into 'dst' client output buffers.
@@ -1130,10 +1097,30 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
         int ielCur = ielFromEventLoop(el);
 
-        // We always accept on the same thread
-        aeAcquireLock();
-        acceptCommonHandler(cfd,0,cip, ielCur);
-        aeReleaseLock();
+        if (!g_fTestMode)
+        {
+            // We always accept on the same thread
+        LLocalThread:
+            aeAcquireLock();
+            acceptCommonHandler(cfd,0,cip, ielCur);
+            aeReleaseLock();
+        }
+        else
+        {
+            // In test mode we want a good distribution among threads and avoid the main thread
+            //  since the main thread is most likely to work
+            int iel = IDX_EVENT_LOOP_MAIN;
+            while (cserver.cthreads > 1 && iel == IDX_EVENT_LOOP_MAIN)
+                iel = rand() % cserver.cthreads;
+            if (iel == ielFromEventLoop(el))
+                goto LLocalThread;
+            char *szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
+            memcpy(szT, cip, NET_IP_STR_LEN);
+            aePostFunction(g_pserver->rgthreadvar[iel].el, [cfd, iel, szT]{
+                acceptCommonHandler(cfd,0,szT, iel);
+                zfree(szT);
+            });
+        }
     }
 }
 
@@ -1155,7 +1142,17 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         serverLog(LL_VERBOSE,"Accepted connection to %s", g_pserver->unixsocket);
 
         aeAcquireLock();
-        acceptCommonHandler(cfd,CLIENT_UNIX_SOCKET,NULL, ielCur);
+        int ielTarget = rand() % cserver.cthreads;
+        if (ielTarget == ielCur)
+        {
+            acceptCommonHandler(cfd,CLIENT_UNIX_SOCKET,NULL, ielCur);
+        }
+        else
+        {
+            aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [cfd, ielTarget]{
+                acceptCommonHandler(cfd,CLIENT_UNIX_SOCKET,NULL, ielTarget);
+            });
+        }
         aeReleaseLock();
         
     }
@@ -1236,9 +1233,10 @@ void unlinkClient(client *c) {
     /* Remove from the list of pending writes if needed. */
     if (c->flags & CLIENT_PENDING_WRITE) {
         std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[c->iel].lockPendingWrite);
-        ln = listSearchKey(g_pserver->rgthreadvar[c->iel].clients_pending_write,c);
-        serverAssert(ln != NULL);
-        listDelNode(g_pserver->rgthreadvar[c->iel].clients_pending_write,ln);
+        auto itr = std::find(g_pserver->rgthreadvar[c->iel].clients_pending_write.begin(),
+            g_pserver->rgthreadvar[c->iel].clients_pending_write.end(), c);
+        serverAssert(itr != g_pserver->rgthreadvar[c->iel].clients_pending_write.end());
+        g_pserver->rgthreadvar[c->iel].clients_pending_write.erase(itr);
         c->flags &= ~CLIENT_PENDING_WRITE;
     }
 
@@ -1379,10 +1377,15 @@ void freeClient(client *c) {
  * a context where calling freeClient() is not possible, because the client
  * should be valid for the continuation of the flow of the program. */
 void freeClientAsync(client *c) {
+    /* We need to handle concurrent access to the server.clients_to_close list
+     * only in the freeClientAsync() function, since it's the only function that
+     * may access the list while Redis uses I/O threads. All the other accesses
+     * are in the context of the main thread while the other threads are
+     * idle. */
     if (c->flags & CLIENT_CLOSE_ASAP || c->flags & CLIENT_LUA) return;
-    AeLocker lock;
-    lock.arm(nullptr);
     std::lock_guard<decltype(c->lock)> clientlock(c->lock);
+    AeLocker lock;
+    lock.arm(c);
     c->flags |= CLIENT_CLOSE_ASAP;    
     listAddNodeTail(g_pserver->clients_to_close,c);
 }
@@ -1414,7 +1417,12 @@ client *lookupClientByID(uint64_t id) {
 }
 
 /* Write data in output buffers to client. Return C_OK if the client
- * is still valid after the call, C_ERR if it was freed. */
+ * is still valid after the call, C_ERR if it was freed because of some
+ * error.
+ *
+ * This function is called by threads, but always with handler_installed
+ * set to 0. So when handler_installed is set to 0 the function must be
+ * thread safe. */
 int writeToClient(int fd, client *c, int handler_installed) {
     ssize_t nwritten = 0, totwritten = 0;
     clientReplyBlock *o;
@@ -1480,7 +1488,7 @@ int writeToClient(int fd, client *c, int handler_installed) {
             !(c->flags & CLIENT_SLAVE)) break;
     }
     
-    __atomic_fetch_add(&g_pserver->stat_net_output_bytes, totwritten, __ATOMIC_RELAXED);
+    g_pserver->stat_net_output_bytes += totwritten;
     if (nwritten == -1) {
         if (errno == EAGAIN) {
             nwritten = 0;
@@ -1488,15 +1496,7 @@ int writeToClient(int fd, client *c, int handler_installed) {
             serverLog(LL_VERBOSE,
                 "Error writing to client: %s", strerror(errno));
             lock.unlock();
-            if (aeTryAcquireLock())
-            {
-                freeClient(c);
-                aeReleaseLock();
-            }
-            else
-            {
-                freeClientAsync(c);
-            }
+            freeClientAsync(c);
             
             return C_ERR;
         }
@@ -1515,15 +1515,7 @@ int writeToClient(int fd, client *c, int handler_installed) {
         /* Close connection after entire reply has been sent. */
         if (c->flags & CLIENT_CLOSE_AFTER_REPLY) {
             lock.unlock();
-            if (aeTryAcquireLock())
-            {
-                freeClient(c);
-                aeReleaseLock();
-            }
-            else
-            {
-                freeClientAsync(c);
-            }
+            freeClientAsync(c);
             return C_ERR;
         }
     }
@@ -1536,7 +1528,14 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     client *c = (client*)privdata;
 
     serverAssert(ielFromEventLoop(el) == c->iel);
-    writeToClient(fd,c,1);
+    if (writeToClient(fd,c,1) == C_ERR)
+    {
+        AeLocker ae;
+        c->lock.lock();
+        ae.arm(c);
+        if (c->flags & CLIENT_CLOSE_ASAP)
+            freeClient(c);
+    }
 }
 
 void ProcessPendingAsyncWrites()
@@ -1598,56 +1597,62 @@ void ProcessPendingAsyncWrites()
  * need to use a syscall in order to install the writable event handler,
  * get it called, and so forth. */
 int handleClientsWithPendingWrites(int iel) {
-    listIter li;
-    listNode *ln;
-
     std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[iel].lockPendingWrite);
-    list *list = g_pserver->rgthreadvar[iel].clients_pending_write;
-    int processed = listLength(list);
+    auto &vec = g_pserver->rgthreadvar[iel].clients_pending_write;
+    int processed = (int)vec.size();
     serverAssert(iel == (serverTL - g_pserver->rgthreadvar));
 
-    listRewind(list,&li);
-    while((ln = listNext(&li))) {
-        client *c = (client*)listNodeValue(ln);
-        std::unique_lock<decltype(c->lock)> lock(c->lock);
+    int ae_flags = AE_WRITABLE|AE_WRITE_THREADSAFE;
+    /* For the fsync=always policy, we want that a given FD is never
+        * served for reading and writing in the same event loop iteration,
+        * so that in the middle of receiving the query, and serving it
+        * to the client, we'll call beforeSleep() that will do the
+        * actual fsync of AOF to disk. AE_BARRIER ensures that. */
+    if (g_pserver->aof_state == AOF_ON &&
+        g_pserver->aof_fsync == AOF_FSYNC_ALWAYS)
+    {
+        ae_flags |= AE_BARRIER;
+    }
+
+    while(!vec.empty()) {
+        client *c = vec.back();
+        AssertCorrectThread(c);
 
         c->flags &= ~CLIENT_PENDING_WRITE;
-        listDelNode(list,ln);
-        AssertCorrectThread(c);
+        vec.pop_back();
 
         /* If a client is protected, don't do anything,
          * that may trigger write error or recreate handler. */
         if (c->flags & CLIENT_PROTECTED) continue;
 
+        std::unique_lock<decltype(c->lock)> lock(c->lock);
+
         /* Try to write buffers to the client socket. */
         if (writeToClient(c->fd,c,0) == C_ERR) {
-            lock.release(); // client is free'd
+            if (c->flags & CLIENT_CLOSE_ASAP)
+            {
+                c->lock.lock();
+                AeLocker ae;
+                ae.arm(c);
+                freeClient(c);  // writeToClient will only async close, but there's no need to wait
+            }
             continue;
         }
 
         /* If after the synchronous writes above we still have data to
          * output to the client, we need to install the writable handler. */
         if (clientHasPendingReplies(c)) {
-            int ae_flags = AE_WRITABLE|AE_WRITE_THREADSAFE;
-            /* For the fsync=always policy, we want that a given FD is never
-             * served for reading and writing in the same event loop iteration,
-             * so that in the middle of receiving the query, and serving it
-             * to the client, we'll call beforeSleep() that will do the
-             * actual fsync of AOF to disk. AE_BARRIER ensures that. */
-            if (g_pserver->aof_state == AOF_ON &&
-                g_pserver->aof_fsync == AOF_FSYNC_ALWAYS)
-            {
-                ae_flags |= AE_BARRIER;
-            }
-            
             if (aeCreateFileEvent(g_pserver->rgthreadvar[c->iel].el, c->fd, ae_flags, sendReplyToClient, c) == AE_ERR)
                 freeClientAsync(c);
         }
     }
 
-    AeLocker locker;
-    locker.arm(nullptr);
-    ProcessPendingAsyncWrites();
+    if (listLength(serverTL->clients_pending_asyncwrite))
+    {
+        AeLocker locker;
+        locker.arm(nullptr);
+        ProcessPendingAsyncWrites();
+    }
 
     return processed;
 }
@@ -1950,13 +1955,48 @@ int processMultibulkBuffer(client *c) {
     return C_ERR;
 }
 
+/* This function calls processCommand(), but also performs a few sub tasks
+ * that are useful in that context:
+ *
+ * 1. It sets the current client to the client 'c'.
+ * 2. In the case of master clients, the replication offset is updated.
+ * 3. The client is reset unless there are reasons to avoid doing it.
+ *
+ * The function returns C_ERR in case the client was freed as a side effect
+ * of processing the command, otherwise C_OK is returned. */
+int processCommandAndResetClient(client *c, int flags) {
+    int deadclient = 0;
+    serverTL->current_client = c;
+    if (processCommand(c, flags) == C_OK) {
+        if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
+            /* Update the applied replication offset of our master. */
+            c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
+        }
+
+        /* Don't reset the client structure for clients blocked in a
+         * module blocking command, so that the reply callback will
+         * still be able to access the client argv and argc field.
+         * The client will be reset in unblockClientFromModule(). */
+        if (!(c->flags & CLIENT_BLOCKED) ||
+            c->btype != BLOCKED_MODULE)
+        {
+            resetClient(c);
+        }
+    }
+    if (serverTL->current_client == NULL) deadclient = 1;
+    serverTL->current_client = NULL;
+    /* freeMemoryIfNeeded may flush slave output buffers. This may
+     * result into a slave, that may be the active client, to be
+     * freed. */
+    return deadclient ? C_ERR : C_OK;
+}
+
 /* This function is called every time, in the client structure 'c', there is
  * more query buffer to process, because we read more data from the socket
  * or because a client was blocked and later reactivated, so there could be
  * pending query buffer, already representing a full command, to process. */
 void processInputBuffer(client *c, int callFlags) {
     AssertCorrectThread(c);
-    bool fFreed = false;
     
     /* Keep processing while there is something in the input buffer */
     while(c->qb_pos < sdslen(c->querybuf)) {
@@ -2000,60 +2040,47 @@ void processInputBuffer(client *c, int callFlags) {
         if (c->argc == 0) {
             resetClient(c);
         } else {
-            AeLocker locker;
-            locker.arm(c);
-            serverTL->current_client = c;
-
-            /* Only reset the client when the command was executed. */
-            if (processCommand(c, callFlags) == C_OK) {
-                if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
-                    /* Update the applied replication offset of our master. */
-                    c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
-                }
-
-                /* Don't reset the client structure for clients blocked in a
-                 * module blocking command, so that the reply callback will
-                 * still be able to access the client argv and argc field.
-                 * The client will be reset in unblockClientFromModule(). */
-                if (!(c->flags & CLIENT_BLOCKED) || c->btype != BLOCKED_MODULE)
-                    resetClient(c);
+            /* We are finally ready to execute the command. */
+            if (processCommandAndResetClient(c, callFlags) == C_ERR) {
+                /* If the client is no longer valid, we avoid exiting this
+                 * loop and trimming the client buffer later. So we return
+                 * ASAP in that case. */
+                return;
             }
-            /* freeMemoryIfNeeded may flush slave output buffers. This may
-             * result into a slave, that may be the active client, to be
-             * freed. */
-            if (serverTL->current_client == NULL) {
-                fFreed = true;
-                break;
-            }
-            serverTL->current_client = NULL;
         }
     }
 
     /* Trim to pos */
-    if (!fFreed && c->qb_pos) {
+    if (c->qb_pos) {
         sdsrange(c->querybuf,c->qb_pos,-1);
         c->qb_pos = 0;
     }
 }
 
 /* This is a wrapper for processInputBuffer that also cares about handling
- * the replication forwarding to the sub-slaves, in case the client 'c'
+ * the replication forwarding to the sub-replicas, in case the client 'c'
  * is flagged as master. Usually you want to call this instead of the
  * raw processInputBuffer(). */
 void processInputBufferAndReplicate(client *c) {
     if (!(c->flags & CLIENT_MASTER)) {
         processInputBuffer(c, CMD_CALL_FULL);
     } else {
+        /* If the client is a master we need to compute the difference
+         * between the applied offset before and after processing the buffer,
+         * to understand how much of the replication stream was actually
+         * applied to the master state: this quantity, and its corresponding
+         * part of the replication stream, will be propagated to the
+         * sub-replicas and to the replication backlog. */
         size_t prev_offset = c->reploff;
         processInputBuffer(c, CMD_CALL_FULL);
         size_t applied = c->reploff - prev_offset;
         if (applied) {
             if (!g_pserver->fActiveReplica)
             {
-                aeAcquireLock();
+                AeLocker ae;
+                ae.arm(c);
                 replicationFeedSlavesFromMasterStream(g_pserver->slaves,
                         c->pending_querybuf, applied);
-                aeReleaseLock();
             }
             sdsrange(c->pending_querybuf,applied,-1);
         }
@@ -2103,16 +2130,12 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         } else {
             serverLog(LL_VERBOSE, "Reading from client: %s",strerror(errno));
-            lock.unlock();
-            aelock.arm(nullptr);
-            freeClient(c);
+            freeClientAsync(c);
             return;
         }
     } else if (nread == 0) {
         serverLog(LL_VERBOSE, "Client closed connection");
-        lock.unlock();
-        aelock.arm(nullptr);
-        freeClient(c);
+        freeClientAsync(c);
         return;
     } else if (c->flags & CLIENT_MASTER) {
         /* Append the query buffer to the pending (not applied) buffer
@@ -2132,10 +2155,8 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
         bytes = sdscatrepr(bytes,c->querybuf,64);
         serverLog(LL_WARNING,"Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci, bytes);
         sdsfree(ci);
-        sdsfree(bytes);
-        lock.unlock();
-        aelock.arm(nullptr);
-        freeClient(c);
+        sdsfree(bytes);       
+        freeClientAsync(c);
         return;
     }
 
@@ -2146,8 +2167,11 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
      * corresponding part of the replication stream, will be propagated to
      * the sub-slaves and to the replication backlog. */
     processInputBufferAndReplicate(c);
-    aelock.arm(c);
-    ProcessPendingAsyncWrites();
+    if (listLength(serverTL->clients_pending_asyncwrite))
+    {
+        aelock.arm(c);
+        ProcessPendingAsyncWrites();
+    }
 }
 
 void getClientsMaxBuffers(unsigned long *longest_output_list,
@@ -2497,7 +2521,7 @@ NULL
         if (c->name)
             addReplyBulk(c,c->name);
         else
-            addReplyNull(c);
+            addReplyNull(c, shared.nullbulk);
     } else if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"pause") && c->argc == 3) {
         long long duration;
 
@@ -2571,7 +2595,9 @@ void helloCommand(client *c) {
 
     if (!g_pserver->sentinel_mode) {
         addReplyBulkCString(c,"role");
-        addReplyBulkCString(c,listLength(g_pserver->masters) ? "replica" : "master");
+        addReplyBulkCString(c,listLength(g_pserver->masters) ? 
+            g_pserver->fActiveReplica ? "active-replica" : "replica" 
+            : "master");
     }
 
     addReplyBulkCString(c,"modules");
@@ -2899,3 +2925,4 @@ int processEventsWhileBlocked(int iel) {
     aeAcquireLock();
     return count;
 }
+

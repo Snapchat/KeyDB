@@ -134,7 +134,7 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
     unsigned int rank[ZSKIPLIST_MAXLEVEL];
     int i, level;
 
-    serverAssert(!isnan(score));
+    serverAssert(!std::isnan(score));
     x = zsl->header;
     for (i = zsl->level-1; i >= 0; i--) {
         /* store rank that is crossed to reach the insert position */
@@ -530,11 +530,11 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
     } else {
         if (((char*)ptrFromObj(min))[0] == '(') {
             spec->min = strtod((char*)ptrFromObj(min)+1,&eptr);
-            if (eptr[0] != '\0' || isnan(spec->min)) return C_ERR;
+            if (eptr[0] != '\0' || std::isnan(spec->min)) return C_ERR;
             spec->minex = 1;
         } else {
             spec->min = strtod((char*)ptrFromObj(min),&eptr);
-            if (eptr[0] != '\0' || isnan(spec->min)) return C_ERR;
+            if (eptr[0] != '\0' || std::isnan(spec->min)) return C_ERR;
         }
     }
     if (max->encoding == OBJ_ENCODING_INT) {
@@ -542,11 +542,11 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
     } else {
         if (((char*)ptrFromObj(max))[0] == '(') {
             spec->max = strtod((char*)ptrFromObj(max)+1,&eptr);
-            if (eptr[0] != '\0' || isnan(spec->max)) return C_ERR;
+            if (eptr[0] != '\0' || std::isnan(spec->max)) return C_ERR;
             spec->maxex = 1;
         } else {
             spec->max = strtod((char*)ptrFromObj(max),&eptr);
-            if (eptr[0] != '\0' || isnan(spec->max)) return C_ERR;
+            if (eptr[0] != '\0' || std::isnan(spec->max)) return C_ERR;
         }
     }
 
@@ -1320,7 +1320,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore) {
     double curscore;
 
     /* NaN as input is an error regardless of all the other parameters. */
-    if (isnan(score)) {
+    if (std::isnan(score)) {
         *flags = ZADD_NAN;
         return 0;
     }
@@ -1339,7 +1339,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore) {
             /* Prepare the score for the increment if needed. */
             if (incr) {
                 score += curscore;
-                if (isnan(score)) {
+                if (std::isnan(score)) {
                     *flags |= ZADD_NAN;
                     return 0;
                 }
@@ -1385,7 +1385,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore) {
             /* Prepare the score for the increment if needed. */
             if (incr) {
                 score += curscore;
-                if (isnan(score)) {
+                if (std::isnan(score)) {
                     *flags |= ZADD_NAN;
                     return 0;
                 }
@@ -2150,7 +2150,7 @@ inline static void zunionInterAggregate(double *target, double val, int aggregat
         /* The result of adding two doubles is NaN when one variable
          * is +inf and the other is -inf. When these numbers are added,
          * we maintain the convention of the result being 0.0. */
-        if (isnan(*target)) *target = 0.0;
+        if (std::isnan(*target)) *target = 0.0;
     } else if (aggregate == REDIS_AGGR_MIN) {
         *target = val < *target ? val : *target;
     } else if (aggregate == REDIS_AGGR_MAX) {
@@ -2283,7 +2283,7 @@ void zunionInterGenericCommand(client *c, robj *dstkey, int op) {
                 double score, value;
 
                 score = src[0].weight * zval.score;
-                if (isnan(score)) score = 0;
+                if (std::isnan(score)) score = 0;
 
                 for (j = 1; j < setnum; j++) {
                     /* It is not safe to access the zset we are
@@ -2330,7 +2330,7 @@ void zunionInterGenericCommand(client *c, robj *dstkey, int op) {
             while (zuiNext(&src[i],&zval)) {
                 /* Initialize value */
                 score = src[i].weight * zval.score;
-                if (isnan(score)) score = 0;
+                if (std::isnan(score)) score = 0;
 
                 /* Search for this element in the accumulating dictionary. */
                 de = dictAddRaw(accumulator,zuiSdsFromValue(&zval),&existing);
@@ -2439,7 +2439,7 @@ void zrangeGenericCommand(client *c, int reverse) {
     /* Invariant: start >= 0, so this test will be true when end < 0.
      * The range is empty when start > end or start >= length. */
     if (start > end || start >= llen) {
-        addReplyNull(c);
+        addReplyNull(c,shared.emptymultibulk);
         return;
     }
     if (end >= llen) end = llen-1;
@@ -2595,7 +2595,10 @@ void genericZrangebyscoreCommand(client *c, int reverse) {
 
         /* No "first" element in the specified interval. */
         if (eptr == NULL) {
-            addReplyNull(c);
+            if (c->resp < 3)
+                addReply(c, shared.emptyarray);
+            else
+                addReplyNull(c);
             return;
         }
 

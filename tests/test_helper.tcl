@@ -41,6 +41,7 @@ set ::all_tests {
     integration/replication-3
     integration/replication-4
     integration/replication-psync
+    integration/replication-active
     integration/aof
     integration/rdb
     integration/convert-zipmap-hash-on-load
@@ -63,7 +64,6 @@ set ::all_tests {
     unit/lazyfree
     unit/wait
     unit/pendingquerybuf
-    modules/commandfilter
 }
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0
@@ -504,7 +504,7 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--only}} {
         lappend ::only_tests $arg
         incr j
-    } elseif {$opt eq {--skiptill}} {
+    } elseif {$opt eq {--skip-till}} {
         set ::skip_till $arg
         incr j
     } elseif {$opt eq {--list-tests}} {

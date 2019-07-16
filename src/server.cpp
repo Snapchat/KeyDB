@@ -59,6 +59,9 @@
 #include <sys/socket.h>
 #include <algorithm>
 #include <uuid/uuid.h>
+#include "aelocker.h"
+
+int g_fTestMode = false;
 
 /* Our shared "common" objects */
 
@@ -1745,16 +1748,17 @@ void databasesCron(void) {
  * every object access, and accuracy is not needed. To access a global var is
  * a lot faster than calling time(NULL) */
 void updateCachedTime(void) {
-    time_t unixtime = time(NULL);
-    atomicSet(g_pserver->unixtime,unixtime);
+    g_pserver->unixtime = time(NULL);
     g_pserver->mstime = mstime();
 
-    /* To get information about daylight saving time, we need to call localtime_r
-     * and cache the result. However calling localtime_r in this context is safe
-     * since we will never fork() while here, in the main thread. The logging
-     * function will call a thread safe version of localtime that has no locks. */
+    /* To get information about daylight saving time, we need to call
+     * localtime_r and cache the result. However calling localtime_r in this
+     * context is safe since we will never fork() while here, in the main
+     * thread. The logging function will call a thread safe version of
+     * localtime that has no locks. */
     struct tm tm;
-    localtime_r(&g_pserver->unixtime,&tm);
+    time_t ut = g_pserver->unixtime;
+    localtime_r(&ut,&tm);
     g_pserver->daylight_active = tm.tm_isdst;
 }
 
@@ -1782,6 +1786,15 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(eventLoop);
     UNUSED(id);
     UNUSED(clientData);
+
+    /* If another threads unblocked one of our clients, and this thread has been idle
+        then beforeSleep won't have a chance to process the unblocking.  So we also
+        process them here in the cron job to ensure they don't starve.
+    */
+    if (listLength(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].unblocked_clients))
+    {
+        processUnblockedClients(IDX_EVENT_LOOP_MAIN);
+    }
 
     ProcessPendingAsyncWrites();    // This is really a bug, but for now catch any laggards that didn't clean up
         
@@ -1826,8 +1839,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      *
      * Note that you can change the resolution altering the
      * LRU_CLOCK_RESOLUTION define. */
-    unsigned long lruclock = getLRUClock();
-    atomicSet(g_pserver->lruclock,lruclock);
+    g_pserver->lruclock = getLRUClock();
 
     /* Record the max memory used since the server was started. */
     if (zmalloc_used_memory() > g_pserver->stat_peak_memory)
@@ -2000,9 +2012,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             flushAppendOnlyFile(0);
     }
 
-    /* Close clients that need to be closed asynchronous */
-    freeClientsInAsyncFreeQueue(IDX_EVENT_LOOP_MAIN);
-
     /* Clear the paused clients flag if needed. */
     clientsArePaused(); /* Don't check return value, just use the side effect.*/
 
@@ -2053,13 +2062,18 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
 
     int iel = ielFromEventLoop(eventLoop);
     serverAssert(iel != IDX_EVENT_LOOP_MAIN);
+
+    /* If another threads unblocked one of our clients, and this thread has been idle
+        then beforeSleep won't have a chance to process the unblocking.  So we also
+        process them here in the cron job to ensure they don't starve.
+    */
+    if (listLength(g_pserver->rgthreadvar[iel].unblocked_clients))
+    {
+        processUnblockedClients(iel);
+    }
     
-    aeAcquireLock();
     ProcessPendingAsyncWrites();    // A bug but leave for now, events should clean up after themselves
     clientsCron(iel);
-
-    freeClientsInAsyncFreeQueue(iel);
-    aeReleaseLock();
 
     return 1000/g_pserver->hz;
 }
@@ -2119,6 +2133,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     handleClientsWithPendingWrites(IDX_EVENT_LOOP_MAIN);
     aeAcquireLock();
 
+    /* Close clients that need to be closed asynchronous */
+    freeClientsInAsyncFreeQueue(IDX_EVENT_LOOP_MAIN);
+
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
      * time. */
@@ -2143,6 +2160,11 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
     /* Handle writes with pending output buffers. */
     handleClientsWithPendingWrites(iel);
 
+    aeAcquireLock();
+    /* Close clients that need to be closed asynchronous */
+    freeClientsInAsyncFreeQueue(iel);
+    aeReleaseLock();
+
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
      * time. */
@@ -2166,6 +2188,8 @@ void createSharedObjects(void) {
     shared.ok = createObject(OBJ_STRING,sdsnew("+OK\r\n"));
     shared.err = createObject(OBJ_STRING,sdsnew("-ERR\r\n"));
     shared.emptybulk = createObject(OBJ_STRING,sdsnew("$0\r\n\r\n"));
+    shared.emptymultibulk = createObject(OBJ_STRING,sdsnew("*0\r\n"));
+    shared.nullbulk = createObject(OBJ_STRING,sdsnew("$0\r\n\r\n"));
     shared.czero = createObject(OBJ_STRING,sdsnew(":0\r\n"));
     shared.cone = createObject(OBJ_STRING,sdsnew(":1\r\n"));
     shared.emptyarray = createObject(OBJ_STRING,sdsnew("*0\r\n"));
@@ -2287,10 +2311,6 @@ void initMasterInfo(redisMaster *master)
 void initServerConfig(void) {
     int j;
 
-    serverAssert(pthread_mutex_init(&g_pserver->next_client_id_mutex,NULL) == 0);
-    serverAssert(pthread_mutex_init(&g_pserver->lruclock_mutex,NULL) == 0);
-    serverAssert(pthread_mutex_init(&g_pserver->unixtime_mutex,NULL) == 0);
-
     updateCachedTime();
     getRandomHexChars(g_pserver->runid,CONFIG_RUN_ID_SIZE);
     g_pserver->runid[CONFIG_RUN_ID_SIZE] = '\0';
@@ -2405,8 +2425,7 @@ void initServerConfig(void) {
     g_pserver->lua_time_limit = LUA_SCRIPT_TIME_LIMIT;
     g_pserver->fActiveReplica = CONFIG_DEFAULT_ACTIVE_REPLICA;
 
-    unsigned int lruclock = getLRUClock();
-    atomicSet(g_pserver->lruclock,lruclock);
+    g_pserver->lruclock = getLRUClock();
     resetServerSaveParams();
 
     appendServerSaveParams(60*60,1);  /* save after 1 hour and 1 change */
@@ -2496,20 +2515,6 @@ void initServerConfig(void) {
     /* Multithreading */
     cserver.cthreads = CONFIG_DEFAULT_THREADS;
     cserver.fThreadAffinity = CONFIG_DEFAULT_THREAD_AFFINITY;
-
-    g_pserver->db = (redisDb*)zmalloc(sizeof(redisDb)*cserver.dbnum, MALLOC_LOCAL);
-
-    /* Create the Redis databases, and initialize other internal state. */
-    for (int j = 0; j < cserver.dbnum; j++) {
-        g_pserver->db[j].pdict = dictCreate(&dbDictType,NULL);
-        g_pserver->db[j].expires = dictCreate(&keyptrDictType,NULL);
-        g_pserver->db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
-        g_pserver->db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
-        g_pserver->db[j].watched_keys = dictCreate(&keylistDictType,NULL);
-        g_pserver->db[j].id = j;
-        g_pserver->db[j].avg_ttl = 0;
-        g_pserver->db[j].defrag_later = listCreate();
-    }
 }
 
 extern char **environ;
@@ -2853,7 +2858,6 @@ static void initNetworking(int fReusePort)
 
 static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
 {
-    pvar->clients_pending_write = listCreate();
     pvar->unblocked_clients = listCreate();
     pvar->clients_pending_asyncwrite = listCreate();
     pvar->ipfd_count = 0;
@@ -2915,6 +2919,20 @@ void initServer(void) {
     setupSignalHandlers();
 
     fastlock_init(&g_pserver->flock);
+
+    g_pserver->db = (redisDb*)zmalloc(sizeof(redisDb)*cserver.dbnum, MALLOC_LOCAL);
+
+    /* Create the Redis databases, and initialize other internal state. */
+    for (int j = 0; j < cserver.dbnum; j++) {
+        g_pserver->db[j].pdict = dictCreate(&dbDictType,NULL);
+        g_pserver->db[j].expires = dictCreate(&keyptrDictType,NULL);
+        g_pserver->db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
+        g_pserver->db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
+        g_pserver->db[j].watched_keys = dictCreate(&keylistDictType,NULL);
+        g_pserver->db[j].id = j;
+        g_pserver->db[j].avg_ttl = 0;
+        g_pserver->db[j].defrag_later = listCreate();
+    }
 
     if (g_pserver->syslog_enabled) {
         openlog(g_pserver->syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,
@@ -3429,8 +3447,14 @@ void call(client *c, int flags) {
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c, int callFlags) {
-    serverAssert(GlobalLocksAcquired());
-    moduleCallCommandFilters(c);
+    AeLocker locker;
+    AssertCorrectThread(c);
+
+    if (moduleHasCommandFilters())
+    {
+        locker.arm(c);
+        moduleCallCommandFilters(c);
+    }
 
     /* The QUIT command is handled separately. Normal command procs will
      * go through checking for replication and QUIT will cause trouble
@@ -3441,10 +3465,6 @@ int processCommand(client *c, int callFlags) {
         c->flags |= CLIENT_CLOSE_AFTER_REPLY;
         return C_ERR;
     }
-
-    AssertCorrectThread(c);
-    serverAssert(GlobalLocksAcquired());
-    incrementMvccTstamp();
 
     /* Now lookup the command and check ASAP about trivial error conditions
      * such as wrong arity, bad command name and so forth. */
@@ -3482,6 +3502,8 @@ int processCommand(client *c, int callFlags) {
 
     /* Check if the user can run this command according to the current
      * ACLs. */
+    if (c->puser && !(c->puser->flags & USER_FLAG_ALLCOMMANDS))
+        locker.arm(c);  // ACLs require the lock
     int acl_retval = ACLCheckCommandPerm(c);
     if (acl_retval != ACL_OK) {
         flagTransaction(c);
@@ -3507,6 +3529,7 @@ int processCommand(client *c, int callFlags) {
         !(c->cmd->getkeys_proc == NULL && c->cmd->firstkey == 0 &&
           c->cmd->proc != execCommand))
     {
+        locker.arm(c);
         int hashslot;
         int error_code;
         clusterNode *n = getNodeByQuery(c,c->cmd,c->argv,c->argc,
@@ -3521,6 +3544,11 @@ int processCommand(client *c, int callFlags) {
             return C_OK;
         }
     }
+
+    incrementMvccTstamp();
+    
+    if (!locker.isArmed())
+        locker.arm(c);
 
     /* Handle the maxmemory directive.
      *
@@ -3986,8 +4014,7 @@ sds genRedisInfoString(const char *section) {
             call_uname = 0;
         }
 
-        unsigned int lruclock;
-        atomicGet(g_pserver->lruclock,lruclock);
+        unsigned int lruclock = g_pserver->lruclock.load();
         info = sdscatprintf(info,
             "# Server\r\n"
             "redis_version:%s\r\n"
@@ -4299,8 +4326,8 @@ sds genRedisInfoString(const char *section) {
             g_pserver->stat_numconnections,
             g_pserver->stat_numcommands,
             getInstantaneousMetric(STATS_METRIC_COMMAND),
-            g_pserver->stat_net_input_bytes,
-            g_pserver->stat_net_output_bytes,
+            g_pserver->stat_net_input_bytes.load(),
+            g_pserver->stat_net_output_bytes.load(),
             (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT)/1024,
             (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT)/1024,
             g_pserver->stat_rejected_conn,
@@ -4330,7 +4357,8 @@ sds genRedisInfoString(const char *section) {
         info = sdscatprintf(info,
             "# Replication\r\n"
             "role:%s\r\n",
-            listLength(g_pserver->masters) == 0 ? "master" : "slave");
+            listLength(g_pserver->masters) == 0 ? "master" 
+                : g_pserver->fActiveReplica ? "active-replica" : "slave");
         if (listLength(g_pserver->masters)) {
             listIter li;
             listNode *ln;
@@ -4440,7 +4468,7 @@ sds genRedisInfoString(const char *section) {
                     "slave%d:ip=%s,port=%d,state=%s,"
                     "offset=%lld,lag=%ld\r\n",
                     slaveid,slaveip,slave->slave_listening_port,state,
-                    slave->repl_ack_off, lag);
+                    (slave->repl_ack_off + slave->reploff_skipped), lag);
                 slaveid++;
             }
         }
@@ -4913,7 +4941,7 @@ void incrementMvccTstamp()
     }
     else
     {
-        g_pserver->mvcc_tstamp = ((uint64_t)g_pserver->mstime) << 20;
+        atomicSet(g_pserver->mvcc_tstamp, ((uint64_t)g_pserver->mstime) << 20);
     }
 }
 
@@ -4967,8 +4995,6 @@ int main(int argc, char **argv) {
             return sha1Test(argc, argv);
         } else if (!strcasecmp(argv[2], "util")) {
             return utilTest(argc, argv);
-        } else if (!strcasecmp(argv[2], "sds")) {
-            return sdsTest(argc, argv);
         } else if (!strcasecmp(argv[2], "endianconv")) {
             return endianconvTest(argc, argv);
         } else if (!strcasecmp(argv[2], "crc64")) {

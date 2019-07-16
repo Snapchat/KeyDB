@@ -9,9 +9,11 @@ extern "C" {
 struct fastlock;
 void fastlock_init(struct fastlock *lock);
 void fastlock_lock(struct fastlock *lock);
-int fastlock_trylock(struct fastlock *lock);
+int fastlock_trylock(struct fastlock *lock, int fWeak);
 void fastlock_unlock(struct fastlock *lock);
 void fastlock_free(struct fastlock *lock);
+int fastlock_unlock_recursive(struct fastlock *lock);
+void fastlock_lock_recursive(struct fastlock *lock, int nesting);
 
 uint64_t fastlock_getlongwaitcount();   // this is a global value
 
@@ -20,17 +22,29 @@ uint64_t fastlock_getlongwaitcount();   // this is a global value
 }
 #endif
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
 struct ticket
 {
-    uint16_t m_active;
-    uint16_t m_avail;
+    union
+    {
+        struct
+        {
+            uint16_t m_active;
+            uint16_t m_avail;
+        };
+        unsigned u;
+    };
 };
+#pragma GCC diagnostic pop
+
 struct fastlock
 {
     volatile struct ticket m_ticket;
 
     volatile int m_pidOwner;
     volatile int m_depth;
+    unsigned futex;
 
 #ifdef __cplusplus
     fastlock()
@@ -43,14 +57,24 @@ struct fastlock
         fastlock_lock(this);
     }
 
-    bool try_lock()
+    bool try_lock(bool fWeak = false)
     {
-        return !!fastlock_trylock(this);
+        return !!fastlock_trylock(this, fWeak);
     }
 
     void unlock()
     {
         fastlock_unlock(this);
+    }
+
+    int unlock_recursive()
+    {
+        return fastlock_unlock_recursive(this);
+    }
+
+    void lock_recursive(int nesting)
+    {
+        fastlock_lock_recursive(this, nesting);
     }
 
     bool fOwnLock();   // true if this thread owns the lock, NOTE: not 100% reliable, use for debugging only

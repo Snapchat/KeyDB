@@ -543,10 +543,10 @@ int rdbSaveDoubleValue(rio *rdb, double val) {
     unsigned char buf[128];
     int len;
 
-    if (isnan(val)) {
+    if (std::isnan(val)) {
         buf[0] = 253;
         len = 1;
-    } else if (!isfinite(val)) {
+    } else if (!std::isfinite(val)) {
         len = 1;
         buf[0] = (val < 0) ? 255 : 254;
     } else {
@@ -1220,12 +1220,12 @@ werr: /* Write error. */
     return C_ERR;
 }
 
-int rdbSaveFd(int fd, rdbSaveInfo *rsi)
+int rdbSaveFp(FILE *fp, rdbSaveInfo *rsi)
 {
     int error = 0;
     rio rdb;
 
-    rioInitWithFile(&rdb,fd);
+    rioInitWithFile(&rdb,fp);
 
     if (g_pserver->rdb_save_incremental_fsync)
         rioSetAutoSync(&rdb,REDIS_AUTOSYNC_BYTES);
@@ -1267,7 +1267,7 @@ int rdbSaveFile(char *filename, rdbSaveInfo *rsi) {
         return C_ERR;
     }
 
-    if (rdbSaveFd(fileno(fp), rsi) == C_ERR){
+    if (rdbSaveFp(fp, rsi) == C_ERR){
         goto werr;
     }
 
@@ -2151,7 +2151,7 @@ int rdbLoadFile(char *filename, rdbSaveInfo *rsi) {
 
     if ((fp = fopen(filename,"r")) == NULL) return C_ERR;
     startLoading(fp);
-    rioInitWithFile(&rdb,fileno(fp));
+    rioInitWithFile(&rdb,fp);
     retval = rdbLoadRio(&rdb,rsi,0);
     fclose(fp);
     stopLoading();

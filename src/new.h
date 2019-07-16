@@ -2,22 +2,9 @@
 #include <cstddef>  // std::size_t
 
 [[deprecated]]
-inline void *operator new(size_t size)
-{
-    return zmalloc(size, MALLOC_LOCAL);
-}
+void *operator new(size_t size);
 
-inline void *operator new(size_t size, enum MALLOC_CLASS mclass) 
-{ 
-    return zmalloc(size, mclass);
-} 
+void *operator new(size_t size, enum MALLOC_CLASS mclass);
 
-inline void operator delete(void * p) noexcept
-{
-    zfree(p);
-}
-
-inline void operator delete(void *p, std::size_t) noexcept
-{
-    zfree(p);
-}
+void operator delete(void * p) noexcept;
+void operator delete(void *p, std::size_t) noexcept;

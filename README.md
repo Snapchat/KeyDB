@@ -1,10 +1,11 @@
 ![Current Release](https://img.shields.io/github/release/JohnSully/KeyDB.svg)
 [![Build Status](https://travis-ci.org/JohnSully/KeyDB.svg?branch=unstable)](https://travis-ci.org/JohnSully/KeyDB) [![Join the chat at https://gitter.im/KeyDB/community](https://badges.gitter.im/KeyDB/community.svg)](https://gitter.im/KeyDB/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+[![StackShare](http://img.shields.io/badge/tech-stack-0690fa.svg?style=flat)](https://stackshare.io/eq-alpha-technology-inc/eq-alpha-technology-inc)
 
 What is KeyDB?
 --------------
 
-KeyDB is a high performance fork of Redis focusing on multithreading, memory efficiency, and high throughput.  In addition to multithreading KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/KeyDB-(Redis-Fork):-Active-Replica-Support), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3.
+KeyDB is a high performance fork of Redis focusing on multithreading, memory efficiency, and high throughput.  In addition to multithreading KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/Active-Replication), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3.
 
 On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency.
 
@@ -14,12 +15,14 @@ Try our docker container: https://hub.docker.com/r/eqalpha/keydb
 
 Talk on Gitter: https://gitter.im/KeyDB
 
+[Subscribe to the KeyDB mailing list](https://eqalpha.us20.list-manage.com/subscribe/post?u=978f486c2f95589b24591a9cc&id=4ab9220500)
+
 Management GUI: We recommend [FastoNoSQL](https://fastonosql.com/) which has official KeyDB support.
 
 New: Active Replica Support
 ---------------------------
 
-New! KeyDB now has support for Active Replicas.  This feature greatly simplifies hot-spare failover and allows you to distribute writes over replicas instead of just a single master.  For more information [see the wiki page](https://github.com/JohnSully/KeyDB/wiki/KeyDB-(Redis-Fork):-Active-Replica-Support).
+New! KeyDB now has support for Active Replicas.  This feature greatly simplifies hot-spare failover and allows you to distribute writes over replicas instead of just a single master.  For more information [see the wiki page](https://github.com/JohnSully/KeyDB/wiki/Active-Replication).
 
 Why fork Redis?
 ---------------
@@ -248,5 +251,4 @@ source distribution.
 
 Please see the CONTRIBUTING file in this source distribution for more
 information.
-
 

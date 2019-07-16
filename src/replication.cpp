@@ -323,6 +323,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     char proto[1024];
     int cchProto = snprintf(proto, sizeof(proto), "*3\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
     cchProto = std::min((int)sizeof(proto), cchProto);
+    long long master_repl_offset_start = g_pserver->master_repl_offset;
 
     /* Write the command to the replication backlog if any. */
     if (g_pserver->repl_backlog) 
@@ -375,8 +376,12 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
-        if (serverTL->current_client && FSameHost(serverTL->current_client, slave)) continue;
         std::unique_lock<decltype(slave->lock)> lock(slave->lock);
+        if (serverTL->current_client && FSameHost(serverTL->current_client, slave))
+        {
+            slave->reploff_skipped += g_pserver->master_repl_offset - master_repl_offset_start;
+            continue;
+        }
 
         if (!fSendRaw)
             addReplyProtoAsync(slave, proto, cchProto);
@@ -1290,6 +1295,7 @@ void replicationCreateMasterClient(redisMaster *mi, int fd, int dbid) {
     mi->master->flags |= CLIENT_MASTER;
     mi->master->authenticated = 1;
     mi->master->reploff = mi->master_initial_offset;
+    mi->master->reploff_skipped = 0;
     mi->master->read_reploff = mi->master->reploff;
     mi->master->puser = NULL; /* This client can do everything. */
     
@@ -2192,8 +2198,10 @@ int connectWithMaster(redisMaster *mi) {
 void undoConnectWithMaster(redisMaster *mi) {
     int fd = mi->repl_transfer_s;
 
-    aeDeleteFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,fd,AE_READABLE|AE_WRITABLE);
-    close(fd);
+    aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [fd]{
+        aeDeleteFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,fd,AE_READABLE|AE_WRITABLE);
+        close(fd);
+    });
     mi->repl_transfer_s = -1;
 }
 
@@ -2240,7 +2248,8 @@ struct redisMaster *replicationAddMaster(char *ip, int port) {
     while ((ln = listNext(&li)))
     {
         redisMaster *miCheck = (redisMaster*)listNodeValue(ln);
-        serverAssert(strcasecmp(miCheck->masterhost, ip) || miCheck->masterport != port);
+        if (strcasecmp(miCheck->masterhost, ip)==0 && miCheck->masterport == port)
+            return nullptr;
     }
 
     // Pre-req satisfied, lets continue
@@ -2335,12 +2344,15 @@ void replicationUnsetMaster(redisMaster *mi) {
 /* This function is called when the slave lose the connection with the
  * master into an unexpected way. */
 void replicationHandleMasterDisconnection(redisMaster *mi) {
-    mi->master = NULL;
-    mi->repl_state = REPL_STATE_CONNECT;
-    mi->repl_down_since = g_pserver->unixtime;
-    /* We lost connection with our master, don't disconnect slaves yet,
-     * maybe we'll be able to PSYNC with our master later. We'll disconnect
-     * the slaves only if we'll have to do a full resync with our master. */
+    if (mi != nullptr)
+    {
+        mi->master = NULL;
+        mi->repl_state = REPL_STATE_CONNECT;
+        mi->repl_down_since = g_pserver->unixtime;
+        /* We lost connection with our master, don't disconnect slaves yet,
+        * maybe we'll be able to PSYNC with our master later. We'll disconnect
+        * the slaves only if we'll have to do a full resync with our master. */
+    }
 }
 
 void replicaofCommand(client *c) {
@@ -2380,26 +2392,18 @@ void replicaofCommand(client *c) {
         if ((getLongFromObjectOrReply(c, c->argv[2], &port, NULL) != C_OK))
             return;
 
-        /* Check if we are already attached to the specified slave */
-        listIter li;
-        listNode *ln;
-        listRewind(g_pserver->masters, &li);
-        while ((ln = listNext(&li)))
-        {
-            redisMaster *mi = (redisMaster*)listNodeValue(ln);
-            if (!strcasecmp(mi->masterhost,(const char*)ptrFromObj(c->argv[1]))
-                && mi->masterport == port) {
-                serverLog(LL_NOTICE,"REPLICAOF would result into synchronization "
-                                    "with the master we are already connected "
-                                    "with. No operation performed.");
-                addReplySds(c,sdsnew("+OK Already connected to specified "
-                                    "master\r\n"));
-                return;
-            }
-        }
-        /* There was no previous master or the user specified a different one,
-         * we can continue. */
         redisMaster *miNew = replicationAddMaster((char*)ptrFromObj(c->argv[1]), port);
+        if (miNew == nullptr)
+        {
+            // We have a duplicate
+            serverLog(LL_NOTICE,"REPLICAOF would result into synchronization "
+                                "with the master we are already connected "
+                                "with. No operation performed.");
+            addReplySds(c,sdsnew("+OK Already connected to specified "
+                                "master\r\n"));
+            return;
+        }
+
         sds client = catClientInfoString(sdsempty(),c);
         serverLog(LL_NOTICE,"REPLICAOF %s:%d enabled (user request from '%s')",
             miNew->masterhost, miNew->masterport, client);
@@ -2436,7 +2440,7 @@ void roleCommand(client *c) {
             addReplyArrayLen(c,3);
             addReplyBulkCString(c,slaveip);
             addReplyBulkLongLong(c,slave->slave_listening_port);
-            addReplyBulkLongLong(c,slave->repl_ack_off);
+            addReplyBulkLongLong(c,slave->repl_ack_off+slave->reploff_skipped);
             slaves++;
         }
         setDeferredArrayLen(c,mbcount,slaves);
@@ -2450,7 +2454,10 @@ void roleCommand(client *c) {
             redisMaster *mi = (redisMaster*)listNodeValue(ln);
             const char *slavestate = NULL;
             addReplyArrayLen(c,5);
-            addReplyBulkCBuffer(c,"slave",5);
+            if (g_pserver->fActiveReplica)
+                addReplyBulkCBuffer(c,"active-replica",14);
+            else
+                addReplyBulkCBuffer(c,"slave",5);
             addReplyBulkCString(c,mi->masterhost);
             addReplyLongLong(c,mi->masterport);
             if (slaveIsInHandshakeState(mi)) {
@@ -2781,7 +2788,7 @@ int replicationCountAcksByOffset(long long offset) {
         client *slave = (client*)ln->value;
 
         if (slave->replstate != SLAVE_STATE_ONLINE) continue;
-        if (slave->repl_ack_off >= offset) count++;
+        if ((slave->repl_ack_off + slave->reploff_skipped) >= offset) count++;
     }
     return count;
 }
@@ -2793,7 +2800,7 @@ void waitCommand(client *c) {
     long numreplicas, ackreplicas;
     long long offset = c->woff;
 
-    if (listLength(g_pserver->masters)) {
+    if (listLength(g_pserver->masters) && !g_pserver->fActiveReplica) {
         addReplyError(c,"WAIT cannot be used with replica instances. Please also note that since Redis 4.0 if a replica is configured to be writable (which is not the default) writes to replicas are just local and are not propagated.");
         return;
     }

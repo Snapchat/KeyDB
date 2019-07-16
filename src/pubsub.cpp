@@ -84,7 +84,7 @@ void addReplyPubsubUnsubscribed(client *c, robj *channel) {
     if (channel)
         addReplyBulk(c,channel);
     else
-        addReplyNull(c);
+        addReplyNull(c, shared.nullbulk);
     addReplyLongLong(c,clientSubscriptionsCount(c));
 }
 
@@ -112,7 +112,7 @@ void addReplyPubsubPatUnsubscribed(client *c, robj *pattern) {
     if (pattern)
         addReplyBulk(c,pattern);
     else
-        addReplyNull(c);
+        addReplyNull(c, shared.nullbulk);
     addReplyLongLong(c,clientSubscriptionsCount(c));
 }
 

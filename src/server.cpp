@@ -2934,6 +2934,18 @@ void initServer(void) {
         g_pserver->db[j].defrag_later = listCreate();
     }
 
+    /* Fixup Master Client Database */
+    listIter li;
+    listNode *ln;
+    listRewind(g_pserver->masters, &li);
+    while ((ln = listNext(&li)))
+    {
+        redisMaster *mi = (redisMaster*)listNodeValue(ln);
+        serverAssert(mi->master == nullptr);
+        if (mi->cached_master != nullptr)
+            selectDb(mi->cached_master, 0);
+    }
+
     if (g_pserver->syslog_enabled) {
         openlog(g_pserver->syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,
             g_pserver->syslog_facility);

@@ -5,8 +5,6 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
     set slave_log [srv 0 stdout]
     set slave_pid [s process_id]
 
-    set replicaArgs "$slave_host $slave_port"
-    set overridesT "active-replica yes"
     start_server [list overrides [list active-replica yes replicaof [list $slave_host $slave_port]]] {
         set master [srv 0 client]
         set master_host [srv 0 host]

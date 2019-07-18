@@ -199,7 +199,7 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
 
     int ret = AE_OK;
     
-    aeCommand cmd;
+    aeCommand cmd = {};
     cmd.op = AE_ASYNC_OP::CreateFileEvent;
     cmd.fd = fd;
     cmd.mask = mask;
@@ -236,7 +236,7 @@ int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg)
         proc(arg);
         return AE_OK;
     }
-    aeCommand cmd;
+    aeCommand cmd = {};
     cmd.op = AE_ASYNC_OP::PostFunction;
     cmd.proc = proc;
     cmd.clientData = arg;
@@ -253,7 +253,7 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
         return AE_OK;
     }
 
-    aeCommand cmd;
+    aeCommand cmd = {};
     cmd.op = AE_ASYNC_OP::PostCppFunction;
     cmd.pfn = new (MALLOC_LOCAL) std::function<void()>(fn);
     cmd.pctl = nullptr;

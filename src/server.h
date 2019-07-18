@@ -709,13 +709,14 @@ typedef struct RedisModuleDigest {
 
 #define OBJ_SHARED_REFCOUNT INT_MAX
 #define OBJ_MVCC_INVALID (0xFFFFFFFFFFFFFFFFULL)
+
 typedef struct redisObject {
     unsigned type:4;
     unsigned encoding:4;
     unsigned lru:LRU_BITS; /* LRU time (relative to global lru_clock) or
                             * LFU data (least significant 8 bits frequency
                             * and most significant 16 bits access time). */
-    mutable int refcount;
+    mutable std::atomic<int> refcount;
     uint64_t mvcc_tstamp;
     void *m_ptr;
 } robj;

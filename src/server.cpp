@@ -2712,7 +2712,7 @@ int listenToPort(int port, int *fds, int *count, int fReusePort) {
             int unsupported = 0;
             /* Bind * for both IPv6 and IPv4, we enter here only if
              * g_pserver->bindaddr_count == 0. */
-            fds[*count] = anetTcp6Server(g_pserver->neterr,port,NULL,
+            fds[*count] = anetTcp6Server(serverTL->neterr,port,NULL,
                 g_pserver->tcp_backlog, fReusePort);
             if (fds[*count] != ANET_ERR) {
                 anetNonBlock(NULL,fds[*count]);
@@ -2724,7 +2724,7 @@ int listenToPort(int port, int *fds, int *count, int fReusePort) {
 
             if (*count == 1 || unsupported) {
                 /* Bind the IPv4 address as well. */
-                fds[*count] = anetTcpServer(g_pserver->neterr,port,NULL,
+                fds[*count] = anetTcpServer(serverTL->neterr,port,NULL,
                     g_pserver->tcp_backlog, fReusePort);
                 if (fds[*count] != ANET_ERR) {
                     anetNonBlock(NULL,fds[*count]);
@@ -2740,18 +2740,18 @@ int listenToPort(int port, int *fds, int *count, int fReusePort) {
             if (*count + unsupported == 2) break;
         } else if (strchr(g_pserver->bindaddr[j],':')) {
             /* Bind IPv6 address. */
-            fds[*count] = anetTcp6Server(g_pserver->neterr,port,g_pserver->bindaddr[j],
+            fds[*count] = anetTcp6Server(serverTL->neterr,port,g_pserver->bindaddr[j],
                 g_pserver->tcp_backlog, fReusePort);
         } else {
             /* Bind IPv4 address. */
-            fds[*count] = anetTcpServer(g_pserver->neterr,port,g_pserver->bindaddr[j],
+            fds[*count] = anetTcpServer(serverTL->neterr,port,g_pserver->bindaddr[j],
                 g_pserver->tcp_backlog, fReusePort);
         }
         if (fds[*count] == ANET_ERR) {
             serverLog(LL_WARNING,
                 "Could not create server TCP listening socket %s:%d: %s",
                 g_pserver->bindaddr[j] ? g_pserver->bindaddr[j] : "*",
-                port, g_pserver->neterr);
+                port, serverTL->neterr);
                 if (errno == ENOPROTOOPT     || errno == EPROTONOSUPPORT ||
                     errno == ESOCKTNOSUPPORT || errno == EPFNOSUPPORT ||
                     errno == EAFNOSUPPORT    || errno == EADDRNOTAVAIL)
@@ -2837,10 +2837,10 @@ static void initNetworking(int fReusePort)
     /* Open the listening Unix domain socket. */
     if (g_pserver->unixsocket != NULL) {
         unlink(g_pserver->unixsocket); /* don't care if this fails */
-        g_pserver->sofd = anetUnixServer(g_pserver->neterr,g_pserver->unixsocket,
+        g_pserver->sofd = anetUnixServer(serverTL->neterr,g_pserver->unixsocket,
             g_pserver->unixsocketperm, g_pserver->tcp_backlog);
         if (g_pserver->sofd == ANET_ERR) {
-            serverLog(LL_WARNING, "Opening Unix socket: %s", g_pserver->neterr);
+            serverLog(LL_WARNING, "Opening Unix socket: %s", serverTL->neterr);
             exit(1);
         }
         anetNonBlock(NULL,g_pserver->sofd);

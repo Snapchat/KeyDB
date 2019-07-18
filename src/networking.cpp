@@ -1087,11 +1087,11 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(privdata);
 
     while(max--) {
-        cfd = anetTcpAccept(g_pserver->neterr, fd, cip, sizeof(cip), &cport);
+        cfd = anetTcpAccept(serverTL->neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK)
                 serverLog(LL_WARNING,
-                    "Accepting client connection: %s", g_pserver->neterr);
+                    "Accepting client connection: %s", serverTL->neterr);
             return;
         }
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
@@ -1131,11 +1131,11 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(privdata);
 
     while(max--) {
-        cfd = anetUnixAccept(g_pserver->neterr, fd);
+        cfd = anetUnixAccept(serverTL->neterr, fd);
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK)
                 serverLog(LL_WARNING,
-                    "Accepting client connection: %s", g_pserver->neterr);
+                    "Accepting client connection: %s", serverTL->neterr);
             return;
         }
         int ielCur = ielFromEventLoop(el);

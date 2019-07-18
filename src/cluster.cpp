@@ -643,11 +643,11 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     if (listLength(g_pserver->masters) == 0 && g_pserver->loading) return;
 
     while(max--) {
-        cfd = anetTcpAccept(g_pserver->neterr, fd, cip, sizeof(cip), &cport);
+        cfd = anetTcpAccept(serverTL->neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK)
                 serverLog(LL_VERBOSE,
-                    "Error accepting cluster node: %s", g_pserver->neterr);
+                    "Error accepting cluster node: %s", serverTL->neterr);
             return;
         }
         anetNonBlock(NULL,cfd);
@@ -3407,7 +3407,7 @@ void clusterCron(void) {
             mstime_t old_ping_sent;
             clusterLink *link;
 
-            fd = anetTcpNonBlockBindConnect(g_pserver->neterr, node->ip,
+            fd = anetTcpNonBlockBindConnect(serverTL->neterr, node->ip,
                 node->cport, NET_FIRST_BIND_ADDR);
             if (fd == -1) {
                 /* We got a synchronous error from connect before
@@ -3418,7 +3418,7 @@ void clusterCron(void) {
                 if (node->ping_sent == 0) node->ping_sent = mstime();
                 serverLog(LL_DEBUG, "Unable to connect to "
                     "Cluster Node [%s]:%d -> %s", node->ip,
-                    node->cport, g_pserver->neterr);
+                    node->cport, serverTL->neterr);
                 continue;
             }
             link = createClusterLink(node);
@@ -5010,15 +5010,15 @@ migrateCachedSocket* migrateGetSocket(client *c, robj *host, robj *port, long ti
     }
 
     /* Create the socket */
-    fd = anetTcpNonBlockConnect(g_pserver->neterr,szFromObj(c->argv[1]),
+    fd = anetTcpNonBlockConnect(serverTL->neterr,szFromObj(c->argv[1]),
                                 atoi(szFromObj(c->argv[2])));
     if (fd == -1) {
         sdsfree(name);
         addReplyErrorFormat(c,"Can't connect to target node: %s",
-            g_pserver->neterr);
+            serverTL->neterr);
         return NULL;
     }
-    anetEnableTcpNoDelay(g_pserver->neterr,fd);
+    anetEnableTcpNoDelay(serverTL->neterr,fd);
 
     /* Check if it connects within the specified timeout. */
     if ((aeWait(fd,AE_WRITABLE,timeout) & AE_WRITABLE) == 0) {

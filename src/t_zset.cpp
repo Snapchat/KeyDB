@@ -2665,7 +2665,10 @@ void genericZrangebyscoreCommand(client *c, int reverse) {
 
         /* No "first" element in the specified interval. */
         if (ln == NULL) {
-            addReplyNull(c);
+            if (c->resp < 3)
+                addReply(c, shared.emptyarray);
+            else
+                addReplyNull(c);
             return;
         }
 

@@ -436,7 +436,7 @@ NULL
             "Value at:%p refcount:%d "
             "encoding:%s serializedlength:%zu "
             "lru:%d lru_seconds_idle:%llu%s",
-            (void*)val, val->refcount,
+            (void*)val, static_cast<int>(val->refcount),
             strenc, rdbSavedObjectLen(val),
             val->lru, estimateObjectIdleTime(val)/1000, extra);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"sdslen") && c->argc == 3) {
@@ -721,14 +721,14 @@ void _serverAssertPrintClientInfo(const client *c) {
             arg = buf;
         }
         serverLog(LL_WARNING,"client->argv[%d] = \"%s\" (refcount: %d)",
-            j, arg, c->argv[j]->refcount);
+            j, arg, static_cast<int>(c->argv[j]->refcount));
     }
 }
 
 void serverLogObjectDebugInfo(robj_roptr o) {
     serverLog(LL_WARNING,"Object type: %d", o->type);
     serverLog(LL_WARNING,"Object encoding: %d", o->encoding);
-    serverLog(LL_WARNING,"Object refcount: %d", o->refcount);
+    serverLog(LL_WARNING,"Object refcount: %d", static_cast<int>(o->refcount));
     if (o->type == OBJ_STRING && sdsEncodedObject(o)) {
         serverLog(LL_WARNING,"Object raw string len: %zu", sdslen(szFromObj(o)));
         if (sdslen(szFromObj(o)) < 4096) {

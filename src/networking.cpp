@@ -1631,7 +1631,7 @@ int handleClientsWithPendingWrites(int iel) {
         if (writeToClient(c->fd,c,0) == C_ERR) {
             if (c->flags & CLIENT_CLOSE_ASAP)
             {
-                c->lock.lock();
+                lock.release(); // still locked
                 AeLocker ae;
                 ae.arm(c);
                 freeClient(c);  // writeToClient will only async close, but there's no need to wait

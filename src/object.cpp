@@ -356,7 +356,7 @@ void incrRefCount(robj_roptr o) {
 }
 
 void decrRefCount(robj_roptr o) {
-    if (o->refcount == 1) {
+    if (o->refcount.load(std::memory_order_acquire) == 1) {
         switch(o->type) {
         case OBJ_STRING: freeStringObject(o); break;
         case OBJ_LIST: freeListObject(o); break;

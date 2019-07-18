@@ -57,6 +57,7 @@
 #define UNUSED(x) ((void)x)
 #endif
 
+
 /****************************************************
  *
  *      Implementation of a fair spinlock.  To promote fairness we
@@ -64,12 +65,74 @@
  * 
  ****************************************************/
 
+
+#if !defined(__has_feature)
+    #define __has_feature(x) 0
+#endif
+
+#if __has_feature(thread_sanitizer)
+
+    /* Report that a lock has been created at address "lock". */
+    #define ANNOTATE_RWLOCK_CREATE(lock) \
+        AnnotateRWLockCreate(__FILE__, __LINE__, lock)
+
+    /* Report that the lock at address "lock" is about to be destroyed. */
+    #define ANNOTATE_RWLOCK_DESTROY(lock) \
+        AnnotateRWLockDestroy(__FILE__, __LINE__, lock)
+
+    /* Report that the lock at address "lock" has been acquired.
+       is_w=1 for writer lock, is_w=0 for reader lock. */
+    #define ANNOTATE_RWLOCK_ACQUIRED(lock, is_w) \
+        AnnotateRWLockAcquired(__FILE__, __LINE__, lock, is_w)
+
+    /* Report that the lock at address "lock" is about to be released. */
+    #define ANNOTATE_RWLOCK_RELEASED(lock, is_w) \
+      AnnotateRWLockReleased(__FILE__, __LINE__, lock, is_w)
+
+    #if defined(DYNAMIC_ANNOTATIONS_WANT_ATTRIBUTE_WEAK)
+        #if defined(__GNUC__)
+            #define DYNAMIC_ANNOTATIONS_ATTRIBUTE_WEAK __attribute__((weak))
+        #else
+            /* TODO(glider): for Windows support we may want to change this macro in order
+               to prepend __declspec(selectany) to the annotations' declarations. */
+            #error weak annotations are not supported for your compiler
+        #endif
+    #else
+        #define DYNAMIC_ANNOTATIONS_ATTRIBUTE_WEAK
+    #endif
+
+    extern "C" {
+    void AnnotateRWLockCreate(
+        const char *file, int line,
+        const volatile void *lock) DYNAMIC_ANNOTATIONS_ATTRIBUTE_WEAK;
+    void AnnotateRWLockDestroy(
+        const char *file, int line,
+        const volatile void *lock) DYNAMIC_ANNOTATIONS_ATTRIBUTE_WEAK;
+    void AnnotateRWLockAcquired(
+        const char *file, int line,
+        const volatile void *lock, long is_w) DYNAMIC_ANNOTATIONS_ATTRIBUTE_WEAK;
+    void AnnotateRWLockReleased(
+        const char *file, int line,
+        const volatile void *lock, long is_w) DYNAMIC_ANNOTATIONS_ATTRIBUTE_WEAK;
+    }
+
+#else
+
+    #define ANNOTATE_RWLOCK_CREATE(lock)
+    #define ANNOTATE_RWLOCK_DESTROY(lock)
+    #define ANNOTATE_RWLOCK_ACQUIRED(lock, is_w)
+    #define ANNOTATE_RWLOCK_RELEASED(lock, is_w)
+
+#endif
+
 static_assert(sizeof(pid_t) <= sizeof(fastlock::m_pidOwner), "fastlock::m_pidOwner not large enough");
 uint64_t g_longwaits = 0;
 
 uint64_t fastlock_getlongwaitcount()
 {
-    return g_longwaits;
+    uint64_t rval;
+    __atomic_load(&g_longwaits, &rval, __ATOMIC_RELAXED);
+    return rval;
 }
 
 #ifndef ASM_SPINLOCK
@@ -107,12 +170,15 @@ extern "C" void fastlock_init(struct fastlock *lock)
     lock->m_depth = 0;
     lock->m_pidOwner = -1;
     lock->futex = 0;
+    ANNOTATE_RWLOCK_CREATE(lock);
 }
 
 #ifndef ASM_SPINLOCK
 extern "C" void fastlock_lock(struct fastlock *lock)
 {
-    if ((int)__atomic_load_4(&lock->m_pidOwner, __ATOMIC_ACQUIRE) == gettid())
+    int pidOwner;
+    __atomic_load(&lock->m_pidOwner, &pidOwner, __ATOMIC_ACQUIRE);
+    if (pidOwner == gettid())
     {
         ++lock->m_depth;
         return;
@@ -124,8 +190,12 @@ extern "C" void fastlock_lock(struct fastlock *lock)
 #endif
     int cloops = 0;
     ticket ticketT;
-    while (((ticketT.u = __atomic_load_4(&lock->m_ticket.m_active, __ATOMIC_ACQUIRE)) & 0xffff) != myticket)
+    for (;;)
     {
+        __atomic_load(&lock->m_ticket.u, &ticketT.u, __ATOMIC_ACQUIRE);
+        if ((ticketT.u & 0xffff) == myticket)
+            break;
+
 #if defined(__i386__) || defined(__amd64__)
         __asm__ ("pause");
 #endif
@@ -136,28 +206,34 @@ extern "C" void fastlock_lock(struct fastlock *lock)
             futex(&lock->m_ticket.u, FUTEX_WAIT_BITSET_PRIVATE, ticketT.u, nullptr, mask);
             __atomic_fetch_and(&lock->futex, ~mask, __ATOMIC_RELEASE);
 #endif
-            ++g_longwaits;
+            __atomic_fetch_add(&g_longwaits, 1, __ATOMIC_RELAXED);
         }
     }
 
     lock->m_depth = 1;
-    __atomic_store_4(&lock->m_pidOwner, gettid(), __ATOMIC_RELEASE);
+    int tid = gettid();
+    __atomic_store(&lock->m_pidOwner, &tid, __ATOMIC_RELEASE);
+    ANNOTATE_RWLOCK_ACQUIRED(lock, true);
     std::atomic_thread_fence(std::memory_order_acquire);
 }
 
 extern "C" int fastlock_trylock(struct fastlock *lock, int fWeak)
 {
-    if ((int)__atomic_load_4(&lock->m_pidOwner, __ATOMIC_ACQUIRE) == gettid())
+    int tid;
+    __atomic_load(&lock->m_pidOwner, &tid, __ATOMIC_ACQUIRE);
+    if (tid == gettid())
     {
         ++lock->m_depth;
         return true;
     }
 
     // cheap test
-    if (lock->m_ticket.m_active != lock->m_ticket.m_avail)
+    struct ticket ticketT;
+    __atomic_load(&lock->m_ticket.u, &ticketT.u, __ATOMIC_ACQUIRE);
+    if (ticketT.m_active != ticketT.m_avail)
         return false;
 
-    uint16_t active = __atomic_load_2(&lock->m_ticket.m_active, __ATOMIC_RELAXED);
+    uint16_t active = ticketT.m_active;
     uint16_t next = active + 1;
 
     struct ticket ticket_expect { { { active, active } } };
@@ -165,7 +241,9 @@ extern "C" int fastlock_trylock(struct fastlock *lock, int fWeak)
     if (__atomic_compare_exchange(&lock->m_ticket, &ticket_expect, &ticket_setiflocked, fWeak /*weak*/, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
     {
         lock->m_depth = 1;
-        __atomic_store_4(&lock->m_pidOwner, gettid(), __ATOMIC_RELEASE);
+        tid = gettid();
+        __atomic_store(&lock->m_pidOwner, &tid,  __ATOMIC_RELEASE);
+        ANNOTATE_RWLOCK_ACQUIRED(lock, true);
         return true;
     }
     return false;
@@ -176,13 +254,20 @@ extern "C" int fastlock_trylock(struct fastlock *lock, int fWeak)
 void unlock_futex(struct fastlock *lock, uint16_t ifutex)
 {
     unsigned mask = (1U << (ifutex % 32));
-    unsigned futexT = __atomic_load_4(&lock->futex, __ATOMIC_RELAXED) & mask;
+    unsigned futexT;
+    __atomic_load(&lock->futex, &futexT, __ATOMIC_RELAXED);
+    futexT &= mask;
     
     if (futexT == 0)
         return;
     
-    while (__atomic_load_4(&lock->futex, __ATOMIC_ACQUIRE) & mask)
+    for (;;)
     {
+        __atomic_load(&lock->futex, &futexT, __ATOMIC_ACQUIRE);
+        futexT &= mask;
+        if (!futexT)
+            break;
+
         if (futex(&lock->m_ticket.u, FUTEX_WAKE_BITSET_PRIVATE, INT_MAX, nullptr, mask) == 1)
             break;
     }
@@ -194,9 +279,13 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
     --lock->m_depth;
     if (lock->m_depth == 0)
     {
-        assert((int)__atomic_load_4(&lock->m_pidOwner, __ATOMIC_RELAXED) >= 0);  // unlock after free
-        lock->m_pidOwner = -1;
+        int pidT;
+        __atomic_load(&lock->m_pidOwner, &pidT, __ATOMIC_RELAXED);
+        assert(pidT >= 0);  // unlock after free
+        int t = -1;
+        __atomic_store(&lock->m_pidOwner, &t, __ATOMIC_RELEASE);
         std::atomic_thread_fence(std::memory_order_release);
+        ANNOTATE_RWLOCK_RELEASED(lock, true);
         uint16_t activeNew = __atomic_add_fetch(&lock->m_ticket.m_active, 1, __ATOMIC_RELEASE);  // on x86 the atomic is not required here, but ASM handles that case
 #ifdef __linux__
         unlock_futex(lock, activeNew);
@@ -213,12 +302,15 @@ extern "C" void fastlock_free(struct fastlock *lock)
     assert((lock->m_ticket.m_active == lock->m_ticket.m_avail)                                        // Asser the lock is unlocked
         || (lock->m_pidOwner == gettid() && (lock->m_ticket.m_active == lock->m_ticket.m_avail-1)));  // OR we own the lock and nobody else is waiting
     lock->m_pidOwner = -2;  // sentinal value indicating free
+    ANNOTATE_RWLOCK_DESTROY(lock);
 }
 
 
 bool fastlock::fOwnLock()
 {
-    return gettid() == m_pidOwner;
+    int tid;
+    __atomic_load(&m_pidOwner, &tid, __ATOMIC_RELAXED);
+    return gettid() == tid;
 }
 
 int fastlock_unlock_recursive(struct fastlock *lock)

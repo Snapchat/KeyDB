@@ -2290,6 +2290,7 @@ sds getAllClientsInfoString(int type) {
     listRewind(g_pserver->clients,&li);
     while ((ln = listNext(&li)) != NULL) {
         client = reinterpret_cast<struct client*>(listNodeValue(ln));
+        std::unique_lock<decltype(client->lock)> lock(client->lock);
         if (type != -1 && getClientType(client) != type) continue;
         o = catClientInfoString(o,client);
         o = sdscatlen(o,"\n",1);

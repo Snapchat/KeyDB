@@ -43,7 +43,7 @@ robj *createObject(int type, void *ptr) {
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
     o->m_ptr = ptr;
-    o->refcount = 1;
+    o->refcount.store(1, std::memory_order_relaxed);
     o->mvcc_tstamp = OBJ_MVCC_INVALID;
 
     /* Set the LRU to the current lruclock (minutes resolution), or
@@ -69,7 +69,7 @@ robj *createObject(int type, void *ptr) {
  */
 robj *makeObjectShared(robj *o) {
     serverAssert(o->refcount == 1);
-    o->refcount = OBJ_SHARED_REFCOUNT;
+    o->refcount.store(OBJ_SHARED_REFCOUNT, std::memory_order_relaxed);
     return o;
 }
 
@@ -91,7 +91,7 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
 
     o->type = OBJ_STRING;
     o->encoding = OBJ_ENCODING_EMBSTR;
-    o->refcount = 1;
+    o->refcount.store(1, std::memory_order_relaxed);
     o->mvcc_tstamp = OBJ_MVCC_INVALID;
 
     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
@@ -352,7 +352,7 @@ void freeStreamObject(robj_roptr o) {
 }
 
 void incrRefCount(robj_roptr o) {
-    if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount++;
+    if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount.fetch_add(1, std::memory_order_acquire);
 }
 
 void decrRefCount(robj_roptr o) {
@@ -370,7 +370,7 @@ void decrRefCount(robj_roptr o) {
         zfree(o.unsafe_robjcast());
     } else {
         if (o->refcount <= 0) serverPanic("decrRefCount against refcount <= 0");
-        if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount--;
+        if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount.fetch_sub(1, std::memory_order_acquire);
     }
 }
 

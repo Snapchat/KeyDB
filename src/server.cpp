@@ -1023,7 +1023,7 @@ extern "C" void nolocks_localtime(struct tm *tmp, time_t t, time_t tz, int dst);
  * serverLog() is to prefer. */
 void serverLogRaw(int level, const char *msg) {
     const int syslogLevelMap[] = { LOG_DEBUG, LOG_INFO, LOG_NOTICE, LOG_WARNING };
-    const char *c = ".-*#";
+    const char *c = ".-*#                                                             ";
     FILE *fp;
     char buf[64];
     int rawmode = (level & LL_RAW);
@@ -1749,7 +1749,8 @@ void databasesCron(void) {
  * a lot faster than calling time(NULL) */
 void updateCachedTime(void) {
     g_pserver->unixtime = time(NULL);
-    g_pserver->mstime = mstime();
+    long long ms = mstime();
+    __atomic_store(&g_pserver->mstime, &ms, __ATOMIC_RELAXED);
 
     /* To get information about daylight saving time, we need to call
      * localtime_r and cache the result. However calling localtime_r in this
@@ -4941,13 +4942,20 @@ int redisIsSupervised(int mode) {
 
 uint64_t getMvccTstamp()
 {
-    return g_pserver->mvcc_tstamp;
+    uint64_t rval;
+    __atomic_load(&g_pserver->mvcc_tstamp, &rval, __ATOMIC_ACQUIRE);
+    return rval;
 }
 
 void incrementMvccTstamp()
 {
-    uint64_t msPrev = g_pserver->mvcc_tstamp >> 20;
-    if (msPrev >= (uint64_t)g_pserver->mstime)  // we can be greater if the count overflows
+    uint64_t msPrev;
+    __atomic_load(&g_pserver->mvcc_tstamp, &msPrev, __ATOMIC_ACQUIRE);
+    msPrev >>= 20;  // convert to milliseconds
+
+    long long mst;
+    __atomic_load(&g_pserver->mstime, &mst, __ATOMIC_RELAXED);
+    if (msPrev >= (uint64_t)mst)  // we can be greater if the count overflows
     {
         atomicIncr(g_pserver->mvcc_tstamp, 1);
     }

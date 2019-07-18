@@ -45,6 +45,17 @@ endif
 endif
 
 USEASM?=true
+
+ifneq ($(SANITIZE),)
+	CC=clang
+	CXX=clang++
+	CFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE
+	CXXFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE
+	LDFLAGS+= -fsanitize=$(SANITIZE)
+	MALLOC=libc
+	USEASM=false
+endif
+
 # Do we use our assembly spinlock? X64 only
 ifeq ($(uname_S),Linux)
 ifeq ($(uname_M),x86_64)

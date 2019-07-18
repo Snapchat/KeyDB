@@ -4,7 +4,10 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
     set slave_port [srv 0 port]
     set slave_log [srv 0 stdout]
     set slave_pid [s process_id]
-    start_server {overrides {active-replica yes}} {
+
+    set replicaArgs "$slave_host $slave_port"
+    set overridesT "active-replica yes"
+    start_server [list overrides [list active-replica yes replicaof [list $slave_host $slave_port]]] {
         set master [srv 0 client]
         set master_host [srv 0 host]
         set master_port [srv 0 port]
@@ -13,10 +16,11 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
         # are no bugs the timeout is triggered in a reasonable amount
         # of time.
         $slave config set repl-timeout 5
+        $master config set repl-timeout 5
 
         # Start the replication process...
         $slave slaveof $master_host $master_port
-        $master slaveof $slave_host $slave_port
+        #note the master is a replica via the config (see start_server above)
 
         test {Active replicas report the correct role} {
             wait_for_condition 50 100 {

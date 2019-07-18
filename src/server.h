@@ -1158,6 +1158,7 @@ struct redisServerThreadVars {
                                 to be processed. */
     client *lua_client = nullptr;   /* The "fake client" to query Redis from Lua */
     struct fastlock lockPendingWrite;
+    char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
 };
 
 struct redisMaster {
@@ -1275,7 +1276,6 @@ struct redisServer {
     rax *clients_index;         /* Active clients dictionary by client ID. */
     int clients_paused;         /* True if clients are currently paused */
     mstime_t clients_pause_end_time; /* Time when we undo clients_paused */
-    char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     dict *migrate_cached_sockets;/* MIGRATE cached sockets */
     std::atomic<uint64_t> next_client_id; /* Next client unique ID. Incremental. */
     int protected_mode;         /* Don't accept external connections. */

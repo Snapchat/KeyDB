@@ -1274,7 +1274,7 @@ void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
     kde = dictFind(db->pdict,ptrFromObj(key));
     serverAssertWithInfo(NULL,key,kde != NULL);
 
-    if (((robj*)dictGetVal(kde))->refcount == OBJ_SHARED_REFCOUNT)
+    if (((robj*)dictGetVal(kde))->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
     {
         // shared objects cannot have the expire bit set, create a real object
         dictSetVal(db->pdict, kde, dupStringObject((robj*)dictGetVal(kde)));

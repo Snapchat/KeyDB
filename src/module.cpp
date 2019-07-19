@@ -1252,6 +1252,17 @@ int RM_ReplyWithStringBuffer(RedisModuleCtx *ctx, const char *buf, size_t len) {
     return REDISMODULE_OK;
 }
 
+/* Reply with a bulk string, taking in input a C buffer pointer that is
+ * assumed to be null-terminated.
+ *
+ * The function always returns REDISMODULE_OK. */
+int RM_ReplyWithCString(RedisModuleCtx *ctx, const char *buf) {
+    client *c = moduleGetReplyClient(ctx);
+    if (c == NULL) return REDISMODULE_OK;
+    addReplyBulkCString(c,(char*)buf);
+    return REDISMODULE_OK;
+}
+
 /* Reply with a bulk string, taking in input a RedisModuleString object.
  *
  * The function always returns REDISMODULE_OK. */
@@ -1464,6 +1475,9 @@ int RM_GetContextFlags(RedisModuleCtx *ctx) {
 
     if (g_pserver->cluster_enabled)
         flags |= REDISMODULE_CTX_FLAGS_CLUSTER;
+
+    if (g_pserver->loading)
+        flags |= REDISMODULE_CTX_FLAGS_LOADING;
 
     /* Maxmemory and eviction policy */
     if (g_pserver->maxmemory > 0) {

@@ -3375,6 +3375,7 @@ void call(client *c, int flags) {
         latencyAddSampleIfNeeded(latency_event,duration/1000);
         slowlogPushEntryIfNeeded(c,c->argv,c->argc,duration);
     }
+
     if (flags & CMD_CALL_STATS) {
         /* use the real command that was executed (cmd and lastamc) may be
          * different, in case of MULTI-EXEC or re-written commands such as
@@ -3448,6 +3449,16 @@ void call(client *c, int flags) {
     ProcessPendingAsyncWrites();
     
     g_pserver->also_propagate = prev_also_propagate;
+
+    /* If the client has keys tracking enabled for client side caching,
+     * make sure to remember the keys it fetched via this command. */
+    if (c->cmd->flags & CMD_READONLY) {
+        client *caller = (c->flags & CLIENT_LUA && g_pserver->lua_caller) ?
+                            g_pserver->lua_caller : c;
+        if (caller->flags & CLIENT_TRACKING)
+            trackingRememberKeys(caller);
+    }
+
     g_pserver->stat_numcommands++;
 }
 

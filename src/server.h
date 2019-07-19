@@ -327,8 +327,8 @@ public:
 #define AOF_WAIT_REWRITE 2    /* AOF waits rewrite to start appending */
 
 /* Client flags */
-#define CLIENT_SLAVE (1<<0)   /* This client is a slave server */
-#define CLIENT_MASTER (1<<1)  /* This client is a master server */
+#define CLIENT_SLAVE (1<<0)   /* This client is a repliaca */
+#define CLIENT_MASTER (1<<1)  /* This client is a master */
 #define CLIENT_MONITOR (1<<2) /* This client is a slave monitor, see MONITOR */
 #define CLIENT_MULTI (1<<3)   /* This client is in a MULTI context */
 #define CLIENT_BLOCKED (1<<4) /* The client is waiting in a blocking operation */
@@ -359,7 +359,17 @@ public:
 #define CLIENT_LUA_DEBUG_SYNC (1<<26)  /* EVAL debugging without fork() */
 #define CLIENT_MODULE (1<<27) /* Non connected client used by some module. */
 #define CLIENT_PROTECTED (1<<28) /* Client should not be freed for now. */
-#define CLIENT_FORCE_REPLY (1<<29) /* Should addReply be forced to write the text? */
+#define CLIENT_PENDING_READ (1<<29) /* The client has pending reads and was put
+                                       in the list of clients we can read
+                                       from. */
+#define CLIENT_PENDING_COMMAND (1<<30) /* Used in threaded I/O to signal after
+                                          we return single threaded that the
+                                          client has already pending commands
+                                          to be executed. */
+#define CLIENT_TRACKING (1<<31) /* Client enabled keys tracking in order to
+                                   perform client side caching. */
+#define CLIENT_TRACKING_BROKEN_REDIR (1ULL<<32) /* Target client is invalid. */
+#define CLIENT_FORCE_REPLY (1ULL<<33) /* Should addReply be forced to write the text? */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -930,7 +940,7 @@ typedef struct client {
     time_t ctime;           /* Client creation time. */
     time_t lastinteraction; /* Time of the last interaction, used for timeout */
     time_t obuf_soft_limit_reached_time;
-    std::atomic<int> flags;              /* Client flags: CLIENT_* macros. */
+    std::atomic<uint64_t> flags;              /* Client flags: CLIENT_* macros. */
     int fPendingAsyncWrite; /* NOTE: Not a flag because it is written to outside of the client lock (locked by the global lock instead) */
     int authenticated;      /* Needed when the default user requires auth. */
     int replstate;          /* Replication state if this is a slave. */
@@ -965,6 +975,11 @@ typedef struct client {
     /* compliant servers will announce their UUIDs when a replica connection is started, and return when asked */
     /* UUIDs are transient and lost when the server is shut down */
     unsigned char uuid[UUID_BINARY_LEN];
+
+    /* If this client is in tracking mode and this field is non zero,
+     * invalidation messages for keys fetched by this client will be send to
+     * the specified client ID. */
+    uint64_t client_tracking_redirection;
 
     /* Response buffer */
     int bufpos;
@@ -1460,6 +1475,8 @@ struct redisServer {
     unsigned int blocked_clients;   /* # of clients executing a blocking cmd.*/
     unsigned int blocked_clients_by_type[BLOCKED_NUM];
     list *ready_keys;        /* List of readyList structures for BLPOP & co */
+    /* Client side caching. */
+    unsigned int tracking_clients;  /* # of clients with tracking enabled.*/
     /* Sort parameters - qsort_r() is only available under BSD so we
      * have to take this state global, in order to pass it to sortCompare() */
     int sort_desc;
@@ -1796,6 +1813,7 @@ void addReplyPushLenAsync(client *c, long length);
 void addReplyLongLongAsync(client *c, long long ll);
 
 void ProcessPendingAsyncWrites(void);
+client *lookupClientByID(uint64_t id);
 
 #ifdef __GNUC__
 void addReplyErrorFormat(client *c, const char *fmt, ...)
@@ -1806,6 +1824,12 @@ void addReplyStatusFormat(client *c, const char *fmt, ...)
 void addReplyErrorFormat(client *c, const char *fmt, ...);
 void addReplyStatusFormat(client *c, const char *fmt, ...);
 #endif
+
+/* Client side caching (tracking mode) */
+void enableTracking(client *c, uint64_t redirect_to);
+void disableTracking(client *c);
+void trackingRememberKeys(client *c);
+void trackingInvalidateKey(robj *keyobj);
 
 /* List data type */
 void listTypeTryConversion(robj *subject, robj *value);
@@ -2134,6 +2158,7 @@ int pubsubUnsubscribeAllPatterns(client *c, int notify);
 void freePubsubPattern(const void *p);
 int listMatchPubsubPattern(void *a, void *b);
 int pubsubPublishMessage(robj *channel, robj *message);
+void addReplyPubsubMessage(client *c, robj *channel, robj *msg);
 
 /* Keyspace events notification */
 void notifyKeyspaceEvent(int type, const char *event, robj *key, int dbid);

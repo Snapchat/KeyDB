@@ -174,6 +174,7 @@ client *createClient(int fd, int iel) {
     c->bufAsync = NULL;
     c->buflenAsync = 0;
     c->bufposAsync = 0;
+    c->client_tracking_redirection = 0;
     memset(c->uuid, 0, UUID_BINARY_LEN);
 
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
@@ -1264,6 +1265,9 @@ void unlinkClient(client *c) {
         serverAssert(fFound);
         c->fPendingAsyncWrite = FALSE;
     }
+
+    /* Clear the tracking status. */
+    if (c->flags & CLIENT_TRACKING) disableTracking(c);
 }
 
 void freeClient(client *c) {
@@ -2245,6 +2249,8 @@ sds catClientInfoString(sds s, client *client) {
     if (client->flags & CLIENT_PUBSUB) *p++ = 'P';
     if (client->flags & CLIENT_MULTI) *p++ = 'x';
     if (client->flags & CLIENT_BLOCKED) *p++ = 'b';
+    if (client->flags & CLIENT_TRACKING) *p++ = 't';
+    if (client->flags & CLIENT_TRACKING_BROKEN_REDIR) *p++ = 'R';
     if (client->flags & CLIENT_DIRTY_CAS) *p++ = 'd';
     if (client->flags & CLIENT_CLOSE_AFTER_REPLY) *p++ = 'c';
     if (client->flags & CLIENT_UNBLOCKED) *p++ = 'u';
@@ -2357,6 +2363,7 @@ void clientCommand(client *c) {
 "reply (on|off|skip)    -- Control the replies sent to the current connection.",
 "setname <name>         -- Assign the name <name> to the current connection.",
 "unblock <clientid> [TIMEOUT|ERROR] -- Unblock the specified blocked client.",
+"tracking (on|off) [REDIRECT <id>] -- Enable client keys tracking for client side caching.",
 NULL
         };
         addReplyHelp(c, help);
@@ -2515,20 +2522,56 @@ NULL
         } else {
             addReply(c,shared.czero);
         }
-    } else if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"setname") && c->argc == 3) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"setname") && c->argc == 3) {
+        /* CLIENT SETNAME */
         if (clientSetNameOrReply(c,c->argv[2]) == C_OK)
             addReply(c,shared.ok);
-    } else if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"getname") && c->argc == 2) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"getname") && c->argc == 2) {
+        /* CLIENT GETNAME */
         if (c->name)
             addReplyBulk(c,c->name);
         else
             addReplyNull(c, shared.nullbulk);
-    } else if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"pause") && c->argc == 3) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"pause") && c->argc == 3) {
+        /* CLIENT PAUSE */
         long long duration;
 
-        if (getTimeoutFromObjectOrReply(c,c->argv[2],&duration,UNIT_MILLISECONDS)
-                                        != C_OK) return;
+        if (getTimeoutFromObjectOrReply(c,c->argv[2],&duration,
+                UNIT_MILLISECONDS) != C_OK) return;
         pauseClients(duration);
+        addReply(c,shared.ok);
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"tracking") &&
+               (c->argc == 3 || c->argc == 5))
+    {
+        /* CLIENT TRACKING (on|off) [REDIRECT <id>] */
+        long long redir = 0;
+
+        /* Parse the redirection option: we'll require the client with
+         * the specified ID to exist right now, even if it is possible
+         * it will get disconnected later. */
+        if (c->argc == 5) {
+            if (strcasecmp(szFromObj(c->argv[3]),"redirect") != 0) {
+                addReply(c,shared.syntaxerr);
+                return;
+            } else {
+                if (getLongLongFromObjectOrReply(c,c->argv[4],&redir,NULL) !=
+                    C_OK) return;
+                if (lookupClientByID(redir) == NULL) {
+                    addReplyError(c,"The client ID you want redirect to "
+                                    "does not exist");
+                    return;
+                }
+            }
+        }
+
+        if (!strcasecmp(szFromObj(c->argv[2]),"on")) {
+            enableTracking(c,redir);
+        } else if (!strcasecmp(szFromObj(c->argv[2]),"off")) {
+            disableTracking(c);
+        } else {
+            addReply(c,shared.syntaxerr);
+            return;
+        }
         addReply(c,shared.ok);
     } else {
         addReplyErrorFormat(c, "Unknown subcommand or wrong number of arguments for '%s'. Try CLIENT HELP", (char*)ptrFromObj(c->argv[1]));

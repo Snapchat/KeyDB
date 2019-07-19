@@ -750,7 +750,7 @@ __attribute__((always_inline)) inline char *szFromObj(const robj *o)
  * below function. Native types are checked against the OBJ_STRING,
  * OBJ_LIST, OBJ_* defines, and Module types have their registered name
  * returned.*/
-char* typeNameCanonicalize(robj*);
+const char* typeNameCanonicalize(robj_roptr o);
 
 /* Macro used to initialize a Redis object allocated on the stack.
  * Note that this macro is taken near the structure definition to make sure

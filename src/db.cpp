@@ -451,6 +451,7 @@ int selectDb(client *c, int id) {
 
 void signalModifiedKey(redisDb *db, robj *key) {
     touchWatchedKey(db,key);
+    if (g_pserver->tracking_clients) trackingInvalidateKey(key);
 }
 
 void signalFlushedDb(int dbid) {

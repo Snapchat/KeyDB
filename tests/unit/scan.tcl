@@ -69,7 +69,7 @@ start_server {tags {"scan"}} {
             if {$cur == 0} break
         }
 
-        assert_equal 0 [llength $keys]
+        assert_equal 0 [llength $keys] "non-strings excluded"
 
         # Check strings are included
         set cur 0
@@ -82,7 +82,7 @@ start_server {tags {"scan"}} {
             if {$cur == 0} break
         }
 
-        assert_equal 1000 [llength $keys]
+        assert_equal 1000 [llength $keys] "strings included"
 
         # Check all three args work together
         set cur 0

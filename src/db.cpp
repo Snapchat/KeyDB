@@ -820,7 +820,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
         /* Filter an element if it isn't the type we want. */
         if (!filter && o == nullptr && type){
             robj_roptr typecheck = lookupKeyReadWithFlags(c->db, kobj, LOOKUP_NOTOUCH);
-            const char* type = typeNameCanonicalize(typecheck);
+            const char* type = getObjectTypeName(typecheck);
             if (strcasecmp((char*) type, type)) filter = 1;
         }
 
@@ -880,7 +880,7 @@ void lastsaveCommand(client *c) {
     addReplyLongLong(c,g_pserver->lastsave);
 }
 
-const char* typeNameCanonicalize(robj_roptr o) {
+const char* getObjectTypeName(robj_roptr o) {
     const char* type;
     if (o == nullptr) {
         type = "none";
@@ -904,7 +904,7 @@ const char* typeNameCanonicalize(robj_roptr o) {
 
 void typeCommand(client *c) {
     robj_roptr o = lookupKeyReadWithFlags(c->db,c->argv[1],LOOKUP_NOTOUCH);
-    addReplyStatus(c, typeNameCanonicalize(o));
+    addReplyStatus(c, getObjectTypeName(o));
 }
 
 void shutdownCommand(client *c) {

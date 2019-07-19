@@ -2971,7 +2971,7 @@ void replicationCron(void) {
 
     /* First, send PING according to ping_slave_period. */
     if ((replication_cron_loops % g_pserver->repl_ping_slave_period) == 0 &&
-        listLength(g_pserver->slaves))
+        listLength(g_pserver->slaves) && !clientsArePaused())
     {
         ping_argv[0] = createStringObject("PING",4);
         replicationFeedSlaves(g_pserver->slaves, g_pserver->slaveseldb,

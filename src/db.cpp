@@ -665,7 +665,7 @@ int parseScanCursorOrReply(client *c, robj *o, unsigned long *cursor) {
 }
 
 /* This command implements SCAN, HSCAN and SSCAN commands.
- * If object 'o' is passed, then it must be a Hash or Set object, otherwise
+ * If object 'o' is passed, then it must be a Hash, Set or Zset object, otherwise
  * if 'o' is NULL the command will operate on the dictionary associated with
  * the current database.
  *
@@ -681,6 +681,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
     listNode *node, *nextnode;
     long count = 10;
     sds pat = NULL;
+    sds typename = NULL;
     int patlen = 0, use_pattern = 0;
     dict *ht;
 
@@ -717,6 +718,10 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
             use_pattern = !(pat[0] == '*' && patlen == 1);
 
             i += 2;
+        } else if (!strcasecmp(c->argv[i]->ptr, "type") && o == NULL && j >= 2) {
+            /* SCAN for a particular type only applies to the db dict */
+            typename = c->argv[i+1]->ptr;
+            i+= 2;
         } else {
             addReply(c,shared.syntaxerr);
             goto cleanup;
@@ -809,6 +814,31 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
                 len = ll2string(buf,sizeof(buf),(long)ptrFromObj(kobj));
                 if (!stringmatchlen(pat, patlen, buf, len, 0)) filter = 1;
             }
+        }
+
+        /* Filter an element if it isn't the type we want. */
+        if (!filter && o == NULL && typename){
+            robj* typecheck;
+            char *type;
+            typecheck = lookupKeyReadWithFlags(c->db, kobj, LOOKUP_NOTOUCH);
+            if (typecheck == NULL) {
+                type = "none";
+            } else {
+                switch(typecheck->type) {
+                case OBJ_STRING: type = "string"; break;
+                case OBJ_LIST: type = "list"; break;
+                case OBJ_SET: type = "set"; break;
+                case OBJ_ZSET: type = "zset"; break;
+                case OBJ_HASH: type = "hash"; break;
+                case OBJ_STREAM: type = "stream"; break;
+                case OBJ_MODULE: {
+                    moduleValue *mv = typecheck->ptr;
+                    type = mv->type->name;
+                }; break;
+                default: type = "unknown"; break;
+                }
+            }
+            if (strcasecmp((char*) typename, type)) filter = 1;
         }
 
         /* Filter element if it is an expired key. */

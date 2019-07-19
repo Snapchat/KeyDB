@@ -820,8 +820,8 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
         /* Filter an element if it isn't the type we want. */
         if (!filter && o == nullptr && type){
             robj_roptr typecheck = lookupKeyReadWithFlags(c->db, kobj, LOOKUP_NOTOUCH);
-            const char* type = getObjectTypeName(typecheck);
-            if (strcasecmp((char*) type, type)) filter = 1;
+            const char* typeT = getObjectTypeName(typecheck);
+            if (strcasecmp((char*) type, typeT)) filter = 1;
         }
 
         /* Filter element if it is an expired key. */

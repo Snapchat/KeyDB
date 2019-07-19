@@ -681,7 +681,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
     listNode *node, *nextnode;
     long count = 10;
     sds pat = NULL;
-    sds typename = NULL;
+    sds type = NULL;
     int patlen = 0, use_pattern = 0;
     dict *ht;
 
@@ -718,9 +718,9 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
             use_pattern = !(pat[0] == '*' && patlen == 1);
 
             i += 2;
-        } else if (!strcasecmp(c->argv[i]->ptr, "type") && o == NULL && j >= 2) {
+        } else if (!strcasecmp(szFromObj(c->argv[i]), "type") && o == nullptr && j >= 2) {
             /* SCAN for a particular type only applies to the db dict */
-            typename = c->argv[i+1]->ptr;
+            type = szFromObj(c->argv[i+1]);
             i+= 2;
         } else {
             addReply(c,shared.syntaxerr);
@@ -817,10 +817,10 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
         }
 
         /* Filter an element if it isn't the type we want. */
-        if (!filter && o == NULL && typename){
-            robj* typecheck = lookupKeyReadWithFlags(c->db, kobj, LOOKUP_NOTOUCH);
-            char* type = typeNameCanonicalize(typecheck);
-            if (strcasecmp((char*) typename, type)) filter = 1;
+        if (!filter && o == nullptr && type){
+            robj_roptr typecheck = lookupKeyReadWithFlags(c->db, kobj, LOOKUP_NOTOUCH);
+            const char* type = typeNameCanonicalize(typecheck);
+            if (strcasecmp((char*) type, type)) filter = 1;
         }
 
         /* Filter element if it is an expired key. */
@@ -879,9 +879,9 @@ void lastsaveCommand(client *c) {
     addReplyLongLong(c,g_pserver->lastsave);
 }
 
-const char* typeNameCanonicalize(robj *o) {
+const char* typeNameCanonicalize(robj_roptr o) {
     const char* type;
-    if (o == NULL) {
+    if (o == nullptr) {
         type = "none";
     } else {
         switch(o->type) {

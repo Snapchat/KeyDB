@@ -81,6 +81,7 @@ typedef long long mstime_t; /* millisecond time type. */
                            N-elements flat arrays */
 #include "rax.h"     /* Radix tree */
 #include "uuid.h"
+#include "semiorderedset.h"
 
 /* Following includes allow test functions to be called from Redis main() */
 #include "zipmap.h"
@@ -243,7 +244,7 @@ public:
 #define CONFIG_DEFAULT_ACTIVE_REPLICA 0
 #define CONFIG_DEFAULT_ENABLE_MULTIMASTER 0
 
-#define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
+#define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 64 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
 #define ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC 25 /* CPU max % for keys collection */
 #define ACTIVE_EXPIRE_CYCLE_SLOW 0
@@ -717,7 +718,7 @@ typedef struct RedisModuleDigest {
 #define LRU_CLOCK_MAX ((1<<LRU_BITS)-1) /* Max value of obj->lru */
 #define LRU_CLOCK_RESOLUTION 1000 /* LRU clock resolution in ms */
 
-#define OBJ_SHARED_REFCOUNT INT_MAX
+#define OBJ_SHARED_REFCOUNT (0x7FFFFFFF) 
 #define OBJ_MVCC_INVALID (0xFFFFFFFFFFFFFFFFULL)
 
 typedef struct redisObject {
@@ -726,10 +727,21 @@ typedef struct redisObject {
     unsigned lru:LRU_BITS; /* LRU time (relative to global lru_clock) or
                             * LFU data (least significant 8 bits frequency
                             * and most significant 16 bits access time). */
-    mutable std::atomic<int> refcount;
+private:
+    mutable std::atomic<unsigned> refcount;
+public:
     uint64_t mvcc_tstamp;
     void *m_ptr;
+
+    inline bool FExpires() const { return refcount.load(std::memory_order_relaxed) >> 31; }
+    void SetFExpires(bool fExpires);
+
+    void setrefcount(unsigned ref);
+    unsigned getrefcount(std::memory_order order) const { return (refcount.load(order) & ~(1U << 31)); }
+    void addref() const { refcount.fetch_add(1, std::memory_order_acq_rel); }
+    unsigned release() const { return refcount.fetch_sub(1, std::memory_order_acq_rel) & ~(1U << 31); }
 } robj;
+static_assert(sizeof(redisObject) == 24, "object size is critical, don't increase");
 
 __attribute__((always_inline)) inline const void *ptrFromObj(robj_roptr &o)
 {
@@ -755,6 +767,38 @@ __attribute__((always_inline)) inline char *szFromObj(const robj *o)
     return (char*)ptrFromObj(o);
 }
 
+class expireEntry {
+    sds m_key;
+    long long m_when;
+
+public:
+    expireEntry(sds key, long long when)
+    {
+        m_key = key;
+        m_when = when;
+    }
+
+    bool operator!=(const expireEntry &e) const noexcept
+    {
+        return m_when != e.m_when || m_key != e.m_key;
+    }
+    bool operator==(const expireEntry &e) const noexcept
+    {
+        return m_when == e.m_when && m_key == e.m_key;
+    }
+    bool operator==(const char *key) const noexcept { return m_key == key; }
+
+    bool operator<(const expireEntry &e) const noexcept { return m_when < e.m_when; }
+    bool operator<(const char *key) const noexcept { return m_key < key; }
+    bool operator<(long long when) const noexcept { return m_when < when; }
+
+    const char *key() const noexcept { return m_key; }
+    long long when() const noexcept { return m_when; }
+    
+
+    explicit operator const char*() const noexcept { return m_key; }
+    explicit operator long long() const noexcept { return m_when; }
+};
 
 /* The a string name for an object's type as listed above
  * Native types are checked against the OBJ_STRING, OBJ_LIST, OBJ_* defines,
@@ -766,7 +810,7 @@ const char *getObjectTypeName(robj_roptr o);
  * we'll update it when the structure is changed, to avoid bugs like
  * bug #85 introduced exactly in this way. */
 #define initStaticStringObject(_var,_ptr) do { \
-    _var.refcount = 1; \
+    _var.setrefcount(1); \
     _var.type = OBJ_STRING; \
     _var.encoding = OBJ_ENCODING_RAW; \
     _var.m_ptr = _ptr; \
@@ -793,12 +837,15 @@ typedef struct clientReplyBlock {
  * database. The database number is the 'id' field in the structure. */
 typedef struct redisDb {
     dict *pdict;                 /* The keyspace for this DB */
-    dict *expires;              /* Timeout of keys with a timeout set */
+    semiorderedset<expireEntry, const char*> *setexpire;
+    semiorderedset<expireEntry, const char*>::setiter expireitr;
+
     dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
     dict *ready_keys;           /* Blocked keys that received a PUSH */
     dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
     int id;                     /* Database ID */
-    long long avg_ttl;          /* Average TTL, just for stats */
+    long long last_expire_set;  /* when the last expire was set */
+    double avg_ttl;             /* Average TTL, just for stats */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
 } redisDb;
 
@@ -2174,6 +2221,7 @@ int rewriteConfig(char *path);
 
 /* db.c -- Keyspace access API */
 int removeExpire(redisDb *db, robj *key);
+int removeExpireCore(redisDb *db, robj *key, dictEntry *de);
 void propagateExpire(redisDb *db, robj *key, int lazy);
 int expireIfNeeded(redisDb *db, robj *key);
 long long getExpire(redisDb *db, robj_roptr key);

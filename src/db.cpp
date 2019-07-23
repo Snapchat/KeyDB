@@ -39,6 +39,8 @@
  *----------------------------------------------------------------------------*/
 
 int keyIsExpired(redisDb *db, robj *key);
+int expireIfNeeded(redisDb *db, robj *key, robj *o);
+void dbOverwriteCore(redisDb *db, dictEntry *de, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire);
 
 /* Update LFU when an object is accessed.
  * Firstly, decrement the counter if the decrement time is reached.
@@ -48,6 +50,20 @@ void updateLFU(robj *val) {
     counter = LFULogIncr(counter);
     val->lru = (LFUGetTimeInMinutes()<<8) | counter;
 }
+
+void updateExpire(redisDb *db, sds key, robj *valOld, robj *valNew)
+{
+    serverAssert(valOld->FExpires());
+    serverAssert(!valNew->FExpires());
+    
+    auto itr = db->setexpire->find(key);
+    serverAssert(itr != db->setexpire->end());
+    
+    valNew->SetFExpires(true);
+    valOld->SetFExpires(false);
+    return;
+}
+
 
 /* Low level key lookup API, not actually called directly from commands
  * implementations that should instead rely on lookupKeyRead(),
@@ -160,8 +176,10 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key) {
  * Returns the linked value object if the key exists or NULL if the key
  * does not exist in the specified DB. */
 robj *lookupKeyWrite(redisDb *db, robj *key) {
-    expireIfNeeded(db,key);
-    return lookupKey(db,key,LOOKUP_UPDATEMVCC);
+    robj *o = lookupKey(db,key,LOOKUP_UPDATEMVCC);
+    if (expireIfNeeded(db,key))
+        o = NULL;
+    return o;
 }
 
 robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply) {
@@ -177,6 +195,7 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
 }
 
 int dbAddCore(redisDb *db, robj *key, robj *val) {
+    serverAssert(!val->FExpires());
     sds copy = sdsdup(szFromObj(key));
     int retval = dictAdd(db->pdict, copy, val);
     val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
@@ -206,10 +225,18 @@ void dbAdd(redisDb *db, robj *key, robj *val)
     serverAssertWithInfo(NULL,key,retval == DICT_OK);
 }
 
-void dbOverwriteCore(redisDb *db, dictEntry *de, robj *val, bool fUpdateMvcc)
+void dbOverwriteCore(redisDb *db, dictEntry *de, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire)
 {
     dictEntry auxentry = *de;
     robj *old = (robj*)dictGetVal(de);
+
+    if (old->FExpires()) {
+        if (fRemoveExpire)
+            removeExpire(db, key);
+        else
+            updateExpire(db, (sds)dictGetKey(de), old, val);
+    }
+
     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         val->lru = old->lru;
     }
@@ -235,7 +262,7 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
     dictEntry *de = dictFind(db->pdict,ptrFromObj(key));
 
     serverAssertWithInfo(NULL,key,de != NULL);
-    dbOverwriteCore(db, de, val, true);
+    dbOverwriteCore(db, de, key, val, true, false);
 }
 
 /* Insert a key, handling duplicate keys according to fReplace */
@@ -250,7 +277,7 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
         robj *old = (robj*)dictGetVal(de);
         if (old->mvcc_tstamp <= val->mvcc_tstamp)
         {
-            dbOverwriteCore(db, de, val, false);
+            dbOverwriteCore(db, de, key, val, false, true);
             return true;
         }
         
@@ -271,13 +298,13 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
  *
  * All the new keys in the database should be created via this interface. */
 void setKey(redisDb *db, robj *key, robj *val) {
-    if (lookupKeyWrite(db,key) == NULL) {
+    dictEntry *de = dictFind(db->pdict, ptrFromObj(key));
+    if (de == NULL) {
         dbAdd(db,key,val);
     } else {
-        dbOverwrite(db,key,val);
+        dbOverwriteCore(db,de,key,val,true,true);
     }
     incrRefCount(val);
-    removeExpire(db,key);
     signalModifiedKey(db,key);
 }
 
@@ -292,7 +319,7 @@ int dbExists(redisDb *db, robj *key) {
 robj *dbRandomKey(redisDb *db) {
     dictEntry *de;
     int maxtries = 100;
-    int allvolatile = dictSize(db->pdict) == dictSize(db->expires);
+    int allvolatile = dictSize(db->pdict) == db->setexpire->size();
 
     while(1) {
         sds key;
@@ -303,23 +330,30 @@ robj *dbRandomKey(redisDb *db) {
 
         key = (sds)dictGetKey(de);
         keyobj = createStringObject(key,sdslen(key));
-        if (dictFind(db->expires,key)) {
+
+        if (((robj*)dictGetVal(de))->FExpires())
+        {
             if (allvolatile && listLength(g_pserver->masters) && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
-                 * it could happen that all the keys are already logically
-                 * expired in the slave, so the function cannot stop because
-                 * expireIfNeeded() is false, nor it can stop because
-                 * dictGetRandomKey() returns NULL (there are keys to return).
-                 * To prevent the infinite loop we do some tries, but if there
-                 * are the conditions for an infinite loop, eventually we
-                 * return a key name that may be already expired. */
+                    * it could happen that all the keys are already logically
+                    * expired in the slave, so the function cannot stop because
+                    * expireIfNeeded() is false, nor it can stop because
+                    * dictGetRandomKey() returns NULL (there are keys to return).
+                    * To prevent the infinite loop we do some tries, but if there
+                    * are the conditions for an infinite loop, eventually we
+                    * return a key name that may be already expired. */
                 return keyobj;
             }
-            if (expireIfNeeded(db,keyobj)) {
+        }
+            
+        if (((robj*)dictGetVal(de))->FExpires())
+        {
+             if (expireIfNeeded(db,keyobj)) {
                 decrRefCount(keyobj);
                 continue; /* search for another key. This expired. */
-            }
+             }
         }
+        
         return keyobj;
     }
 }
@@ -328,7 +362,10 @@ robj *dbRandomKey(redisDb *db) {
 int dbSyncDelete(redisDb *db, robj *key) {
     /* Deleting an entry from the expires dict will not free the sds of
      * the key, because it is shared with the main dictionary. */
-    if (dictSize(db->expires) > 0) dictDelete(db->expires,ptrFromObj(key));
+
+    dictEntry *de = dictFind(db->pdict, szFromObj(key));
+    if (de != nullptr && ((robj*)dictGetVal(de))->FExpires())
+        removeExpireCore(db, key, de);
     if (dictDelete(db->pdict,ptrFromObj(key)) == DICT_OK) {
         if (g_pserver->cluster_enabled) slotToKeyDel(key);
         return 1;
@@ -373,7 +410,7 @@ int dbDelete(redisDb *db, robj *key) {
  */
 robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
     serverAssert(o->type == OBJ_STRING);
-    if (o->refcount != 1 || o->encoding != OBJ_ENCODING_RAW) {
+    if (o->getrefcount(std::memory_order_relaxed) != 1 || o->encoding != OBJ_ENCODING_RAW) {
         robj *decoded = getDecodedObject(o);
         o = createRawStringObject(szFromObj(decoded), sdslen(szFromObj(decoded)));
         decrRefCount(decoded);
@@ -419,7 +456,9 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
             emptyDbAsync(&g_pserver->db[j]);
         } else {
             dictEmpty(g_pserver->db[j].pdict,callback);
-            dictEmpty(g_pserver->db[j].expires,callback);
+            delete g_pserver->db[j].setexpire;
+            g_pserver->db[j].setexpire = new (MALLOC_LOCAL) semiorderedset<expireEntry, const char*>();
+            g_pserver->db[j].expireitr = g_pserver->db[j].setexpire->end();
         }
     }
     if (g_pserver->cluster_enabled) {
@@ -964,9 +1003,10 @@ void renameGenericCommand(client *c, int nx) {
          * with the same name. */
         dbDelete(c->db,c->argv[2]);
     }
-    dbAdd(c->db,c->argv[2],o);
-    if (expire != -1) setExpire(c,c->db,c->argv[2],expire);
     dbDelete(c->db,c->argv[1]);
+    dbAdd(c->db,c->argv[2],o);
+    if (expire != -1) 
+        setExpire(c,c->db,c->argv[2],expire);
     signalModifiedKey(c->db,c->argv[1]);
     signalModifiedKey(c->db,c->argv[2]);
     notifyKeyspaceEvent(NOTIFY_GENERIC,"rename_from",
@@ -1024,6 +1064,12 @@ void moveCommand(client *c) {
         return;
     }
     expire = getExpire(c->db,c->argv[1]);
+    if (o->FExpires())
+        removeExpire(c->db,c->argv[1]);
+    serverAssert(!o->FExpires());
+    incrRefCount(o);
+    dbDelete(src,c->argv[1]);
+    g_pserver->dirty++;
 
     /* Return zero if the key already exists in the target DB */
     if (lookupKeyWrite(dst,c->argv[1]) != NULL) {
@@ -1032,11 +1078,7 @@ void moveCommand(client *c) {
     }
     dbAdd(dst,c->argv[1],o);
     if (expire != -1) setExpire(c,dst,c->argv[1],expire);
-    incrRefCount(o);
 
-    /* OK! key moved, free the entry in the source DB */
-    dbDelete(src,c->argv[1]);
-    g_pserver->dirty++;
     addReply(c,shared.cone);
 }
 
@@ -1077,12 +1119,16 @@ int dbSwapDatabases(int id1, int id2) {
      * ready_keys and watched_keys, since we want clients to
      * remain in the same DB they were. */
     db1->pdict = db2->pdict;
-    db1->expires = db2->expires;
+    db1->setexpire = db2->setexpire;
+    db1->expireitr = db2->expireitr;
     db1->avg_ttl = db2->avg_ttl;
+    db1->last_expire_set = db2->last_expire_set;
 
     db2->pdict = aux.pdict;
-    db2->expires = aux.expires;
+    db2->setexpire = aux.setexpire;
+    db2->expireitr = aux.expireitr;
     db2->avg_ttl = aux.avg_ttl;
+    db2->last_expire_set = aux.last_expire_set;
 
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
@@ -1130,12 +1176,25 @@ void swapdbCommand(client *c) {
 /*-----------------------------------------------------------------------------
  * Expires API
  *----------------------------------------------------------------------------*/
-
 int removeExpire(redisDb *db, robj *key) {
+    dictEntry *de = dictFind(db->pdict,ptrFromObj(key));
+    return removeExpireCore(db, key, de);
+}
+int removeExpireCore(redisDb *db, robj *key, dictEntry *de) {
     /* An expire may only be removed if there is a corresponding entry in the
      * main dict. Otherwise, the key will never be freed. */
-    serverAssertWithInfo(NULL,key,dictFind(db->pdict,ptrFromObj(key)) != NULL);
-    return dictDelete(db->expires,ptrFromObj(key)) == DICT_OK;
+    serverAssertWithInfo(NULL,key,de != NULL);
+
+    robj *val = (robj*)dictGetVal(de);
+    if (!val->FExpires())
+        return 0;
+
+    auto itr = db->setexpire->find((sds)dictGetKey(de));
+    serverAssert(itr != db->setexpire->end());
+    serverAssert(itr->key() == (sds)dictGetKey(de));
+    db->setexpire->erase(itr);
+    val->SetFExpires(false);
+    return 1;
 }
 
 /* Set an expire to the specified key. If the expire is set in the context
@@ -1143,14 +1202,40 @@ int removeExpire(redisDb *db, robj *key) {
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds
  * after which the key will no longer be considered valid. */
 void setExpire(client *c, redisDb *db, robj *key, long long when) {
-    dictEntry *kde, *de;
+    dictEntry *kde;
+
     serverAssert(GlobalLocksAcquired());
 
     /* Reuse the sds from the main dict in the expire dict */
     kde = dictFind(db->pdict,ptrFromObj(key));
     serverAssertWithInfo(NULL,key,kde != NULL);
-    de = dictAddOrFind(db->expires,dictGetKey(kde));
-    dictSetSignedIntegerVal(de,when);
+
+    if (((robj*)dictGetVal(kde))->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
+    {
+        // shared objects cannot have the expire bit set, create a real object
+        dictSetVal(db->pdict, kde, dupStringObject((robj*)dictGetVal(kde)));
+    }
+
+    if (((robj*)dictGetVal(kde))->FExpires())
+        removeExpire(db, key);  // should we optimize for when this is called with an already set expiry?
+
+    expireEntry e((sds)dictGetKey(kde), when);
+    ((robj*)dictGetVal(kde))->SetFExpires(true);
+
+    /* Update TTL stats (exponential moving average) */
+    /*  Note: We never have to update this on expiry since we reduce it by the current elapsed time here */
+    long long now = g_pserver->mstime;
+    db->avg_ttl -= (now - db->last_expire_set); // reduce the TTL by the time that has elapsed
+    if (db->setexpire->empty())
+        db->avg_ttl = 0;
+    else
+        db->avg_ttl -= db->avg_ttl / db->setexpire->size(); // slide one entry out the window
+    if (db->avg_ttl < 0)
+        db->avg_ttl = 0;    // TTLs are never negative
+    db->avg_ttl += (double)(when-now) / (db->setexpire->size()+1);    // add the new entry
+    db->last_expire_set = now;
+
+    db->setexpire->insert(e);
 
     int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
     if (c && writable_slave && !(c->flags & CLIENT_MASTER))
@@ -1163,13 +1248,18 @@ long long getExpire(redisDb *db, robj_roptr key) {
     dictEntry *de;
 
     /* No expire? return ASAP */
-    if (dictSize(db->expires) == 0 ||
-       (de = dictFind(db->expires,ptrFromObj(key))) == NULL) return -1;
+    if (db->setexpire->size() == 0)
+        return -1;
 
-    /* The entry was found in the expire dict, this means it should also
-     * be present in the main dict (safety check). */
-    serverAssertWithInfo(NULL,key,dictFind(db->pdict,ptrFromObj(key)) != NULL);
-    return dictGetSignedIntegerVal(de);
+    de = dictFind(db->pdict, ptrFromObj(key));
+    if (de == NULL)
+        return -1;
+    robj *obj = (robj*)dictGetVal(de);
+    if (!obj->FExpires())
+        return -1;
+
+    auto itr = db->setexpire->find((sds)dictGetKey(de));
+    return itr->when();
 }
 
 /* Propagate expires into slaves and the AOF file.

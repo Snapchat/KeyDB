@@ -51,26 +51,19 @@
  *
  * The parameter 'now' is the current time in milliseconds as is passed
  * to the function to avoid too many gettimeofday() syscalls. */
-int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
-    long long t = dictGetSignedIntegerVal(de);
-    if (now > t) {
-        sds key = (sds)dictGetKey(de);
-        robj *keyobj = createStringObject(key,sdslen(key));
+void activeExpireCycleExpire(redisDb *db, const char *key) {
+    robj *keyobj = createStringObject(key,sdslen(key));
 
-        propagateExpire(db,keyobj,g_pserver->lazyfree_lazy_expire);
-        if (g_pserver->lazyfree_lazy_expire)
-            dbAsyncDelete(db,keyobj);
-        else
-            dbSyncDelete(db,keyobj);
-        notifyKeyspaceEvent(NOTIFY_EXPIRED,
-            "expired",keyobj,db->id);
-        if (g_pserver->tracking_clients) trackingInvalidateKey(keyobj);
-        decrRefCount(keyobj);
-        g_pserver->stat_expiredkeys++;
-        return 1;
-    } else {
-        return 0;
-    }
+    propagateExpire(db,keyobj,g_pserver->lazyfree_lazy_expire);
+    if (g_pserver->lazyfree_lazy_expire)
+        dbAsyncDelete(db,keyobj);
+    else
+        dbSyncDelete(db,keyobj);
+    notifyKeyspaceEvent(NOTIFY_EXPIRED,
+        "expired",keyobj,db->id);
+    if (g_pserver->tracking_clients) trackingInvalidateKey(keyobj);
+    decrRefCount(keyobj);
+    g_pserver->stat_expiredkeys++;
 }
 
 /* Try to expire a few timed out keys. The algorithm used is adaptive and
@@ -148,7 +141,6 @@ void activeExpireCycle(int type) {
     long total_expired = 0;
 
     for (j = 0; j < dbs_per_call && timelimit_exit == 0; j++) {
-        int expired;
         redisDb *db = g_pserver->db+(current_db % cserver.dbnum);
 
         /* Increment the DB now so we are sure if we run out of time
@@ -156,78 +148,44 @@ void activeExpireCycle(int type) {
          * distribute the time evenly across DBs. */
         current_db++;
 
-        /* Continue to expire if at the end of the cycle more than 25%
-         * of the keys were expired. */
-        do {
-            unsigned long num, slots;
-            long long now, ttl_sum;
-            int ttl_samples;
-            iteration++;
+        long long now;
+        iteration++;
+        now = mstime();
 
-            /* If there is nothing to expire try next DB ASAP. */
-            if ((num = dictSize(db->expires)) == 0) {
-                db->avg_ttl = 0;
-                break;
+        /* If there is nothing to expire try next DB ASAP. */
+        if (db->setexpire->empty())
+        {
+            db->avg_ttl = 0;
+            db->last_expire_set = now;
+            continue;
+        }
+        
+        size_t expired = 0;
+        size_t tried = 0;
+        db->expireitr = db->setexpire->enumerate(db->expireitr, now, [&](const expireEntry &e) __attribute__((always_inline)) {
+            if (e.when() < now)
+            {
+                activeExpireCycleExpire(db, e.key());
+                ++expired;
             }
-            slots = dictSlots(db->expires);
-            now = mstime();
+            ++tried;
 
-            /* When there are less than 1% filled slots getting random
-             * keys is expensive, so stop here waiting for better times...
-             * The dictionary will be resized asap. */
-            if (num && slots > DICT_HT_INITIAL_SIZE &&
-                (num*100/slots < 1)) break;
-
-            /* The main collection cycle. Sample random keys among keys
-             * with an expire set, checking for expired ones. */
-            expired = 0;
-            ttl_sum = 0;
-            ttl_samples = 0;
-
-            if (num > ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP)
-                num = ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP;
-
-            while (num--) {
-                dictEntry *de;
-                long long ttl;
-
-                if ((de = dictGetRandomKey(db->expires)) == NULL) break;
-                ttl = dictGetSignedIntegerVal(de)-now;
-                if (activeExpireCycleTryExpire(db,de,now)) expired++;
-                if (ttl > 0) {
-                    /* We want the average TTL of keys yet not expired. */
-                    ttl_sum += ttl;
-                    ttl_samples++;
-                }
-                total_sampled++;
-            }
-            total_expired += expired;
-
-            /* Update the average TTL stats for this database. */
-            if (ttl_samples) {
-                long long avg_ttl = ttl_sum/ttl_samples;
-
-                /* Do a simple running average with a few samples.
-                 * We just use the current estimate with a weight of 2%
-                 * and the previous estimate with a weight of 98%. */
-                if (db->avg_ttl == 0) db->avg_ttl = avg_ttl;
-                db->avg_ttl = (db->avg_ttl/50)*49 + (avg_ttl/50);
-            }
-
-            /* We can't block forever here even if there are many keys to
-             * expire. So after a given amount of milliseconds return to the
-             * caller waiting for the other active expire cycle. */
-            if ((iteration & 0xf) == 0) { /* check once every 16 iterations. */
+            if ((tried % ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP) == 0)
+            {
+                /* We can't block forever here even if there are many keys to
+                * expire. So after a given amount of milliseconds return to the
+                * caller waiting for the other active expire cycle. */
                 elapsed = ustime()-start;
                 if (elapsed > timelimit) {
                     timelimit_exit = 1;
                     g_pserver->stat_expired_time_cap_reached_count++;
-                    break;
+                    return false;
                 }
             }
-            /* We don't repeat the cycle if there are less than 25% of keys
-             * found expired in the current DB. */
-        } while (expired > ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP/4);
+            return true;
+        });
+
+        total_expired += expired;
     }
 
     elapsed = ustime()-start;
@@ -301,20 +259,27 @@ void expireSlaveKeys(void) {
         while(dbids && dbid < cserver.dbnum) {
             if ((dbids & 1) != 0) {
                 redisDb *db = g_pserver->db+dbid;
-                dictEntry *expire = dictFind(db->expires,keyname);
+
+                // the expire is hashed based on the key pointer, so we need the point in the main db
+                dictEntry *deMain = dictFind(db->pdict, keyname);
+                auto itr = db->setexpire->end();
+                if (deMain != nullptr)
+                    itr = db->setexpire->find((sds)dictGetKey(deMain));
                 int expired = 0;
 
-                if (expire &&
-                    activeExpireCycleTryExpire(g_pserver->db+dbid,expire,start))
+                if (itr != db->setexpire->end())
                 {
-                    expired = 1;
+                    if (itr->when() < start) {
+                        activeExpireCycleExpire(g_pserver->db+dbid,itr->key());
+                        expired = 1;
+                    }
                 }
 
                 /* If the key was not expired in this DB, we need to set the
                  * corresponding bit in the new bitmap we set as value.
                  * At the end of the loop if the bitmap is zero, it means we
                  * no longer need to keep track of this key. */
-                if (expire && !expired) {
+                if (itr != db->setexpire->end() && !expired) {
                     noexpire++;
                     new_dbids |= (uint64_t)1 << dbid;
                 }

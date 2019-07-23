@@ -1122,11 +1122,13 @@ int dbSwapDatabases(int id1, int id2) {
     db1->setexpire = db2->setexpire;
     db1->expireitr = db2->expireitr;
     db1->avg_ttl = db2->avg_ttl;
+    db1->last_expire_set = db2->last_expire_set;
 
     db2->pdict = aux.pdict;
     db2->setexpire = aux.setexpire;
     db2->expireitr = aux.expireitr;
     db2->avg_ttl = aux.avg_ttl;
+    db2->last_expire_set = aux.last_expire_set;
 
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
@@ -1219,6 +1221,19 @@ void setExpire(client *c, redisDb *db, robj *key, long long when) {
 
     expireEntry e((sds)dictGetKey(kde), when);
     ((robj*)dictGetVal(kde))->SetFExpires(true);
+
+    /* Update TTL stats (exponential moving average) */
+    /*  Note: We never have to update this on expiry since we reduce it by the current elapsed time here */
+    long long now = g_pserver->mstime;
+    db->avg_ttl -= (now - db->last_expire_set); // reduce the TTL by the time that has elapsed
+    if (db->setexpire->empty())
+        db->avg_ttl = 0;
+    else
+        db->avg_ttl -= db->avg_ttl / db->setexpire->size(); // slide one entry out the window
+    if (db->avg_ttl < 0)
+        db->avg_ttl = 0;    // TTLs are never negative
+    db->avg_ttl += (double)(when-now) / (db->setexpire->size()+1);    // add the new entry
+    db->last_expire_set = now;
 
     db->setexpire->insert(e);
 

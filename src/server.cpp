@@ -2926,6 +2926,7 @@ void initServer(void) {
         g_pserver->db[j].watched_keys = dictCreate(&keylistDictType,NULL);
         g_pserver->db[j].id = j;
         g_pserver->db[j].avg_ttl = 0;
+        g_pserver->db[j].last_expire_set = 0;
         g_pserver->db[j].defrag_later = listCreate();
     }
 
@@ -4566,10 +4567,17 @@ sds genRedisInfoString(const char *section) {
 
             keys = dictSize(g_pserver->db[j].pdict);
             vkeys = g_pserver->db[j].setexpire->size();
+
+            // Adjust TTL by the current time
+            g_pserver->db[j].avg_ttl -= (g_pserver->mstime - g_pserver->db[j].last_expire_set);
+            if (g_pserver->db[j].avg_ttl < 0)
+                g_pserver->db[j].avg_ttl = 0;
+            g_pserver->db[j].last_expire_set = g_pserver->mstime;
+            
             if (keys || vkeys) {
                 info = sdscatprintf(info,
                     "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n",
-                    j, keys, vkeys, g_pserver->db[j].avg_ttl);
+                    j, keys, vkeys, static_cast<long long>(g_pserver->db[j].avg_ttl));
             }
         }
     }

@@ -4949,7 +4949,7 @@ void restoreCommand(client *c) {
     dbAdd(c->db,c->argv[1],obj);
     if (ttl) {
         if (!absttl) ttl+=mstime();
-        setExpire(c,c->db,c->argv[1],ttl);
+        setExpire(c,c->db,c->argv[1],nullptr,ttl);
     }
     objectSetLRUOrLFU(obj,lfu_freq,lru_idle,lru_clock);
     signalModifiedKey(c->db,c->argv[1]);
@@ -5194,7 +5194,10 @@ try_again:
     /* Create RESTORE payload and generate the protocol to call the command. */
     for (j = 0; j < num_keys; j++) {
         long long ttl = 0;
-        long long expireat = getExpire(c->db,kv[j]);
+        expireEntry *pexpire = getExpire(c->db,kv[j]);
+        long long expireat = -1;
+        if (pexpire != nullptr)
+            pexpire->FGetPrimaryExpire(&expireat);
 
         if (expireat != -1) {
             ttl = expireat-mstime();

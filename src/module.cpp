@@ -1644,7 +1644,11 @@ int RM_UnlinkKey(RedisModuleKey *key) {
  * If no TTL is associated with the key or if the key is empty,
  * REDISMODULE_NO_EXPIRE is returned. */
 mstime_t RM_GetExpire(RedisModuleKey *key) {
-    mstime_t expire = getExpire(key->db,key->key);
+    expireEntry *pexpire = getExpire(key->db,key->key);
+    mstime_t expire = -1;
+    if (pexpire != nullptr)
+        pexpire->FGetPrimaryExpire(&expire);
+    
     if (expire == -1 || key->value == NULL) return -1;
     expire -= mstime();
     return expire >= 0 ? expire : 0;
@@ -1664,7 +1668,7 @@ int RM_SetExpire(RedisModuleKey *key, mstime_t expire) {
         return REDISMODULE_ERR;
     if (expire != REDISMODULE_NO_EXPIRE) {
         expire += mstime();
-        setExpire(key->ctx->client,key->db,key->key,expire);
+        setExpire(key->ctx->client,key->db,key->key,nullptr,expire);
     } else {
         removeExpire(key->db,key->key);
     }

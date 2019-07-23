@@ -1031,12 +1031,13 @@ size_t rdbSavedObjectLen(robj *o) {
  * On error -1 is returned.
  * On success if the key was actually saved 1 is returned, otherwise 0
  * is returned (the key was already expired). */
-int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
+int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, expireEntry *pexpire) {
     int savelru = g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LRU;
     int savelfu = g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU;
 
     /* Save the expire time */
-    if (expiretime != -1) {
+    long long expiretime = -1;
+    if (pexpire != nullptr && pexpire->FGetPrimaryExpire(&expiretime)) {
         if (rdbSaveType(rdb,RDB_OPCODE_EXPIRETIME_MS) == -1) return -1;
         if (rdbSaveMillisecondTime(rdb,expiretime) == -1) return -1;
     }
@@ -1061,14 +1062,29 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
         if (rdbWriteRaw(rdb,buf,1) == -1) return -1;
     }
 
-    char szMvcc[32];
-    snprintf(szMvcc, 32, "%" PRIu64, val->mvcc_tstamp);
-    if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szMvcc) == -1) return -1;
+    char szT[32];
+    snprintf(szT, 32, "%" PRIu64, val->mvcc_tstamp);
+    if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szT) == -1) return -1;
 
     /* Save type, key, value */
     if (rdbSaveObjectType(rdb,val) == -1) return -1;
     if (rdbSaveStringObject(rdb,key) == -1) return -1;
     if (rdbSaveObject(rdb,val,key) == -1) return -1;
+
+    /* Save expire entry after as it will apply to the previously loaded key */
+    /*  This is because we update the expire datastructure directly without buffering */
+    if (pexpire != nullptr)
+    {
+        for (auto itr : *pexpire)
+        {
+            if (itr.subkey() == nullptr)
+                continue;   // already saved
+            snprintf(szT, 32, "%lld", itr.when());
+            rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-key",itr.subkey());
+            rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-when",szT);
+        }
+    }
+
     return 1;
 }
 
@@ -1099,12 +1115,11 @@ int rdbSaveInfoAuxFields(rio *rdb, int flags, rdbSaveInfo *rsi) {
 int saveKey(rio *rdb, redisDb *db, int flags, size_t *processed, const char *keystr, robj *o)
 {    
     robj key;
-    long long expire;
 
     initStaticStringObject(key,(char*)keystr);
-    expire = getExpire(db, &key);
+    expireEntry *pexpire = getExpire(db, &key);
 
-    if (rdbSaveKeyValuePair(rdb,&key,o,expire) == -1)
+    if (rdbSaveKeyValuePair(rdb,&key,o,pexpire) == -1)
         return 0;
 
     /* When this RDB is produced as part of an AOF rewrite, move
@@ -1907,6 +1922,8 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
     long long lru_clock = 0;
     uint64_t mvcc_tstamp = OBJ_MVCC_INVALID;
+    robj *subexpireKey = nullptr;
+    robj *key = nullptr;
 
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = g_pserver->loading_process_events_interval_bytes;
@@ -1928,7 +1945,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
     lru_clock = LRU_CLOCK();
     
     while(1) {
-        robj *key, *val;
+        robj *val;
 
         /* Read type. */
         if ((type = rdbLoadType(rdb)) == -1) goto eoferr;
@@ -2036,6 +2053,18 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
             } else if (!strcasecmp(szFromObj(auxkey),"mvcc-tstamp")) {
                 static_assert(sizeof(unsigned long long) == sizeof(uint64_t), "Ensure long long is 64-bits");
                 mvcc_tstamp = strtoull(szFromObj(auxval), nullptr, 10);
+            } else if (!strcasecmp(szFromObj(auxkey), "keydb-subexpire-key")) {
+                subexpireKey = auxval;
+                incrRefCount(subexpireKey);
+            } else if (!strcasecmp(szFromObj(auxkey), "keydb-subexpire-when")) {
+                if (key == nullptr || subexpireKey == nullptr) {
+                    serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping.");
+                }
+                else {
+                    setExpire(NULL, db, key, subexpireKey, strtoll(szFromObj(auxval), nullptr, 10));
+                    decrRefCount(subexpireKey);
+                    subexpireKey = nullptr;
+                }
             } else {
                 /* We ignore fields we don't understand, as by AUX field
                  * contract. */
@@ -2077,6 +2106,9 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
         }
 
         /* Read key */
+        if (key != nullptr)
+            decrRefCount(key);
+
         if ((key = rdbLoadStringObject(rdb)) == NULL) goto eoferr;
         /* Read value */
         if ((val = rdbLoadObject(type,rdb,key, mvcc_tstamp)) == NULL) goto eoferr;
@@ -2090,24 +2122,19 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
             decrRefCount(val);
         } else {
             /* Add the new object in the hash table */
-            int fInserted = dbMerge(db, key, val, rsi->fForceSetKey);
+            int fInserted = dbMerge(db, key, val, rsi->fForceSetKey);   // Note: dbMerge will incrRef
 
             if (fInserted)
             {
                 /* Set the expire time if needed */
                 if (expiretime != -1)
-                    setExpire(NULL,db,key,expiretime);
+                    setExpire(NULL,db,key,nullptr,expiretime);
 
                 /* Set usage information (for eviction). */
                 objectSetLRUOrLFU(val,lfu_freq,lru_idle,lru_clock);
-
-                /* Decrement the key refcount since dbMerge() will take its
-                * own reference. */
-                decrRefCount(key);
             }
             else
             {
-                decrRefCount(key);
                 decrRefCount(val);
             }
         }
@@ -2117,6 +2144,16 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
         expiretime = -1;
         lfu_freq = -1;
         lru_idle = -1;
+    }
+
+    if (key != nullptr)
+        decrRefCount(key);
+
+    if (subexpireKey != nullptr)
+    {
+        serverLog(LL_WARNING, "Corrupt subexpire entry in RDB.");
+        decrRefCount(subexpireKey);
+        subexpireKey = nullptr;
     }
     
     /* Verify the checksum if RDB version is >= 5 */

@@ -124,8 +124,12 @@ void mixStringObjectDigest(unsigned char *digest, robj_roptr o) {
 void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj_roptr o) {
     uint32_t aux = htonl(o->type);
     mixDigest(digest,&aux,sizeof(aux));
-    long long expiretime = getExpire(db,keyobj);
+    expireEntry *pexpire = getExpire(db,keyobj);
+    long long expiretime = -1;
     char buf[128];
+
+    if (pexpire != nullptr)
+        pexpire->FGetPrimaryExpire(&expiretime);
 
     /* Save the key and associated value */
     if (o->type == OBJ_STRING) {

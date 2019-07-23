@@ -252,7 +252,7 @@ struct visitFunctor
         return count < g_pserver->maxmemory_samples;
     }
 };
-void evictionPoolPopulate(int dbid, dict *dbdict, semiorderedset<expireEntry,const char*> *setexpire, struct evictionPoolEntry *pool)
+void evictionPoolPopulate(int dbid, dict *dbdict, expireset *setexpire, struct evictionPoolEntry *pool)
 {
     if (setexpire != nullptr)
     {

@@ -457,7 +457,7 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
         } else {
             dictEmpty(g_pserver->db[j].pdict,callback);
             delete g_pserver->db[j].setexpire;
-            g_pserver->db[j].setexpire = new (MALLOC_LOCAL) semiorderedset<expireEntry, const char*>();
+            g_pserver->db[j].setexpire = new (MALLOC_LOCAL) expireset();
             g_pserver->db[j].expireitr = g_pserver->db[j].setexpire->end();
         }
     }
@@ -976,7 +976,6 @@ void shutdownCommand(client *c) {
 
 void renameGenericCommand(client *c, int nx) {
     robj *o;
-    long long expire;
     int samekey = 0;
 
     /* When source and dest key is the same, no operation is performed,
@@ -992,7 +991,15 @@ void renameGenericCommand(client *c, int nx) {
     }
 
     incrRefCount(o);
-    expire = getExpire(c->db,c->argv[1]);
+
+    std::unique_ptr<expireEntry> spexpire;
+
+    {   // scope pexpireOld since it will be invalid soon
+    expireEntry *pexpireOld = getExpire(c->db,c->argv[1]);
+    if (pexpireOld != nullptr)
+        spexpire = std::make_unique<expireEntry>(std::move(*pexpireOld));
+    }
+
     if (lookupKeyWrite(c->db,c->argv[2]) != NULL) {
         if (nx) {
             decrRefCount(o);
@@ -1005,8 +1012,8 @@ void renameGenericCommand(client *c, int nx) {
     }
     dbDelete(c->db,c->argv[1]);
     dbAdd(c->db,c->argv[2],o);
-    if (expire != -1) 
-        setExpire(c,c->db,c->argv[2],expire);
+    if (spexpire != nullptr) 
+        setExpire(c,c->db,c->argv[2],std::move(*spexpire));
     signalModifiedKey(c->db,c->argv[1]);
     signalModifiedKey(c->db,c->argv[2]);
     notifyKeyspaceEvent(NOTIFY_GENERIC,"rename_from",
@@ -1029,7 +1036,7 @@ void moveCommand(client *c) {
     robj *o;
     redisDb *src, *dst;
     int srcid;
-    long long dbid, expire;
+    long long dbid;
 
     if (g_pserver->cluster_enabled) {
         addReplyError(c,"MOVE is not allowed in cluster mode");
@@ -1063,7 +1070,13 @@ void moveCommand(client *c) {
         addReply(c,shared.czero);
         return;
     }
-    expire = getExpire(c->db,c->argv[1]);
+
+    std::unique_ptr<expireEntry> spexpire;
+    {   // scope pexpireOld
+    expireEntry *pexpireOld = getExpire(c->db,c->argv[1]);
+    if (pexpireOld != nullptr)
+        spexpire = std::make_unique<expireEntry>(std::move(*pexpireOld));
+    }
     if (o->FExpires())
         removeExpire(c->db,c->argv[1]);
     serverAssert(!o->FExpires());
@@ -1077,7 +1090,7 @@ void moveCommand(client *c) {
         return;
     }
     dbAdd(dst,c->argv[1],o);
-    if (expire != -1) setExpire(c,dst,c->argv[1],expire);
+    if (spexpire != nullptr) setExpire(c,dst,c->argv[1],std::move(*spexpire));
 
     addReply(c,shared.cone);
 }
@@ -1201,7 +1214,58 @@ int removeExpireCore(redisDb *db, robj *key, dictEntry *de) {
  * of an user calling a command 'c' is the client, otherwise 'c' is set
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds
  * after which the key will no longer be considered valid. */
-void setExpire(client *c, redisDb *db, robj *key, long long when) {
+void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when) {
+    dictEntry *kde;
+
+    serverAssert(GlobalLocksAcquired());
+
+    /* Reuse the sds from the main dict in the expire dict */
+    kde = dictFind(db->pdict,ptrFromObj(key));
+    serverAssertWithInfo(NULL,key,kde != NULL);
+
+    if (((robj*)dictGetVal(kde))->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
+    {
+        // shared objects cannot have the expire bit set, create a real object
+        dictSetVal(db->pdict, kde, dupStringObject((robj*)dictGetVal(kde)));
+    }
+
+    /* Update TTL stats (exponential moving average) */
+    /*  Note: We never have to update this on expiry since we reduce it by the current elapsed time here */
+    long long now = g_pserver->mstime;
+    db->avg_ttl -= (now - db->last_expire_set); // reduce the TTL by the time that has elapsed
+    if (db->setexpire->empty())
+        db->avg_ttl = 0;
+    else
+        db->avg_ttl -= db->avg_ttl / db->setexpire->size(); // slide one entry out the window
+    if (db->avg_ttl < 0)
+        db->avg_ttl = 0;    // TTLs are never negative
+    db->avg_ttl += (double)(when-now) / (db->setexpire->size()+1);    // add the new entry
+    db->last_expire_set = now;
+
+    /* Update the expire set */
+    const char *szSubKey = (subkey != nullptr) ? szFromObj(subkey) : nullptr;
+    if (((robj*)dictGetVal(kde))->FExpires()) {
+        auto itr = db->setexpire->find((sds)dictGetKey(kde));
+        serverAssert(itr != db->setexpire->end());
+        expireEntry eNew(std::move(*itr));
+        eNew.update(szSubKey, when);
+        db->setexpire->erase(itr);
+        db->setexpire->insert(eNew);
+    }
+    else
+    {
+        expireEntry e((sds)dictGetKey(kde), szSubKey, when);
+        ((robj*)dictGetVal(kde))->SetFExpires(true);
+        db->setexpire->insert(e);
+    }
+
+    int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
+    if (c && writable_slave && !(c->flags & CLIENT_MASTER))
+        rememberSlaveKeyWithExpire(db,key);
+}
+
+void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
+{
     dictEntry *kde;
 
     serverAssert(GlobalLocksAcquired());
@@ -1217,49 +1281,36 @@ void setExpire(client *c, redisDb *db, robj *key, long long when) {
     }
 
     if (((robj*)dictGetVal(kde))->FExpires())
-        removeExpire(db, key);  // should we optimize for when this is called with an already set expiry?
+        removeExpire(db, key);
 
-    expireEntry e((sds)dictGetKey(kde), when);
+    e.setKeyUnsafe((sds)dictGetKey(kde));
+    db->setexpire->insert(e);
     ((robj*)dictGetVal(kde))->SetFExpires(true);
 
-    /* Update TTL stats (exponential moving average) */
-    /*  Note: We never have to update this on expiry since we reduce it by the current elapsed time here */
-    long long now = g_pserver->mstime;
-    db->avg_ttl -= (now - db->last_expire_set); // reduce the TTL by the time that has elapsed
-    if (db->setexpire->empty())
-        db->avg_ttl = 0;
-    else
-        db->avg_ttl -= db->avg_ttl / db->setexpire->size(); // slide one entry out the window
-    if (db->avg_ttl < 0)
-        db->avg_ttl = 0;    // TTLs are never negative
-    db->avg_ttl += (double)(when-now) / (db->setexpire->size()+1);    // add the new entry
-    db->last_expire_set = now;
-
-    db->setexpire->insert(e);
 
     int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
     if (c && writable_slave && !(c->flags & CLIENT_MASTER))
         rememberSlaveKeyWithExpire(db,key);
 }
 
-/* Return the expire time of the specified key, or -1 if no expire
+/* Return the expire time of the specified key, or null if no expire
  * is associated with this key (i.e. the key is non volatile) */
-long long getExpire(redisDb *db, robj_roptr key) {
+expireEntry *getExpire(redisDb *db, robj_roptr key) {
     dictEntry *de;
 
     /* No expire? return ASAP */
     if (db->setexpire->size() == 0)
-        return -1;
+        return nullptr;
 
     de = dictFind(db->pdict, ptrFromObj(key));
     if (de == NULL)
-        return -1;
+        return nullptr;
     robj *obj = (robj*)dictGetVal(de);
     if (!obj->FExpires())
-        return -1;
+        return nullptr;
 
     auto itr = db->setexpire->find((sds)dictGetKey(de));
-    return itr->when();
+    return itr.operator->();
 }
 
 /* Propagate expires into slaves and the AOF file.
@@ -1287,14 +1338,27 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
     decrRefCount(argv[1]);
 }
 
-/* Check if the key is expired. */
+/* Check if the key is expired. Note, this does not check subexpires */
 int keyIsExpired(redisDb *db, robj *key) {
-    mstime_t when = getExpire(db,key);
+    expireEntry *pexpire = getExpire(db,key);
 
-    if (when < 0) return 0; /* No expire for this key */
+    if (pexpire == nullptr) return 0; /* No expire for this key */
 
     /* Don't expire anything while loading. It will be done later. */
     if (g_pserver->loading) return 0;
+
+    long long when = -1;
+    for (auto &exp : *pexpire)
+    {
+        if (exp.subkey() == nullptr)
+        {
+            when = exp.when();
+            break;
+        }
+    }
+
+    if (when == -1)
+        return 0;
 
     /* If we are in the context of a Lua script, we pretend that time is
      * blocked to when the Lua script started. This way a key can expire

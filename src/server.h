@@ -844,7 +844,8 @@ typedef struct redisDb {
     dict *ready_keys;           /* Blocked keys that received a PUSH */
     dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
     int id;                     /* Database ID */
-    long long avg_ttl;          /* Average TTL, just for stats */
+    long long last_expire_set;  /* when the last expire was set */
+    double avg_ttl;             /* Average TTL, just for stats */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
 } redisDb;
 

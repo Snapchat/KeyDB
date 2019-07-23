@@ -155,8 +155,8 @@ void activeExpireCycle(int type) {
         /* If there is nothing to expire try next DB ASAP. */
         if (db->setexpire->empty())
         {
-            // TODO: Compute db->avg_ttl somewhere... but probably not here
             db->avg_ttl = 0;
+            db->last_expire_set = now;
             continue;
         }
         

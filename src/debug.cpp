@@ -638,10 +638,9 @@ NULL
         dictGetStats(buf,sizeof(buf),g_pserver->db[dbid].pdict);
         stats = sdscat(stats,buf);
 
-        stats = sdscatprintf(stats,"[Expires HT]\n");
-        // TODO!
-        //dictGetStats(buf,sizeof(buf),server.db[dbid].expires);
-        //stats = sdscat(stats,buf);
+        stats = sdscatprintf(stats,"[Expires set]\n");
+        g_pserver->db[dbid].setexpire->getstats(buf, sizeof(buf));
+        stats = sdscat(stats, buf);
 
         addReplyBulkSds(c,stats);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"htstats-key") && c->argc == 3) {

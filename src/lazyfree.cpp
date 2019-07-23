@@ -110,7 +110,7 @@ void freeObjAsync(robj *o) {
 void emptyDbAsync(redisDb *db) {
     dict *oldht1 = db->pdict;
     auto *set = db->setexpire;
-    db->setexpire = new (MALLOC_LOCAL) semiorderedset<expireEntry, const char*>();
+    db->setexpire = new (MALLOC_LOCAL) expireset();
     db->expireitr = db->setexpire->end();
     db->pdict = dictCreate(&dbDictType,NULL);
     atomicIncr(lazyfree_objects,dictSize(oldht1));
@@ -141,7 +141,7 @@ void lazyfreeFreeObjectFromBioThread(robj *o) {
  * when the database was logically deleted. 'sl' is a skiplist used by
  * Redis Cluster in order to take the hash slots -> keys mapping. This
  * may be NULL if Redis Cluster is disabled. */
-void lazyfreeFreeDatabaseFromBioThread(dict *ht1, semiorderedset<expireEntry, const char *> *set) {
+void lazyfreeFreeDatabaseFromBioThread(dict *ht1, expireset *set) {
     size_t numkeys = dictSize(ht1);
     dictRelease(ht1);
     delete set;

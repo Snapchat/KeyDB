@@ -1321,13 +1321,12 @@ int rewriteAppendOnlyFileRio(rio *aof) {
         while((de = dictNext(di)) != NULL) {
             sds keystr;
             robj key, *o;
-            long long expiretime;
 
             keystr = (sds)dictGetKey(de);
             o = (robj*)dictGetVal(de);
             initStaticStringObject(key,keystr);
 
-            expiretime = getExpire(db,&key);
+            expireEntry *pexpire = getExpire(db,&key);
 
             /* Save the key and associated value */
             if (o->type == OBJ_STRING) {
@@ -1353,11 +1352,23 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                 serverPanic("Unknown object type");
             }
             /* Save the expire time */
-            if (expiretime != -1) {
-                char cmd[]="*3\r\n$9\r\nPEXPIREAT\r\n";
-                if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) goto werr;
-                if (rioWriteBulkObject(aof,&key) == 0) goto werr;
-                if (rioWriteBulkLongLong(aof,expiretime) == 0) goto werr;
+            if (pexpire != nullptr) {
+                for (auto &subExpire : *pexpire) {
+                    if (subExpire.subkey() == nullptr)
+                    {
+                        char cmd[]="*3\r\n$9\r\nPEXPIREAT\r\n";
+                        if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) goto werr;
+                        if (rioWriteBulkObject(aof,&key) == 0) goto werr;
+                    }
+                    else
+                    {
+                        char cmd[]="*4\r\n$12\r\nEXPIREMEMBER\r\n";
+                        if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) goto werr;
+                        if (rioWriteBulkObject(aof,&key) == 0) goto werr;
+                        if (rioWrite(aof,subExpire.subkey(),sdslen(subExpire.subkey())) == 0) goto werr;
+                    }
+                    if (rioWriteBulkLongLong(aof,subExpire.when()) == 0) goto werr; // common
+                }
             }
             /* Read some diff from the parent process from time to time. */
             if (aof->processed_bytes > processed+AOF_READ_DIFF_INTERVAL_BYTES) {

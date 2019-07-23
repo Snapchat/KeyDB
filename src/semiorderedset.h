@@ -13,6 +13,8 @@
  * 
  */
 
+extern uint64_t dictGenHashFunction(const void *key, int len);
+
 template<typename T, typename T_KEY = T>
 class semiorderedset
 {
@@ -26,9 +28,9 @@ class semiorderedset
 
     constexpr size_t targetElementsPerBucket()
     {
-        // Aim for roughly 2 cache lines per bucket (determined by imperical testing)
+        // Aim for roughly 4 cache lines per bucket (determined by imperical testing)
         //  lower values are faster but use more memory
-        return std::max((64/sizeof(T))*2, (size_t)2);
+        return std::max((64/sizeof(T))*4, (size_t)2);
     }
 
 public:
@@ -212,28 +214,68 @@ public:
         return cb;
     }
 
+    #define DICT_STATS_VECTLEN 50
+    size_t getstats(char *buf, size_t bufsize) const
+    {
+        unsigned long i, slots = 0, chainlen, maxchainlen = 0;
+        unsigned long totchainlen = 0;
+        unsigned long clvector[DICT_STATS_VECTLEN] = {0};
+        size_t l = 0;
+
+        if (empty()) {
+            return snprintf(buf,bufsize,
+                "No stats available for empty dictionaries\n");
+        }
+
+        /* Compute stats. */
+        for (auto &vec : m_data) {
+            if (vec.empty()) {
+                clvector[0]++;
+                continue;
+            }
+            slots++;
+            /* For each hash entry on this slot... */
+            chainlen = vec.size();
+            
+            clvector[(chainlen < DICT_STATS_VECTLEN) ? chainlen : (DICT_STATS_VECTLEN-1)]++;
+            if (chainlen > maxchainlen) maxchainlen = chainlen;
+            totchainlen += chainlen;
+        }
+
+        size_t used = m_data.size()-clvector[0];
+        /* Generate human readable stats. */
+        l += snprintf(buf+l,bufsize-l,
+            "semiordered set stats:\n"
+            " table size: %ld\n"
+            " number of slots: %ld\n"
+            " used slots: %ld\n"
+            " max chain length: %ld\n"
+            " avg chain length (counted): %.02f\n"
+            " avg chain length (computed): %.02f\n"
+            " Chain length distribution:\n",
+            size(), used, slots, maxchainlen,
+            (float)totchainlen/slots, (float)size()/m_data.size());
+
+        for (i = 0; i < DICT_STATS_VECTLEN; i++) {
+            if (clvector[i] == 0) continue;
+            if (l >= bufsize) break;
+            l += snprintf(buf+l,bufsize-l,
+                "   %s%ld: %ld (%.02f%%)\n",
+                (i == DICT_STATS_VECTLEN-1)?">= ":"",
+                i, clvector[i], ((float)clvector[i]/m_data.size())*100);
+        }
+
+        /* Unlike snprintf(), teturn the number of characters actually written. */
+        if (bufsize) buf[bufsize-1] = '\0';
+        return strlen(buf);
+    }
+
 private:
     inline size_t hashmask() const { return (1ULL << bits) - 1; }
 
-    template<typename TT_KEY, typename std::enable_if_t<!std::is_pointer<TT_KEY>::value>* = nullptr>
-    size_t idxFromObj(TT_KEY key)
+    size_t idxFromObj(const T_KEY &key)
     {
-        static_assert(!std::is_pointer<TT_KEY>::value, "SFINAE isn't working");
-        std::hash<TT_KEY> hash;
-        return hash(key) & hashmask();
-    }
-
-
-    template<typename TT_KEY, typename std::enable_if_t<std::is_pointer<TT_KEY>::value>* = nullptr>
-    size_t idxFromObj(TT_KEY key)
-    {
-        std::hash<TT_KEY> hash;
-        size_t v = hash(key);
-        // it's legal for std::hash to literally give us back the same pointer
-        //  in which case the lower bits will have zero entropy.  Of course its also
-        //  legal for std::hash to do what we're doing here in which case we're reducing
-        //  lower order entropy... so rotate+XOR is the safest choice
-        v ^= (v>>3) | (v << ((sizeof(v)*8)-3));
+        size_t v = (size_t)dictGenHashFunction(&key, sizeof(key));
         return v & hashmask();
     }
 

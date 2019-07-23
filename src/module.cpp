@@ -566,7 +566,7 @@ void RedisModuleCommandDispatcher(client *c) {
     for (int i = 0; i < c->argc; i++) {
         /* Only do the work if the module took ownership of the object:
          * in that case the refcount is no longer 1. */
-        if (c->argv[i]->refcount > 1)
+        if (c->argv[i]->getrefcount(std::memory_order_relaxed) > 1)
             trimStringObjectIfNeeded(c->argv[i]);
     }
 }
@@ -1037,7 +1037,7 @@ int RM_StringCompare(RedisModuleString *a, RedisModuleString *b) {
 /* Return the (possibly modified in encoding) input 'str' object if
  * the string is unshared, otherwise NULL is returned. */
 RedisModuleString *moduleAssertUnsharedString(RedisModuleString *str) {
-    if (str->refcount != 1) {
+    if (str->getrefcount(std::memory_order_relaxed) != 1) {
         serverLog(LL_WARNING,
             "Module attempted to use an in-place string modify operation "
             "with a string referenced multiple times. Please check the code "

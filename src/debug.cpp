@@ -436,7 +436,7 @@ NULL
             "Value at:%p refcount:%d "
             "encoding:%s serializedlength:%zu "
             "lru:%d lru_seconds_idle:%llu%s",
-            (void*)val, static_cast<int>(val->refcount),
+            (void*)val, static_cast<int>(val->getrefcount(std::memory_order_relaxed)),
             strenc, rdbSavedObjectLen(val),
             val->lru, estimateObjectIdleTime(val)/1000, extra);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"sdslen") && c->argc == 3) {
@@ -638,9 +638,9 @@ NULL
         dictGetStats(buf,sizeof(buf),g_pserver->db[dbid].pdict);
         stats = sdscat(stats,buf);
 
-        stats = sdscatprintf(stats,"[Expires HT]\n");
-        dictGetStats(buf,sizeof(buf),g_pserver->db[dbid].expires);
-        stats = sdscat(stats,buf);
+        stats = sdscatprintf(stats,"[Expires set]\n");
+        g_pserver->db[dbid].setexpire->getstats(buf, sizeof(buf));
+        stats = sdscat(stats, buf);
 
         addReplyBulkSds(c,stats);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"htstats-key") && c->argc == 3) {
@@ -721,14 +721,14 @@ void _serverAssertPrintClientInfo(const client *c) {
             arg = buf;
         }
         serverLog(LL_WARNING,"client->argv[%d] = \"%s\" (refcount: %d)",
-            j, arg, static_cast<int>(c->argv[j]->refcount));
+            j, arg, static_cast<int>(c->argv[j]->getrefcount(std::memory_order_relaxed)));
     }
 }
 
 void serverLogObjectDebugInfo(robj_roptr o) {
     serverLog(LL_WARNING,"Object type: %d", o->type);
     serverLog(LL_WARNING,"Object encoding: %d", o->encoding);
-    serverLog(LL_WARNING,"Object refcount: %d", static_cast<int>(o->refcount));
+    serverLog(LL_WARNING,"Object refcount: %d", static_cast<int>(o->getrefcount(std::memory_order_relaxed)));
     if (o->type == OBJ_STRING && sdsEncodedObject(o)) {
         serverLog(LL_WARNING,"Object raw string len: %zu", sdslen(szFromObj(o)));
         if (sdslen(szFromObj(o)) < 4096) {

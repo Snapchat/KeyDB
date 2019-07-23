@@ -665,7 +665,7 @@ cleanup:
          * The object must be small, SDS-encoded, and with refcount = 1
          * (we must be the only owner) for us to cache it. */
         if (j < LUA_CMD_OBJCACHE_SIZE &&
-            o->refcount == 1 &&
+            o->getrefcount(std::memory_order_relaxed) == 1 &&
             (o->encoding == OBJ_ENCODING_RAW ||
              o->encoding == OBJ_ENCODING_EMBSTR) &&
             sdslen((sds)ptrFromObj(o)) <= LUA_CMD_OBJCACHE_MAX_LEN)

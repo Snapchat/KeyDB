@@ -1428,8 +1428,6 @@ int htNeedsResize(dict *dict) {
 void tryResizeHashTables(int dbid) {
     if (htNeedsResize(g_pserver->db[dbid].pdict))
         dictResize(g_pserver->db[dbid].pdict);
-    if (htNeedsResize(g_pserver->db[dbid].expires))
-        dictResize(g_pserver->db[dbid].expires);
 }
 
 /* Our hash table implementation performs rehashing incrementally while
@@ -1443,11 +1441,6 @@ int incrementallyRehash(int dbid) {
     /* Keys dictionary */
     if (dictIsRehashing(g_pserver->db[dbid].pdict)) {
         dictRehashMilliseconds(g_pserver->db[dbid].pdict,1);
-        return 1; /* already used our millisecond for this loop... */
-    }
-    /* Expires */
-    if (dictIsRehashing(g_pserver->db[dbid].expires)) {
-        dictRehashMilliseconds(g_pserver->db[dbid].expires,1);
         return 1; /* already used our millisecond for this loop... */
     }
     return 0;
@@ -1889,7 +1882,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
             size = dictSlots(g_pserver->db[j].pdict);
             used = dictSize(g_pserver->db[j].pdict);
-            vkeys = dictSize(g_pserver->db[j].expires);
+            vkeys = g_pserver->db[j].setexpire->size();
             if (used || vkeys) {
                 serverLog(LL_VERBOSE,"DB %d: %lld keys (%lld volatile) in %lld slots HT.",j,used,vkeys,size);
                 /* dictPrintStats(g_pserver->dict); */
@@ -2926,12 +2919,14 @@ void initServer(void) {
     /* Create the Redis databases, and initialize other internal state. */
     for (int j = 0; j < cserver.dbnum; j++) {
         g_pserver->db[j].pdict = dictCreate(&dbDictType,NULL);
-        g_pserver->db[j].expires = dictCreate(&keyptrDictType,NULL);
+        g_pserver->db[j].setexpire = new(MALLOC_LOCAL) semiorderedset<expireEntry, const char*>;
+        g_pserver->db[j].expireitr = g_pserver->db[j].setexpire->end();
         g_pserver->db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
         g_pserver->db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
         g_pserver->db[j].watched_keys = dictCreate(&keylistDictType,NULL);
         g_pserver->db[j].id = j;
         g_pserver->db[j].avg_ttl = 0;
+        g_pserver->db[j].last_expire_set = 0;
         g_pserver->db[j].defrag_later = listCreate();
     }
 
@@ -4571,11 +4566,18 @@ sds genRedisInfoString(const char *section) {
             long long keys, vkeys;
 
             keys = dictSize(g_pserver->db[j].pdict);
-            vkeys = dictSize(g_pserver->db[j].expires);
+            vkeys = g_pserver->db[j].setexpire->size();
+
+            // Adjust TTL by the current time
+            g_pserver->db[j].avg_ttl -= (g_pserver->mstime - g_pserver->db[j].last_expire_set);
+            if (g_pserver->db[j].avg_ttl < 0)
+                g_pserver->db[j].avg_ttl = 0;
+            g_pserver->db[j].last_expire_set = g_pserver->mstime;
+            
             if (keys || vkeys) {
                 info = sdscatprintf(info,
                     "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n",
-                    j, keys, vkeys, g_pserver->db[j].avg_ttl);
+                    j, keys, vkeys, static_cast<long long>(g_pserver->db[j].avg_ttl));
             }
         }
     }

@@ -39,11 +39,11 @@
 /* ===================== Creation and parsing of objects ==================== */
 
 robj *createObject(int type, void *ptr) {
-    robj *o = (robj*)zmalloc(sizeof(*o), MALLOC_SHARED);
+    robj *o = (robj*)zcalloc(sizeof(*o), MALLOC_SHARED);
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
     o->m_ptr = ptr;
-    o->refcount.store(1, std::memory_order_relaxed);
+    o->setrefcount(1);
     o->mvcc_tstamp = OBJ_MVCC_INVALID;
 
     /* Set the LRU to the current lruclock (minutes resolution), or
@@ -68,8 +68,9 @@ robj *createObject(int type, void *ptr) {
  *
  */
 robj *makeObjectShared(robj *o) {
-    serverAssert(o->refcount == 1);
-    o->refcount.store(OBJ_SHARED_REFCOUNT, std::memory_order_relaxed);
+    serverAssert(o->getrefcount(std::memory_order_relaxed) == 1);
+    serverAssert(!o->FExpires());
+    o->setrefcount(OBJ_SHARED_REFCOUNT);
     return o;
 }
 
@@ -86,12 +87,12 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     size_t allocsize = sizeof(struct sdshdr8)+len+1;
     if (allocsize < sizeof(void*))
         allocsize = sizeof(void*);
-    robj *o = (robj*)zmalloc(sizeof(robj)+allocsize-sizeof(o->m_ptr), MALLOC_SHARED);
+    robj *o = (robj*)zcalloc(sizeof(robj)+allocsize-sizeof(o->m_ptr), MALLOC_SHARED);
     struct sdshdr8 *sh = (sdshdr8*)(&o->m_ptr);
 
     o->type = OBJ_STRING;
     o->encoding = OBJ_ENCODING_EMBSTR;
-    o->refcount.store(1, std::memory_order_relaxed);
+    o->setrefcount(1);
     o->mvcc_tstamp = OBJ_MVCC_INVALID;
 
     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
@@ -352,11 +353,14 @@ void freeStreamObject(robj_roptr o) {
 }
 
 void incrRefCount(robj_roptr o) {
-    if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount.fetch_add(1, std::memory_order_acquire);
+    if (o->getrefcount(std::memory_order_relaxed) != OBJ_SHARED_REFCOUNT) o->addref();
 }
 
 void decrRefCount(robj_roptr o) {
-    if (o->refcount.load(std::memory_order_acquire) == 1) {
+    if (o->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
+        return;
+    unsigned prev = o->release();
+    if (prev == 1) {
         switch(o->type) {
         case OBJ_STRING: freeStringObject(o); break;
         case OBJ_LIST: freeListObject(o); break;
@@ -369,8 +373,7 @@ void decrRefCount(robj_roptr o) {
         }
         zfree(o.unsafe_robjcast());
     } else {
-        if (o->refcount <= 0) serverPanic("decrRefCount against refcount <= 0");
-        if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount.fetch_sub(1, std::memory_order_acquire);
+        if (prev <= 0) serverPanic("decrRefCount against refcount <= 0");
     }
 }
 
@@ -394,7 +397,7 @@ void decrRefCountVoid(const void *o) {
  *    decrRefCount(obj);
  */
 robj *resetRefCount(robj *obj) {
-    obj->refcount = 0;
+    obj->setrefcount(0);
     return obj;
 }
 
@@ -452,7 +455,7 @@ robj *tryObjectEncoding(robj *o) {
     /* It's not safe to encode shared objects: shared objects can be shared
      * everywhere in the "object space" of Redis and may end in places where
      * they are not handled. We handle them only as values in the keyspace. */
-     if (o->refcount > 1) return o;
+     if (o->getrefcount(std::memory_order_relaxed) > 1) return o;
 
     /* Check if we can represent this string as a long integer.
      * Note that we are sure that a string larger than 20 chars is not
@@ -1064,8 +1067,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
         mh->db[mh->num_dbs].overhead_ht_main = mem;
         mem_total+=mem;
 
-        mem = dictSize(db->expires) * sizeof(dictEntry) +
-              dictSlots(db->expires) * sizeof(dictEntry*);
+        mem = db->setexpire->bytes_used();
         mh->db[mh->num_dbs].overhead_ht_expires = mem;
         mem_total+=mem;
 
@@ -1275,7 +1277,7 @@ NULL
     } else if (!strcasecmp(szFromObj(c->argv[1]),"refcount") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
                 == NULL) return;
-        addReplyLongLong(c,o->refcount);
+        addReplyLongLong(c,o->getrefcount(std::memory_order_relaxed));
     } else if (!strcasecmp(szFromObj(c->argv[1]),"encoding") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
                 == NULL) return;
@@ -1473,4 +1475,19 @@ NULL
     } else {
         addReplyErrorFormat(c, "Unknown subcommand or wrong number of arguments for '%s'. Try MEMORY HELP", (char*)ptrFromObj(c->argv[1]));
     }
+}
+
+void redisObject::SetFExpires(bool fExpire)
+{
+    serverAssert(this->refcount != OBJ_SHARED_REFCOUNT);
+    if (fExpire)
+        this->refcount.fetch_or(1U << 31, std::memory_order_relaxed);
+    else
+        this->refcount.fetch_and(~(1U << 31), std::memory_order_relaxed);
+}
+
+void redisObject::setrefcount(unsigned ref)
+{ 
+    serverAssert(!FExpires());
+    refcount.store(ref, std::memory_order_relaxed); 
 }

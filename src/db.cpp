@@ -231,17 +231,24 @@ void dbOverwriteCore(redisDb *db, dictEntry *de, robj *key, robj *val, bool fUpd
     robj *old = (robj*)dictGetVal(de);
 
     if (old->FExpires()) {
-        if (fRemoveExpire)
+        if (fRemoveExpire) {
             removeExpire(db, key);
-        else
+        }
+        else {
+            if (val->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
+                val = dupStringObject(val);
             updateExpire(db, (sds)dictGetKey(de), old, val);
+        }
     }
 
     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         val->lru = old->lru;
     }
-    if (fUpdateMvcc)
+    if (fUpdateMvcc) {
+        if (val->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
+            val = dupStringObject(val);
         val->mvcc_tstamp = getMvccTstamp();
+    }
 
     dictSetVal(db->pdict, de, val);
 

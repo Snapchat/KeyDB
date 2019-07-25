@@ -3279,9 +3279,14 @@ void replicaReplayCommand(client *c)
     cFake->puser = c->puser;
     cFake->querybuf = sdscatsds(cFake->querybuf,(sds)ptrFromObj(c->argv[2]));
     selectDb(cFake, c->db->id);
+    auto ccmdPrev = serverTL->commandsExecuted;
     processInputBuffer(cFake, (CMD_CALL_FULL & (~CMD_CALL_PROPAGATE)));
+    bool fExec = ccmdPrev != serverTL->commandsExecuted;
     cFake->lock.unlock();
-    addReply(c, shared.ok);
+    if (fExec)
+        addReply(c, shared.ok);
+    else
+        addReplyError(c, "command did not execute");
     freeClient(cFake);
     serverTL->current_client = current_clientSave;
 

@@ -49,6 +49,15 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
             }
         }
 
+        test {Active replicas propogate binary} {
+            $master set binkey "\u0000foo"
+            wait_for_condition 50 500 {
+                [string match *foo* [$slave get binkey]]
+            } else {
+                fail "replication failed to propogate binary data"
+            }
+        }
+
         test {Active replicas WAIT} {
             # Test that wait succeeds since replicas should be syncronized
             $master set testkey foo

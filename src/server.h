@@ -1159,6 +1159,7 @@ struct redisServerThreadVars {
     client *lua_client = nullptr;   /* The "fake client" to query Redis from Lua */
     struct fastlock lockPendingWrite;
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
+    long unsigned commandsExecuted = 0;
 };
 
 struct redisMaster {

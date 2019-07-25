@@ -3265,7 +3265,7 @@ void replicaReplayCommand(client *c)
     cFake->lock.lock();
     cFake->authenticated = c->authenticated;
     cFake->puser = c->puser;
-    cFake->querybuf = sdscat(cFake->querybuf,(sds)ptrFromObj(c->argv[2]));
+    cFake->querybuf = sdscatsds(cFake->querybuf,(sds)ptrFromObj(c->argv[2]));
     selectDb(cFake, c->db->id);
     processInputBuffer(cFake, (CMD_CALL_FULL & (~CMD_CALL_PROPAGATE)));
     cFake->lock.unlock();

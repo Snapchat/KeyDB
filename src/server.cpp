@@ -3347,6 +3347,7 @@ void call(client *c, int flags) {
     dirty = g_pserver->dirty;
     start = ustime();
     c->cmd->proc(c);
+    serverTL->commandsExecuted++;
     duration = ustime()-start;
     dirty = g_pserver->dirty-dirty;
     if (dirty < 0) dirty = 0;

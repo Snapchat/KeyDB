@@ -3930,6 +3930,8 @@ void RM_FreeThreadSafeContext(RedisModuleCtx *ctx) {
 void RM_ThreadSafeContextLock(RedisModuleCtx *ctx) {
     UNUSED(ctx);
     moduleAcquireGIL(FALSE /*fServerThread*/);
+    if (serverTL == nullptr)
+        serverTL = &g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN];    // arbitrary module threads get the main thread context
 }
 
 /* Release the server lock after a thread safe API call was executed. */

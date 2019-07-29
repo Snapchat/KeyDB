@@ -801,7 +801,8 @@ public:
     void expireSubKey(const char *szSubkey, long long when)
     {
         auto itrInsert = std::lower_bound(m_vecexpireEntries.begin(), m_vecexpireEntries.end(), when);
-        m_vecexpireEntries.emplace(itrInsert, when, sdsdup(szSubkey));
+        const char *subkey = (szSubkey) ? sdsdup(szSubkey) : nullptr;
+        m_vecexpireEntries.emplace(itrInsert, when, subkey);
     }
 
     bool FEmpty() const noexcept { return m_vecexpireEntries.empty(); }

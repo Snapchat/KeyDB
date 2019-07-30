@@ -5,31 +5,36 @@
 What is KeyDB?
 --------------
 
-KeyDB is a high performance fork of Redis focusing on multithreading, memory efficiency, and high throughput.  In addition to multithreading KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/Active-Replication), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3.
+KeyDB is a high performance Redis compatible database with a focus on multithreading, memory efficiency, and high throughput.  In addition to multithreading, KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/Active-Replication), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3. 
 
-On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency.
+KeyDB has full compatibility with the Redis protocol, modules, and scripts.  This includes full support for transactions, and atomic execution of scripts.  Not only do we keep up to date with the latest open source changes within Redis, we are leading the way in performance and community driven features that deserve to be part of the base code. With this compatibility, you are enabled to use KeyDB as a powerful backend server without having to rework your client side or eliminate Redis modules you may be using.
 
-KeyDB has full compatibility with the Redis protocol, modules, and scripts.  This includes full support for transactions, and atomic execution of scripts.  For more information see our architecture section below.
+On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency. Active-Replica options simplify hot-spare failover allowing you to easily distribute writes over replicas instead of just a single master. Being able to run larger loads on a multithreaded server instance reduces your need to shard, simplifying setup and scaling requirements.
 
+KeyDB has moved to its stable version 5.0 including active-replication. KeyDB features are driven by the open source community, and we always welcome your input. Try our new experimental features such as subkey expiries (EXPIRE MEMBER) and multi-master support. If you have code to contribute create a pull request where it wont  be ignored or sit on a multi-year backlog.
+
+
+How Did KeyDB Start?
+---------------
+KeyDB originated because the maintainers of Redis continually reiterated that they did not plan to support multithreading.  While we have great respect for the Redis team, we felt the analysis justifying the decision was incorrect. We felt that KeyDB was the best way to accelerate development in the areas of most interest to us. In addition, getting changes incorporated into Redis can be difficult, and we wanted open source implementations of features currently only available in proprietary modules.
+KeyDB keeps up to date and in communication with Redis in hopes our projects can learn from each other.
+
+Check out more…
+------------------ 
 Try our docker container: https://hub.docker.com/r/eqalpha/keydb
 
 Talk on Gitter: https://gitter.im/KeyDB
+
+Visit our Website: https://keydb.dev
+
+See options for channel partners and support contracts: https://keydb.dev/support.html
+
+Learn with KeyDB’s official documentation site: https://docs.keydb.dev
 
 [Subscribe to the KeyDB mailing list](https://eqalpha.us20.list-manage.com/subscribe/post?u=978f486c2f95589b24591a9cc&id=4ab9220500)
 
 Management GUI: We recommend [FastoNoSQL](https://fastonosql.com/) which has official KeyDB support.
 
-New: Active Replica Support
----------------------------
-
-New! KeyDB now has support for Active Replicas.  This feature greatly simplifies hot-spare failover and allows you to distribute writes over replicas instead of just a single master.  For more information [see the wiki page](https://github.com/JohnSully/KeyDB/wiki/Active-Replication).
-
-Why fork Redis?
----------------
-
-The Redis maintainers have continually reiterated that they do not plan to support multithreading.  While we have great respect for the redis team, we feel the analysis justifying this decision is incorrect.  In addition we wanted open source implementations of features currently only available in proprietary modules.   We feel a fork is the best way to accelerate development in the areas of most interest to us.
-
-We plan to track the Redis repo closely and hope our projects can learn from each other.
 
 Benchmarking KeyDB
 ------------------
@@ -58,6 +63,10 @@ If you would like to use the [FLASH backed](https://github.com/JohnSully/KeyDB/w
 
 If you would like KeyDB to dump and load directly to AWS S3 this option specifies the bucket.  Using this option with the traditional RDB options will result in KeyDB backing up twice to both locations.  If both are specified KeyDB will first attempt to load from the local dump file and if that fails load from S3.  This requires the AWS CLI tools to be installed and configured which are used under the hood to transfer the data.
 
+    active-replica yes
+
+If you are using active-active replication set `active-replica` option to “yes”. This will enable both instances to accept reads and writes while remaining synced. [Click here](https://docs.keydb.dev/docs/active-rep/) to see more on active-rep in our docs section. There are also [docker examples]( https://docs.keydb.dev/docs/docker-active-rep/) on docs.
+
 All other configuration options behave as you'd expect.  Your existing configuration files should continue to work unchanged.
 
 Building KeyDB
@@ -67,15 +76,18 @@ KeyDB can be compiled and is tested for use on Linux.  KeyDB currently relies on
 
 Install dependencies:
 
-    % sudo apt install build-essential nasm autotools-dev autoconf libjemalloc-dev tcl tcl-dev uuid-dev
+    % sudo apt install build-essential nasm autotools-dev autoconf libjemalloc-dev tcl tcl-dev uuid-dev libcurl4-openssl-dev
 
 Compiling is as simple as:
 
     % make
 
-You can enable flash support with (Note: autoconf and autotools must be installed):
+You can enable flash support with:
 
     % make MALLOC=memkind
+
+***Note that the following dependencies may be needed: 
+    % sudo apt-get install autoconf autotools-dev libnuma-dev libtool
 
 Fixing build problems with dependencies or cached build options
 ---------
@@ -179,7 +191,7 @@ then in another terminal try the following:
     (integer) 2
     keydb>
 
-You can find the list of all the available commands at http://redis.io/commands.
+You can find the list of all the available commands at https://docs.keydb.dev/docs/commands/
 
 Installing KeyDB
 -----------------
@@ -222,24 +234,18 @@ Future work:
 
 Docker Build
 ------------
-
-Run the following commands for a full source download and build:
-
+Build the latest binaries from the github unstable branch within a docker container. Note this is built for Ubuntu 18.04.
+Simply make a directory you would like to have the latest binaries dumped in, then run the following commmand with your updated path:
 ```
-git clone git@github.com:JohnSully/KeyDB.git
-docker run -it --rm -v `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make
+$ docker run -it --rm -v /path-to-dump-binaries:/keydb_bin eqalpha/keydb-build-bin
 ```
+You should receive the following files: keydb-benchmark,  keydb-check-aof,  keydb-check-rdb,  keydb-cli,  keydb-sentinel,  keydb-server
 
-Then you have fresh binaries built, you can also pass any other options to the make command above after the word make. E.g.
-
-```docker run -it --rm -v `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make MAllOC=memkind```
-
-The above commands will build you binaries in the src directory. Standard `make install` without Docker command will work after if you wish to install
-
-If you'd prefer you can build the Dockerfile in the repo instead of pulling the above container for use:
-
-`docker build -t KeyDB .`
-
+If you are looking to enable flash support with the build (make MALLOC=memkind) then use the following command:
+```
+$ docker run -it --rm -v /path-to-dump-binaries:/keydb_bin eqalpha/keydb-build-bin:flash
+```
+Please note that you will need libcurl4-openssl-dev in order to run keydb. With flash version you may need libnuma-dev and libtool installed in order to run the binaries. Keep this in mind especially when running in a container. For a copy of all our Dockerfiles, please see them on [docs]( https://docs.keydb.dev/docs/dockerfiles/).
 Code contributions
 -----------------
 
@@ -251,4 +257,5 @@ source distribution.
 
 Please see the CONTRIBUTING file in this source distribution for more
 information.
+
 

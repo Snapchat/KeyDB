@@ -5,19 +5,22 @@
 What is KeyDB?
 --------------
 
-KeyDB is a high performance Redis compatible database with a focus on multithreading, memory efficiency, and high throughput.  In addition to multithreading, KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/Active-Replication), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3. 
+KeyDB is a high performance fork of Redis with a focus on multithreading, memory efficiency, and high throughput.  In addition to multithreading, KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/Active-Replication), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3. 
 
-KeyDB has full compatibility with the Redis protocol, modules, and scripts.  This includes full support for transactions, and atomic execution of scripts.  Not only do we keep up to date with the latest open source changes within Redis, we are leading the way in performance and community driven features that deserve to be part of the base code. With this compatibility, you are enabled to use KeyDB as a powerful backend server without having to rework your client side or eliminate Redis modules you may be using.
+KeyDB maintains full compatibility with the Redis protocol, modules, and scripts.  This includes the atomicity gurantees for scripts and transactions.  Because KeyDB keeps in sync with Redis development KeyDB is a superset of Redis functionality, making KeyDB a drop in replacement for existing Redis deployments.
 
-On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency. Active-Replica options simplify hot-spare failover allowing you to easily distribute writes over replicas instead of just a single master. Being able to run larger loads on a multithreaded server instance reduces your need to shard, simplifying setup and scaling requirements.
+On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency. Active-Replication simplifies hot-spare failover allowing you to easily distribute writes over replicas and use simple TCP based load balancing/failover. KeyDB's higher performance allows you to do more on less hardware which reduces operation costs and complexity.
 
-KeyDB has moved to its stable version 5.0 including active-replication. KeyDB features are driven by the open source community, and we always welcome your input. Try our new experimental features such as subkey expiries (EXPIRE MEMBER) and multi-master support. If you have code to contribute create a pull request where it wont  be ignored or sit on a multi-year backlog.
+<img src=https://cdn-images-1.medium.com/max/1400/1*s7mTb7Qb0kxc951mz8bdgA.png width=420 height=300/><img src=https://cdn-images-1.medium.com/max/1400/1*R00A5U4AFGohGOYHMfT6fA.png height=300/>
 
-
-How Did KeyDB Start?
+Why fork Redis?
 ---------------
-KeyDB originated because the maintainers of Redis continually reiterated that they did not plan to support multithreading.  While we have great respect for the Redis team, we felt the analysis justifying the decision was incorrect. We felt that KeyDB was the best way to accelerate development in the areas of most interest to us. In addition, getting changes incorporated into Redis can be difficult, and we wanted open source implementations of features currently only available in proprietary modules.
-KeyDB keeps up to date and in communication with Redis in hopes our projects can learn from each other.
+
+KeyDB has a different philosophy on how the codebase should evolve.  We feel that ease of use and a "batteries included" approach is the best way to create a good user experience.  While we have great respect for the Redis maintainers it is our opinion that the Redis approach focusses too much on simplicity of the code base at the expense of complexity for the user.  This results in the need for external components to solve common problems and ultimately results in higher overall complexity.
+
+Because of this difference of opinion features which are right for KeyDB may not be appropriate for Redis.  A fork allows us to explore this new development path and implement features which may never be a part of Redis.
+
+KeyDB keeps in sync with upstream Redis changes, and where applicable KeyDB upstreams bug fixes and changes. It is our hope that the two projects can continue to grow and learn from each other.
 
 Check out more…
 ------------------ 
@@ -38,8 +41,6 @@ Management GUI: We recommend [FastoNoSQL](https://fastonosql.com/) which has off
 
 Benchmarking KeyDB
 ------------------
-
-<img src=https://cdn-images-1.medium.com/max/1400/1*s7mTb7Qb0kxc951mz8bdgA.png width=420 height=300/><img src=https://cdn-images-1.medium.com/max/1400/1*R00A5U4AFGohGOYHMfT6fA.png height=300/>
 
 Please note keydb-benchmark and redis-benchmark are currently single threaded and too slow to properly benchmark KeyDB.  We recommend using a redis cluster benchmark tool such as [memtier](https://github.com/RedisLabs/memtier_benchmark).  Please ensure your machine has enough cores for both KeyDB and memteir if testing locally.  KeyDB expects exclusive use of any cores assigned to it.
 
@@ -246,6 +247,7 @@ If you are looking to enable flash support with the build (make MALLOC=memkind) 
 $ docker run -it --rm -v /path-to-dump-binaries:/keydb_bin eqalpha/keydb-build-bin:flash
 ```
 Please note that you will need libcurl4-openssl-dev in order to run keydb. With flash version you may need libnuma-dev and libtool installed in order to run the binaries. Keep this in mind especially when running in a container. For a copy of all our Dockerfiles, please see them on [docs]( https://docs.keydb.dev/docs/dockerfiles/).
+
 Code contributions
 -----------------
 

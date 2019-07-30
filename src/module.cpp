@@ -3920,7 +3920,9 @@ RedisModuleCtx *RM_GetThreadSafeContext(RedisModuleBlockedClient *bc) {
 
 /* Release a thread safe context. */
 void RM_FreeThreadSafeContext(RedisModuleCtx *ctx) {
+    moduleAcquireGIL(false /*fServerThread*/);
     moduleFreeContext(ctx);
+    moduleReleaseGIL(false /*fServerThread*/);
     zfree(ctx);
 }
 

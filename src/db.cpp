@@ -269,7 +269,7 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
     dictEntry *de = dictFind(db->pdict,ptrFromObj(key));
 
     serverAssertWithInfo(NULL,key,de != NULL);
-    dbOverwriteCore(db, de, key, val, true, false);
+    dbOverwriteCore(db, de, key, val, !!g_pserver->fActiveReplica, false);
 }
 
 /* Insert a key, handling duplicate keys according to fReplace */
@@ -309,7 +309,7 @@ void setKey(redisDb *db, robj *key, robj *val) {
     if (de == NULL) {
         dbAdd(db,key,val);
     } else {
-        dbOverwriteCore(db,de,key,val,true,true);
+        dbOverwriteCore(db,de,key,val,!!g_pserver->fActiveReplica,true);
     }
     incrRefCount(val);
     signalModifiedKey(db,key);

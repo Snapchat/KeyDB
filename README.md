@@ -2,6 +2,8 @@
 [![Build Status](https://travis-ci.org/JohnSully/KeyDB.svg?branch=unstable)](https://travis-ci.org/JohnSully/KeyDB) [![Join the chat at https://gitter.im/KeyDB/community](https://badges.gitter.im/KeyDB/community.svg)](https://gitter.im/KeyDB/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 [![StackShare](http://img.shields.io/badge/tech-stack-0690fa.svg?style=flat)](https://stackshare.io/eq-alpha-technology-inc/eq-alpha-technology-inc)
 
+##### Need Help? Check out our extensive [documentation](https://docs.keydb.dev).
+
 What is KeyDB?
 --------------
 
@@ -16,14 +18,13 @@ On the same hardware KeyDB can perform twice as many queries per second as Redis
 Why fork Redis?
 ---------------
 
-KeyDB has a different philosophy on how the codebase should evolve.  We feel that ease of use and a "batteries included" approach is the best way to create a good user experience.  While we have great respect for the Redis maintainers it is our opinion that the Redis approach focusses too much on simplicity of the code base at the expense of complexity for the user.  This results in the need for external components to solve common problems and ultimately results in higher overall complexity.
+KeyDB has a different philosophy on how the codebase should evolve.  We feel that ease of use, high performance, and a "batteries included" approach is the best way to create a good user experience.  While we have great respect for the Redis maintainers it is our opinion that the Redis approach focusses too much on simplicity of the code base at the expense of complexity for the user.  This results in the need for external components and workarounds to solve common problems - resulting in more complexity overall.
 
-Because of this difference of opinion features which are right for KeyDB may not be appropriate for Redis.  A fork allows us to explore this new development path and implement features which may never be a part of Redis.
+Because of this difference of opinion features which are right for KeyDB may not be appropriate for Redis.  A fork allows us to explore this new development path and implement features which may never be a part of Redis.  KeyDB keeps in sync with upstream Redis changes, and where applicable we upstream bug fixes and changes. It is our hope that the two projects can continue to grow and learn from each other.
 
-KeyDB keeps in sync with upstream Redis changes, and where applicable KeyDB upstreams bug fixes and changes. It is our hope that the two projects can continue to grow and learn from each other.
+Additional Resources
+--------------------
 
-Check out more…
------------------- 
 Try our docker container: https://hub.docker.com/r/eqalpha/keydb
 
 Talk on Gitter: https://gitter.im/KeyDB

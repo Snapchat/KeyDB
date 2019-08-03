@@ -260,6 +260,7 @@ void activeExpireCycle(int type) {
         
         size_t expired = 0;
         size_t tried = 0;
+        long long check = ACTIVE_EXPIRE_CYCLE_FAST_DURATION;    // assume a check is roughly 1us.  It isn't but good enough
         db->expireitr = db->setexpire->enumerate(db->expireitr, now, [&](expireEntry &e) __attribute__((always_inline)) {
             if (e.when() < now)
             {
@@ -279,9 +280,10 @@ void activeExpireCycle(int type) {
                     g_pserver->stat_expired_time_cap_reached_count++;
                     return false;
                 }
+                check = ACTIVE_EXPIRE_CYCLE_FAST_DURATION;
             }
             return true;
-        });
+        }, &check);
 
         total_expired += expired;
     }

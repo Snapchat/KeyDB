@@ -30,7 +30,7 @@ class semiorderedset
     {
         // Aim for roughly 4 cache lines per bucket (determined by imperical testing)
         //  lower values are faster but use more memory
-        return std::max((64/sizeof(T))*4, (size_t)2);
+        return std::max((64/sizeof(T))*8, (size_t)2);
     }
 
 public:
@@ -122,7 +122,7 @@ public:
 
     // enumeration starting from the 'itrStart'th key.  Note that the iter is a hint, and need no be valid anymore
     template<typename T_VISITOR, typename T_MAX>
-    setiter enumerate(const setiter &itrStart, const T_MAX &max, T_VISITOR fn)
+    setiter enumerate(const setiter &itrStart, const T_MAX &max, T_VISITOR fn, long long *pccheck)
     {
         setiter itr(itrStart);
 
@@ -135,7 +135,7 @@ public:
         
         for (size_t ibucket = 0; ibucket < m_data.size(); ++ibucket)
         {
-            if (!enumerate_bucket(itr, max, fn))
+            if (!enumerate_bucket(itr, max, fn, pccheck))
                 break;
             itr.idxSecondary = 0;
 
@@ -314,7 +314,7 @@ private:
     }
 
     template<typename T_VISITOR, typename T_MAX>
-    inline bool enumerate_bucket(setiter &itr, const T_MAX &max, T_VISITOR &fn)
+    inline bool enumerate_bucket(setiter &itr, const T_MAX &max, T_VISITOR &fn, long long *pcheckLimit)
     {
         auto &vec = m_data[itr.idxPrimary];
         for (; itr.idxSecondary < vec.size(); ++itr.idxSecondary)
@@ -323,8 +323,9 @@ private:
             assert((itr.idxSecondary+1) >= vec.size() 
                 || static_cast<T_MAX>(vec[itr.idxSecondary]) <= static_cast<T_MAX>(vec[itr.idxSecondary+1]));
 
+            (*pcheckLimit)--;
             if (max < static_cast<T_MAX>(*itr))
-                return true;
+                return *pcheckLimit > 0;
 
             size_t sizeBefore = vec.size();
             if (!fn(*itr))
@@ -339,6 +340,6 @@ private:
             }
         }
         vec.shrink_to_fit();
-        return true;
+        return *pcheckLimit > 0;
     }
 };

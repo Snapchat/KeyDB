@@ -77,7 +77,7 @@ public:
         }
         assert(idx < m_max);
         where = m_data + idx;
-        memmove(m_data + idx + 1, m_data + idx, (m_celem - idx)*sizeof(T));
+        memmove(reinterpret_cast<void*>(m_data + idx + 1), reinterpret_cast<const void*>(m_data + idx), (m_celem - idx)*sizeof(T));
         new(m_data + idx) T(std::move(val));
         ++m_celem;
         return where;
@@ -103,7 +103,7 @@ public:
         size_t idx = where - m_data;
         assert(idx < m_celem);
         where->~T();
-        memmove(where, where+1, ((m_celem - idx - 1)*sizeof(T)));
+        memmove(reinterpret_cast<void*>(where), reinterpret_cast<const void*>(where+1), ((m_celem - idx - 1)*sizeof(T)));
         --m_celem;
 
         if (m_celem == 0)

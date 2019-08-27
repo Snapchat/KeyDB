@@ -1165,6 +1165,7 @@ typedef struct client {
     time_t lastinteraction; /* Time of the last interaction, used for timeout */
     time_t obuf_soft_limit_reached_time;
     std::atomic<uint64_t> flags;              /* Client flags: CLIENT_* macros. */
+    int casyncOpsPending;
     int fPendingAsyncWrite; /* NOTE: Not a flag because it is written to outside of the client lock (locked by the global lock instead) */
     int authenticated;      /* Needed when the default user requires auth. */
     int replstate;          /* Replication state if this is a slave. */
@@ -1941,7 +1942,7 @@ void redisSetProcTitle(const char *title);
 /* networking.c -- Networking and Client related operations */
 client *createClient(int fd, int iel);
 void closeTimedoutClients(void);
-void freeClient(client *c);
+bool freeClient(client *c);
 void freeClientAsync(client *c);
 void resetClient(client *c);
 void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask);
@@ -2761,9 +2762,10 @@ void xorDigest(unsigned char *digest, const void *ptr, size_t len);
 int populateCommandTableParseFlags(struct redisCommand *c, const char *strflags);
 
 int moduleGILAcquiredByModule(void);
+extern bool g_fInCrash;
 static inline int GlobalLocksAcquired(void)  // Used in asserts to verify all global locks are correctly acquired for a server-thread to operate
 {
-    return aeThreadOwnsLock() || moduleGILAcquiredByModule();
+    return aeThreadOwnsLock() || moduleGILAcquiredByModule() || g_fInCrash;
 }
 
 inline int ielFromEventLoop(const aeEventLoop *eventLoop)

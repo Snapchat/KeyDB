@@ -191,6 +191,36 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
     }
 }
 
+// Unlike write() this is an all or nothing thing.  We will block if a partial write is hit
+ssize_t safe_write(int fd, const void *pv, size_t cb)
+{
+    const char *pcb = (const char*)pv;
+    ssize_t written = 0;
+    do
+    {
+        ssize_t rval = write(fd, pcb, cb);
+        if (rval > 0)
+        {
+            pcb += rval;
+            cb -= rval;
+            written += rval;
+        }
+        else if (errno == EAGAIN)
+        {
+            if (written == 0)
+                break;
+            // if we've already written something then we're committed so keep trying
+        }
+        else
+        {
+            if (rval == 0)
+                return written;
+            return rval;
+        }
+    } while (cb);
+    return written;
+}
+
 int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
         aeFileProc *proc, void *clientData, int fSynchronous)
 {
@@ -212,9 +242,10 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
     std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::defer_lock);
     if (fSynchronous)
         cmd.pctl->mutexcv.lock();
-    auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
+    auto size = safe_write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
     if (size != sizeof(cmd))
     {
+        AE_ASSERT(size == sizeof(cmd) || size <= 0);
         AE_ASSERT(errno == EAGAIN);
         ret = AE_ERR;
     }

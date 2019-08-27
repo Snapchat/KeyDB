@@ -175,6 +175,7 @@ client *createClient(int fd, int iel) {
     c->buflenAsync = 0;
     c->bufposAsync = 0;
     c->client_tracking_redirection = 0;
+    c->casyncOpsPending = 0;
     memset(c->uuid, 0, UUID_BINARY_LEN);
 
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
@@ -1004,7 +1005,6 @@ static void acceptCommonHandler(int fd, int flags, char *ip, int iel) {
         serverLog(LL_WARNING,
             "Error registering fd event for the new client: %s (fd=%d)",
             strerror(errno),fd);
-        close(fd); /* May be already closed, just ignore errors */
         return;
     }
 
@@ -1270,7 +1270,7 @@ void unlinkClient(client *c) {
     if (c->flags & CLIENT_TRACKING) disableTracking(c);
 }
 
-void freeClient(client *c) {
+bool freeClient(client *c) {
     listNode *ln;
     serverAssert(c->fd == -1 || GlobalLocksAcquired());
     AssertCorrectThread(c);
@@ -1278,9 +1278,9 @@ void freeClient(client *c) {
 
     /* If a client is protected, yet we need to free it right now, make sure
      * to at least use asynchronous freeing. */
-    if (c->flags & CLIENT_PROTECTED) {
+    if (c->flags & CLIENT_PROTECTED || c->casyncOpsPending) {
         freeClientAsync(c);
-        return;
+        return false;
     }
 
     /* If it is our master that's beging disconnected we should make sure
@@ -1295,7 +1295,7 @@ void freeClient(client *c) {
                         CLIENT_BLOCKED)))
         {
             replicationCacheMaster(MasterInfoFromClient(c), c);
-            return;
+            return false;
         }
     }
 
@@ -1374,6 +1374,7 @@ void freeClient(client *c) {
     ulock.unlock();
     fastlock_free(&c->lock);
     zfree(c);
+    return true;
 }
 
 /* Schedule a client to free it at a safe time in the serverCron() function.
@@ -1386,28 +1387,37 @@ void freeClientAsync(client *c) {
      * may access the list while Redis uses I/O threads. All the other accesses
      * are in the context of the main thread while the other threads are
      * idle. */
-    if (c->flags & CLIENT_CLOSE_ASAP || c->flags & CLIENT_LUA) return;
+    if (c->flags & CLIENT_CLOSE_ASAP || c->flags & CLIENT_LUA) return;  // check without the lock first
     std::lock_guard<decltype(c->lock)> clientlock(c->lock);
     AeLocker lock;
     lock.arm(c);
+    if (c->flags & CLIENT_CLOSE_ASAP || c->flags & CLIENT_LUA) return;  // race condition after we acquire the lock
     c->flags |= CLIENT_CLOSE_ASAP;    
     listAddNodeTail(g_pserver->clients_to_close,c);
 }
 
 void freeClientsInAsyncFreeQueue(int iel) {
+    serverAssert(GlobalLocksAcquired());
     listIter li;
     listNode *ln;
     listRewind(g_pserver->clients_to_close,&li);
 
-    while((ln = listNext(&li))) {
+    // Store the clients in a temp vector since freeClient will modify this list
+    std::vector<client*> vecclientsFree;
+    while((ln = listNext(&li))) 
+    {
         client *c = (client*)listNodeValue(ln);
-        if (c->iel != iel)
-            continue;   // wrong thread
+        if (c->iel == iel)
+        {
+            vecclientsFree.push_back(c);
+            listDelNode(g_pserver->clients_to_close, ln);
+        }
+    }
 
+    for (client *c : vecclientsFree)
+    {
         c->flags &= ~CLIENT_CLOSE_ASAP;
         freeClient(c);
-        listDelNode(g_pserver->clients_to_close,ln);
-        listRewind(g_pserver->clients_to_close,&li);
     }
 }
 
@@ -1555,6 +1565,15 @@ void ProcessPendingAsyncWrites()
         std::lock_guard<decltype(c->lock)> lock(c->lock);
 
         serverAssert(c->fPendingAsyncWrite);
+        if (c->flags & (CLIENT_CLOSE_ASAP | CLIENT_CLOSE_AFTER_REPLY))
+        {
+            c->bufposAsync = 0;
+            c->buflenAsync = 0;
+            zfree(c->bufAsync);
+            c->bufAsync = nullptr;
+            c->fPendingAsyncWrite = FALSE;
+            continue;
+        }
 
         // TODO: Append to end of reply block?
 
@@ -1591,8 +1610,36 @@ void ProcessPendingAsyncWrites()
             continue;
 
         asyncCloseClientOnOutputBufferLimitReached(c);
-        if (aeCreateRemoteFileEvent(g_pserver->rgthreadvar[c->iel].el, c->fd, ae_flags, sendReplyToClient, c, FALSE) == AE_ERR)
-            continue;   // We can retry later in the cron
+        if (c->flags & CLIENT_CLOSE_ASAP)
+            continue;   // we will never write this so don't post an op
+        
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        
+        if (c->casyncOpsPending == 0)
+        {
+            if (FCorrectThread(c))
+            {
+                prepareClientToWrite(c, false); // queue an event
+            }
+            else
+            {
+                // We need to start the write on the client's thread
+                if (aePostFunction(g_pserver->rgthreadvar[c->iel].el, [c]{
+                        // Install a write handler.  Don't do the actual write here since we don't want
+                        //  to duplicate the throttling and safety mechanisms of the normal write code
+                        std::lock_guard<decltype(c->lock)> lock(c->lock);
+                        serverAssert(c->casyncOpsPending > 0);
+                        c->casyncOpsPending--;
+                        aeCreateFileEvent(g_pserver->rgthreadvar[c->iel].el, c->fd, AE_WRITABLE|AE_WRITE_THREADSAFE, sendReplyToClient, c);
+                    }, false) == AE_ERR
+                )
+                {
+                    // Posting the function failed
+                    continue;   // We can retry later in the cron
+                }
+                ++c->casyncOpsPending; // race is handled by the client lock in the lambda
+            }
+        }
     }
 }
 
@@ -1632,13 +1679,15 @@ int handleClientsWithPendingWrites(int iel) {
         std::unique_lock<decltype(c->lock)> lock(c->lock);
 
         /* Try to write buffers to the client socket. */
-        if (writeToClient(c->fd,c,0) == C_ERR) {
+        if (writeToClient(c->fd,c,0) == C_ERR) 
+        {
             if (c->flags & CLIENT_CLOSE_ASAP)
             {
                 lock.release(); // still locked
                 AeLocker ae;
                 ae.arm(c);
-                freeClient(c);  // writeToClient will only async close, but there's no need to wait
+                if (!freeClient(c))  // writeToClient will only async close, but there's no need to wait
+                    c->lock.unlock();   // if we just got put on the async close list, then we need to remove the lock
             }
             continue;
         }

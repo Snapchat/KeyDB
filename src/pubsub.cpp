@@ -143,6 +143,8 @@ int clientSubscriptionsCount(client *c) {
 /* Subscribe a client to a channel. Returns 1 if the operation succeeded, or
  * 0 if the client was already subscribed to that channel. */
 int pubsubSubscribeChannel(client *c, robj *channel) {
+    serverAssert(GlobalLocksAcquired());
+    serverAssert(c->lock.fOwnLock());
     dictEntry *de;
     list *clients = NULL;
     int retval = 0;
@@ -202,6 +204,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify) {
 
 /* Subscribe a client to a pattern. Returns 1 if the operation succeeded, or 0 if the client was already subscribed to that pattern. */
 int pubsubSubscribePattern(client *c, robj *pattern) {
+    serverAssert(GlobalLocksAcquired());
     int retval = 0;
 
     if (listSearchKey(c->pubsub_patterns,pattern) == NULL) {
@@ -244,6 +247,7 @@ int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
 /* Unsubscribe from all the channels. Return the number of channels the
  * client was subscribed to. */
 int pubsubUnsubscribeAllChannels(client *c, int notify) {
+    serverAssert(GlobalLocksAcquired());
     dictIterator *di = dictGetSafeIterator(c->pubsub_channels);
     dictEntry *de;
     int count = 0;
@@ -262,6 +266,7 @@ int pubsubUnsubscribeAllChannels(client *c, int notify) {
 /* Unsubscribe from all the patterns. Return the number of patterns the
  * client was subscribed from. */
 int pubsubUnsubscribeAllPatterns(client *c, int notify) {
+    serverAssert(GlobalLocksAcquired());
     listNode *ln;
     listIter li;
     int count = 0;
@@ -278,6 +283,7 @@ int pubsubUnsubscribeAllPatterns(client *c, int notify) {
 
 /* Publish a message */
 int pubsubPublishMessage(robj *channel, robj *message) {
+    serverAssert(GlobalLocksAcquired());
     int receivers = 0;
     dictEntry *de;
     listNode *ln;
@@ -293,6 +299,8 @@ int pubsubPublishMessage(robj *channel, robj *message) {
         listRewind(list,&li);
         while ((ln = listNext(&li)) != NULL) {
             client *c = reinterpret_cast<client*>(ln->value);
+            if (c->flags & CLIENT_CLOSE_ASAP)   // avoid blocking if the write will be ignored
+                continue;
             fastlock_lock(&c->lock);
             addReplyPubsubMessage(c,channel,message);
             fastlock_unlock(&c->lock);
@@ -311,6 +319,8 @@ int pubsubPublishMessage(robj *channel, robj *message) {
                                 (char*)ptrFromObj(channel),
                                 sdslen(szFromObj(channel)),0))
             {
+                if (pat->pclient->flags & CLIENT_CLOSE_ASAP)
+                    continue;
                 fastlock_lock(&pat->pclient->lock);
                 addReplyPubsubPatMessage(pat->pclient,
                     pat->pattern,channel,message);

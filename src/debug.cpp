@@ -55,6 +55,8 @@ typedef ucontext_t sigcontext_t;
 #endif
 #endif
 
+bool g_fInCrash = false;
+
 /* ================================= Debugging ============================== */
 
 /* Compute the sha1 of string at 's' with 'len' bytes long.
@@ -1360,6 +1362,7 @@ void dumpX86Calls(void *addr, size_t len) {
 
 void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
     ucontext_t *uc = (ucontext_t*) secret;
+    g_fInCrash = true;
     void *eip = getMcontextEip(uc);
     sds infostring, clients;
     struct sigaction act;

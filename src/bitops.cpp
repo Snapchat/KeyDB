@@ -396,6 +396,7 @@ void printBits(unsigned char *p, unsigned long count) {
 #define BITOP_OR    1
 #define BITOP_XOR   2
 #define BITOP_NOT   3
+#define BITOP_INVALID 4
 
 #define BITFIELDOP_GET 0
 #define BITFIELDOP_SET 1
@@ -587,72 +588,10 @@ void getbitCommand(client *c) {
     addReply(c, bitval ? shared.cone : shared.czero);
 }
 
-/* BITOP op_name target_key src_key1 src_key2 src_key3 ... src_keyN */
-void bitopCommand(client *c) {
-    char *opname = szFromObj(c->argv[1]);
-    robj *targetkey = c->argv[2];
-    robj_roptr o;
-    unsigned long op, j, numkeys;
-    robj_roptr *objects;      /* Array of source objects. */
-    unsigned char **src; /* Array of source strings pointers. */
-    unsigned long *len, maxlen = 0; /* Array of length of src strings,
-                                       and max len. */
-    unsigned long minlen = 0;    /* Min len among the input keys. */
+unsigned char *bitopCore(unsigned long op, unsigned long minlen, unsigned long maxlen, unsigned long numkeys, unsigned char **src, unsigned long *len)
+{
     unsigned char *res = NULL; /* Resulting string. */
-
-    /* Parse the operation name. */
-    if ((opname[0] == 'a' || opname[0] == 'A') && !strcasecmp(opname,"and"))
-        op = BITOP_AND;
-    else if((opname[0] == 'o' || opname[0] == 'O') && !strcasecmp(opname,"or"))
-        op = BITOP_OR;
-    else if((opname[0] == 'x' || opname[0] == 'X') && !strcasecmp(opname,"xor"))
-        op = BITOP_XOR;
-    else if((opname[0] == 'n' || opname[0] == 'N') && !strcasecmp(opname,"not"))
-        op = BITOP_NOT;
-    else {
-        addReply(c,shared.syntaxerr);
-        return;
-    }
-
-    /* Sanity check: NOT accepts only a single key argument. */
-    if (op == BITOP_NOT && c->argc != 4) {
-        addReplyError(c,"BITOP NOT must be called with a single source key.");
-        return;
-    }
-
-    /* Lookup keys, and store pointers to the string objects into an array. */
-    numkeys = c->argc - 3;
-    src = (unsigned char**)zmalloc(sizeof(unsigned char*) * numkeys, MALLOC_LOCAL);
-    len = (unsigned long*)zmalloc(sizeof(long) * numkeys, MALLOC_LOCAL);
-    objects = (robj_roptr*)zmalloc(sizeof(robj_roptr) * numkeys, MALLOC_LOCAL);
-    for (j = 0; j < numkeys; j++) {
-        o = lookupKeyRead(c->db,c->argv[j+3]);
-        /* Handle non-existing keys as empty strings. */
-        if (o == nullptr) {
-            objects[j] = nullptr;
-            src[j] = NULL;
-            len[j] = 0;
-            minlen = 0;
-            continue;
-        }
-        /* Return an error if one of the keys is not a string. */
-        if (checkType(c,o,OBJ_STRING)) {
-            unsigned long i;
-            for (i = 0; i < j; i++) {
-                if (objects[i])
-                    decrRefCount(objects[i]);
-            }
-            zfree(src);
-            zfree(len);
-            zfree(objects);
-            return;
-        }
-        objects[j] = getDecodedObject(o);
-        src[j] = (unsigned char*)ptrFromObj(objects[j]);
-        len[j] = sdslen(szFromObj(objects[j]));
-        if (len[j] > maxlen) maxlen = len[j];
-        if (j == 0 || len[j] < minlen) minlen = len[j];
-    }
+    unsigned long j;
 
     /* Compute the bit operation, if at least one string is not empty. */
     if (maxlen) {
@@ -744,7 +683,230 @@ void bitopCommand(client *c) {
             res[j] = output;
         }
     }
-    for (j = 0; j < numkeys; j++) {
+
+    return res;
+}
+
+unsigned bitopFromStr(const char *opname)
+{
+    if ((opname[0] == 'a' || opname[0] == 'A') && !strcasecmp(opname,"and"))
+        return BITOP_AND;
+    else if((opname[0] == 'o' || opname[0] == 'O') && !strcasecmp(opname,"or"))
+        return BITOP_OR;
+    else if((opname[0] == 'x' || opname[0] == 'X') && !strcasecmp(opname,"xor"))
+        return BITOP_XOR;
+    else if((opname[0] == 'n' || opname[0] == 'N') && !strcasecmp(opname,"not"))
+        return BITOP_NOT;
+    return BITOP_INVALID;
+}
+
+// Format (long):(long)
+std::pair<long long, long long> parseRange(robj *o)
+{
+    const char *sz = szFromObj(o);
+    
+    const char *pchCheck = sz;
+    while (*pchCheck != '\0' && *pchCheck != ':')
+        ++pchCheck;
+
+    if (*pchCheck != ':')
+        throw shared.syntaxerr;
+
+    long long min,max;
+    if (!string2ll(sz, pchCheck - sz, &min))
+        throw shared.syntaxerr;
+
+    if (!string2ll(pchCheck+1, strlen(pchCheck+1), &max))
+        throw shared.syntaxerr;
+
+    return std::make_pair(min, max);
+}
+
+void bitopRangeCommand(client *c)
+{
+    char *opname = szFromObj(c->argv[1]);
+    robj *targetkey = c->argv[2];
+    unsigned long minlen = 0, maxlen = 0;
+
+    /* Parse the operation name. */
+    unsigned long op = bitopFromStr(opname);
+    if (op == BITOP_INVALID) {
+        addReply(c,shared.syntaxerr);
+        return;
+    }
+
+    /* Sanity check: NOT accepts only a single key argument. */
+    if (op == BITOP_NOT && c->argc != 4) {
+        addReplyError(c,"BITOP NOT must be called with a single source key.");
+        return;
+    }
+
+    if ((c->argc % 2) == 0)
+    {   // did someone forget a range?
+        addReply(c,shared.syntaxerr);
+        return;
+    }
+
+    /* Lookup keys, and store pointers to the string objects into an array. */
+    unsigned numkeys = (c->argc - 3) / 2;
+    std::vector<unsigned char*> vecsrc(numkeys);
+    std::vector<unsigned long> veclen(numkeys);
+    std::vector<robj_rorefptr> vecobjects(numkeys);
+    std::vector<std::unique_ptr<const char, void(*)(const char*)>> vecspsz;   // temp storage so we free allocated strings
+    
+    for (unsigned long j = 0; j < numkeys; j++) {
+        size_t iarg = (j*2)+3;
+        robj_roptr o = lookupKeyRead(c->db,c->argv[iarg]);
+        /* Handle non-existing keys as empty strings. */
+        if (o == nullptr) {
+            vecobjects[j] = nullptr;
+            vecsrc[j] = NULL;
+            veclen[j] = 0;
+            minlen = 0;
+            continue;
+        }
+        /* Return an error if one of the keys is not a string. */
+        if (checkType(c,o,OBJ_STRING))
+            return;
+        
+        vecobjects[j] = getDecodedObject(o);
+
+        auto range = parseRange(c->argv[iarg+1]);
+        if (range.first < 0 || (range.second < range.first && range.second != -1))
+            throw shared.syntaxerr;
+
+        vecsrc[j] = (unsigned char*)ptrFromObj(vecobjects[j]);
+        veclen[j] = sdslen(szFromObj(vecobjects[j]));
+
+        // Handle the offset
+        if ((size_t)range.first >= (veclen[j]*CHAR_BIT))
+        {   // the start position is longer than the string
+            vecsrc[j] = nullptr;
+            veclen[j] = 0;
+        }
+        else
+        {
+            vecsrc[j] += range.first/CHAR_BIT;
+            veclen[j] -= range.first/CHAR_BIT;
+            int bitshift = range.first % CHAR_BIT;
+            if (bitshift)
+            {
+                sds newstr = sdsnewlen(nullptr, veclen[j]);
+                for (size_t ich = 0; ich < veclen[j]; ++ich)
+                    newstr[ich] = static_cast<unsigned char>(vecsrc[j][ich]) >> bitshift;
+                vecsrc[j] = (unsigned char*)newstr;
+                auto spT = std::unique_ptr<const char, void(*)(const char*)>(newstr, sdsfree);
+                vecspsz.emplace_back(std::move(spT));
+            }
+        }
+
+        // Now the max char
+        if (range.second != -1)
+        {
+            if (range.second < 0)
+                throw shared.syntaxerr;
+            range.second -= range.first;    // make relative
+            int mod = range.second % CHAR_BIT;
+            if ((size_t)range.second < (veclen[j]*CHAR_BIT))
+            {
+                veclen[j] = range.second/CHAR_BIT;
+                if (mod)
+                    veclen[j]++;
+            }
+            if (mod && veclen[j] > 0)
+            {
+                sds newstr = sdsnewlen(nullptr, veclen[j]);
+                memcpy(newstr, vecsrc[j], veclen[j]);
+                newstr[sdslen(newstr)-1] &= ((1U << mod)-1);
+                vecsrc[j] = (unsigned char*)newstr;
+                auto spT = std::unique_ptr<const char, void(*)(const char*)>(newstr, sdsfree);
+                vecspsz.emplace_back(std::move(spT));
+            }
+        }
+
+        if (veclen[j] > maxlen) maxlen = veclen[j];
+        if (j == 0 || veclen[j] < minlen) minlen = veclen[j];
+    }
+
+    unsigned char *res = bitopCore(op, minlen, maxlen, numkeys, vecsrc.data(), veclen.data());
+
+    /* Store the computed value into the target key */
+    if (maxlen) {
+        robj *o = createObject(OBJ_STRING,res);
+        setKey(c->db,targetkey,o);
+        notifyKeyspaceEvent(NOTIFY_STRING,"set",targetkey,c->db->id);
+        decrRefCount(o);
+    } else if (dbDelete(c->db,targetkey)) {
+        signalModifiedKey(c->db,targetkey);
+        notifyKeyspaceEvent(NOTIFY_GENERIC,"del",targetkey,c->db->id);
+    }
+    g_pserver->dirty++;
+    addReplyLongLong(c,maxlen); /* Return the output string length in bytes. */
+}
+
+/* BITOP op_name target_key src_key1 src_key2 src_key3 ... src_keyN */
+void bitopCommand(client *c) {
+    char *opname = szFromObj(c->argv[1]);
+    robj *targetkey = c->argv[2];
+    robj_roptr o;
+    unsigned long op, numkeys;
+    robj_roptr *objects;      /* Array of source objects. */
+    unsigned char **src; /* Array of source strings pointers. */
+    unsigned long *len, maxlen = 0; /* Array of length of src strings,
+                                       and max len. */
+    unsigned long minlen = 0;    /* Min len among the input keys. */
+
+    /* Parse the operation name. */
+    op = bitopFromStr(opname);
+    if (op == BITOP_INVALID) {
+        addReply(c,shared.syntaxerr);
+        return;
+    }
+
+    /* Sanity check: NOT accepts only a single key argument. */
+    if (op == BITOP_NOT && c->argc != 4) {
+        addReplyError(c,"BITOP NOT must be called with a single source key.");
+        return;
+    }
+
+    /* Lookup keys, and store pointers to the string objects into an array. */
+    numkeys = c->argc - 3;
+    src = (unsigned char**)zmalloc(sizeof(unsigned char*) * numkeys, MALLOC_LOCAL);
+    len = (unsigned long*)zmalloc(sizeof(long) * numkeys, MALLOC_LOCAL);
+    objects = (robj_roptr*)zmalloc(sizeof(robj_roptr) * numkeys, MALLOC_LOCAL);
+
+    for (unsigned long j = 0; j < numkeys; j++) {
+        o = lookupKeyRead(c->db,c->argv[j+3]);
+        /* Handle non-existing keys as empty strings. */
+        if (o == nullptr) {
+            objects[j] = nullptr;
+            src[j] = NULL;
+            len[j] = 0;
+            minlen = 0;
+            continue;
+        }
+        /* Return an error if one of the keys is not a string. */
+        if (checkType(c,o,OBJ_STRING)) {
+            unsigned long i;
+            for (i = 0; i < j; i++) {
+                if (objects[i])
+                    decrRefCount(objects[i]);
+            }
+            zfree(src);
+            zfree(len);
+            zfree(objects);
+            return;
+        }
+        objects[j] = getDecodedObject(o);
+        src[j] = (unsigned char*)ptrFromObj(objects[j]);
+        len[j] = sdslen(szFromObj(objects[j]));
+        if (len[j] > maxlen) maxlen = len[j];
+        if (j == 0 || len[j] < minlen) minlen = len[j];
+    }
+
+    unsigned char *res = bitopCore(op, minlen, maxlen, numkeys, src, len);
+    
+    for (unsigned long j = 0; j < numkeys; j++) {
         if (objects[j])
             decrRefCount(objects[j]);
     }

@@ -867,6 +867,10 @@ struct redisCommand redisCommandTable[] = {
      "write use-memory @bitmap",
      0,NULL,2,-1,1,0,0,0},
 
+    {"bitoprange",bitopRangeCommand,-5,
+     "write use-memory @bitmap",
+     0,NULL,2,-1,1,0,0,0},
+
     {"bitcount",bitcountCommand,-2,
      "read-only @bitmap",
      0,NULL,1,1,1,0,0,0},
@@ -3346,7 +3350,16 @@ void call(client *c, int flags) {
     /* Call the command. */
     dirty = g_pserver->dirty;
     start = ustime();
-    c->cmd->proc(c);
+    try
+    {
+        c->cmd->proc(c);
+    } 
+    catch (robj *obj)
+    {
+        addReply(c, obj);
+        decrRefCount(obj);
+    }
+    
     serverTL->commandsExecuted++;
     duration = ustime()-start;
     dirty = g_pserver->dirty-dirty;

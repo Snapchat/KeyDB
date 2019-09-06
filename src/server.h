@@ -95,7 +95,8 @@ extern int g_fTestMode;
 struct redisObject;
 class robj_roptr
 {
-    const redisObject *m_ptr;
+protected:
+    const redisObject *m_ptr = nullptr;
 
 public:
     robj_roptr()
@@ -142,6 +143,45 @@ public:
     {
         return (redisObject*)m_ptr;
     }
+};
+
+void incrRefCount(robj_roptr o);
+void decrRefCount(robj_roptr o);
+class robj_rorefptr : public robj_roptr
+{
+public:
+    robj_rorefptr() = default;
+    robj_rorefptr(const redisObject *ref)
+        : robj_roptr(ref)
+        {}
+
+    robj_rorefptr(const robj_rorefptr& other)
+        : robj_roptr(other)
+    {
+        if (m_ptr)
+            incrRefCount(m_ptr);
+    }
+    robj_rorefptr(robj_rorefptr&& other)
+        : robj_roptr(other)
+    {}
+
+    ~robj_rorefptr()
+    {
+        if (m_ptr)
+            decrRefCount(m_ptr);
+    }
+
+    robj_rorefptr &operator=(robj_rorefptr &other)
+    {
+        robj_roptr::operator=(other.m_ptr);
+        if (m_ptr)
+            incrRefCount(other);
+        return *this;
+    }
+    
+    using robj_roptr::operator=;
+    using robj_roptr::operator==;
+    using robj_roptr::operator->;
 };
 
 /* Error codes */
@@ -2687,6 +2727,7 @@ void evalShaCommand(client *c);
 void scriptCommand(client *c);
 void timeCommand(client *c);
 void bitopCommand(client *c);
+void bitopRangeCommand(client *c);
 void bitcountCommand(client *c);
 void bitposCommand(client *c);
 void replconfCommand(client *c);

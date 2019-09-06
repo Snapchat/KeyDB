@@ -3272,9 +3272,14 @@ void replicaReplayCommand(client *c)
     bool fExec = ccmdPrev != serverTL->commandsExecuted;
     cFake->lock.unlock();
     if (fExec)
+    {
         addReply(c, shared.ok);
+        selectDb(c, cFake->db->id);
+    }
     else
+    {
         addReplyError(c, "command did not execute");
+    }
     freeClient(cFake);
     serverTL->current_client = current_clientSave;
 

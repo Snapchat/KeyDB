@@ -30,6 +30,7 @@
 #include "server.h"
 #include "cluster.h"
 #include "atomicvar.h"
+#include "aelocker.h"
 
 #include <signal.h>
 #include <ctype.h>
@@ -642,6 +643,8 @@ void keysCommand(client *c) {
     unsigned long numkeys = 0;
     void *replylen = addReplyDeferredLen(c);
 
+    aeReleaseLock();
+
     di = dictGetSafeIterator(c->db->pdict);
     allkeys = (pattern[0] == '*' && pattern[1] == '\0');
     while((de = dictNext(di)) != NULL) {
@@ -659,6 +662,12 @@ void keysCommand(client *c) {
     }
     dictReleaseIterator(di);
     setDeferredArrayLen(c,replylen,numkeys);
+    
+    fastlock_unlock(&c->db->lock);  // we must release the DB lock before acquiring the AE lock to prevent deadlocks
+    AeLocker lock;
+    lock.arm(c);
+    fastlock_lock(&c->db->lock);    // we still need the DB lock
+    lock.release();
 }
 
 /* This callback is used by scanGenericCommand in order to collect elements
@@ -1132,7 +1141,8 @@ int dbSwapDatabases(int id1, int id2) {
     if (id1 < 0 || id1 >= cserver.dbnum ||
         id2 < 0 || id2 >= cserver.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
-    redisDb aux = g_pserver->db[id1];
+    redisDb aux; 
+    memcpy(&aux, &g_pserver->db[id1], sizeof(redisDb));
     redisDb *db1 = &g_pserver->db[id1], *db2 = &g_pserver->db[id2];
 
     /* Swap hash tables. Note that we don't swap blocking_keys,

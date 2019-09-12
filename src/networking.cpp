@@ -247,7 +247,7 @@ void clientInstallAsyncWriteHandler(client *c) {
  * data should be appended to the output buffers. */
 int prepareClientToWrite(client *c, bool fAsync) {
     fAsync = fAsync && !FCorrectThread(c);  // Not async if we're on the right thread
-    serverAssert(!fAsync || GlobalLocksAcquired());
+    serverAssert(FCorrectThread(c) || fAsync);
     serverAssert(c->fd <= 0 || c->lock.fOwnLock());
 
     if (c->flags & CLIENT_FORCE_REPLY) return C_OK; // FORCE REPLY means we're doing something else with the buffer.

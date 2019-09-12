@@ -59,6 +59,7 @@
 #include <sys/socket.h>
 #include <algorithm>
 #include <uuid/uuid.h>
+#include <mutex>
 #include "aelocker.h"
 
 int g_fTestMode = false;
@@ -2922,6 +2923,7 @@ void initServer(void) {
 
     /* Create the Redis databases, and initialize other internal state. */
     for (int j = 0; j < cserver.dbnum; j++) {
+        new (&g_pserver->db[j]) redisDb;
         g_pserver->db[j].pdict = dictCreate(&dbDictType,NULL);
         g_pserver->db[j].setexpire = new(MALLOC_LOCAL) expireset();
         g_pserver->db[j].expireitr = g_pserver->db[j].setexpire->end();
@@ -3696,6 +3698,7 @@ int processCommand(client *c, int callFlags) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
+        std::unique_lock<decltype(c->db->lock)> ulock(c->db->lock);
         call(c,callFlags);
         c->woff = g_pserver->master_repl_offset;
         if (listLength(g_pserver->ready_keys))
@@ -4097,10 +4100,12 @@ sds genRedisInfoString(const char *section) {
             "connected_clients:%lu\r\n"
             "client_recent_max_input_buffer:%zu\r\n"
             "client_recent_max_output_buffer:%zu\r\n"
-            "blocked_clients:%d\r\n",
+            "blocked_clients:%d\r\n"
+            "current_client_thread:%d\r\n",
             listLength(g_pserver->clients)-listLength(g_pserver->slaves),
             maxin, maxout,
-            g_pserver->blocked_clients);
+            g_pserver->blocked_clients,
+            static_cast<int>(serverTL - g_pserver->rgthreadvar));
         for (int ithread = 0; ithread < cserver.cthreads; ++ithread)
         {
             info = sdscatprintf(info,

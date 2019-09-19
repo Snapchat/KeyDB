@@ -333,7 +333,7 @@ void touchWatchedKeysOnFlush(int dbid) {
              * key exists, mark the client as dirty, as the key will be
              * removed. */
             if (dbid == -1 || wk->db->id == dbid) {
-                if (dictFind(wk->db->pdict, ptrFromObj(wk->key)) != NULL)
+                if (wk->db->find(wk->key) != NULL)
                     c->flags |= CLIENT_DIRTY_CAS;
             }
         }

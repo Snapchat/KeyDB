@@ -1143,8 +1143,8 @@ int saveKey(rio *rdb, redisDb *db, int flags, size_t *processed, const char *key
  * integer pointed by 'error' is set to the value of errno just after the I/O
  * error. */
 int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
-    dictIterator *di = NULL;
     dictEntry *de;
+    dictIterator *di = NULL;
     char magic[10];
     int j;
     uint64_t cksum;
@@ -1158,9 +1158,7 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
 
     for (j = 0; j < cserver.dbnum; j++) {
         redisDb *db = g_pserver->db+j;
-        dict *d = db->pdict;
-        if (dictSize(d) == 0) continue;
-        di = dictGetSafeIterator(d);
+        if (db->size() == 0) continue;
 
         /* Write the SELECT DB opcode */
         if (rdbSaveType(rdb,RDB_OPCODE_SELECTDB) == -1) goto werr;
@@ -1171,7 +1169,7 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
          * However this does not limit the actual size of the DB to load since
          * these sizes are just hints to resize the hash tables. */
         uint64_t db_size, expires_size;
-        db_size = dictSize(db->pdict);
+        db_size = db->size();
         expires_size = db->setexpire->size();
         if (rdbSaveType(rdb,RDB_OPCODE_RESIZEDB) == -1) goto werr;
         if (rdbSaveLen(rdb,db_size) == -1) goto werr;
@@ -1179,19 +1177,17 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
         
         /* Iterate this DB writing every entry */
         size_t ckeysExpired = 0;
-        while((de = dictNext(di)) != NULL) {
-            sds keystr = (sds)dictGetKey(de);
-            robj *o = (robj*)dictGetVal(de);
-
+        bool fSavedAll = db->iterate([&](const char *keystr, robj *o)->bool{
             if (o->FExpires())
                 ++ckeysExpired;
             
             if (!saveKey(rdb, db, flags, &processed, keystr, o))
-                goto werr;
-        }
+                return false;
+            return true;
+        });
+        if (!fSavedAll)
+            goto werr;
         serverAssert(ckeysExpired == db->setexpire->size());
-        dictReleaseIterator(di);
-        di = NULL; /* So that we don't release it again on error. */
     }
 
     /* If we are storing the replication information on disk, persist
@@ -1998,7 +1994,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
                 goto eoferr;
             if ((expires_size = rdbLoadLen(rdb,NULL)) == RDB_LENERR)
                 goto eoferr;
-            dictExpand(db->pdict,db_size);
+            db->expand(db_size);
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB

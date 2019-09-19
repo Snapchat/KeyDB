@@ -70,10 +70,8 @@ void updateExpire(redisDb *db, sds key, robj *valOld, robj *valNew)
  * implementations that should instead rely on lookupKeyRead(),
  * lookupKeyWrite() and lookupKeyReadWithFlags(). */
 static robj *lookupKey(redisDb *db, robj *key, int flags) {
-    dictEntry *de = dictFind(db->pdict,ptrFromObj(key));
-    if (de) {
-        robj *val = (robj*)dictGetVal(de);
-
+    robj *val = db->find(key);
+    if (val) {
         /* Update the access time for the ageing algorithm.
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
@@ -317,7 +315,7 @@ void setKey(redisDb *db, robj *key, robj *val) {
 }
 
 int dbExists(redisDb *db, robj *key) {
-    return dictFind(db->pdict,ptrFromObj(key)) != NULL;
+    return (db->find(key) != nullptr);
 }
 
 /* Return a random key, in form of a Redis object.
@@ -325,21 +323,20 @@ int dbExists(redisDb *db, robj *key) {
  *
  * The function makes sure to return keys not already expired. */
 robj *dbRandomKey(redisDb *db) {
-    dictEntry *de;
     int maxtries = 100;
-    int allvolatile = dictSize(db->pdict) == db->setexpire->size();
+    bool allvolatile = db->size() == db->setexpire->size();
 
     while(1) {
         sds key;
         robj *keyobj;
 
-        de = dictGetRandomKey(db->pdict);
-        if (de == NULL) return NULL;
+        auto pair = db->random();
+        if (pair.first == NULL) return NULL;
 
-        key = (sds)dictGetKey(de);
+        key = (sds)pair.first;
         keyobj = createStringObject(key,sdslen(key));
 
-        if (((robj*)dictGetVal(de))->FExpires())
+        if (pair.second->FExpires())
         {
             if (allvolatile && listLength(g_pserver->masters) && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
@@ -354,7 +351,7 @@ robj *dbRandomKey(redisDb *db) {
             }
         }
             
-        if (((robj*)dictGetVal(de))->FExpires())
+        if (pair.second->FExpires())
         {
              if (expireIfNeeded(db,keyobj)) {
                 decrRefCount(keyobj);
@@ -427,7 +424,7 @@ robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
     return o;
 }
 
-/* Remove all keys from all the databases in a Redis g_pserver->
+/* Remove all keys from all the databases in a Redis DB
  * If callback is given the function is called from time to time to
  * signal that work is in progress.
  *
@@ -635,9 +632,25 @@ void randomkeyCommand(client *c) {
     decrRefCount(key);
 }
 
+
+bool redisDb::iterate(std::function<bool(const char*, robj*)> fn)
+{
+    dictIterator *di = dictGetSafeIterator(pdict);
+    dictEntry *de = nullptr;
+    bool fResult = true;
+    while((de = dictNext(di)) != nullptr)
+    {
+        if (!fn((const char*)dictGetKey(de), (robj*)dictGetVal(de)))
+        {
+            fResult = false;
+            break;
+        }
+    }
+    dictReleaseIterator(di);
+    return fResult;
+}
+
 void keysCommand(client *c) {
-    dictIterator *di;
-    dictEntry *de;
     sds pattern = szFromObj(c->argv[1]);
     int plen = sdslen(pattern), allkeys;
     unsigned long numkeys = 0;
@@ -645,10 +658,8 @@ void keysCommand(client *c) {
 
     aeReleaseLock();
 
-    di = dictGetSafeIterator(c->db->pdict);
     allkeys = (pattern[0] == '*' && pattern[1] == '\0');
-    while((de = dictNext(di)) != NULL) {
-        sds key = (sds)dictGetKey(de);
+    c->db->iterate([&](const char *key, robj *)->bool {
         robj *keyobj;
 
         if (allkeys || stringmatchlen(pattern,plen,key,sdslen(key),0)) {
@@ -659,8 +670,8 @@ void keysCommand(client *c) {
             }
             decrRefCount(keyobj);
         }
-    }
-    dictReleaseIterator(di);
+        return true;
+    });
     setDeferredArrayLen(c,replylen,numkeys);
     
     fastlock_unlock(&c->db->lock);  // we must release the DB lock before acquiring the AE lock to prevent deadlocks
@@ -928,7 +939,7 @@ void scanCommand(client *c) {
 }
 
 void dbsizeCommand(client *c) {
-    addReplyLongLong(c,dictSize(c->db->pdict));
+    addReplyLongLong(c,c->db->size());
 }
 
 void lastsaveCommand(client *c) {
@@ -1346,20 +1357,17 @@ void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
 /* Return the expire time of the specified key, or null if no expire
  * is associated with this key (i.e. the key is non volatile) */
 expireEntry *getExpire(redisDb *db, robj_roptr key) {
-    dictEntry *de;
-
     /* No expire? return ASAP */
     if (db->setexpire->size() == 0)
         return nullptr;
 
-    de = dictFind(db->pdict, ptrFromObj(key));
-    if (de == NULL)
+    auto pair = db->lookup_tuple(key);
+    if (pair.first == nullptr)
         return nullptr;
-    robj *obj = (robj*)dictGetVal(de);
-    if (!obj->FExpires())
+    if (!pair.second->FExpires())
         return nullptr;
 
-    auto itr = db->setexpire->find((sds)dictGetKey(de));
+    auto itr = db->setexpire->find(pair.first);
     return itr.operator->();
 }
 
@@ -1821,4 +1829,18 @@ unsigned int delKeysInSlot(unsigned int hashslot) {
 
 unsigned int countKeysInSlot(unsigned int hashslot) {
     return g_pserver->cluster->slots_keys_count[hashslot];
+}
+
+void redisDb::initialize(int id)
+{
+    this->pdict = dictCreate(&dbDictType,NULL);
+    this->setexpire = new(MALLOC_LOCAL) expireset();
+    this->expireitr = this->setexpire->end();
+    this->blocking_keys = dictCreate(&keylistDictType,NULL);
+    this->ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
+    this->watched_keys = dictCreate(&keylistDictType,NULL);
+    this->id = id;
+    this->avg_ttl = 0;
+    this->last_expire_set = 0;
+    this->defrag_later = listCreate();
 }

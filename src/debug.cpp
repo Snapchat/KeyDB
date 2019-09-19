@@ -266,8 +266,6 @@ void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj
  * a different digest. */
 void computeDatasetDigest(unsigned char *final) {
     unsigned char digest[20];
-    dictIterator *di = NULL;
-    dictEntry *de;
     int j;
     uint32_t aux;
 
@@ -276,8 +274,7 @@ void computeDatasetDigest(unsigned char *final) {
     for (j = 0; j < cserver.dbnum; j++) {
         redisDb *db = g_pserver->db+j;
 
-        if (dictSize(db->pdict) == 0) continue;
-        di = dictGetSafeIterator(db->pdict);
+        if (db->size() == 0) continue;
 
         /* hash the DB id, so the same dataset moved in a different
          * DB will lead to a different digest */
@@ -285,24 +282,21 @@ void computeDatasetDigest(unsigned char *final) {
         mixDigest(final,&aux,sizeof(aux));
 
         /* Iterate this DB writing every entry */
-        while((de = dictNext(di)) != NULL) {
-            sds key;
-            robj *keyobj, *o;
+        db->iterate([&](const char *key, robj *o)->bool {
+            robj *keyobj;
 
             memset(digest,0,20); /* This key-val digest */
-            key = (sds)dictGetKey(de);
             keyobj = createStringObject(key,sdslen(key));
 
             mixDigest(digest,key,sdslen(key));
 
-            o = (robj*)dictGetVal(de);
             xorObjectDigest(db,keyobj,digest,o);
 
             /* We can finally xor the key-val digest to the final digest */
             xorDigest(final,digest,20);
             decrRefCount(keyobj);
-        }
-        dictReleaseIterator(di);
+            return true;
+        });
     }
 }
 
@@ -394,15 +388,14 @@ NULL
         serverLog(LL_WARNING,"Append Only File loaded by DEBUG LOADAOF");
         addReply(c,shared.ok);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"object") && c->argc == 3) {
-        dictEntry *de;
         robj *val;
         const char *strenc;
 
-        if ((de = dictFind(c->db->pdict,ptrFromObj(c->argv[2]))) == NULL) {
+        val = c->db->find(c->argv[2]);
+        if (val == NULL) {
             addReply(c,shared.nokeyerr);
             return;
         }
-        val = (robj*)dictGetVal(de);
         strenc = strEncoding(val->encoding);
 
         char extra[138] = {0};
@@ -446,16 +439,14 @@ NULL
             strenc, rdbSavedObjectLen(val),
             val->lru, estimateObjectIdleTime(val)/1000, extra);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"sdslen") && c->argc == 3) {
-        dictEntry *de;
-        robj *val;
-        sds key;
+        auto pair = c->db->lookup_tuple(c->argv[2]);
+        robj *val = pair.second;
+        const char *key = pair.first;
 
-        if ((de = dictFind(c->db->pdict,ptrFromObj(c->argv[2]))) == NULL) {
+        if (val == NULL) {
             addReply(c,shared.nokeyerr);
             return;
         }
-        val = (robj*)dictGetVal(de);
-        key = (sds)dictGetKey(de);
 
         if (val->type != OBJ_STRING || !sdsEncodedObject(val)) {
             addReplyError(c,"Not an sds encoded string.");
@@ -465,16 +456,16 @@ NULL
                 "val_sds_len:%lld, val_sds_avail:%lld, val_zmalloc: %lld",
                 (long long) sdslen(key),
                 (long long) sdsavail(key),
-                (long long) sdsZmallocSize(key),
+                (long long) sdsZmallocSize((sds)key),
                 (long long) sdslen(szFromObj(val)),
                 (long long) sdsavail(szFromObj(val)),
                 (long long) getStringObjectSdsUsedMemory(val));
         }
     } else if (!strcasecmp(szFromObj(c->argv[1]),"ziplist") && c->argc == 3) {
-        robj *o;
+        robj_roptr o;
 
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.nokeyerr))
-                == NULL) return;
+                == nullptr) return;
 
         if (o->encoding != OBJ_ENCODING_ZIPLIST) {
             addReplyError(c,"Not an sds encoded string.");
@@ -490,7 +481,7 @@ NULL
 
         if (getLongFromObjectOrReply(c, c->argv[2], &keys, NULL) != C_OK)
             return;
-        dictExpand(c->db->pdict,keys);
+        c->db->expand(keys);
         for (j = 0; j < keys; j++) {
             long valsize = 0;
             snprintf(buf,sizeof(buf),"%s:%lu",
@@ -641,7 +632,7 @@ NULL
         }
 
         stats = sdscatprintf(stats,"[Dictionary HT]\n");
-        dictGetStats(buf,sizeof(buf),g_pserver->db[dbid].pdict);
+        g_pserver->db[dbid].getStats(buf,sizeof(buf));
         stats = sdscat(stats,buf);
 
         stats = sdscatprintf(stats,"[Expires set]\n");
@@ -650,11 +641,11 @@ NULL
 
         addReplyBulkSds(c,stats);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"htstats-key") && c->argc == 3) {
-        robj *o;
+        robj_roptr o;
         dict *ht = NULL;
 
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.nokeyerr))
-                == NULL) return;
+                == nullptr) return;
 
         /* Get the hash table reference from the object, if possible. */
         switch (o->encoding) {
@@ -1256,12 +1247,10 @@ void logCurrentClient(void) {
      * selected DB, and if so print info about the associated object. */
     if (cc->argc >= 1) {
         robj *val, *key;
-        dictEntry *de;
 
         key = getDecodedObject(cc->argv[1]);
-        de = dictFind(cc->db->pdict, ptrFromObj(key));
-        if (de) {
-            val = (robj*)dictGetVal(de);
+        val = cc->db->find(key);
+        if (val) {
             serverLog(LL_WARNING,"key '%s' found in DB containing the following object:", (char*)ptrFromObj(key));
             serverLogObjectDebugInfo(val);
         }

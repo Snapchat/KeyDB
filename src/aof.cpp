@@ -1300,29 +1300,23 @@ ssize_t aofReadDiffFromParent(void) {
 
 int rewriteAppendOnlyFileRio(rio *aof) {
     dictIterator *di = NULL;
-    dictEntry *de;
     size_t processed = 0;
     int j;
 
     for (j = 0; j < cserver.dbnum; j++) {
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
         redisDb *db = g_pserver->db+j;
-        dict *d = db->pdict;
-        if (dictSize(d) == 0) continue;
-        di = dictGetSafeIterator(d);
+        if (db->size() == 0) continue;
 
         /* SELECT the new DB */
         if (rioWrite(aof,selectcmd,sizeof(selectcmd)-1) == 0) goto werr;
         if (rioWriteBulkLongLong(aof,j) == 0) goto werr;
 
         /* Iterate this DB writing every entry */
-        while((de = dictNext(di)) != NULL) {
-            sds keystr;
-            robj key, *o;
+        bool fComplete = db->iterate([&](const char *keystr, robj *o)->bool{
+            robj key;
 
-            keystr = (sds)dictGetKey(de);
-            o = (robj*)dictGetVal(de);
-            initStaticStringObject(key,keystr);
+            initStaticStringObject(key,(sds)keystr);
 
             expireEntry *pexpire = getExpire(db,&key);
 
@@ -1330,22 +1324,22 @@ int rewriteAppendOnlyFileRio(rio *aof) {
             if (o->type == OBJ_STRING) {
                 /* Emit a SET command */
                 char cmd[]="*3\r\n$3\r\nSET\r\n";
-                if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) goto werr;
+                if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) return false;
                 /* Key and value */
-                if (rioWriteBulkObject(aof,&key) == 0) goto werr;
-                if (rioWriteBulkObject(aof,o) == 0) goto werr;
+                if (rioWriteBulkObject(aof,&key) == 0) return false;
+                if (rioWriteBulkObject(aof,o) == 0) return false;
             } else if (o->type == OBJ_LIST) {
-                if (rewriteListObject(aof,&key,o) == 0) goto werr;
+                if (rewriteListObject(aof,&key,o) == 0) return false;
             } else if (o->type == OBJ_SET) {
-                if (rewriteSetObject(aof,&key,o) == 0) goto werr;
+                if (rewriteSetObject(aof,&key,o) == 0) return false;
             } else if (o->type == OBJ_ZSET) {
-                if (rewriteSortedSetObject(aof,&key,o) == 0) goto werr;
+                if (rewriteSortedSetObject(aof,&key,o) == 0) return false;
             } else if (o->type == OBJ_HASH) {
-                if (rewriteHashObject(aof,&key,o) == 0) goto werr;
+                if (rewriteHashObject(aof,&key,o) == 0) return false;
             } else if (o->type == OBJ_STREAM) {
-                if (rewriteStreamObject(aof,&key,o) == 0) goto werr;
+                if (rewriteStreamObject(aof,&key,o) == 0) return false;
             } else if (o->type == OBJ_MODULE) {
-                if (rewriteModuleObject(aof,&key,o) == 0) goto werr;
+                if (rewriteModuleObject(aof,&key,o) == 0) return false;
             } else {
                 serverPanic("Unknown object type");
             }
@@ -1355,17 +1349,17 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                     if (subExpire.subkey() == nullptr)
                     {
                         char cmd[]="*3\r\n$9\r\nPEXPIREAT\r\n";
-                        if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) goto werr;
-                        if (rioWriteBulkObject(aof,&key) == 0) goto werr;
+                        if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) return false;
+                        if (rioWriteBulkObject(aof,&key) == 0) return false;
                     }
                     else
                     {
                         char cmd[]="*4\r\n$12\r\nEXPIREMEMBER\r\n";
-                        if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) goto werr;
-                        if (rioWriteBulkObject(aof,&key) == 0) goto werr;
-                        if (rioWrite(aof,subExpire.subkey(),sdslen(subExpire.subkey())) == 0) goto werr;
+                        if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) return false;
+                        if (rioWriteBulkObject(aof,&key) == 0) return false;
+                        if (rioWrite(aof,subExpire.subkey(),sdslen(subExpire.subkey())) == 0) return false;
                     }
-                    if (rioWriteBulkLongLong(aof,subExpire.when()) == 0) goto werr; // common
+                    if (rioWriteBulkLongLong(aof,subExpire.when()) == 0) return false; // common
                 }
             }
             /* Read some diff from the parent process from time to time. */
@@ -1373,9 +1367,10 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                 processed = aof->processed_bytes;
                 aofReadDiffFromParent();
             }
-        }
-        dictReleaseIterator(di);
-        di = NULL;
+            return true;
+        });
+        if (!fComplete)
+            goto werr;
     }
     return C_OK;
 

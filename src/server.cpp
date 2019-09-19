@@ -1885,8 +1885,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         for (j = 0; j < cserver.dbnum; j++) {
             long long size, used, vkeys;
 
-            size = dictSlots(g_pserver->db[j].pdict);
-            used = dictSize(g_pserver->db[j].pdict);
+            size = g_pserver->db[j].slots();
+            used = g_pserver->db[j].size();
             vkeys = g_pserver->db[j].setexpire->size();
             if (used || vkeys) {
                 serverLog(LL_VERBOSE,"DB %d: %lld keys (%lld volatile) in %lld slots HT.",j,used,vkeys,size);
@@ -2924,16 +2924,7 @@ void initServer(void) {
     /* Create the Redis databases, and initialize other internal state. */
     for (int j = 0; j < cserver.dbnum; j++) {
         new (&g_pserver->db[j]) redisDb;
-        g_pserver->db[j].pdict = dictCreate(&dbDictType,NULL);
-        g_pserver->db[j].setexpire = new(MALLOC_LOCAL) expireset();
-        g_pserver->db[j].expireitr = g_pserver->db[j].setexpire->end();
-        g_pserver->db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
-        g_pserver->db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
-        g_pserver->db[j].watched_keys = dictCreate(&keylistDictType,NULL);
-        g_pserver->db[j].id = j;
-        g_pserver->db[j].avg_ttl = 0;
-        g_pserver->db[j].last_expire_set = 0;
-        g_pserver->db[j].defrag_later = listCreate();
+        g_pserver->db[j].initialize(j);
     }
 
     /* Fixup Master Client Database */
@@ -4575,7 +4566,7 @@ sds genRedisInfoString(const char *section) {
         for (j = 0; j < cserver.dbnum; j++) {
             long long keys, vkeys;
 
-            keys = dictSize(g_pserver->db[j].pdict);
+            keys = g_pserver->db[j].size();
             vkeys = g_pserver->db[j].setexpire->size();
 
             // Adjust TTL by the current time

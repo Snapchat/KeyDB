@@ -129,6 +129,11 @@ public:
         return m_ptr;
     }
 
+    const redisObject& operator*() const
+    {
+        return *m_ptr;
+    }
+
     bool operator!() const
     {
         return !m_ptr;
@@ -1014,10 +1019,74 @@ typedef struct clientReplyBlock {
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
 typedef struct redisDb {
+    // Legacy C API, Do not add more
+    friend void tryResizeHashTables(int);
+    friend int incrementallyRehash(int);
+    friend int dbAddCore(redisDb *db, robj *key, robj *val);
+    friend void dbOverwriteCore(redisDb *db, dictEntry *de, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire);
+    friend void dbOverwrite(redisDb *db, robj *key, robj *val);
+    friend int dbMerge(redisDb *db, robj *key, robj *val, int fReplace);
+    friend void setKey(redisDb *db, robj *key, robj *val);
+    friend int dbSyncDelete(redisDb *db, robj *key);
+    friend int dbAsyncDelete(redisDb *db, robj *key);
+    friend long long emptyDb(int dbnum, int flags, void(callback)(void*));
+    friend void emptyDbAsync(redisDb *db);
+    friend void scanGenericCommand(struct client *c, robj_roptr o, unsigned long cursor);
+    friend int dbSwapDatabases(int id1, int id2);
+    friend int removeExpire(redisDb *db, robj *key);
+    friend void setExpire(struct client *c, redisDb *db, robj *key, robj *subkey, long long when);
+    friend void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e);
+    friend void evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct evictionPoolEntry *pool);
+    friend void activeDefragCycle(void);
+
     redisDb() 
         : expireitr(nullptr)
     {};
+
+    void initialize(int id);
+
+    size_t slots() const { return dictSlots(pdict); }
+    size_t size() const { return dictSize(pdict); }
+    void expand(uint64_t slots) { dictExpand(pdict, slots); }
+    
+    robj *find(robj_roptr key)
+    {
+        return find(szFromObj(key));
+    }
+    robj *find(const char *key) 
+    {
+        dictEntry *de = dictFind(pdict, key);
+        if (de != nullptr)
+            return (robj*)dictGetVal(de);
+        return nullptr;
+    }
+
+    std::pair<const char*,robj*> lookup_tuple(robj_roptr key)
+    {
+        return lookup_tuple(szFromObj(key));
+    }
+    std::pair<const char*,robj*> lookup_tuple(const char *key)
+    {
+        dictEntry *de = dictFind(pdict, key);
+        if (de != nullptr)
+            return std::make_pair<const char*,robj*>((const char*)dictGetKey(de), (robj*)dictGetVal(de));
+        return std::make_pair<const char*,robj*>(nullptr, nullptr);
+    }
+
+    std::pair<const char*,robj*> random()
+    {
+        dictEntry *de = dictGetRandomKey(pdict);
+        if (de != nullptr)
+            return std::make_pair<const char*,robj*>((const char*)dictGetKey(de), (robj*)dictGetVal(de));
+        return std::make_pair<const char*,robj*>(nullptr, nullptr);
+    }
+
+    bool iterate(std::function<bool(const char*, robj*)> fn);
+    void getStats(char *buf, size_t bufsize) { dictGetStats(buf, bufsize, pdict); }
+
+private:
     dict *pdict;                 /* The keyspace for this DB */
+public:
     expireset *setexpire;
     expireset::setiter expireitr;
 
@@ -1907,6 +1976,7 @@ extern dictType dbDictType;
 extern dictType shaScriptObjectDictType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
 extern dictType hashDictType;
+extern dictType keylistDictType;
 extern dictType replScriptCacheDictType;
 extern dictType keyptrDictType;
 extern dictType modulesDictType;
@@ -2135,7 +2205,7 @@ const char *strEncoding(int encoding);
 int compareStringObjects(robj *a, robj *b);
 int collateStringObjects(robj *a, robj *b);
 int equalStringObjects(robj *a, robj *b);
-unsigned long long estimateObjectIdleTime(robj *o);
+unsigned long long estimateObjectIdleTime(robj_roptr o);
 void trimStringObjectIfNeeded(robj *o);
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
 
@@ -2417,8 +2487,8 @@ robj *lookupKeyWrite(redisDb *db, robj *key);
 robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply);
 robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply);
 robj_roptr lookupKeyReadWithFlags(redisDb *db, robj *key, int flags);
-robj *objectCommandLookup(client *c, robj *key);
-robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply);
+robj_roptr objectCommandLookup(client *c, robj *key);
+robj_roptr objectCommandLookupOrReply(client *c, robj *key, robj *reply);
 void objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
                        long long lru_clock);
 #define LOOKUP_NONE 0

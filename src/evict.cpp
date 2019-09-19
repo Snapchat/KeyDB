@@ -87,7 +87,7 @@ unsigned int LRU_CLOCK(void) {
 
 /* Given an object returns the min number of milliseconds the object was never
  * requested, using an approximated LRU algorithm. */
-unsigned long long estimateObjectIdleTime(robj *o) {
+unsigned long long estimateObjectIdleTime(robj_roptr o) {
     unsigned long long lruclock = LRU_CLOCK();
     if (lruclock >= o->lru) {
         return (lruclock - o->lru) * LRU_CLOCK_RESOLUTION;
@@ -252,17 +252,17 @@ struct visitFunctor
         return count < g_pserver->maxmemory_samples;
     }
 };
-void evictionPoolPopulate(int dbid, dict *dbdict, expireset *setexpire, struct evictionPoolEntry *pool)
+void evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct evictionPoolEntry *pool)
 {
     if (setexpire != nullptr)
     {
-        visitFunctor visitor { dbid, dbdict, pool, 0 };
+        visitFunctor visitor { dbid, db->pdict, pool, 0 };
         setexpire->random_visit(visitor);
     }
     else
     {
         dictEntry **samples = (dictEntry**)alloca(g_pserver->maxmemory_samples * sizeof(dictEntry*));
-        int count = dictGetSomeKeys(dbdict,samples,g_pserver->maxmemory_samples);
+        int count = dictGetSomeKeys(db->pdict,samples,g_pserver->maxmemory_samples);
         for (int j = 0; j < count; j++) {
             robj *o = (robj*)dictGetVal(samples[j]);
             processEvictionCandidate(dbid, (sds)dictGetKey(samples[j]), o, nullptr, pool);
@@ -504,8 +504,8 @@ int freeMemoryIfNeeded(void) {
                     db = g_pserver->db+i;
                     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS)
                     {
-                        if ((keys = dictSize(db->pdict)) != 0) {
-                            evictionPoolPopulate(i, db->pdict, nullptr, pool);
+                        if ((keys = db->size()) != 0) {
+                            evictionPoolPopulate(i, db, nullptr, pool);
                             total_keys += keys;
                         }
                     }
@@ -513,7 +513,7 @@ int freeMemoryIfNeeded(void) {
                     {
                         keys = db->setexpire->size();
                         if (keys != 0)
-                            evictionPoolPopulate(i, db->pdict, db->setexpire, pool);
+                            evictionPoolPopulate(i, db, db->setexpire, pool);
                         total_keys += keys;
                     }
                 }
@@ -525,9 +525,9 @@ int freeMemoryIfNeeded(void) {
                     bestdbid = pool[k].dbid;
                     sds key = nullptr;
 
-                    dictEntry *de = dictFind(g_pserver->db[pool[k].dbid].pdict,pool[k].key);
-                    if (de != nullptr && (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS || ((robj*)dictGetVal(de))->FExpires()))
-                        key = (sds)dictGetKey(de);
+                    auto pair = g_pserver->db[pool[k].dbid].lookup_tuple(pool[k].key);
+                    if (pair.first != nullptr && (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS || pair.second->FExpires()))
+                        key = (sds)pair.first;
 
                     /* Remove the entry from the pool. */
                     if (pool[k].key != pool[k].cached)
@@ -559,9 +559,9 @@ int freeMemoryIfNeeded(void) {
                 db = g_pserver->db+j;
                 if (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM)
                 {
-                    if (dictSize(db->pdict) != 0) {
-                        dictEntry *de = dictGetRandomKey(db->pdict);
-                        bestkey = (sds)dictGetKey(de);
+                    if (db->size() != 0) {
+                        auto pair = db->random();
+                        bestkey = (sds)pair.first;
                         bestdbid = j;
                         break;
                     }
@@ -581,16 +581,17 @@ int freeMemoryIfNeeded(void) {
         /* Finally remove the selected key. */
         if (bestkey) {
             db = g_pserver->db+bestdbid;
+
             robj *keyobj = createStringObject(bestkey,sdslen(bestkey));
             propagateExpire(db,keyobj,g_pserver->lazyfree_lazy_eviction);
             /* We compute the amount of memory freed by db*Delete() alone.
-             * It is possible that actually the memory needed to propagate
-             * the DEL in AOF and replication link is greater than the one
-             * we are freeing removing the key, but we can't account for
-             * that otherwise we would never exit the loop.
-             *
-             * AOF and Output buffer memory will be freed eventually so
-             * we only care about memory used by the key space. */
+            * It is possible that actually the memory needed to propagate
+            * the DEL in AOF and replication link is greater than the one
+            * we are freeing removing the key, but we can't account for
+            * that otherwise we would never exit the loop.
+            *
+            * AOF and Output buffer memory will be freed eventually so
+            * we only care about memory used by the key space. */
             delta = (long long) zmalloc_used_memory();
             latencyStartMonitor(eviction_latency);
             if (g_pserver->lazyfree_lazy_eviction)
@@ -609,18 +610,18 @@ int freeMemoryIfNeeded(void) {
             keys_freed++;
 
             /* When the memory to free starts to be big enough, we may
-             * start spending so much time here that is impossible to
-             * deliver data to the slaves fast enough, so we force the
-             * transmission here inside the loop. */
+            * start spending so much time here that is impossible to
+            * deliver data to the slaves fast enough, so we force the
+            * transmission here inside the loop. */
             if (slaves) flushSlavesOutputBuffers();
 
             /* Normally our stop condition is the ability to release
-             * a fixed, pre-computed amount of memory. However when we
-             * are deleting objects in another thread, it's better to
-             * check, from time to time, if we already reached our target
-             * memory, since the "mem_freed" amount is computed only
-             * across the dbAsyncDelete() call, while the thread can
-             * release the memory all the time. */
+            * a fixed, pre-computed amount of memory. However when we
+            * are deleting objects in another thread, it's better to
+            * check, from time to time, if we already reached our target
+            * memory, since the "mem_freed" amount is computed only
+            * across the dbAsyncDelete() call, while the thread can
+            * release the memory all the time. */
             if (g_pserver->lazyfree_lazy_eviction && !(keys_freed % 16)) {
                 if (getMaxmemoryState(NULL,NULL,NULL,NULL) == C_OK) {
                     /* Let's satisfy our stop condition. */

@@ -789,7 +789,7 @@ size_t streamRadixTreeMemoryUsage(rax *rax) {
  * case of aggregated data types where only "sample_size" elements
  * are checked and averaged to estimate the total size. */
 #define OBJ_COMPUTE_SIZE_DEF_SAMPLES 5 /* Default sample size. */
-size_t objectComputeSize(robj *o, size_t sample_size) {
+size_t objectComputeSize(robj_roptr o, size_t sample_size) {
     sds ele, ele2;
     dict *d;
     dictIterator *di;
@@ -800,7 +800,7 @@ size_t objectComputeSize(robj *o, size_t sample_size) {
         if(o->encoding == OBJ_ENCODING_INT) {
             asize = sizeof(*o);
         } else if(o->encoding == OBJ_ENCODING_RAW) {
-            asize = sdsAllocSize(szFromObj(o))+sizeof(*o);
+            asize = sdsAllocSize((sds)szFromObj(o))+sizeof(*o);
         } else if(o->encoding == OBJ_ENCODING_EMBSTR) {
             asize = sdslen(szFromObj(o))+2+sizeof(*o);
         } else {
@@ -1054,16 +1054,16 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
 
     for (j = 0; j < cserver.dbnum; j++) {
         redisDb *db = g_pserver->db+j;
-        long long keyscount = dictSize(db->pdict);
+        long long keyscount = db->size();
         if (keyscount==0) continue;
 
         mh->total_keys += keyscount;
         mh->db = (decltype(mh->db))zrealloc(mh->db,sizeof(mh->db[0])*(mh->num_dbs+1), MALLOC_LOCAL);
         mh->db[mh->num_dbs].dbid = j;
 
-        mem = dictSize(db->pdict) * sizeof(dictEntry) +
-              dictSlots(db->pdict) * sizeof(dictEntry*) +
-              dictSize(db->pdict) * sizeof(robj);
+        mem = db->size() * sizeof(dictEntry) +
+              db->slots() * sizeof(dictEntry*) +
+              db->size() * sizeof(robj);
         mh->db[mh->num_dbs].overhead_ht_main = mem;
         mem_total+=mem;
 
@@ -1246,15 +1246,12 @@ void objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
 
 /* This is a helper function for the OBJECT command. We need to lookup keys
  * without any modification of LRU or other parameters. */
-robj *objectCommandLookup(client *c, robj *key) {
-    dictEntry *de;
-
-    if ((de = dictFind(c->db->pdict,ptrFromObj(key))) == NULL) return NULL;
-    return (robj*) dictGetVal(de);
+robj_roptr objectCommandLookup(client *c, robj *key) {
+    return c->db->find(key);
 }
 
-robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply) {
-    robj *o = objectCommandLookup(c,key);
+robj_roptr objectCommandLookupOrReply(client *c, robj *key, robj *reply) {
+    robj_roptr o = objectCommandLookup(c,key);
 
     if (!o) addReply(c, reply);
     return o;
@@ -1263,7 +1260,7 @@ robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply) {
 /* Object command allows to inspect the internals of an Redis Object.
  * Usage: OBJECT <refcount|encoding|idletime|freq> <key> */
 void objectCommand(client *c) {
-    robj *o;
+    robj_roptr o;
 
     if (c->argc == 2 && !strcasecmp(szFromObj(c->argv[1]),"help")) {
         const char *help[] = {
@@ -1276,15 +1273,15 @@ NULL
         addReplyHelp(c, help);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"refcount") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
-                == NULL) return;
+                == nullptr) return;
         addReplyLongLong(c,o->getrefcount(std::memory_order_relaxed));
     } else if (!strcasecmp(szFromObj(c->argv[1]),"encoding") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
-                == NULL) return;
+                == nullptr) return;
         addReplyBulkCString(c,strEncoding(o->encoding));
     } else if (!strcasecmp(szFromObj(c->argv[1]),"idletime") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
-                == NULL) return;
+                == nullptr) return;
         if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
             addReplyError(c,"An LFU maxmemory policy is selected, idle time not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.");
             return;
@@ -1292,7 +1289,7 @@ NULL
         addReplyLongLong(c,estimateObjectIdleTime(o)/1000);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"freq") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
-                == NULL) return;
+                == nullptr) return;
         if (!(g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU)) {
             addReplyError(c,"An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.");
             return;
@@ -1301,10 +1298,10 @@ NULL
          * in case of the key has not been accessed for a long time,
          * because we update the access time only
          * when the key is read or overwritten. */
-        addReplyLongLong(c,LFUDecrAndReturn(o));
+        addReplyLongLong(c,LFUDecrAndReturn(o.unsafe_robjcast()));
     } else if (!strcasecmp(szFromObj(c->argv[1]), "lastmodified") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
-                == NULL) return;
+                == nullptr) return;
         addReplyLongLong(c, (g_pserver->mstime - (o->mvcc_tstamp >> MVCC_MS_SHIFT)) / 1000);
     } else {
         addReplySubcommandSyntaxError(c);
@@ -1327,7 +1324,6 @@ NULL
         };
         addReplyHelp(c, help);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"usage") && c->argc >= 3) {
-        dictEntry *de;
         long long samples = OBJ_COMPUTE_SIZE_DEF_SAMPLES;
         for (int j = 3; j < c->argc; j++) {
             if (!strcasecmp(szFromObj(c->argv[j]),"samples") &&
@@ -1346,12 +1342,14 @@ NULL
                 return;
             }
         }
-        if ((de = dictFind(c->db->pdict,ptrFromObj(c->argv[2]))) == NULL) {
+
+        auto pair = c->db->lookup_tuple(c->argv[2]);
+        if (pair.first == NULL) {
             addReplyNull(c, shared.nullbulk);
             return;
         }
-        size_t usage = objectComputeSize((robj*)dictGetVal(de),samples);
-        usage += sdsAllocSize((sds)dictGetKey(de));
+        size_t usage = objectComputeSize(pair.second,samples);
+        usage += sdsAllocSize((sds)pair.first);
         usage += sizeof(dictEntry);
         addReplyLongLong(c,usage);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"stats") && c->argc == 2) {

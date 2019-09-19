@@ -74,8 +74,7 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
     }
 
     expireEntryFat *pfat = e.pfatentry();
-    dictEntry *de = dictFind(db->pdict, e.key());
-    robj *val = (robj*)dictGetVal(de);
+    robj *val = db->find(e.key());
     int deleted = 0;
     while (!pfat->FEmpty())
     {
@@ -140,13 +139,11 @@ void expireMemberCommand(client *c)
     when += mstime();
 
     /* No key, return zero. */
-    dictEntry *de = dictFind(c->db->pdict, szFromObj(c->argv[1]));
-    if (de == NULL) {
+    robj *val = c->db->find(c->argv[1]);
+    if (val == nullptr) {
         addReply(c,shared.czero);
         return;
     }
-
-    robj *val = (robj*)dictGetVal(de);
 
     switch (val->type)
     {
@@ -361,10 +358,10 @@ void expireSlaveKeys(void) {
                 redisDb *db = g_pserver->db+dbid;
 
                 // the expire is hashed based on the key pointer, so we need the point in the main db
-                dictEntry *deMain = dictFind(db->pdict, keyname);
+                auto pairMain = db->lookup_tuple(keyname);
                 auto itr = db->setexpire->end();
-                if (deMain != nullptr)
-                    itr = db->setexpire->find((sds)dictGetKey(deMain));
+                if (pairMain.first != nullptr)
+                    itr = db->setexpire->find((sds)pairMain.first);
                 int expired = 0;
 
                 if (itr != db->setexpire->end())

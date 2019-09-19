@@ -902,9 +902,8 @@ long defragOtherGlobals() {
 
 /* returns 0 more work may or may not be needed (see non-zero cursor),
  * and 1 if time is up and more work is needed. */
-int defragLaterItem(dictEntry *de, unsigned long *cursor, long long endtime) {
-    if (de) {
-        robj *ob = (robj*)dictGetVal(de);
+int defragLaterItem(robj *ob, unsigned long *cursor, long long endtime) {
+    if (ob) {
         if (ob->type == OBJ_LIST) {
             g_pserver->stat_active_defrag_hits += scanLaterList(ob);
             *cursor = 0; /* list has no scan, we must finish it in one go */
@@ -959,11 +958,11 @@ int defragLaterStep(redisDb *db, long long endtime) {
         }
 
         /* each time we enter this function we need to fetch the key from the dict again (if it still exists) */
-        dictEntry *de = dictFind(db->pdict, current_key);
+        robj *o = db->find(current_key);
         key_defragged = g_pserver->stat_active_defrag_hits;
         do {
             int quit = 0;
-            if (defragLaterItem(de, &cursor, endtime))
+            if (defragLaterItem(o, &cursor, endtime))
                 quit = 1; /* time is up, we didn't finish all the work */
 
             /* Don't start a new BIG key in this loop, this is because the

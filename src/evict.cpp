@@ -256,13 +256,13 @@ void evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct ev
 {
     if (setexpire != nullptr)
     {
-        visitFunctor visitor { dbid, db->pdict, pool, 0 };
+        visitFunctor visitor { dbid, db->m_persistentData.dictUnsafe(), pool, 0 };
         setexpire->random_visit(visitor);
     }
     else
     {
         dictEntry **samples = (dictEntry**)alloca(g_pserver->maxmemory_samples * sizeof(dictEntry*));
-        int count = dictGetSomeKeys(db->pdict,samples,g_pserver->maxmemory_samples);
+        int count = dictGetSomeKeys(db->m_persistentData.dictUnsafe(),samples,g_pserver->maxmemory_samples);
         for (int j = 0; j < count; j++) {
             robj *o = (robj*)dictGetVal(samples[j]);
             processEvictionCandidate(dbid, (sds)dictGetKey(samples[j]), o, nullptr, pool);
@@ -511,9 +511,9 @@ int freeMemoryIfNeeded(void) {
                     }
                     else
                     {
-                        keys = db->setexpire->size();
+                        keys = db->expireSize();
                         if (keys != 0)
-                            evictionPoolPopulate(i, db, db->setexpire, pool);
+                            evictionPoolPopulate(i, db, db->m_persistentData.setexpireUnsafe(), pool);
                         total_keys += keys;
                     }
                 }
@@ -525,9 +525,9 @@ int freeMemoryIfNeeded(void) {
                     bestdbid = pool[k].dbid;
                     sds key = nullptr;
 
-                    auto pair = g_pserver->db[pool[k].dbid].lookup_tuple(pool[k].key);
-                    if (pair.first != nullptr && (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS || pair.second->FExpires()))
-                        key = (sds)pair.first;
+                    auto itr = g_pserver->db[pool[k].dbid].find(pool[k].key);
+                    if (itr != nullptr && (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS || itr.val()->FExpires()))
+                        key = itr.key();
 
                     /* Remove the entry from the pool. */
                     if (pool[k].key != pool[k].cached)
@@ -560,17 +560,17 @@ int freeMemoryIfNeeded(void) {
                 if (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM)
                 {
                     if (db->size() != 0) {
-                        auto pair = db->random();
-                        bestkey = (sds)pair.first;
+                        auto itr = db->random();
+                        bestkey = itr.key();
                         bestdbid = j;
                         break;
                     }
                 }
                 else
                 {
-                    if (!db->setexpire->empty())
+                    if (db->expireSize())
                     {
-                        bestkey = (sds)db->setexpire->random_value().key();
+                        bestkey = (sds)db->random_expire().key();
                         bestdbid = j;
                         break;
                     }

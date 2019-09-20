@@ -87,6 +87,7 @@ static robj *lookupKey(redisDb *db, robj *key, int flags) {
 
         if (flags & LOOKUP_UPDATEMVCC) {
             val->mvcc_tstamp = getMvccTstamp();
+            db->trackkey(key);
         }
         return val;
     } else {
@@ -800,7 +801,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
     /* Handle the case of a hash table. */
     ht = NULL;
     if (o == nullptr) {
-        ht = c->db->dictUnsafe();
+        ht = c->db->dictUnsafeKeyOnly();
     } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HT) {
         ht = (dict*)ptrFromObj(o);
     } else if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HT) {
@@ -1221,12 +1222,12 @@ int redisDbPersistentData::removeExpire(robj *key, dict_iter itr) {
     if (!val->FExpires())
         return 0;
 
+    trackkey(key);
     auto itrExpire = m_setexpire->find(itr.key());
     serverAssert(itrExpire != m_setexpire->end());
     serverAssert(itrExpire->key() == itr.key());
     m_setexpire->erase(itrExpire);
     val->SetFExpires(false);
-    trackkey(key);
     return 1;
 }
 
@@ -1805,13 +1806,13 @@ void redisDbPersistentData::initialize()
     m_pdict = dictCreate(&dbDictType,NULL);
     m_setexpire = new(MALLOC_LOCAL) expireset();
     m_fAllChanged = false;
-    m_fTrackingChanges = false;
+    m_fTrackingChanges = 0;
 }
 
 void redisDb::initialize(int id)
 {
     m_persistentData.initialize();
-    this->expireitr = m_persistentData.setexpireUnsafe()->end();
+    this->expireitr = m_persistentData.setexpire()->end();
     this->blocking_keys = dictCreate(&keylistDictType,NULL);
     this->ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
     this->watched_keys = dictCreate(&keylistDictType,NULL);
@@ -1843,7 +1844,7 @@ size_t redisDb::clear(bool fAsync, void(callback)(void*))
     } else {
         m_persistentData.clear(callback);
     }
-    expireitr = m_persistentData.setexpireUnsafe()->end();
+    expireitr = m_persistentData.setexpire()->end();
     return removed;
 }
 
@@ -1854,6 +1855,8 @@ void redisDbPersistentData::clear(void(callback)(void*))
         m_fAllChanged = true;
     delete m_setexpire;
     m_setexpire = new (MALLOC_LOCAL) expireset();
+    if (m_pstorage != nullptr)
+        m_pstorage->clear();
 }
 
 /* static */ void redisDbPersistentData::swap(redisDbPersistentData *db1, redisDbPersistentData *db2)
@@ -1863,11 +1866,13 @@ void redisDbPersistentData::clear(void(callback)(void*))
     db1->m_fTrackingChanges = db2->m_fTrackingChanges;
     db1->m_fAllChanged = db2->m_fAllChanged;
     db1->m_setexpire = db2->m_setexpire;
+    db1->m_pstorage = db2->m_pstorage;
 
     db2->m_pdict = aux.m_pdict;
     db2->m_fTrackingChanges = aux.m_fTrackingChanges;
     db2->m_fAllChanged = aux.m_fAllChanged;
     db2->m_setexpire = aux.m_setexpire;
+    db2->m_pstorage = aux.m_pstorage;
 }
 
 void redisDbPersistentData::setExpire(robj *key, robj *subkey, long long when)
@@ -1875,6 +1880,7 @@ void redisDbPersistentData::setExpire(robj *key, robj *subkey, long long when)
     /* Reuse the sds from the main dict in the expire dict */
     dictEntry *kde = dictFind(m_pdict,ptrFromObj(key));
     serverAssertWithInfo(NULL,key,kde != NULL);
+    trackkey(key);
 
     if (((robj*)dictGetVal(kde))->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
     {
@@ -1901,15 +1907,86 @@ void redisDbPersistentData::setExpire(robj *key, robj *subkey, long long when)
 
 void redisDbPersistentData::setExpire(expireEntry &&e)
 {
+    trackkey(e.key());
     m_setexpire->insert(e);
 }
 
 bool redisDb::FKeyExpires(const char *key)
 {
-    return m_persistentData.setexpireUnsafe()->find(key) != m_persistentData.setexpireUnsafe()->end();
+    return m_persistentData.setexpireUnsafe()->find(key) != m_persistentData.setexpire()->end();
 }
 
 void redisDbPersistentData::updateValue(dict_iter itr, robj *val)
 {
+    trackkey(itr.key());
     dictSetVal(m_pdict, itr.de, val);
+}
+
+void redisDbPersistentData::ensure(dictEntry *de)
+{
+    if (de != nullptr && dictGetVal(de) == nullptr)
+    {
+        serverAssert(m_pstorage != nullptr);
+        sds key = (sds)dictGetKey(de);
+        m_pstorage->retrieve(key, sdslen(key), true, [&](const char *, size_t, const void *data, size_t cb){
+            robj *o = deserializeStoredObject(data, cb);
+            serverAssert(o != nullptr);
+            dictSetVal(m_pdict, de, o);
+        });
+    }
+}
+
+void redisDbPersistentData::storeKey(const char *szKey, size_t cchKey, robj *o)
+{
+    sds temp = serializeStoredObject(o);
+    m_pstorage->insert(szKey, cchKey, temp, sdslen(temp));
+    sdsfree(temp);
+}
+
+void redisDbPersistentData::storeDatabase()
+{
+    dictIterator *di = dictGetIterator(m_pdict);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        sds key = (sds)dictGetKey(de);
+        robj *o = (robj*)dictGetVal(de);
+        storeKey(key, sdslen(key), o);
+    }
+    dictReleaseIterator(di);
+}
+
+void redisDbPersistentData::processChanges()
+{
+    --m_fTrackingChanges;
+    serverAssert(m_fTrackingChanges >= 0);
+
+    if (m_pstorage != nullptr)
+    {
+        if (m_fTrackingChanges == 0)
+        {
+            if (m_fAllChanged)
+            {
+                m_pstorage->clear();
+                storeDatabase();
+            }
+            else
+            {
+                for (auto &str : m_setchanged)
+                {
+                    sds sdsKey = sdsnewlen(str.data(), str.size());
+                    robj *o = find(sdsKey);
+                    if (o != nullptr)
+                    {
+                        storeKey(str.data(), str.size(), o);
+                    }
+                    else
+                    {
+                        m_pstorage->erase(str.data(), str.size());
+                    }
+                    sdsfree(sdsKey);
+                }
+            }
+        }
+    }
+    m_setchanged.clear();
 }

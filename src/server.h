@@ -90,6 +90,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #include "sha1.h"
 #include "endianconv.h"
 #include "crc64.h"
+#include "IStorage.h"
 
 extern int g_fTestMode;
 
@@ -1086,19 +1087,21 @@ public:
 
     void trackkey(const char *key)
     {
-        if (m_fTrackingChanges)
-            m_setchanged.insert(key);
+        if (m_fTrackingChanges && !m_fAllChanged)
+            m_setchanged.insert(std::string(key, sdslen(key)));
     }
 
     dict_iter find(const char *key) 
     {
         dictEntry *de = dictFind(m_pdict, key);
+        ensure(de);
         return dict_iter(de);
     }
 
     dict_iter random()
     {
         dictEntry *de = dictGetRandomKey(m_pdict);
+        ensure(de);
         return dict_iter(de);
     }
 
@@ -1131,16 +1134,27 @@ public:
     void setExpire(expireEntry &&e);
     void initialize();
 
-    dict *dictUnsafe() { return m_pdict; }
+    void trackChanges() { m_fTrackingChanges++; }
+    void processChanges();
+
+    // This should only be used if you look at the key, we do not fixup
+    //  objects stored elsewhere
+    dict *dictUnsafeKeyOnly() { return m_pdict; }   
+
     expireset *setexpireUnsafe() { return m_setexpire; }
     const expireset *setexpire() { return m_setexpire; }
 
 private:
+    void ensure(dictEntry *de);
+    void storeDatabase();
+    void storeKey(const char *key, size_t cchKey, robj *o);
+
     // Keyspace
     dict *m_pdict;                 /* The keyspace for this DB */
-    bool m_fTrackingChanges = false;
+    int m_fTrackingChanges = 0;     // Note: Stack based
     bool m_fAllChanged = false;
     std::set<std::string> m_setchanged;
+    IStorage *m_pstorage = nullptr;
 
     // Expire
     expireset *m_setexpire;
@@ -1181,6 +1195,10 @@ typedef struct redisDb {
     void expand(uint64_t slots) { m_persistentData.expand(slots); }
     void tryResize() { m_persistentData.tryResize(); }
     const expireset *setexpire() { return m_persistentData.setexpire(); }
+
+    void trackChanges() { m_persistentData.trackChanges(); }
+    void processChanges() { m_persistentData.processChanges(); }
+    void trackkey(robj_roptr o) { m_persistentData.trackkey(o); }
     
     iter find(robj_roptr key)
     {
@@ -1215,7 +1233,7 @@ typedef struct redisDb {
 
     bool FKeyExpires(const char *key);
     size_t clear(bool fAsync, void(callback)(void*));
-    dict *dictUnsafe() { return m_persistentData.dictUnsafe(); }
+    dict *dictUnsafeKeyOnly() { return m_persistentData.dictUnsafeKeyOnly(); }
     expireEntry *getExpire(robj_roptr key);
 private:
     redisDbPersistentData m_persistentData;
@@ -2338,6 +2356,10 @@ int collateStringObjects(robj *a, robj *b);
 int equalStringObjects(robj *a, robj *b);
 unsigned long long estimateObjectIdleTime(robj_roptr o);
 void trimStringObjectIfNeeded(robj *o);
+
+robj *deserializeStoredObject(const void *data, size_t cb);
+sds serializeStoredObject(robj_roptr o);
+
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
 
 /* Synchronous I/O with timeout */

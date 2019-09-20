@@ -1439,8 +1439,7 @@ int htNeedsResize(dict *dict) {
 /* If the percentage of used slots in the HT reaches HASHTABLE_MIN_FILL
  * we resize the hash table to save memory */
 void tryResizeHashTables(int dbid) {
-    if (htNeedsResize(g_pserver->db[dbid].pdict))
-        dictResize(g_pserver->db[dbid].pdict);
+    g_pserver->db[dbid].tryResize();
 }
 
 /* Our hash table implementation performs rehashing incrementally while
@@ -1450,10 +1449,10 @@ void tryResizeHashTables(int dbid) {
  *
  * The function returns 1 if some rehashing was performed, otherwise 0
  * is returned. */
-int incrementallyRehash(int dbid) {
+int redisDbPersistentData::incrementallyRehash() {
     /* Keys dictionary */
-    if (dictIsRehashing(g_pserver->db[dbid].pdict)) {
-        dictRehashMilliseconds(g_pserver->db[dbid].pdict,1);
+    if (dictIsRehashing(m_pdict)) {
+        dictRehashMilliseconds(m_pdict,1);
         return 1; /* already used our millisecond for this loop... */
     }
     return 0;
@@ -1734,7 +1733,7 @@ void databasesCron(void) {
         /* Rehash */
         if (g_pserver->activerehashing) {
             for (j = 0; j < dbs_per_call; j++) {
-                int work_done = incrementallyRehash(rehash_db);
+                int work_done = g_pserver->db[rehash_db].incrementallyRehash();
                 if (work_done) {
                     /* If the function did some work, stop here, we'll do
                      * more at the next cron loop. */
@@ -1895,7 +1894,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
             size = g_pserver->db[j].slots();
             used = g_pserver->db[j].size();
-            vkeys = g_pserver->db[j].setexpire->size();
+            vkeys = g_pserver->db[j].expireSize();
             if (used || vkeys) {
                 serverLog(LL_VERBOSE,"DB %d: %lld keys (%lld volatile) in %lld slots HT.",j,used,vkeys,size);
                 /* dictPrintStats(g_pserver->dict); */
@@ -4575,7 +4574,7 @@ sds genRedisInfoString(const char *section) {
             long long keys, vkeys;
 
             keys = g_pserver->db[j].size();
-            vkeys = g_pserver->db[j].setexpire->size();
+            vkeys = g_pserver->db[j].expireSize();
 
             // Adjust TTL by the current time
             g_pserver->db[j].avg_ttl -= (g_pserver->mstime - g_pserver->db[j].last_expire_set);

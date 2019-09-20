@@ -439,9 +439,9 @@ NULL
             strenc, rdbSavedObjectLen(val),
             val->lru, estimateObjectIdleTime(val)/1000, extra);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"sdslen") && c->argc == 3) {
-        auto pair = c->db->lookup_tuple(c->argv[2]);
-        robj *val = pair.second;
-        const char *key = pair.first;
+        auto itr = c->db->find(c->argv[2]);
+        robj *val = itr.val();
+        const char *key = itr.key();
 
         if (val == NULL) {
             addReply(c,shared.nokeyerr);
@@ -636,7 +636,7 @@ NULL
         stats = sdscat(stats,buf);
 
         stats = sdscatprintf(stats,"[Expires set]\n");
-        g_pserver->db[dbid].setexpire->getstats(buf, sizeof(buf));
+        g_pserver->db[dbid].getExpireStats(buf, sizeof(buf));
         stats = sdscat(stats, buf);
 
         addReplyBulkSds(c,stats);

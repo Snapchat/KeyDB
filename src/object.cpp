@@ -1067,7 +1067,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
         mh->db[mh->num_dbs].overhead_ht_main = mem;
         mem_total+=mem;
 
-        mem = db->setexpire->bytes_used();
+        mem = db->setexpire()->bytes_used();
         mh->db[mh->num_dbs].overhead_ht_expires = mem;
         mem_total+=mem;
 
@@ -1343,13 +1343,13 @@ NULL
             }
         }
 
-        auto pair = c->db->lookup_tuple(c->argv[2]);
-        if (pair.first == NULL) {
+        auto itr = c->db->find(c->argv[2]);
+        if (itr == nullptr) {
             addReplyNull(c, shared.nullbulk);
             return;
         }
-        size_t usage = objectComputeSize(pair.second,samples);
-        usage += sdsAllocSize((sds)pair.first);
+        size_t usage = objectComputeSize(itr.val(),samples);
+        usage += sdsAllocSize(itr.key());
         usage += sizeof(dictEntry);
         addReplyLongLong(c,usage);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"stats") && c->argc == 2) {

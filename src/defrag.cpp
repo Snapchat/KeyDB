@@ -781,8 +781,8 @@ long defragKey(redisDb *db, dictEntry *de) {
     newsds = activeDefragSds(keysds);
     if (newsds)
         defragged++, de->key = newsds;
-    if (!db->setexpire->empty()) {
-        replaceSateliteOSetKeyPtr(*db->setexpire, keysds, newsds);
+    if (!db->setexpire()->empty()) {
+        replaceSateliteOSetKeyPtr(*const_cast<expireset*>(db->setexpire()), keysds, newsds);
     }
 
     /* Try to defrag robj and / or string value. */
@@ -1111,7 +1111,7 @@ void activeDefragCycle(void) {
                 break; /* this will exit the function and we'll continue on the next cycle */
             }
 
-            cursor = dictScan(db->pdict, cursor, defragScanCallback, defragDictBucketCallback, db);
+            cursor = dictScan(db->dictUnsafe(), cursor, defragScanCallback, defragDictBucketCallback, db);
 
             /* Once in 16 scan iterations, 512 pointer reallocations. or 64 keys
              * (if we have a lot of pointers in one hash bucket or rehasing),

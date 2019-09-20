@@ -93,9 +93,9 @@ public:
         return end();
     }
 
-    setiter end()
+    setiter end() const
     {
-        setiter itr(this);
+        setiter itr(const_cast<semiorderedset<T,T_KEY,MEMMOVE_SAFE>*>(this));
         itr.idxPrimary = m_data.size();
         return itr;
     }

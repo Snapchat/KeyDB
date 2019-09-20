@@ -41,7 +41,6 @@
 
 int keyIsExpired(redisDb *db, robj *key);
 int expireIfNeeded(redisDb *db, robj *key, robj *o);
-void dbOverwriteCore(redisDb *db, dictEntry *de, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire);
 
 /* Update LFU when an object is accessed.
  * Firstly, decrement the counter if the decrement time is reached.
@@ -57,8 +56,7 @@ void updateExpire(redisDb *db, sds key, robj *valOld, robj *valNew)
     serverAssert(valOld->FExpires());
     serverAssert(!valNew->FExpires());
     
-    auto itr = db->setexpire->find(key);
-    serverAssert(itr != db->setexpire->end());
+    serverAssert(db->FKeyExpires((const char*)key));
     
     valNew->SetFExpires(true);
     valOld->SetFExpires(false);
@@ -70,8 +68,9 @@ void updateExpire(redisDb *db, sds key, robj *valOld, robj *valNew)
  * implementations that should instead rely on lookupKeyRead(),
  * lookupKeyWrite() and lookupKeyReadWithFlags(). */
 static robj *lookupKey(redisDb *db, robj *key, int flags) {
-    robj *val = db->find(key);
-    if (val) {
+    auto itr = db->find(key);
+    if (itr) {
+        robj *val = itr.val();
         /* Update the access time for the ageing algorithm.
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
@@ -193,13 +192,13 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
-int dbAddCore(redisDb *db, robj *key, robj *val) {
+bool dbAddCore(redisDb *db, robj *key, robj *val) {
     serverAssert(!val->FExpires());
     sds copy = sdsdup(szFromObj(key));
-    int retval = dictAdd(db->pdict, copy, val);
+    bool fInserted = db->insert(copy, val);
     val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
 
-    if (retval == DICT_OK)
+    if (fInserted)
     {
         if (val->type == OBJ_LIST ||
             val->type == OBJ_ZSET)
@@ -211,7 +210,7 @@ int dbAddCore(redisDb *db, robj *key, robj *val) {
         sdsfree(copy);
     }
 
-    return retval;
+    return fInserted;
 }
 
 /* Add the key to the DB. It's up to the caller to increment the reference
@@ -220,23 +219,22 @@ int dbAddCore(redisDb *db, robj *key, robj *val) {
  * The program is aborted if the key already exists. */
 void dbAdd(redisDb *db, robj *key, robj *val)
 {
-    int retval = dbAddCore(db, key, val);
-    serverAssertWithInfo(NULL,key,retval == DICT_OK);
+    bool fInserted = dbAddCore(db, key, val);
+    serverAssertWithInfo(NULL,key,fInserted);
 }
 
-void dbOverwriteCore(redisDb *db, dictEntry *de, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire)
+void redisDb::dbOverwriteCore(redisDb::iter itr, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire)
 {
-    dictEntry auxentry = *de;
-    robj *old = (robj*)dictGetVal(de);
+    robj *old = itr.val();
 
     if (old->FExpires()) {
         if (fRemoveExpire) {
-            removeExpire(db, key);
+            removeExpire(this, key);
         }
         else {
             if (val->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
                 val = dupStringObject(val);
-            updateExpire(db, (sds)dictGetKey(de), old, val);
+            updateExpire(this, itr.key(), old, val);
         }
     }
 
@@ -249,14 +247,12 @@ void dbOverwriteCore(redisDb *db, dictEntry *de, robj *key, robj *val, bool fUpd
         val->mvcc_tstamp = getMvccTstamp();
     }
 
-    dictSetVal(db->pdict, de, val);
+    if (g_pserver->lazyfree_lazy_server_del)
+        freeObjAsync(itr.val());
+    else
+        decrRefCount(itr.val());
 
-    if (g_pserver->lazyfree_lazy_server_del) {
-        freeObjAsync(old);
-        dictSetVal(db->pdict, &auxentry, NULL);
-    }
-
-    dictFreeVal(db->pdict, &auxentry);
+    m_persistentData.updateValue(itr, val);
 }
 
 /* Overwrite an existing key with a new value. Incrementing the reference
@@ -265,10 +261,10 @@ void dbOverwriteCore(redisDb *db, dictEntry *de, robj *key, robj *val, bool fUpd
  *
  * The program is aborted if the key was not already present. */
 void dbOverwrite(redisDb *db, robj *key, robj *val) {
-    dictEntry *de = dictFind(db->pdict,ptrFromObj(key));
+    auto itr = db->find(key);
 
-    serverAssertWithInfo(NULL,key,de != NULL);
-    dbOverwriteCore(db, de, key, val, !!g_pserver->fActiveReplica, false);
+    serverAssertWithInfo(NULL,key,itr != nullptr);
+    db->dbOverwriteCore(itr, key, val, !!g_pserver->fActiveReplica, false);
 }
 
 /* Insert a key, handling duplicate keys according to fReplace */
@@ -276,14 +272,14 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
 {
     if (fReplace)
     {
-        dictEntry *de = dictFind(db->pdict, ptrFromObj(key));
-        if (de == nullptr)
-            return (dbAddCore(db, key, val) == DICT_OK);
+        auto itr = db->find(key);
+        if (itr == nullptr)
+            return (dbAddCore(db, key, val) == true);
 
-        robj *old = (robj*)dictGetVal(de);
+        robj *old = itr.val();
         if (old->mvcc_tstamp <= val->mvcc_tstamp)
         {
-            dbOverwriteCore(db, de, key, val, false, true);
+            db->dbOverwriteCore(itr, key, val, false, true);
             return true;
         }
         
@@ -291,7 +287,7 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
     }
     else
     {
-        return (dbAddCore(db, key, val) == DICT_OK);
+        return (dbAddCore(db, key, val) == true);
     }
 }
 
@@ -304,11 +300,11 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
  *
  * All the new keys in the database should be created via this interface. */
 void setKey(redisDb *db, robj *key, robj *val) {
-    dictEntry *de = dictFind(db->pdict, ptrFromObj(key));
-    if (de == NULL) {
+    auto itr = db->find(key);
+    if (itr == NULL) {
         dbAdd(db,key,val);
     } else {
-        dbOverwriteCore(db,de,key,val,!!g_pserver->fActiveReplica,true);
+        db->dbOverwriteCore(itr,key,val,!!g_pserver->fActiveReplica,true);
     }
     incrRefCount(val);
     signalModifiedKey(db,key);
@@ -324,19 +320,19 @@ int dbExists(redisDb *db, robj *key) {
  * The function makes sure to return keys not already expired. */
 robj *dbRandomKey(redisDb *db) {
     int maxtries = 100;
-    bool allvolatile = db->size() == db->setexpire->size();
+    bool allvolatile = db->expireSize() == db->size();
 
     while(1) {
         sds key;
         robj *keyobj;
 
-        auto pair = db->random();
-        if (pair.first == NULL) return NULL;
+        auto itr = db->random();
+        if (itr == nullptr) return NULL;
 
-        key = (sds)pair.first;
+        key = itr.key();
         keyobj = createStringObject(key,sdslen(key));
 
-        if (pair.second->FExpires())
+        if (itr.val()->FExpires())
         {
             if (allvolatile && listLength(g_pserver->masters) && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
@@ -351,7 +347,7 @@ robj *dbRandomKey(redisDb *db) {
             }
         }
             
-        if (pair.second->FExpires())
+        if (itr.val()->FExpires())
         {
              if (expireIfNeeded(db,keyobj)) {
                 decrRefCount(keyobj);
@@ -363,20 +359,26 @@ robj *dbRandomKey(redisDb *db) {
     }
 }
 
-/* Delete a key, value, and associated expiration entry if any, from the DB */
-int dbSyncDelete(redisDb *db, robj *key) {
+bool redisDbPersistentData::syncDelete(robj *key)
+{
     /* Deleting an entry from the expires dict will not free the sds of
      * the key, because it is shared with the main dictionary. */
 
-    dictEntry *de = dictFind(db->pdict, szFromObj(key));
-    if (de != nullptr && ((robj*)dictGetVal(de))->FExpires())
-        removeExpireCore(db, key, de);
-    if (dictDelete(db->pdict,ptrFromObj(key)) == DICT_OK) {
+    auto itr = find(szFromObj(key));
+    trackkey(szFromObj(key));
+    if (itr != nullptr && itr.val()->FExpires())
+        removeExpire(key, itr);
+    if (dictDelete(m_pdict,ptrFromObj(key)) == DICT_OK) {
         if (g_pserver->cluster_enabled) slotToKeyDel(key);
         return 1;
     } else {
         return 0;
     }
+}
+
+/* Delete a key, value, and associated expiration entry if any, from the DB */
+int dbSyncDelete(redisDb *db, robj *key) {
+    return db->m_persistentData.syncDelete(key);
 }
 
 /* This is a wrapper whose behavior depends on the Redis lazy free
@@ -456,15 +458,7 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
     }
 
     for (int j = startdb; j <= enddb; j++) {
-        removed += dictSize(g_pserver->db[j].pdict);
-        if (async) {
-            emptyDbAsync(&g_pserver->db[j]);
-        } else {
-            dictEmpty(g_pserver->db[j].pdict,callback);
-            delete g_pserver->db[j].setexpire;
-            g_pserver->db[j].setexpire = new (MALLOC_LOCAL) expireset();
-            g_pserver->db[j].expireitr = g_pserver->db[j].setexpire->end();
-        }
+        removed += g_pserver->db[j].clear(!!async, callback); 
     }
     if (g_pserver->cluster_enabled) {
         if (async) {
@@ -633,9 +627,9 @@ void randomkeyCommand(client *c) {
 }
 
 
-bool redisDb::iterate(std::function<bool(const char*, robj*)> fn)
+bool redisDbPersistentData::iterate(std::function<bool(const char*, robj*)> &fn)
 {
-    dictIterator *di = dictGetSafeIterator(pdict);
+    dictIterator *di = dictGetSafeIterator(m_pdict);
     dictEntry *de = nullptr;
     bool fResult = true;
     while((de = dictNext(di)) != nullptr)
@@ -806,7 +800,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
     /* Handle the case of a hash table. */
     ht = NULL;
     if (o == nullptr) {
-        ht = c->db->pdict;
+        ht = c->db->dictUnsafe();
     } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HT) {
         ht = (dict*)ptrFromObj(o);
     } else if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HT) {
@@ -1159,17 +1153,14 @@ int dbSwapDatabases(int id1, int id2) {
     /* Swap hash tables. Note that we don't swap blocking_keys,
      * ready_keys and watched_keys, since we want clients to
      * remain in the same DB they were. */
-    db1->pdict = db2->pdict;
-    db1->setexpire = db2->setexpire;
-    db1->expireitr = db2->expireitr;
+    redisDbPersistentData::swap(&db1->m_persistentData, &db2->m_persistentData);
     db1->avg_ttl = db2->avg_ttl;
     db1->last_expire_set = db2->last_expire_set;
+    db1->expireitr = db2->expireitr;
 
-    db2->pdict = aux.pdict;
-    db2->setexpire = aux.setexpire;
-    db2->expireitr = aux.expireitr;
     db2->avg_ttl = aux.avg_ttl;
     db2->last_expire_set = aux.last_expire_set;
+    db2->expireitr = aux.expireitr;
 
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
@@ -1218,37 +1209,38 @@ void swapdbCommand(client *c) {
  * Expires API
  *----------------------------------------------------------------------------*/
 int removeExpire(redisDb *db, robj *key) {
-    dictEntry *de = dictFind(db->pdict,ptrFromObj(key));
-    return removeExpireCore(db, key, de);
+    auto itr = db->find(key);
+    return db->m_persistentData.removeExpire(key, itr);
 }
-int removeExpireCore(redisDb *db, robj *key, dictEntry *de) {
+int redisDbPersistentData::removeExpire(robj *key, dict_iter itr) {
     /* An expire may only be removed if there is a corresponding entry in the
      * main dict. Otherwise, the key will never be freed. */
-    serverAssertWithInfo(NULL,key,de != NULL);
+    serverAssertWithInfo(NULL,key,itr != nullptr);
 
-    robj *val = (robj*)dictGetVal(de);
+    robj *val = itr.val();
     if (!val->FExpires())
         return 0;
 
-    auto itr = db->setexpire->find((sds)dictGetKey(de));
-    serverAssert(itr != db->setexpire->end());
-    serverAssert(itr->key() == (sds)dictGetKey(de));
-    db->setexpire->erase(itr);
+    auto itrExpire = m_setexpire->find(itr.key());
+    serverAssert(itrExpire != m_setexpire->end());
+    serverAssert(itrExpire->key() == itr.key());
+    m_setexpire->erase(itrExpire);
     val->SetFExpires(false);
+    trackkey(key);
     return 1;
 }
 
-int removeSubkeyExpire(redisDb *db, robj *key, robj *subkey) {
-    dictEntry *de = dictFind(db->pdict,ptrFromObj(key));
-    serverAssertWithInfo(NULL,key,de != NULL);
+int redisDbPersistentData::removeSubkeyExpire(robj *key, robj *subkey) {
+    auto de = find(szFromObj(key));
+    serverAssertWithInfo(NULL,key,de != nullptr);
     
-    robj *val = (robj*)dictGetVal(de);
+    robj *val = de.val();
     if (!val->FExpires())
         return 0;
     
-    auto itr = db->setexpire->find((sds)dictGetKey(de));
-    serverAssert(itr != db->setexpire->end());
-    serverAssert(itr->key() == (sds)dictGetKey(de));
+    auto itr = m_setexpire->find(de.key());
+    serverAssert(itr != m_setexpire->end());
+    serverAssert(itr->key() == de.key());
     if (!itr->FFat())
         return 0;
 
@@ -1266,7 +1258,7 @@ int removeSubkeyExpire(redisDb *db, robj *key, robj *subkey) {
     }
 
     if (itr->pfatentry()->size() == 0)
-        removeExpireCore(db, key, de);
+        this->removeExpire(key, de);
 
     return found;
 }
@@ -1276,49 +1268,23 @@ int removeSubkeyExpire(redisDb *db, robj *key, robj *subkey) {
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds
  * after which the key will no longer be considered valid. */
 void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when) {
-    dictEntry *kde;
-
     serverAssert(GlobalLocksAcquired());
-
-    /* Reuse the sds from the main dict in the expire dict */
-    kde = dictFind(db->pdict,ptrFromObj(key));
-    serverAssertWithInfo(NULL,key,kde != NULL);
-
-    if (((robj*)dictGetVal(kde))->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
-    {
-        // shared objects cannot have the expire bit set, create a real object
-        dictSetVal(db->pdict, kde, dupStringObject((robj*)dictGetVal(kde)));
-    }
 
     /* Update TTL stats (exponential moving average) */
     /*  Note: We never have to update this on expiry since we reduce it by the current elapsed time here */
     long long now = g_pserver->mstime;
     db->avg_ttl -= (now - db->last_expire_set); // reduce the TTL by the time that has elapsed
-    if (db->setexpire->empty())
+    if (db->expireSize() == 0)
         db->avg_ttl = 0;
     else
-        db->avg_ttl -= db->avg_ttl / db->setexpire->size(); // slide one entry out the window
+        db->avg_ttl -= db->avg_ttl / db->expireSize(); // slide one entry out the window
     if (db->avg_ttl < 0)
         db->avg_ttl = 0;    // TTLs are never negative
-    db->avg_ttl += (double)(when-now) / (db->setexpire->size()+1);    // add the new entry
+    db->avg_ttl += (double)(when-now) / (db->expireSize()+1);    // add the new entry
     db->last_expire_set = now;
 
     /* Update the expire set */
-    const char *szSubKey = (subkey != nullptr) ? szFromObj(subkey) : nullptr;
-    if (((robj*)dictGetVal(kde))->FExpires()) {
-        auto itr = db->setexpire->find((sds)dictGetKey(kde));
-        serverAssert(itr != db->setexpire->end());
-        expireEntry eNew(std::move(*itr));
-        eNew.update(szSubKey, when);
-        db->setexpire->erase(itr);
-        db->setexpire->insert(eNew);
-    }
-    else
-    {
-        expireEntry e((sds)dictGetKey(kde), szSubKey, when);
-        ((robj*)dictGetVal(kde))->SetFExpires(true);
-        db->setexpire->insert(e);
-    }
+    db->m_persistentData.setExpire(key, subkey, when);
 
     int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
     if (c && writable_slave && !(c->flags & CLIENT_MASTER))
@@ -1327,26 +1293,24 @@ void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when) 
 
 void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
 {
-    dictEntry *kde;
-
     serverAssert(GlobalLocksAcquired());
 
     /* Reuse the sds from the main dict in the expire dict */
-    kde = dictFind(db->pdict,ptrFromObj(key));
+    auto kde = db->find(key);
     serverAssertWithInfo(NULL,key,kde != NULL);
 
-    if (((robj*)dictGetVal(kde))->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
+    if (kde.val()->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
     {
         // shared objects cannot have the expire bit set, create a real object
-        dictSetVal(db->pdict, kde, dupStringObject((robj*)dictGetVal(kde)));
+        db->m_persistentData.updateValue(kde, dupStringObject(kde.val()));
     }
 
-    if (((robj*)dictGetVal(kde))->FExpires())
+    if (kde.val()->FExpires())
         removeExpire(db, key);
 
-    e.setKeyUnsafe((sds)dictGetKey(kde));
-    db->setexpire->insert(e);
-    ((robj*)dictGetVal(kde))->SetFExpires(true);
+    e.setKeyUnsafe(kde.key());
+    db->m_persistentData.setExpire(std::move(e));
+    kde.val()->SetFExpires(true);
 
 
     int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
@@ -1356,19 +1320,24 @@ void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
 
 /* Return the expire time of the specified key, or null if no expire
  * is associated with this key (i.e. the key is non volatile) */
-expireEntry *getExpire(redisDb *db, robj_roptr key) {
+expireEntry *redisDb::getExpire(robj_roptr key) {
     /* No expire? return ASAP */
-    if (db->setexpire->size() == 0)
+    if (expireSize() == 0)
         return nullptr;
 
-    auto pair = db->lookup_tuple(key);
-    if (pair.first == nullptr)
+    auto itr = find(key);
+    if (itr == nullptr)
         return nullptr;
-    if (!pair.second->FExpires())
+    if (!itr.val()->FExpires())
         return nullptr;
 
-    auto itr = db->setexpire->find(pair.first);
-    return itr.operator->();
+    auto itrExpire = m_persistentData.findExpire(itr.key());
+    return itrExpire.operator->();
+}
+
+expireEntry *getExpire(redisDb *db, robj_roptr key)
+{
+    return db->getExpire(key);
 }
 
 /* Propagate expires into slaves and the AOF file.
@@ -1831,11 +1800,18 @@ unsigned int countKeysInSlot(unsigned int hashslot) {
     return g_pserver->cluster->slots_keys_count[hashslot];
 }
 
+void redisDbPersistentData::initialize()
+{
+    m_pdict = dictCreate(&dbDictType,NULL);
+    m_setexpire = new(MALLOC_LOCAL) expireset();
+    m_fAllChanged = false;
+    m_fTrackingChanges = false;
+}
+
 void redisDb::initialize(int id)
 {
-    this->pdict = dictCreate(&dbDictType,NULL);
-    this->setexpire = new(MALLOC_LOCAL) expireset();
-    this->expireitr = this->setexpire->end();
+    m_persistentData.initialize();
+    this->expireitr = m_persistentData.setexpireUnsafe()->end();
     this->blocking_keys = dictCreate(&keylistDictType,NULL);
     this->ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
     this->watched_keys = dictCreate(&keylistDictType,NULL);
@@ -1843,4 +1819,97 @@ void redisDb::initialize(int id)
     this->avg_ttl = 0;
     this->last_expire_set = 0;
     this->defrag_later = listCreate();
+}
+
+bool redisDbPersistentData::insert(char *key, robj *o)
+{
+    int res = dictAdd(m_pdict, key, o);
+    if (res == DICT_OK)
+        trackkey(key);
+    return (res == DICT_OK);
+}
+
+void redisDbPersistentData::tryResize()
+{
+    if (htNeedsResize(m_pdict))
+        dictResize(m_pdict);
+}
+
+size_t redisDb::clear(bool fAsync, void(callback)(void*))
+{
+    size_t removed = m_persistentData.size();
+    if (fAsync) {
+        m_persistentData.emptyDbAsync();
+    } else {
+        m_persistentData.clear(callback);
+    }
+    expireitr = m_persistentData.setexpireUnsafe()->end();
+    return removed;
+}
+
+void redisDbPersistentData::clear(void(callback)(void*))
+{
+    dictEmpty(m_pdict,callback);
+    if (m_fTrackingChanges)
+        m_fAllChanged = true;
+    delete m_setexpire;
+    m_setexpire = new (MALLOC_LOCAL) expireset();
+}
+
+/* static */ void redisDbPersistentData::swap(redisDbPersistentData *db1, redisDbPersistentData *db2)
+{
+    redisDbPersistentData aux = *db1;
+    db1->m_pdict = db2->m_pdict;
+    db1->m_fTrackingChanges = db2->m_fTrackingChanges;
+    db1->m_fAllChanged = db2->m_fAllChanged;
+    db1->m_setexpire = db2->m_setexpire;
+
+    db2->m_pdict = aux.m_pdict;
+    db2->m_fTrackingChanges = aux.m_fTrackingChanges;
+    db2->m_fAllChanged = aux.m_fAllChanged;
+    db2->m_setexpire = aux.m_setexpire;
+}
+
+void redisDbPersistentData::setExpire(robj *key, robj *subkey, long long when)
+{
+    /* Reuse the sds from the main dict in the expire dict */
+    dictEntry *kde = dictFind(m_pdict,ptrFromObj(key));
+    serverAssertWithInfo(NULL,key,kde != NULL);
+
+    if (((robj*)dictGetVal(kde))->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
+    {
+        // shared objects cannot have the expire bit set, create a real object
+        dictSetVal(m_pdict, kde, dupStringObject((robj*)dictGetVal(kde)));
+    }
+
+    const char *szSubKey = (subkey != nullptr) ? szFromObj(subkey) : nullptr;
+    if (((robj*)dictGetVal(kde))->FExpires()) {
+        auto itr = m_setexpire->find((sds)dictGetKey(kde));
+        serverAssert(itr != m_setexpire->end());
+        expireEntry eNew(std::move(*itr));
+        eNew.update(szSubKey, when);
+        m_setexpire->erase(itr);
+        m_setexpire->insert(eNew);
+    }
+    else
+    {
+        expireEntry e((sds)dictGetKey(kde), szSubKey, when);
+        ((robj*)dictGetVal(kde))->SetFExpires(true);
+        m_setexpire->insert(e);
+    }
+}
+
+void redisDbPersistentData::setExpire(expireEntry &&e)
+{
+    m_setexpire->insert(e);
+}
+
+bool redisDb::FKeyExpires(const char *key)
+{
+    return m_persistentData.setexpireUnsafe()->find(key) != m_persistentData.setexpireUnsafe()->end();
+}
+
+void redisDbPersistentData::updateValue(dict_iter itr, robj *val)
+{
+    dictSetVal(m_pdict, itr.de, val);
 }

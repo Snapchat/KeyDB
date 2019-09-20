@@ -787,6 +787,8 @@ long defragKey(redisDb *db, dictEntry *de) {
 
     /* Try to defrag robj and / or string value. */
     ob = (robj*)dictGetVal(de);
+    if (ob == nullptr)
+        return defragged;
     if ((newob = activeDefragStringOb(ob, &defragged))) {
         de->v.val = newob;
         ob = newob;
@@ -853,7 +855,7 @@ void defragScanCallback(void *privdata, const dictEntry *de) {
     g_pserver->stat_active_defrag_scanned++;
 }
 
-/* Defrag scan callback for each hash table bicket,
+/* Defrag scan callback for each hash table bucket,
  * used in order to defrag the dictEntry allocations. */
 void defragDictBucketCallback(void *privdata, dictEntry **bucketref) {
     UNUSED(privdata); /* NOTE: this function is also used by both activeDefragCycle and scanLaterHash, etc. don't use privdata */
@@ -1111,7 +1113,8 @@ void activeDefragCycle(void) {
                 break; /* this will exit the function and we'll continue on the next cycle */
             }
 
-            cursor = dictScan(db->dictUnsafe(), cursor, defragScanCallback, defragDictBucketCallback, db);
+            // we actually look at the objects too but defragScanCallback can handle missing values
+            cursor = dictScan(db->dictUnsafeKeyOnly(), cursor, defragScanCallback, defragDictBucketCallback, db);
 
             /* Once in 16 scan iterations, 512 pointer reallocations. or 64 keys
              * (if we have a lot of pointers in one hash bucket or rehasing),

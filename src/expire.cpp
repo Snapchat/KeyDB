@@ -407,12 +407,12 @@ void expireSlaveKeys(void) {
 
                 // the expire is hashed based on the key pointer, so we need the point in the main db
                 auto itrDB = db->find(keyname);
-                auto itrExpire = db->m_persistentData.setexpireUnsafe()->end();
+                auto itrExpire = db->m_persistentData.setexpire()->end();
                 if (itrDB != nullptr)
                     itrExpire = db->m_persistentData.setexpireUnsafe()->find(itrDB.key());
                 int expired = 0;
 
-                if (itrExpire != db->m_persistentData.setexpireUnsafe()->end())
+                if (itrExpire != db->m_persistentData.setexpire()->end())
                 {
                     if (itrExpire->when() < start) {
                         activeExpireCycleExpire(g_pserver->db+dbid,*itrExpire,start);
@@ -424,7 +424,7 @@ void expireSlaveKeys(void) {
                  * corresponding bit in the new bitmap we set as value.
                  * At the end of the loop if the bitmap is zero, it means we
                  * no longer need to keep track of this key. */
-                if (itrExpire != db->m_persistentData.setexpireUnsafe()->end() && !expired) {
+                if (itrExpire != db->m_persistentData.setexpire()->end() && !expired) {
                     noexpire++;
                     new_dbids |= (uint64_t)1 << dbid;
                 }

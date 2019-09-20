@@ -3697,7 +3697,11 @@ int processCommand(client *c, int callFlags) {
         addReply(c,shared.queued);
     } else {
         std::unique_lock<decltype(c->db->lock)> ulock(c->db->lock);
+        for (int idb = 0; idb < cserver.dbnum; ++idb)
+            g_pserver->db[idb].trackChanges();
         call(c,callFlags);
+        for (int idb = 0; idb < cserver.dbnum; ++idb)
+            g_pserver->db[idb].processChanges();
         c->woff = g_pserver->master_repl_offset;
         if (listLength(g_pserver->ready_keys))
             handleClientsBlockedOnKeys();

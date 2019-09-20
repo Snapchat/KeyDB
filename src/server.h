@@ -54,6 +54,7 @@
 #include <vector>
 #include <algorithm>
 #include <memory>
+#include <set>
 #ifdef __cplusplus
 extern "C" {
 #include <lua.h>
@@ -1015,22 +1016,123 @@ typedef struct clientReplyBlock {
 #endif
 } clientReplyBlock;
 
+struct dictEntry;
+class dict_const_iter
+{
+    friend class redisDb;
+    friend class redisDbPersistentData;
+protected:
+    dictEntry *de;
+public:
+    explicit dict_const_iter(dictEntry *de)
+        : de(de)
+    {}
+
+    const char *key() const { return de ? (const char*)dictGetKey(de) : nullptr; }
+    robj_roptr val() const { return de ? (robj*)dictGetVal(de) : nullptr; }
+    const robj* operator->() const { return de ? (robj*)dictGetVal(de) : nullptr; }
+    operator robj_roptr() const { return de ? (robj*)dictGetVal(de) : nullptr; }
+
+    bool operator==(std::nullptr_t) const { return de == nullptr; }
+    bool operator!=(std::nullptr_t) const { return de != nullptr; }
+    bool operator==(const dict_const_iter &other) { return de == other.de; }
+};
+class dict_iter : public dict_const_iter
+{
+public:
+    explicit dict_iter(dictEntry *de)
+        : dict_const_iter(de)
+    {}
+    sds key() { return de ? (sds)dictGetKey(de) : nullptr; }
+    robj *val() { return de ? (robj*)dictGetVal(de) : nullptr; }
+    robj *operator->() { return de ? (robj*)dictGetVal(de) : nullptr; }
+    operator robj*() const { return de ? (robj*)dictGetVal(de) : nullptr; }
+};
+
+class redisDbPersistentData
+{
+public:
+    static void swap(redisDbPersistentData *db1, redisDbPersistentData *db2);
+
+    size_t slots() const { return dictSlots(m_pdict); }
+    size_t size() const { return dictSize(m_pdict); }
+    void expand(uint64_t slots) { dictExpand(m_pdict, slots); }
+    
+    void trackkey(robj_roptr o)
+    {
+        trackkey(szFromObj(o));
+    }
+
+    void trackkey(const char *key)
+    {
+        if (m_fTrackingChanges)
+            m_setchanged.insert(key);
+    }
+
+    dict_iter find(const char *key) 
+    {
+        dictEntry *de = dictFind(m_pdict, key);
+        return dict_iter(de);
+    }
+
+    dict_iter random()
+    {
+        dictEntry *de = dictGetRandomKey(m_pdict);
+        return dict_iter(de);
+    }
+
+    const expireEntry &random_expire()
+    {
+        return m_setexpire->random_value();
+    }
+
+    auto findExpire(const char *key)
+    {
+        return m_setexpire->find(key);
+    }
+
+    void getStats(char *buf, size_t bufsize) { dictGetStats(buf, bufsize, m_pdict); }
+    void getExpireStats(char *buf, size_t bufsize) { m_setexpire->getstats(buf, bufsize); }
+
+    bool insert(char *k, robj *o);
+    void tryResize();
+    int incrementallyRehash();
+    void updateValue(dict_iter itr, robj *val);
+    bool syncDelete(robj *key);
+    bool asyncDelete(robj *key);
+    size_t expireSize() const { return m_setexpire->size(); }
+    int removeExpire(robj *key, dict_iter itr);
+    void clear(void(callback)(void*));
+    void emptyDbAsync();
+    bool iterate(std::function<bool(const char*, robj*)> &fn);
+    void setExpire(robj *key, robj *subkey, long long when);
+    void setExpire(expireEntry &&e);
+    void initialize();
+
+    dict *dictUnsafe() { return m_pdict; }
+    expireset *setexpireUnsafe() { return m_setexpire; }
+    const expireset *setexpire() { return m_setexpire; }
+
+private:
+    // Keyspace
+    dict *m_pdict;                 /* The keyspace for this DB */
+    bool m_fTrackingChanges = false;
+    bool m_fAllChanged = false;
+    std::set<std::string> m_setchanged;
+
+    // Expire
+    expireset *m_setexpire;
+};
+
 /* Redis database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
 typedef struct redisDb {
     // Legacy C API, Do not add more
     friend void tryResizeHashTables(int);
-    friend int incrementallyRehash(int);
-    friend int dbAddCore(redisDb *db, robj *key, robj *val);
-    friend void dbOverwriteCore(redisDb *db, dictEntry *de, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire);
-    friend void dbOverwrite(redisDb *db, robj *key, robj *val);
-    friend int dbMerge(redisDb *db, robj *key, robj *val, int fReplace);
-    friend void setKey(redisDb *db, robj *key, robj *val);
     friend int dbSyncDelete(redisDb *db, robj *key);
     friend int dbAsyncDelete(redisDb *db, robj *key);
     friend long long emptyDb(int dbnum, int flags, void(callback)(void*));
-    friend void emptyDbAsync(redisDb *db);
     friend void scanGenericCommand(struct client *c, robj_roptr o, unsigned long cursor);
     friend int dbSwapDatabases(int id1, int id2);
     friend int removeExpire(redisDb *db, robj *key);
@@ -1038,58 +1140,64 @@ typedef struct redisDb {
     friend void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e);
     friend void evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct evictionPoolEntry *pool);
     friend void activeDefragCycle(void);
+    friend int freeMemoryIfNeeded(void);
+    friend void activeExpireCycle(int);
+    friend void expireSlaveKeys(void);
 
-    redisDb() 
+    typedef ::dict_const_iter const_iter;
+    typedef ::dict_iter iter;
+
+    redisDb()
         : expireitr(nullptr)
-    {};
+    {}
 
     void initialize(int id);
 
-    size_t slots() const { return dictSlots(pdict); }
-    size_t size() const { return dictSize(pdict); }
-    void expand(uint64_t slots) { dictExpand(pdict, slots); }
+    size_t slots() const { return m_persistentData.slots(); }
+    size_t size() const { return m_persistentData.size(); }
+    size_t expireSize() const { return m_persistentData.expireSize(); }
+    void expand(uint64_t slots) { m_persistentData.expand(slots); }
+    void tryResize() { m_persistentData.tryResize(); }
+    const expireset *setexpire() { return m_persistentData.setexpire(); }
     
-    robj *find(robj_roptr key)
+    iter find(robj_roptr key)
     {
         return find(szFromObj(key));
     }
-    robj *find(const char *key) 
+    iter find(const char *key) 
     {
-        dictEntry *de = dictFind(pdict, key);
-        if (de != nullptr)
-            return (robj*)dictGetVal(de);
-        return nullptr;
+        return m_persistentData.find(key);
     }
 
-    std::pair<const char*,robj*> lookup_tuple(robj_roptr key)
+    iter random()
     {
-        return lookup_tuple(szFromObj(key));
-    }
-    std::pair<const char*,robj*> lookup_tuple(const char *key)
-    {
-        dictEntry *de = dictFind(pdict, key);
-        if (de != nullptr)
-            return std::make_pair<const char*,robj*>((const char*)dictGetKey(de), (robj*)dictGetVal(de));
-        return std::make_pair<const char*,robj*>(nullptr, nullptr);
+        return m_persistentData.random();
     }
 
-    std::pair<const char*,robj*> random()
+    const expireEntry &random_expire()
     {
-        dictEntry *de = dictGetRandomKey(pdict);
-        if (de != nullptr)
-            return std::make_pair<const char*,robj*>((const char*)dictGetKey(de), (robj*)dictGetVal(de));
-        return std::make_pair<const char*,robj*>(nullptr, nullptr);
+        return m_persistentData.random_expire();
     }
 
-    bool iterate(std::function<bool(const char*, robj*)> fn);
-    void getStats(char *buf, size_t bufsize) { dictGetStats(buf, bufsize, pdict); }
+    const_iter end() { return const_iter(nullptr); }
 
+    bool iterate(std::function<bool(const char*, robj*)> fn) { return m_persistentData.iterate(fn); }
+    void getStats(char *buf, size_t bufsize) { m_persistentData.getStats(buf, bufsize); }
+    void getExpireStats(char *buf, size_t bufsize) { m_persistentData.getExpireStats(buf, bufsize); }
+
+    bool insert(char *key, robj *o) { return m_persistentData.insert(key, o); }
+    void dbOverwriteCore(redisDb::iter itr, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire);
+
+    int incrementallyRehash() { return m_persistentData.incrementallyRehash(); };
+
+    bool FKeyExpires(const char *key);
+    size_t clear(bool fAsync, void(callback)(void*));
+    dict *dictUnsafe() { return m_persistentData.dictUnsafe(); }
+    expireEntry *getExpire(robj_roptr key);
 private:
-    dict *pdict;                 /* The keyspace for this DB */
+    redisDbPersistentData m_persistentData;
 public:
-    expireset *setexpire;
     expireset::setiter expireitr;
-
     dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
     dict *ready_keys;           /* Blocked keys that received a PUSH */
     dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
@@ -2476,7 +2584,6 @@ int rewriteConfig(char *path);
 
 /* db.c -- Keyspace access API */
 int removeExpire(redisDb *db, robj *key);
-int removeExpireCore(redisDb *db, robj *key, dictEntry *de);
 void propagateExpire(redisDb *db, robj *key, int lazy);
 int expireIfNeeded(redisDb *db, robj *key);
 expireEntry *getExpire(redisDb *db, robj_roptr key);
@@ -2521,7 +2628,6 @@ void slotToKeyAdd(robj *key);
 void slotToKeyDel(robj *key);
 void slotToKeyFlush(void);
 int dbAsyncDelete(redisDb *db, robj *key);
-void emptyDbAsync(redisDb *db);
 void slotToKeyFlushAsync(void);
 size_t lazyfreeGetPendingObjectsCount(void);
 void freeObjAsync(robj *o);

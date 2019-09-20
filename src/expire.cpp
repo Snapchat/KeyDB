@@ -248,7 +248,7 @@ void activeExpireCycle(int type) {
         now = mstime();
 
         /* If there is nothing to expire try next DB ASAP. */
-        if (db->setexpire->empty())
+        if (db->m_persistentData.setexpireUnsafe()->empty())
         {
             db->avg_ttl = 0;
             db->last_expire_set = now;
@@ -258,7 +258,7 @@ void activeExpireCycle(int type) {
         size_t expired = 0;
         size_t tried = 0;
         long long check = ACTIVE_EXPIRE_CYCLE_FAST_DURATION;    // assume a check is roughly 1us.  It isn't but good enough
-        db->expireitr = db->setexpire->enumerate(db->expireitr, now, [&](expireEntry &e) __attribute__((always_inline)) {
+        db->expireitr = db->m_persistentData.setexpireUnsafe()->enumerate(db->expireitr, now, [&](expireEntry &e) __attribute__((always_inline)) {
             if (e.when() < now)
             {
                 activeExpireCycleExpire(db, e, now);
@@ -358,16 +358,16 @@ void expireSlaveKeys(void) {
                 redisDb *db = g_pserver->db+dbid;
 
                 // the expire is hashed based on the key pointer, so we need the point in the main db
-                auto pairMain = db->lookup_tuple(keyname);
-                auto itr = db->setexpire->end();
-                if (pairMain.first != nullptr)
-                    itr = db->setexpire->find((sds)pairMain.first);
+                auto itrDB = db->find(keyname);
+                auto itrExpire = db->m_persistentData.setexpireUnsafe()->end();
+                if (itrDB != nullptr)
+                    itrExpire = db->m_persistentData.setexpireUnsafe()->find(itrDB.key());
                 int expired = 0;
 
-                if (itr != db->setexpire->end())
+                if (itrExpire != db->m_persistentData.setexpireUnsafe()->end())
                 {
-                    if (itr->when() < start) {
-                        activeExpireCycleExpire(g_pserver->db+dbid,*itr,start);
+                    if (itrExpire->when() < start) {
+                        activeExpireCycleExpire(g_pserver->db+dbid,*itrExpire,start);
                         expired = 1;
                     }
                 }
@@ -376,7 +376,7 @@ void expireSlaveKeys(void) {
                  * corresponding bit in the new bitmap we set as value.
                  * At the end of the loop if the bitmap is zero, it means we
                  * no longer need to keep track of this key. */
-                if (itr != db->setexpire->end() && !expired) {
+                if (itrExpire != db->m_persistentData.setexpireUnsafe()->end() && !expired) {
                     noexpire++;
                     new_dbids |= (uint64_t)1 << dbid;
                 }

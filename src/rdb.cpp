@@ -1170,7 +1170,7 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
          * these sizes are just hints to resize the hash tables. */
         uint64_t db_size, expires_size;
         db_size = db->size();
-        expires_size = db->setexpire->size();
+        expires_size = db->expireSize();
         if (rdbSaveType(rdb,RDB_OPCODE_RESIZEDB) == -1) goto werr;
         if (rdbSaveLen(rdb,db_size) == -1) goto werr;
         if (rdbSaveLen(rdb,expires_size) == -1) goto werr;
@@ -1187,7 +1187,7 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
         });
         if (!fSavedAll)
             goto werr;
-        serverAssert(ckeysExpired == db->setexpire->size());
+        serverAssert(ckeysExpired == db->expireSize());
     }
 
     /* If we are storing the replication information on disk, persist

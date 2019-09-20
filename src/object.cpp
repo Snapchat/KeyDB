@@ -1493,3 +1493,54 @@ void redisObject::setrefcount(unsigned ref)
     serverAssert(!FExpires());
     refcount.store(ref, std::memory_order_relaxed); 
 }
+
+sds serializeStoredStringObject(robj_roptr o)
+{
+    sds str = sdsempty();
+    sdscatlen(str, &(*o), sizeof(robj));
+    sdscat(str, szFromObj(o));
+    return str;
+}
+
+robj *deserializeStoredStringObject(const char *data, size_t cb)
+{
+    const robj *oT = (const robj*)data;
+    robj *newObject = nullptr;
+    switch (oT->encoding)
+    {
+    case OBJ_ENCODING_EMBSTR:
+        newObject = (robj*)zmalloc(cb, MALLOC_LOCAL);
+        memcpy(newObject, data, cb);
+        return newObject;
+
+    case OBJ_ENCODING_RAW:
+        newObject = (robj*)zmalloc(sizeof(robj), MALLOC_SHARED);
+        memcpy(newObject, data, sizeof(robj));
+        newObject->m_ptr = sdsnewlen(SDS_NOINIT,cb-sizeof(robj));
+        memcpy(newObject->m_ptr, data+sizeof(robj), cb-sizeof(robj));
+        return newObject;
+    }
+    serverPanic("Unknown string object encoding from storage");
+    return nullptr;
+}
+
+robj *deserializeStoredObject(const void *data, size_t cb)
+{
+    const robj *oT = (const robj*)data;
+    switch (oT->type)
+    {
+        case OBJ_STRING:
+            return deserializeStoredStringObject((char*)data, cb);
+    }
+    serverPanic("Unknown object type loading from storage");
+}
+
+sds serializeStoredObject(robj_roptr o)
+{
+    switch (o->type)
+    {
+        case OBJ_STRING:
+            return serializeStoredStringObject(o);
+    }
+    serverPanic("Attempting to store unknown object type");
+}

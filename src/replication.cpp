@@ -1553,6 +1553,8 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         /* Final setup of the connected slave <- master link */
+        if (fUpdate)
+            unlink(mi->repl_transfer_tmpfile);  // if we're not updating this became the backup RDB
         zfree(mi->repl_transfer_tmpfile);
         close(mi->repl_transfer_fd);
         replicationCreateMasterClient(mi, mi->repl_transfer_s,rsi.repl_stream_db);

@@ -2179,7 +2179,6 @@ eoferr: /* unexpected end of file is handled here with a fatal exit */
     return C_ERR; /* Just to avoid warning */
 }
 
-int rdbLoadFile(char *filename, rdbSaveInfo *rsi);
 int rdbLoad(rdbSaveInfo *rsi)
 {
     int err = C_ERR;
@@ -2199,7 +2198,7 @@ int rdbLoad(rdbSaveInfo *rsi)
  *
  * If you pass an 'rsi' structure initialied with RDB_SAVE_OPTION_INIT, the
  * loading code will fiil the information fields in the structure. */
-int rdbLoadFile(char *filename, rdbSaveInfo *rsi) {
+int rdbLoadFile(const char *filename, rdbSaveInfo *rsi) {
     FILE *fp;
     rio rdb;
     int retval;

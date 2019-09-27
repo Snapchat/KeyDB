@@ -136,6 +136,7 @@ int rdbLoadLenByRef(rio *rdb, int *isencoded, uint64_t *lenptr);
 int rdbSaveObjectType(rio *rdb, robj_roptr o);
 int rdbLoadObjectType(rio *rdb);
 int rdbLoad(rdbSaveInfo *rsi);
+int rdbLoadFile(const char *filename, rdbSaveInfo *rsi);
 int rdbSaveBackground(rdbSaveInfo *rsi);
 int rdbSaveToSlavesSockets(rdbSaveInfo *rsi);
 void rdbRemoveTempFile(pid_t childpid);

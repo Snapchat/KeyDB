@@ -682,10 +682,12 @@ NULL
         changeReplicationId();
         clearReplicationId2();
         addReply(c,shared.ok);
-    } else if (!strcasecmp(szFromObj(c->argv[1]),"stringmatch-test") && c->argc == 2)
-    {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"stringmatch-test") && c->argc == 2) {
         stringmatchlen_fuzz_test();
         addReplyStatus(c,"Apparently Redis did not crash: test passed");
+    } else if (!strcasecmp(szFromObj(c->argv[1]), "force-master") && c->argc == 2) {
+        c->flags |= CLIENT_MASTER | CLIENT_MASTER_FORCE_REPLY;
+        addReply(c, shared.ok);
     } else {
         addReplySubcommandSyntaxError(c);
         return;

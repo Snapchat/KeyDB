@@ -1,0 +1,13 @@
+="repl-stream-db"
+="repl-id"
+="repl-offset"
+="lua"
+="redis-ver"
+="ctime"
+="used-mem"
+="aof-preamble"
+="redis-bits"
+="mvcc-tstamp"
+="keydb-subexpire-key"
+="keydb-subexpire-when"
+

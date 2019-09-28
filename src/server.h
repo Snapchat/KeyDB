@@ -729,7 +729,7 @@ typedef struct redisObject {
                             * LFU data (least significant 8 bits frequency
                             * and most significant 16 bits access time). */
 private:
-    mutable std::atomic<unsigned> refcount;
+    mutable std::atomic<unsigned> refcount {0};
 public:
     uint64_t mvcc_tstamp;
     void *m_ptr;

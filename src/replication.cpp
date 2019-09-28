@@ -323,9 +323,13 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     char uuid[40] = {'\0'};
     uuid_unparse(cserver.uuid, uuid);
     char proto[1024];
-    int cchProto = snprintf(proto, sizeof(proto), "*3\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
+    int cchProto = snprintf(proto, sizeof(proto), "*4\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
     cchProto = std::min((int)sizeof(proto), cchProto);
     long long master_repl_offset_start = g_pserver->master_repl_offset;
+    
+    serverAssert(dictid >= 0);
+    char szDbNum[128];
+    int cchDbNum = snprintf(szDbNum, sizeof(szDbNum), "$%d\r\n%d\r\n", (dictid/10)+1, dictid);
 
     /* Write the command to the replication backlog if any. */
     if (g_pserver->repl_backlog) 
@@ -368,6 +372,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
             }
             const char *crlf = "\r\n";
             feedReplicationBacklog(crlf, 2);
+            feedReplicationBacklog(szDbNum, cchDbNum);
         }
     }
 
@@ -396,7 +401,10 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
             addReplyProtoAsync(slave, reply->buf(), reply->used);
         }
         if (!fSendRaw)
+        {
             addReplyAsync(slave,shared.crlf);
+            addReplyProtoAsync(slave, szDbNum, cchDbNum);
+        }
     }
 
     freeClient(fake);
@@ -3266,6 +3274,7 @@ void replicaReplayCommand(client *c)
     // the replay command contains two arguments: 
     //  1: The UUID of the source
     //  2: The raw command buffer to be replayed
+    //  3: (OPTIONAL) the database ID the command should apply to
     
     if (!(c->flags & CLIENT_MASTER))
     {
@@ -3296,6 +3305,17 @@ void replicaReplayCommand(client *c)
         addReplyError(c, "Expected command buffer arg2");
         s_pstate->Cancel();
         return;
+    }
+
+    if (c->argc >= 4)
+    {
+        long long db;
+        if (getLongLongFromObject(c->argv[3], &db) != C_OK || db >= cserver.dbnum || selectDb(c, (int)db) != C_OK)
+        {
+            addReplyError(c, "Invalid database ID");
+            s_pstate->Cancel();
+            return;
+        }
     }
 
     if (FSameUuidNoNil(uuid, cserver.uuid))

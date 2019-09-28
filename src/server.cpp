@@ -5206,6 +5206,20 @@ int main(int argc, char **argv) {
     #endif
         moduleLoadFromQueue();
         ACLLoadUsersAtStartup();
+
+        // special case of FUZZING load from stdin then quit
+        if (strstr(argv[0],"keydb-fuzz-rdb") != NULL)
+        {
+            serverAssert(GlobalLocksAcquired());
+            rio rdb;
+            rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+            startLoading(stdin);
+            rioInitWithFile(&rdb,stdin);
+            rdbLoadRio(&rdb,&rsi,0);
+            stopLoading();
+            return EXIT_SUCCESS;
+        }
+
         loadDataFromDisk();
         if (g_pserver->cluster_enabled) {
             if (verifyClusterConfigWithData() == C_ERR) {
@@ -5242,11 +5256,7 @@ int main(int argc, char **argv) {
 
     aeReleaseLock();    //Finally we can dump the lock
     moduleReleaseGIL(true);
-
-    // If we're just fuzzing then we've already loaded the RDB so just quit successfully
-    if (strstr(argv[0],"keydb-fuzz-rdb") != NULL)
-        return EXIT_SUCCESS;
-
+    
     serverAssert(cserver.cthreads > 0 && cserver.cthreads <= MAX_EVENT_LOOPS);
     pthread_t rgthread[MAX_EVENT_LOOPS];
     for (int iel = 0; iel < cserver.cthreads; ++iel)

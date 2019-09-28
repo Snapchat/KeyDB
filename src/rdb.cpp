@@ -2107,7 +2107,10 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
 
         /* Read key */
         if (key != nullptr)
+        {
             decrRefCount(key);
+            key = nullptr;
+        }
 
         if ((key = rdbLoadStringObject(rdb)) == NULL) goto eoferr;
         /* Read value */
@@ -2119,7 +2122,9 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
          * snapshot taken by the master may not be reflected on the slave. */
         if (listLength(g_pserver->masters) == 0 && !loading_aof && expiretime != -1 && expiretime < now) {
             decrRefCount(key);
+            key = nullptr;
             decrRefCount(val);
+            val = nullptr;
         } else {
             /* Add the new object in the hash table */
             int fInserted = dbMerge(db, key, val, rsi->fForceSetKey);   // Note: dbMerge will incrRef
@@ -2136,6 +2141,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
             else
             {
                 decrRefCount(val);
+                val = nullptr;
             }
         }
 

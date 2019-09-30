@@ -800,6 +800,8 @@ void loadServerConfigFromString(char *config) {
             serverLog(LL_WARNING, "Warning version is overriden to: %s\n", KEYDB_SET_VERSION);
         } else if (!strcasecmp(argv[0],"testmode") && argc == 2){
             g_fTestMode = yesnotoi(argv[1]);
+        } else if (!strcasecmp(argv[0],"rdbfuzz-mode")) {
+            // NOP, handled in main
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }

@@ -4852,6 +4852,12 @@ void redisOutOfMemoryHandler(size_t allocation_size) {
     serverPanic("Redis aborting for OUT OF MEMORY");
 }
 
+void fuzzOutOfMemoryHandler(size_t allocation_size) {
+    serverLog(LL_WARNING,"Out Of Memory allocating %zu bytes!",
+        allocation_size);
+    exit(EXIT_FAILURE); // don't crash because it causes false positives
+}
+
 void redisSetProcTitle(const char *title) {
 #ifdef USE_SETPROCTITLE
     const char *server_mode = "";
@@ -5208,9 +5214,12 @@ int main(int argc, char **argv) {
         ACLLoadUsersAtStartup();
 
         // special case of FUZZING load from stdin then quit
-        if (strstr(argv[0],"keydb-fuzz-rdb") != NULL)
+        if (argc > 1 && strstr(argv[1],"rdbfuzz-mode") != NULL)
         {
-            serverAssert(GlobalLocksAcquired());
+            zmalloc_set_oom_handler(fuzzOutOfMemoryHandler);
+#ifdef __AFL_HAVE_MANUAL_CONTROL
+            __AFL_INIT();
+#endif
             rio rdb;
             rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
             startLoading(stdin);

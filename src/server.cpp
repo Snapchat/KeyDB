@@ -229,6 +229,10 @@ struct redisCommand redisCommandTable[] = {
      "write @keyspace",
      0,NULL,1,-1,1,0,0,0},
 
+    {"expdel",delCommand,-2,
+     "write @keyspace",
+     0,NULL,1,-1,1,0,0,0},
+
     {"unlink",unlinkCommand,-2,
      "write fast @keyspace",
      0,NULL,1,-1,1,0,0,0},

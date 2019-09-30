@@ -32,6 +32,7 @@
 #include <dlfcn.h>
 #include <mutex>
 #include <condition_variable>
+#include <sys/stat.h>
 
 #define REDISMODULE_CORE 1
 #include "redismodule.h"
@@ -565,7 +566,7 @@ void RedisModuleCommandDispatcher(client *c) {
     for (int i = 0; i < c->argc; i++) {
         /* Only do the work if the module took ownership of the object:
          * in that case the refcount is no longer 1. */
-        if (c->argv[i]->refcount > 1)
+        if (c->argv[i]->getrefcount(std::memory_order_relaxed) > 1)
             trimStringObjectIfNeeded(c->argv[i]);
     }
 }
@@ -1036,7 +1037,7 @@ int RM_StringCompare(RedisModuleString *a, RedisModuleString *b) {
 /* Return the (possibly modified in encoding) input 'str' object if
  * the string is unshared, otherwise NULL is returned. */
 RedisModuleString *moduleAssertUnsharedString(RedisModuleString *str) {
-    if (str->refcount != 1) {
+    if (str->getrefcount(std::memory_order_relaxed) != 1) {
         serverLog(LL_WARNING,
             "Module attempted to use an in-place string modify operation "
             "with a string referenced multiple times. Please check the code "
@@ -1249,6 +1250,17 @@ int RM_ReplyWithStringBuffer(RedisModuleCtx *ctx, const char *buf, size_t len) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return REDISMODULE_OK;
     addReplyBulkCBuffer(c,(char*)buf,len);
+    return REDISMODULE_OK;
+}
+
+/* Reply with a bulk string, taking in input a C buffer pointer that is
+ * assumed to be null-terminated.
+ *
+ * The function always returns REDISMODULE_OK. */
+int RM_ReplyWithCString(RedisModuleCtx *ctx, const char *buf) {
+    client *c = moduleGetReplyClient(ctx);
+    if (c == NULL) return REDISMODULE_OK;
+    addReplyBulkCString(c,(char*)buf);
     return REDISMODULE_OK;
 }
 
@@ -1465,6 +1477,9 @@ int RM_GetContextFlags(RedisModuleCtx *ctx) {
     if (g_pserver->cluster_enabled)
         flags |= REDISMODULE_CTX_FLAGS_CLUSTER;
 
+    if (g_pserver->loading)
+        flags |= REDISMODULE_CTX_FLAGS_LOADING;
+
     /* Maxmemory and eviction policy */
     if (g_pserver->maxmemory > 0) {
         flags |= REDISMODULE_CTX_FLAGS_MAXMEMORY;
@@ -1629,7 +1644,11 @@ int RM_UnlinkKey(RedisModuleKey *key) {
  * If no TTL is associated with the key or if the key is empty,
  * REDISMODULE_NO_EXPIRE is returned. */
 mstime_t RM_GetExpire(RedisModuleKey *key) {
-    mstime_t expire = getExpire(key->db,key->key);
+    expireEntry *pexpire = getExpire(key->db,key->key);
+    mstime_t expire = -1;
+    if (pexpire != nullptr)
+        pexpire->FGetPrimaryExpire(&expire);
+    
     if (expire == -1 || key->value == NULL) return -1;
     expire -= mstime();
     return expire >= 0 ? expire : 0;
@@ -1649,7 +1668,7 @@ int RM_SetExpire(RedisModuleKey *key, mstime_t expire) {
         return REDISMODULE_ERR;
     if (expire != REDISMODULE_NO_EXPIRE) {
         expire += mstime();
-        setExpire(key->ctx->client,key->db,key->key,expire);
+        setExpire(key->ctx->client,key->db,key->key,nullptr,expire);
     } else {
         removeExpire(key->db,key->key);
     }
@@ -5216,6 +5235,15 @@ int moduleLoad(const char *path, void **module_argv, int module_argc) {
     int (*onload)(void *, void **, int);
     void *handle;
     RedisModuleCtx ctx = REDISMODULE_CTX_INIT;
+    
+    struct stat st;
+    if (stat(path, &st) == 0)
+    {   // this check is best effort
+        if (!(st.st_mode & (S_IXUSR  | S_IXGRP | S_IXOTH))) {
+            serverLog(LL_WARNING, "Module %s failed to load: It does not have execute permissions.", path);
+            return C_ERR;
+        }
+    }
 
     handle = dlopen(path,RTLD_NOW|RTLD_LOCAL);
     if (handle == NULL) {

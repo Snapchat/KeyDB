@@ -150,6 +150,84 @@ void evictionPoolAlloc(void) {
     EvictionPoolLRU = ep;
 }
 
+void processEvictionCandidate(int dbid, sds key, robj *o, const expireEntry *e, struct evictionPoolEntry *pool)
+{
+    unsigned long long idle;
+
+    /* Calculate the idle time according to the policy. This is called
+        * idle just because the code initially handled LRU, but is in fact
+        * just a score where an higher score means better candidate. */
+    if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LRU) {
+        idle = (o != nullptr) ? estimateObjectIdleTime(o) : 0;
+    } else if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+        /* When we use an LRU policy, we sort the keys by idle time
+            * so that we expire keys starting from greater idle time.
+            * However when the policy is an LFU one, we have a frequency
+            * estimation, and we want to evict keys with lower frequency
+            * first. So inside the pool we put objects using the inverted
+            * frequency subtracting the actual frequency to the maximum
+            * frequency of 255. */
+        idle = 255-LFUDecrAndReturn(o);
+    } else if (g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
+        /* In this case the sooner the expire the better. */
+        idle = ULLONG_MAX - e->when();
+    } else {
+        serverPanic("Unknown eviction policy in evictionPoolPopulate()");
+    }
+
+    /* Insert the element inside the pool.
+        * First, find the first empty bucket or the first populated
+        * bucket that has an idle time smaller than our idle time. */
+    int k = 0;
+    while (k < EVPOOL_SIZE &&
+            pool[k].key &&
+            pool[k].idle < idle) k++;
+    if (k == 0 && pool[EVPOOL_SIZE-1].key != NULL) {
+        /* Can't insert if the element is < the worst element we have
+            * and there are no empty buckets. */
+        return;
+    } else if (k < EVPOOL_SIZE && pool[k].key == NULL) {
+        /* Inserting into empty position. No setup needed before insert. */
+    } else {
+        /* Inserting in the middle. Now k points to the first element
+            * greater than the element to insert.  */
+        if (pool[EVPOOL_SIZE-1].key == NULL) {
+            /* Free space on the right? Insert at k shifting
+                * all the elements from k to end to the right. */
+
+            /* Save SDS before overwriting. */
+            sds cached = pool[EVPOOL_SIZE-1].cached;
+            memmove(pool+k+1,pool+k,
+                sizeof(pool[0])*(EVPOOL_SIZE-k-1));
+            pool[k].cached = cached;
+        } else {
+            /* No free space on right? Insert at k-1 */
+            k--;
+            /* Shift all elements on the left of k (included) to the
+                * left, so we discard the element with smaller idle time. */
+            sds cached = pool[0].cached; /* Save SDS before overwriting. */
+            if (pool[0].key != pool[0].cached) sdsfree(pool[0].key);
+            memmove(pool,pool+1,sizeof(pool[0])*k);
+            pool[k].cached = cached;
+        }
+    }
+
+    /* Try to reuse the cached SDS string allocated in the pool entry,
+        * because allocating and deallocating this object is costly
+        * (according to the profiler, not my fantasy. Remember:
+        * premature optimizbla bla bla bla. */
+    int klen = sdslen(key);
+    if (klen > EVPOOL_CACHED_SDS_SIZE) {
+        pool[k].key = sdsdup(key);
+    } else {
+        memcpy(pool[k].cached,key,klen+1);
+        sdssetlen(pool[k].cached,klen);
+        pool[k].key = pool[k].cached;
+    }
+    pool[k].idle = idle;
+    pool[k].dbid = dbid;
+}
+
 /* This is an helper function for freeMemoryIfNeeded(), it is used in order
  * to populate the evictionPool with a few entries every time we want to
  * expire a key. Keys with idle time smaller than one of the current
@@ -159,100 +237,36 @@ void evictionPoolAlloc(void) {
  * idle time are on the left, and keys with the higher idle time on the
  * right. */
 
-void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evictionPoolEntry *pool) {
-    int j, k, count;
-    dictEntry **samples = (dictEntry**)alloca(g_pserver->maxmemory_samples * sizeof(dictEntry*));
+struct visitFunctor
+{
+    int dbid;
+    dict *dbdict;
+    struct evictionPoolEntry *pool;
+    int count;
 
-    count = dictGetSomeKeys(sampledict,samples,g_pserver->maxmemory_samples);
-    for (j = 0; j < count; j++) {
-        unsigned long long idle;
-        sds key;
-        robj *o = nullptr;
-        dictEntry *de;
-
-        de = samples[j];
-        key = (sds)dictGetKey(de);
-
-        /* If the dictionary we are sampling from is not the main
-         * dictionary (but the expires one) we need to lookup the key
-         * again in the key dictionary to obtain the value object. */
-        if (g_pserver->maxmemory_policy != MAXMEMORY_VOLATILE_TTL) {
-            if (sampledict != keydict) de = dictFind(keydict, key);
-            o = (robj*)dictGetVal(de);
+    bool operator()(const expireEntry &e)
+    {
+        dictEntry *de = dictFind(dbdict, e.key());
+        processEvictionCandidate(dbid, (sds)dictGetKey(de), (robj*)dictGetVal(de), &e, pool);
+        ++count;
+        return count < g_pserver->maxmemory_samples;
+    }
+};
+void evictionPoolPopulate(int dbid, dict *dbdict, expireset *setexpire, struct evictionPoolEntry *pool)
+{
+    if (setexpire != nullptr)
+    {
+        visitFunctor visitor { dbid, dbdict, pool, 0 };
+        setexpire->random_visit(visitor);
+    }
+    else
+    {
+        dictEntry **samples = (dictEntry**)alloca(g_pserver->maxmemory_samples * sizeof(dictEntry*));
+        int count = dictGetSomeKeys(dbdict,samples,g_pserver->maxmemory_samples);
+        for (int j = 0; j < count; j++) {
+            robj *o = (robj*)dictGetVal(samples[j]);
+            processEvictionCandidate(dbid, (sds)dictGetKey(samples[j]), o, nullptr, pool);
         }
-
-        /* Calculate the idle time according to the policy. This is called
-         * idle just because the code initially handled LRU, but is in fact
-         * just a score where an higher score means better candidate. */
-        if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LRU) {
-            idle = (o != nullptr) ? estimateObjectIdleTime(o) : 0;
-        } else if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-            /* When we use an LRU policy, we sort the keys by idle time
-             * so that we expire keys starting from greater idle time.
-             * However when the policy is an LFU one, we have a frequency
-             * estimation, and we want to evict keys with lower frequency
-             * first. So inside the pool we put objects using the inverted
-             * frequency subtracting the actual frequency to the maximum
-             * frequency of 255. */
-            idle = 255-LFUDecrAndReturn(o);
-        } else if (g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
-            /* In this case the sooner the expire the better. */
-            idle = ULLONG_MAX - (long)dictGetVal(de);
-        } else {
-            serverPanic("Unknown eviction policy in evictionPoolPopulate()");
-        }
-
-        /* Insert the element inside the pool.
-         * First, find the first empty bucket or the first populated
-         * bucket that has an idle time smaller than our idle time. */
-        k = 0;
-        while (k < EVPOOL_SIZE &&
-               pool[k].key &&
-               pool[k].idle < idle) k++;
-        if (k == 0 && pool[EVPOOL_SIZE-1].key != NULL) {
-            /* Can't insert if the element is < the worst element we have
-             * and there are no empty buckets. */
-            continue;
-        } else if (k < EVPOOL_SIZE && pool[k].key == NULL) {
-            /* Inserting into empty position. No setup needed before insert. */
-        } else {
-            /* Inserting in the middle. Now k points to the first element
-             * greater than the element to insert.  */
-            if (pool[EVPOOL_SIZE-1].key == NULL) {
-                /* Free space on the right? Insert at k shifting
-                 * all the elements from k to end to the right. */
-
-                /* Save SDS before overwriting. */
-                sds cached = pool[EVPOOL_SIZE-1].cached;
-                memmove(pool+k+1,pool+k,
-                    sizeof(pool[0])*(EVPOOL_SIZE-k-1));
-                pool[k].cached = cached;
-            } else {
-                /* No free space on right? Insert at k-1 */
-                k--;
-                /* Shift all elements on the left of k (included) to the
-                 * left, so we discard the element with smaller idle time. */
-                sds cached = pool[0].cached; /* Save SDS before overwriting. */
-                if (pool[0].key != pool[0].cached) sdsfree(pool[0].key);
-                memmove(pool,pool+1,sizeof(pool[0])*k);
-                pool[k].cached = cached;
-            }
-        }
-
-        /* Try to reuse the cached SDS string allocated in the pool entry,
-         * because allocating and deallocating this object is costly
-         * (according to the profiler, not my fantasy. Remember:
-         * premature optimizbla bla bla bla. */
-        int klen = sdslen(key);
-        if (klen > EVPOOL_CACHED_SDS_SIZE) {
-            pool[k].key = sdsdup(key);
-        } else {
-            memcpy(pool[k].cached,key,klen+1);
-            sdssetlen(pool[k].cached,klen);
-            pool[k].key = pool[k].cached;
-        }
-        pool[k].idle = idle;
-        pool[k].dbid = dbid;
     }
 }
 
@@ -474,8 +488,6 @@ int freeMemoryIfNeeded(void) {
         sds bestkey = NULL;
         int bestdbid;
         redisDb *db;
-        dict *dict;
-        dictEntry *de;
 
         if (g_pserver->maxmemory_policy & (MAXMEMORY_FLAG_LRU|MAXMEMORY_FLAG_LFU) ||
             g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_TTL)
@@ -490,10 +502,18 @@ int freeMemoryIfNeeded(void) {
                  * every DB. */
                 for (i = 0; i < cserver.dbnum; i++) {
                     db = g_pserver->db+i;
-                    dict = (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) ?
-                            db->pdict : db->expires;
-                    if ((keys = dictSize(dict)) != 0) {
-                        evictionPoolPopulate(i, dict, db->pdict, pool);
+                    if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS)
+                    {
+                        if ((keys = dictSize(db->pdict)) != 0) {
+                            evictionPoolPopulate(i, db->pdict, nullptr, pool);
+                            total_keys += keys;
+                        }
+                    }
+                    else
+                    {
+                        keys = db->setexpire->size();
+                        if (keys != 0)
+                            evictionPoolPopulate(i, db->pdict, db->setexpire, pool);
                         total_keys += keys;
                     }
                 }
@@ -503,14 +523,11 @@ int freeMemoryIfNeeded(void) {
                 for (k = EVPOOL_SIZE-1; k >= 0; k--) {
                     if (pool[k].key == NULL) continue;
                     bestdbid = pool[k].dbid;
+                    sds key = nullptr;
 
-                    if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
-                        de = dictFind(g_pserver->db[pool[k].dbid].pdict,
-                            pool[k].key);
-                    } else {
-                        de = dictFind(g_pserver->db[pool[k].dbid].expires,
-                            pool[k].key);
-                    }
+                    dictEntry *de = dictFind(g_pserver->db[pool[k].dbid].pdict,pool[k].key);
+                    if (de != nullptr && (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS || ((robj*)dictGetVal(de))->FExpires()))
+                        key = (sds)dictGetKey(de);
 
                     /* Remove the entry from the pool. */
                     if (pool[k].key != pool[k].cached)
@@ -520,8 +537,8 @@ int freeMemoryIfNeeded(void) {
 
                     /* If the key exists, is our pick. Otherwise it is
                      * a ghost and we need to try the next element. */
-                    if (de) {
-                        bestkey = (sds)dictGetKey(de);
+                    if (key) {
+                        bestkey = key;
                         break;
                     } else {
                         /* Ghost... Iterate again. */
@@ -540,13 +557,23 @@ int freeMemoryIfNeeded(void) {
             for (i = 0; i < cserver.dbnum; i++) {
                 j = (++next_db) % cserver.dbnum;
                 db = g_pserver->db+j;
-                dict = (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM) ?
-                        db->pdict : db->expires;
-                if (dictSize(dict) != 0) {
-                    de = dictGetRandomKey(dict);
-                    bestkey = (sds)dictGetKey(de);
-                    bestdbid = j;
-                    break;
+                if (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM)
+                {
+                    if (dictSize(db->pdict) != 0) {
+                        dictEntry *de = dictGetRandomKey(db->pdict);
+                        bestkey = (sds)dictGetKey(de);
+                        bestdbid = j;
+                        break;
+                    }
+                }
+                else
+                {
+                    if (!db->setexpire->empty())
+                    {
+                        bestkey = (sds)db->setexpire->random_value().key();
+                        bestdbid = j;
+                        break;
+                    }
                 }
             }
         }

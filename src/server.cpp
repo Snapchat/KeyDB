@@ -59,6 +59,7 @@
 #include <sys/socket.h>
 #include <algorithm>
 #include <uuid/uuid.h>
+#include <mutex>
 #include "aelocker.h"
 
 int g_fTestMode = false;
@@ -225,6 +226,10 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"del",delCommand,-2,
+     "write @keyspace",
+     0,NULL,1,-1,1,0,0,0},
+
+    {"expdel",delCommand,-2,
      "write @keyspace",
      0,NULL,1,-1,1,0,0,0},
 
@@ -615,6 +620,10 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"expireat",expireatCommand,3,
+     "write fast @keyspace",
+     0,NULL,1,1,1,0,0,0},
+
+    {"expiremember", expireMemberCommand, 4,
      "write fast @keyspace",
      0,NULL,1,1,1,0,0,0},
 
@@ -1428,8 +1437,6 @@ int htNeedsResize(dict *dict) {
 void tryResizeHashTables(int dbid) {
     if (htNeedsResize(g_pserver->db[dbid].pdict))
         dictResize(g_pserver->db[dbid].pdict);
-    if (htNeedsResize(g_pserver->db[dbid].expires))
-        dictResize(g_pserver->db[dbid].expires);
 }
 
 /* Our hash table implementation performs rehashing incrementally while
@@ -1443,11 +1450,6 @@ int incrementallyRehash(int dbid) {
     /* Keys dictionary */
     if (dictIsRehashing(g_pserver->db[dbid].pdict)) {
         dictRehashMilliseconds(g_pserver->db[dbid].pdict,1);
-        return 1; /* already used our millisecond for this loop... */
-    }
-    /* Expires */
-    if (dictIsRehashing(g_pserver->db[dbid].expires)) {
-        dictRehashMilliseconds(g_pserver->db[dbid].expires,1);
         return 1; /* already used our millisecond for this loop... */
     }
     return 0;
@@ -1889,7 +1891,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
             size = dictSlots(g_pserver->db[j].pdict);
             used = dictSize(g_pserver->db[j].pdict);
-            vkeys = dictSize(g_pserver->db[j].expires);
+            vkeys = g_pserver->db[j].setexpire->size();
             if (used || vkeys) {
                 serverLog(LL_VERBOSE,"DB %d: %lld keys (%lld volatile) in %lld slots HT.",j,used,vkeys,size);
                 /* dictPrintStats(g_pserver->dict); */
@@ -2925,13 +2927,16 @@ void initServer(void) {
 
     /* Create the Redis databases, and initialize other internal state. */
     for (int j = 0; j < cserver.dbnum; j++) {
+        new (&g_pserver->db[j]) redisDb;
         g_pserver->db[j].pdict = dictCreate(&dbDictType,NULL);
-        g_pserver->db[j].expires = dictCreate(&keyptrDictType,NULL);
+        g_pserver->db[j].setexpire = new(MALLOC_LOCAL) expireset();
+        g_pserver->db[j].expireitr = g_pserver->db[j].setexpire->end();
         g_pserver->db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
         g_pserver->db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
         g_pserver->db[j].watched_keys = dictCreate(&keylistDictType,NULL);
         g_pserver->db[j].id = j;
         g_pserver->db[j].avg_ttl = 0;
+        g_pserver->db[j].last_expire_set = 0;
         g_pserver->db[j].defrag_later = listCreate();
     }
 
@@ -3376,6 +3381,7 @@ void call(client *c, int flags) {
         latencyAddSampleIfNeeded(latency_event,duration/1000);
         slowlogPushEntryIfNeeded(c,c->argv,c->argc,duration);
     }
+
     if (flags & CMD_CALL_STATS) {
         /* use the real command that was executed (cmd and lastamc) may be
          * different, in case of MULTI-EXEC or re-written commands such as
@@ -3449,6 +3455,16 @@ void call(client *c, int flags) {
     ProcessPendingAsyncWrites();
     
     g_pserver->also_propagate = prev_also_propagate;
+
+    /* If the client has keys tracking enabled for client side caching,
+     * make sure to remember the keys it fetched via this command. */
+    if (c->cmd->flags & CMD_READONLY) {
+        client *caller = (c->flags & CLIENT_LUA && g_pserver->lua_caller) ?
+                            g_pserver->lua_caller : c;
+        if (caller->flags & CLIENT_TRACKING)
+            trackingRememberKeys(caller);
+    }
+
     g_pserver->stat_numcommands++;
 }
 
@@ -3524,7 +3540,7 @@ int processCommand(client *c, int callFlags) {
         if (acl_retval == ACL_DENIED_CMD)
             addReplyErrorFormat(c,
                 "-NOPERM this user has no permissions to run "
-                "the '%s' command or its subcommnad", c->cmd->name);
+                "the '%s' command or its subcommand", c->cmd->name);
         else
             addReplyErrorFormat(c,
                 "-NOPERM this user has no permissions to access "
@@ -3686,6 +3702,7 @@ int processCommand(client *c, int callFlags) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
+        std::unique_lock<decltype(c->db->lock)> ulock(c->db->lock);
         call(c,callFlags);
         c->woff = g_pserver->master_repl_offset;
         if (listLength(g_pserver->ready_keys))
@@ -4087,10 +4104,12 @@ sds genRedisInfoString(const char *section) {
             "connected_clients:%lu\r\n"
             "client_recent_max_input_buffer:%zu\r\n"
             "client_recent_max_output_buffer:%zu\r\n"
-            "blocked_clients:%d\r\n",
+            "blocked_clients:%d\r\n"
+            "current_client_thread:%d\r\n",
             listLength(g_pserver->clients)-listLength(g_pserver->slaves),
             maxin, maxout,
-            g_pserver->blocked_clients);
+            g_pserver->blocked_clients,
+            static_cast<int>(serverTL - g_pserver->rgthreadvar));
         for (int ithread = 0; ithread < cserver.cthreads; ++ithread)
         {
             info = sdscatprintf(info,
@@ -4561,11 +4580,18 @@ sds genRedisInfoString(const char *section) {
             long long keys, vkeys;
 
             keys = dictSize(g_pserver->db[j].pdict);
-            vkeys = dictSize(g_pserver->db[j].expires);
+            vkeys = g_pserver->db[j].setexpire->size();
+
+            // Adjust TTL by the current time
+            g_pserver->db[j].avg_ttl -= (g_pserver->mstime - g_pserver->db[j].last_expire_set);
+            if (g_pserver->db[j].avg_ttl < 0)
+                g_pserver->db[j].avg_ttl = 0;
+            g_pserver->db[j].last_expire_set = g_pserver->mstime;
+            
             if (keys || vkeys) {
                 info = sdscatprintf(info,
                     "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n",
-                    j, keys, vkeys, g_pserver->db[j].avg_ttl);
+                    j, keys, vkeys, static_cast<long long>(g_pserver->db[j].avg_ttl));
             }
         }
     }
@@ -4828,6 +4854,12 @@ void redisOutOfMemoryHandler(size_t allocation_size) {
     serverLog(LL_WARNING,"Out Of Memory allocating %zu bytes!",
         allocation_size);
     serverPanic("Redis aborting for OUT OF MEMORY");
+}
+
+void fuzzOutOfMemoryHandler(size_t allocation_size) {
+    serverLog(LL_WARNING,"Out Of Memory allocating %zu bytes!",
+        allocation_size);
+    exit(EXIT_FAILURE); // don't crash because it causes false positives
 }
 
 void redisSetProcTitle(const char *title) {
@@ -5184,6 +5216,23 @@ int main(int argc, char **argv) {
     #endif
         moduleLoadFromQueue();
         ACLLoadUsersAtStartup();
+
+        // special case of FUZZING load from stdin then quit
+        if (argc > 1 && strstr(argv[1],"rdbfuzz-mode") != NULL)
+        {
+            zmalloc_set_oom_handler(fuzzOutOfMemoryHandler);
+#ifdef __AFL_HAVE_MANUAL_CONTROL
+            __AFL_INIT();
+#endif
+            rio rdb;
+            rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+            startLoading(stdin);
+            rioInitWithFile(&rdb,stdin);
+            rdbLoadRio(&rdb,&rsi,0);
+            stopLoading();
+            return EXIT_SUCCESS;
+        }
+
         loadDataFromDisk();
         if (g_pserver->cluster_enabled) {
             if (verifyClusterConfigWithData() == C_ERR) {
@@ -5220,7 +5269,7 @@ int main(int argc, char **argv) {
 
     aeReleaseLock();    //Finally we can dump the lock
     moduleReleaseGIL(true);
-
+    
     serverAssert(cserver.cthreads > 0 && cserver.cthreads <= MAX_EVENT_LOOPS);
     pthread_t rgthread[MAX_EVENT_LOOPS];
     for (int iel = 0; iel < cserver.cthreads; ++iel)

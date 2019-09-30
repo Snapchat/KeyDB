@@ -214,6 +214,64 @@ start_server {tags {"bitops"}} {
         r bitop or x a b
     } {32}
 
+    test {BITOP lshift size} {
+        r set a " "
+        r bitop lshift x a 1
+    } {2}
+
+    test {BITOP rshift size} {
+        r set a " "
+        r bitop rshift x a 1
+    } {1}
+
+    test {BITOP rshift 0 byte} {
+        r set a " "
+        r bitop rshift x a 8
+    } {0}
+
+    test {BITOP rshift underflow} {
+        r set a " "
+        r bitop rshift x a 65
+    } {0}
+
+    test {BITOP lshift string} {
+        r set a "abcdefg"
+        r bitop lshift x a 8
+        r get x
+    } "\x00abcdefg"
+
+    test {BITOP lshift char} {
+        r set a "\xAA"
+        r bitop lshift x a 4
+        r get x
+    } "\xA0\x0A"
+
+    test {BITOP rshift char} {
+        r set a "\xAA"
+        r bitop rshift x a 3
+        r get x
+    } "\x15"
+
+    test {BITOP lshift carry} {
+        r set a "\xFF"
+        r bitop lshift x a 1
+        r get x
+    } "\xFE\x01"
+
+    test {BITOP rshift carry} {
+        r set a "\x00\xFF"
+        r bitop rshift x a 1
+        r get x
+    } "\x80\x7F"
+
+    test {BITOP rshift reciprocal} {
+        r flushdb
+        r set a "abcdefg"
+        r bitop lshift b a 14
+        r bitop rshift res b 14
+        r get res
+    } "abcdefg\x00"
+
     test {BITPOS bit=0 with empty key returns 0} {
         r del str
         r bitpos str 0

@@ -48,6 +48,7 @@ extern "C" int je_get_defrag_hint(void* ptr, int *bin_util, int *run_util);
 /* forward declarations*/
 void defragDictBucketCallback(void *privdata, dictEntry **bucketref);
 dictEntry* replaceSateliteDictKeyPtrAndOrDefragDictEntry(dict *d, sds oldkey, sds newkey, uint64_t hash, long *defragged);
+void replaceSateliteOSetKeyPtr(expireset &set, sds oldkey, sds newkey);
 
 /* Defrag helper for generic allocations.
  *
@@ -102,7 +103,7 @@ sds activeDefragSds(sds sdsptr) {
  * and should NOT be accessed. */
 robj *activeDefragStringOb(robj* ob, long *defragged) {
     robj *ret = NULL;
-    if (ob->refcount!=1)
+    if (ob->getrefcount(std::memory_order_relaxed)!=1)
         return NULL;
 
     /* try to defrag robj (only if not an EMBSTR type (handled below). */
@@ -404,6 +405,17 @@ dictEntry* replaceSateliteDictKeyPtrAndOrDefragDictEntry(dict *d, sds oldkey, sd
         return de;
     }
     return NULL;
+}
+
+void replaceSateliteOSetKeyPtr(expireset &set, sds oldkey, sds newkey) {
+    auto itr = set.find(oldkey);
+    if (itr != set.end())
+    {
+        expireEntry eNew(std::move(*itr));
+        eNew.setKeyUnsafe(newkey);
+        set.erase(itr);
+        set.insert(eNew);
+    }
 }
 
 long activeDefragQuickListNodes(quicklist *ql) {
@@ -769,12 +781,8 @@ long defragKey(redisDb *db, dictEntry *de) {
     newsds = activeDefragSds(keysds);
     if (newsds)
         defragged++, de->key = newsds;
-    if (dictSize(db->expires)) {
-         /* Dirty code:
-          * I can't search in db->expires for that key after i already released
-          * the pointer it holds it won't be able to do the string compare */
-        uint64_t hash = dictGetHash(db->pdict, de->key);
-        replaceSateliteDictKeyPtrAndOrDefragDictEntry(db->expires, keysds, newsds, hash, &defragged);
+    if (!db->setexpire->empty()) {
+        replaceSateliteOSetKeyPtr(*db->setexpire, keysds, newsds);
     }
 
     /* Try to defrag robj and / or string value. */

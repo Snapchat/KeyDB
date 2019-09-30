@@ -2,39 +2,46 @@
 [![Build Status](https://travis-ci.org/JohnSully/KeyDB.svg?branch=unstable)](https://travis-ci.org/JohnSully/KeyDB) [![Join the chat at https://gitter.im/KeyDB/community](https://badges.gitter.im/KeyDB/community.svg)](https://gitter.im/KeyDB/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 [![StackShare](http://img.shields.io/badge/tech-stack-0690fa.svg?style=flat)](https://stackshare.io/eq-alpha-technology-inc/eq-alpha-technology-inc)
 
+##### Need Help? Check out our extensive [documentation](https://docs.keydb.dev).
+
 What is KeyDB?
 --------------
 
-KeyDB is a high performance fork of Redis focusing on multithreading, memory efficiency, and high throughput.  In addition to multithreading KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/Active-Replication), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3.
+KeyDB is a high performance fork of Redis with a focus on multithreading, memory efficiency, and high throughput.  In addition to multithreading, KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/Active-Replication), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3. 
 
-On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency.
+KeyDB maintains full compatibility with the Redis protocol, modules, and scripts.  This includes the atomicity gurantees for scripts and transactions.  Because KeyDB keeps in sync with Redis development KeyDB is a superset of Redis functionality, making KeyDB a drop in replacement for existing Redis deployments.
 
-KeyDB has full compatibility with the Redis protocol, modules, and scripts.  This includes full support for transactions, and atomic execution of scripts.  For more information see our architecture section below.
+On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency. Active-Replication simplifies hot-spare failover allowing you to easily distribute writes over replicas and use simple TCP based load balancing/failover. KeyDB's higher performance allows you to do more on less hardware which reduces operation costs and complexity.
+
+<img src=https://cdn-images-1.medium.com/max/1400/1*s7mTb7Qb0kxc951mz8bdgA.png width=420 height=300/><img src=https://cdn-images-1.medium.com/max/1400/1*R00A5U4AFGohGOYHMfT6fA.png height=300/>
+
+Why fork Redis?
+---------------
+
+KeyDB has a different philosophy on how the codebase should evolve.  We feel that ease of use, high performance, and a "batteries included" approach is the best way to create a good user experience.  While we have great respect for the Redis maintainers it is our opinion that the Redis approach focusses too much on simplicity of the code base at the expense of complexity for the user.  This results in the need for external components and workarounds to solve common problems - resulting in more complexity overall.
+
+Because of this difference of opinion features which are right for KeyDB may not be appropriate for Redis.  A fork allows us to explore this new development path and implement features which may never be a part of Redis.  KeyDB keeps in sync with upstream Redis changes, and where applicable we upstream bug fixes and changes. It is our hope that the two projects can continue to grow and learn from each other.
+
+Additional Resources
+--------------------
 
 Try our docker container: https://hub.docker.com/r/eqalpha/keydb
 
 Talk on Gitter: https://gitter.im/KeyDB
 
+Visit our Website: https://keydb.dev
+
+See options for channel partners and support contracts: https://keydb.dev/support.html
+
+Learn with KeyDB’s official documentation site: https://docs.keydb.dev
+
 [Subscribe to the KeyDB mailing list](https://eqalpha.us20.list-manage.com/subscribe/post?u=978f486c2f95589b24591a9cc&id=4ab9220500)
 
 Management GUI: We recommend [FastoNoSQL](https://fastonosql.com/) which has official KeyDB support.
 
-New: Active Replica Support
----------------------------
-
-New! KeyDB now has support for Active Replicas.  This feature greatly simplifies hot-spare failover and allows you to distribute writes over replicas instead of just a single master.  For more information [see the wiki page](https://github.com/JohnSully/KeyDB/wiki/Active-Replication).
-
-Why fork Redis?
----------------
-
-The Redis maintainers have continually reiterated that they do not plan to support multithreading.  While we have great respect for the redis team, we feel the analysis justifying this decision is incorrect.  In addition we wanted open source implementations of features currently only available in proprietary modules.   We feel a fork is the best way to accelerate development in the areas of most interest to us.
-
-We plan to track the Redis repo closely and hope our projects can learn from each other.
 
 Benchmarking KeyDB
 ------------------
-
-<img src=https://cdn-images-1.medium.com/max/1400/1*s7mTb7Qb0kxc951mz8bdgA.png width=420 height=300/><img src=https://cdn-images-1.medium.com/max/1400/1*R00A5U4AFGohGOYHMfT6fA.png height=300/>
 
 Please note keydb-benchmark and redis-benchmark are currently single threaded and too slow to properly benchmark KeyDB.  We recommend using a redis cluster benchmark tool such as [memtier](https://github.com/RedisLabs/memtier_benchmark).  Please ensure your machine has enough cores for both KeyDB and memteir if testing locally.  KeyDB expects exclusive use of any cores assigned to it.
 
@@ -58,6 +65,10 @@ If you would like to use the [FLASH backed](https://github.com/JohnSully/KeyDB/w
 
 If you would like KeyDB to dump and load directly to AWS S3 this option specifies the bucket.  Using this option with the traditional RDB options will result in KeyDB backing up twice to both locations.  If both are specified KeyDB will first attempt to load from the local dump file and if that fails load from S3.  This requires the AWS CLI tools to be installed and configured which are used under the hood to transfer the data.
 
+    active-replica yes
+
+If you are using active-active replication set `active-replica` option to “yes”. This will enable both instances to accept reads and writes while remaining synced. [Click here](https://docs.keydb.dev/docs/active-rep/) to see more on active-rep in our docs section. There are also [docker examples]( https://docs.keydb.dev/docs/docker-active-rep/) on docs.
+
 All other configuration options behave as you'd expect.  Your existing configuration files should continue to work unchanged.
 
 Building KeyDB
@@ -67,15 +78,18 @@ KeyDB can be compiled and is tested for use on Linux.  KeyDB currently relies on
 
 Install dependencies:
 
-    % sudo apt install build-essential nasm autotools-dev autoconf libjemalloc-dev tcl tcl-dev uuid-dev
+    % sudo apt install build-essential nasm autotools-dev autoconf libjemalloc-dev tcl tcl-dev uuid-dev libcurl4-openssl-dev
 
 Compiling is as simple as:
 
     % make
 
-You can enable flash support with (Note: autoconf and autotools must be installed):
+You can enable flash support with:
 
     % make MALLOC=memkind
+
+***Note that the following dependencies may be needed: 
+    % sudo apt-get install autoconf autotools-dev libnuma-dev libtool
 
 Fixing build problems with dependencies or cached build options
 ---------
@@ -179,7 +193,7 @@ then in another terminal try the following:
     (integer) 2
     keydb>
 
-You can find the list of all the available commands at http://redis.io/commands.
+You can find the list of all the available commands at https://docs.keydb.dev/docs/commands/
 
 Installing KeyDB
 -----------------
@@ -222,23 +236,18 @@ Future work:
 
 Docker Build
 ------------
-
-Run the following commands for a full source download and build:
-
+Build the latest binaries from the github unstable branch within a docker container. Note this is built for Ubuntu 18.04.
+Simply make a directory you would like to have the latest binaries dumped in, then run the following commmand with your updated path:
 ```
-git clone git@github.com:JohnSully/KeyDB.git
-docker run -it --rm -v `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make
+$ docker run -it --rm -v /path-to-dump-binaries:/keydb_bin eqalpha/keydb-build-bin
 ```
+You should receive the following files: keydb-benchmark,  keydb-check-aof,  keydb-check-rdb,  keydb-cli,  keydb-sentinel,  keydb-server
 
-Then you have fresh binaries built, you can also pass any other options to the make command above after the word make. E.g.
-
-```docker run -it --rm -v `pwd`/KeyDB:/build -w /build devopsdood/keydb-builder make MAllOC=memkind```
-
-The above commands will build you binaries in the src directory. Standard `make install` without Docker command will work after if you wish to install
-
-If you'd prefer you can build the Dockerfile in the repo instead of pulling the above container for use:
-
-`docker build -t KeyDB .`
+If you are looking to enable flash support with the build (make MALLOC=memkind) then use the following command:
+```
+$ docker run -it --rm -v /path-to-dump-binaries:/keydb_bin eqalpha/keydb-build-bin:flash
+```
+Please note that you will need libcurl4-openssl-dev in order to run keydb. With flash version you may need libnuma-dev and libtool installed in order to run the binaries. Keep this in mind especially when running in a container. For a copy of all our Dockerfiles, please see them on [docs]( https://docs.keydb.dev/docs/dockerfiles/).
 
 Code contributions
 -----------------
@@ -251,4 +260,5 @@ source distribution.
 
 Please see the CONTRIBUTING file in this source distribution for more
 information.
+
 

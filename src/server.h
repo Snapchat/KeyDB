@@ -53,6 +53,7 @@
 #include <atomic>
 #include <vector>
 #include <algorithm>
+#include <memory>
 #ifdef __cplusplus
 extern "C" {
 #include <lua.h>
@@ -81,6 +82,7 @@ typedef long long mstime_t; /* millisecond time type. */
                            N-elements flat arrays */
 #include "rax.h"     /* Radix tree */
 #include "uuid.h"
+#include "semiorderedset.h"
 
 /* Following includes allow test functions to be called from Redis main() */
 #include "zipmap.h"
@@ -243,7 +245,7 @@ public:
 #define CONFIG_DEFAULT_ACTIVE_REPLICA 0
 #define CONFIG_DEFAULT_ENABLE_MULTIMASTER 0
 
-#define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
+#define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 64 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
 #define ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC 25 /* CPU max % for keys collection */
 #define ACTIVE_EXPIRE_CYCLE_SLOW 0
@@ -327,8 +329,8 @@ public:
 #define AOF_WAIT_REWRITE 2    /* AOF waits rewrite to start appending */
 
 /* Client flags */
-#define CLIENT_SLAVE (1<<0)   /* This client is a slave server */
-#define CLIENT_MASTER (1<<1)  /* This client is a master server */
+#define CLIENT_SLAVE (1<<0)   /* This client is a repliaca */
+#define CLIENT_MASTER (1<<1)  /* This client is a master */
 #define CLIENT_MONITOR (1<<2) /* This client is a slave monitor, see MONITOR */
 #define CLIENT_MULTI (1<<3)   /* This client is in a MULTI context */
 #define CLIENT_BLOCKED (1<<4) /* The client is waiting in a blocking operation */
@@ -359,7 +361,17 @@ public:
 #define CLIENT_LUA_DEBUG_SYNC (1<<26)  /* EVAL debugging without fork() */
 #define CLIENT_MODULE (1<<27) /* Non connected client used by some module. */
 #define CLIENT_PROTECTED (1<<28) /* Client should not be freed for now. */
-#define CLIENT_FORCE_REPLY (1<<29) /* Should addReply be forced to write the text? */
+#define CLIENT_PENDING_READ (1<<29) /* The client has pending reads and was put
+                                       in the list of clients we can read
+                                       from. */
+#define CLIENT_PENDING_COMMAND (1<<30) /* Used in threaded I/O to signal after
+                                          we return single threaded that the
+                                          client has already pending commands
+                                          to be executed. */
+#define CLIENT_TRACKING (1<<31) /* Client enabled keys tracking in order to
+                                   perform client side caching. */
+#define CLIENT_TRACKING_BROKEN_REDIR (1ULL<<32) /* Target client is invalid. */
+#define CLIENT_FORCE_REPLY (1ULL<<33) /* Should addReply be forced to write the text? */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -707,7 +719,7 @@ typedef struct RedisModuleDigest {
 #define LRU_CLOCK_MAX ((1<<LRU_BITS)-1) /* Max value of obj->lru */
 #define LRU_CLOCK_RESOLUTION 1000 /* LRU clock resolution in ms */
 
-#define OBJ_SHARED_REFCOUNT INT_MAX
+#define OBJ_SHARED_REFCOUNT (0x7FFFFFFF) 
 #define OBJ_MVCC_INVALID (0xFFFFFFFFFFFFFFFFULL)
 
 typedef struct redisObject {
@@ -716,11 +728,21 @@ typedef struct redisObject {
     unsigned lru:LRU_BITS; /* LRU time (relative to global lru_clock) or
                             * LFU data (least significant 8 bits frequency
                             * and most significant 16 bits access time). */
-    mutable std::atomic<int> refcount;
+private:
+    mutable std::atomic<unsigned> refcount {0};
+public:
     uint64_t mvcc_tstamp;
     void *m_ptr;
-} robj;
 
+    inline bool FExpires() const { return refcount.load(std::memory_order_relaxed) >> 31; }
+    void SetFExpires(bool fExpires);
+
+    void setrefcount(unsigned ref);
+    unsigned getrefcount(std::memory_order order) const { return (refcount.load(order) & ~(1U << 31)); }
+    void addref() const { refcount.fetch_add(1, std::memory_order_acq_rel); }
+    unsigned release() const { return refcount.fetch_sub(1, std::memory_order_acq_rel) & ~(1U << 31); }
+} robj;
+static_assert(sizeof(redisObject) == 24, "object size is critical, don't increase");
 
 __attribute__((always_inline)) inline const void *ptrFromObj(robj_roptr &o)
 {
@@ -746,12 +768,227 @@ __attribute__((always_inline)) inline char *szFromObj(const robj *o)
     return (char*)ptrFromObj(o);
 }
 
+class expireEntryFat
+{
+    friend class expireEntry;
+public:
+    struct subexpireEntry
+    {
+        long long when;
+        std::unique_ptr<const char, void(*)(const char*)> spsubkey;
+
+        subexpireEntry(long long when, const char *subkey)
+            : when(when), spsubkey(subkey, sdsfree)
+        {}
+
+        bool operator<(long long when) const noexcept { return this->when < when; }
+        bool operator<(const subexpireEntry &se) { return this->when < se.when; }
+    };
+
+private:
+    sds m_keyPrimary;
+    std::vector<subexpireEntry> m_vecexpireEntries;  // Note a NULL for the sds portion means the expire is for the primary key
+
+public:
+    expireEntryFat(sds keyPrimary)
+        : m_keyPrimary(keyPrimary)
+        {}
+    long long when() const noexcept { return m_vecexpireEntries.front().when; }
+    const char *key() const noexcept { return m_keyPrimary; }
+
+    bool operator<(long long when) const noexcept { return this->when() <  when; }
+
+    void expireSubKey(const char *szSubkey, long long when)
+    {
+        auto itrInsert = std::lower_bound(m_vecexpireEntries.begin(), m_vecexpireEntries.end(), when);
+        const char *subkey = (szSubkey) ? sdsdup(szSubkey) : nullptr;
+        m_vecexpireEntries.emplace(itrInsert, when, subkey);
+    }
+
+    bool FEmpty() const noexcept { return m_vecexpireEntries.empty(); }
+    const subexpireEntry &nextExpireEntry() const noexcept { return m_vecexpireEntries.front(); }
+    void popfrontExpireEntry() { m_vecexpireEntries.erase(m_vecexpireEntries.begin()); }
+    const subexpireEntry &operator[](size_t idx) { return m_vecexpireEntries[idx]; }
+    size_t size() const noexcept { return m_vecexpireEntries.size(); }
+};
+
+class expireEntry {
+    union
+    {
+        sds m_key;
+        expireEntryFat *m_pfatentry;
+    } u;
+    long long m_when;   // LLONG_MIN means this is a fat entry and we should use the pointer
+
+public:
+    class iter
+    {
+        expireEntry *m_pentry = nullptr;
+        size_t m_idx = 0;
+
+    public:
+        iter(expireEntry *pentry, size_t idx)
+            : m_pentry(pentry), m_idx(idx)
+        {}
+
+        iter &operator++() { ++m_idx; return *this; }
+        
+        const char *subkey() const
+        {
+            if (m_pentry->FFat())
+                return (*m_pentry->pfatentry())[m_idx].spsubkey.get();
+            return nullptr;
+        }
+        long long when() const
+        {
+            if (m_pentry->FFat())
+                return (*m_pentry->pfatentry())[m_idx].when;
+            return m_pentry->when();
+        }
+
+        bool operator!=(const iter &other)
+        {
+            return m_idx != other.m_idx;
+        }
+
+        const iter &operator*() const { return *this; }
+    };
+
+    expireEntry(sds key, const char *subkey, long long when)
+    {
+        if (subkey != nullptr)
+        {
+            m_when = LLONG_MIN;
+            u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(key);
+            u.m_pfatentry->expireSubKey(subkey, when);
+        }
+        else
+        {
+            u.m_key = key;
+            m_when = when;
+        }
+    }
+
+    expireEntry(expireEntryFat *pfatentry)
+    {
+        u.m_pfatentry = pfatentry;
+        m_when = LLONG_MIN;
+    }
+
+    expireEntry(expireEntry &&e)
+    {
+        u.m_key = e.u.m_key;
+        m_when = e.m_when;
+        e.u.m_key = (char*)key();  // we do this so it can still be found in the set
+        e.m_when = 0;
+    }
+
+    ~expireEntry()
+    {
+        if (FFat())
+            delete u.m_pfatentry;
+    }
+
+    void setKeyUnsafe(sds key)
+    {
+        if (FFat())
+            u.m_pfatentry->m_keyPrimary = key;
+        else
+            u.m_key = key;
+    }
+
+    inline bool FFat() const noexcept { return m_when == LLONG_MIN; }
+    expireEntryFat *pfatentry() { assert(FFat()); return u.m_pfatentry; }
+
+
+    bool operator==(const char *key) const noexcept
+    { 
+        return this->key() == key; 
+    }
+
+    bool operator<(const expireEntry &e) const noexcept
+    { 
+        return when() < e.when(); 
+    }
+    bool operator<(long long when) const noexcept
+    { 
+        return this->when() < when;
+    }
+
+    const char *key() const noexcept
+    { 
+        if (FFat())
+            return u.m_pfatentry->key();
+        return u.m_key;
+    }
+    long long when() const noexcept
+    { 
+        if (FFat())
+            return u.m_pfatentry->when();
+        return m_when; 
+    }
+
+    void update(const char *subkey, long long when)
+    {
+        if (!FFat())
+        {
+            if (subkey == nullptr)
+            {
+                m_when = when;
+                return;
+            }
+            else
+            {
+                // we have to upgrade to a fat entry
+                long long whenT = m_when;
+                sds keyPrimary = u.m_key;
+                m_when = LLONG_MIN;
+                u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(keyPrimary);
+                u.m_pfatentry->expireSubKey(nullptr, whenT);
+                // at this point we're fat so fall through
+            }
+        }
+        u.m_pfatentry->expireSubKey(subkey, when);
+    }
+    
+    iter begin() { return iter(this, 0); }
+    iter end()
+    {
+        if (FFat())
+            return iter(this, u.m_pfatentry->size());
+        return iter(this, 1);
+    }
+
+    bool FGetPrimaryExpire(long long *pwhen)
+    {
+        *pwhen = -1;
+        for (auto itr : *this)
+        {
+            if (itr.subkey() == nullptr)
+            {
+                *pwhen = itr.when();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    explicit operator const char*() const noexcept { return key(); }
+    explicit operator long long() const noexcept { return when(); }
+};
+typedef semiorderedset<expireEntry, const char *, true /*expireEntry can be memmoved*/> expireset;
+
+/* The a string name for an object's type as listed above
+ * Native types are checked against the OBJ_STRING, OBJ_LIST, OBJ_* defines,
+ * and Module types have their registered name returned. */
+const char *getObjectTypeName(robj_roptr o);
+
 /* Macro used to initialize a Redis object allocated on the stack.
  * Note that this macro is taken near the structure definition to make sure
  * we'll update it when the structure is changed, to avoid bugs like
  * bug #85 introduced exactly in this way. */
 #define initStaticStringObject(_var,_ptr) do { \
-    _var.refcount = 1; \
+    _var.setrefcount(1); \
     _var.type = OBJ_STRING; \
     _var.encoding = OBJ_ENCODING_RAW; \
     _var.m_ptr = _ptr; \
@@ -777,14 +1014,22 @@ typedef struct clientReplyBlock {
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
 typedef struct redisDb {
+    redisDb() 
+        : expireitr(nullptr)
+    {};
     dict *pdict;                 /* The keyspace for this DB */
-    dict *expires;              /* Timeout of keys with a timeout set */
+    expireset *setexpire;
+    expireset::setiter expireitr;
+
     dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
     dict *ready_keys;           /* Blocked keys that received a PUSH */
     dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
     int id;                     /* Database ID */
-    long long avg_ttl;          /* Average TTL, just for stats */
+    long long last_expire_set;  /* when the last expire was set */
+    double avg_ttl;             /* Average TTL, just for stats */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
+
+    fastlock lock;
 } redisDb;
 
 /* Client MULTI/EXEC state */
@@ -924,7 +1169,7 @@ typedef struct client {
     time_t ctime;           /* Client creation time. */
     time_t lastinteraction; /* Time of the last interaction, used for timeout */
     time_t obuf_soft_limit_reached_time;
-    std::atomic<int> flags;              /* Client flags: CLIENT_* macros. */
+    std::atomic<uint64_t> flags;              /* Client flags: CLIENT_* macros. */
     int casyncOpsPending;
     int fPendingAsyncWrite; /* NOTE: Not a flag because it is written to outside of the client lock (locked by the global lock instead) */
     int authenticated;      /* Needed when the default user requires auth. */
@@ -960,6 +1205,11 @@ typedef struct client {
     /* compliant servers will announce their UUIDs when a replica connection is started, and return when asked */
     /* UUIDs are transient and lost when the server is shut down */
     unsigned char uuid[UUID_BINARY_LEN];
+
+    /* If this client is in tracking mode and this field is non zero,
+     * invalidation messages for keys fetched by this client will be send to
+     * the specified client ID. */
+    uint64_t client_tracking_redirection;
 
     /* Response buffer */
     int bufpos;
@@ -1456,6 +1706,8 @@ struct redisServer {
     unsigned int blocked_clients;   /* # of clients executing a blocking cmd.*/
     unsigned int blocked_clients_by_type[BLOCKED_NUM];
     list *ready_keys;        /* List of readyList structures for BLPOP & co */
+    /* Client side caching. */
+    unsigned int tracking_clients;  /* # of clients with tracking enabled.*/
     /* Sort parameters - qsort_r() is only available under BSD so we
      * have to take this state global, in order to pass it to sortCompare() */
     int sort_desc;
@@ -1792,6 +2044,7 @@ void addReplyPushLenAsync(client *c, long length);
 void addReplyLongLongAsync(client *c, long long ll);
 
 void ProcessPendingAsyncWrites(void);
+client *lookupClientByID(uint64_t id);
 
 #ifdef __GNUC__
 void addReplyErrorFormat(client *c, const char *fmt, ...)
@@ -1802,6 +2055,12 @@ void addReplyStatusFormat(client *c, const char *fmt, ...)
 void addReplyErrorFormat(client *c, const char *fmt, ...);
 void addReplyStatusFormat(client *c, const char *fmt, ...);
 #endif
+
+/* Client side caching (tracking mode) */
+void enableTracking(client *c, uint64_t redirect_to);
+void disableTracking(client *c);
+void trackingRememberKeys(client *c);
+void trackingInvalidateKey(robj *keyobj);
 
 /* List data type */
 void listTypeTryConversion(robj *subject, robj *value);
@@ -1912,6 +2171,7 @@ long long getPsyncInitialOffset(void);
 int replicationSetupSlaveForFullResync(client *slave, long long offset);
 void changeReplicationId(void);
 void clearReplicationId2(void);
+void mergeReplicationId(const char *);
 void chopReplicationBacklog(void);
 void replicationCacheMasterUsingMyself(struct redisMaster *mi);
 void feedReplicationBacklog(const void *ptr, size_t len);
@@ -2130,6 +2390,7 @@ int pubsubUnsubscribeAllPatterns(client *c, int notify);
 void freePubsubPattern(const void *p);
 int listMatchPubsubPattern(void *a, void *b);
 int pubsubPublishMessage(robj *channel, robj *message);
+void addReplyPubsubMessage(client *c, robj *channel, robj *msg);
 
 /* Keyspace events notification */
 void notifyKeyspaceEvent(int type, const char *event, robj *key, int dbid);
@@ -2146,10 +2407,12 @@ int rewriteConfig(char *path);
 
 /* db.c -- Keyspace access API */
 int removeExpire(redisDb *db, robj *key);
+int removeExpireCore(redisDb *db, robj *key, dictEntry *de);
 void propagateExpire(redisDb *db, robj *key, int lazy);
 int expireIfNeeded(redisDb *db, robj *key);
-long long getExpire(redisDb *db, robj_roptr key);
-void setExpire(client *c, redisDb *db, robj *key, long long when);
+expireEntry *getExpire(redisDb *db, robj_roptr key);
+void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when);
+void setExpire(client *c, redisDb *db, robj *key, expireEntry &&entry);
 robj_roptr lookupKeyRead(redisDb *db, robj *key);
 robj *lookupKeyWrite(redisDb *db, robj *key);
 robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply);
@@ -2344,6 +2607,7 @@ void mgetCommand(client *c);
 void monitorCommand(client *c);
 void expireCommand(client *c);
 void expireatCommand(client *c);
+void expireMemberCommand(client *c);
 void pexpireCommand(client *c);
 void pexpireatCommand(client *c);
 void getsetCommand(client *c);

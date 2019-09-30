@@ -93,5 +93,18 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
             assert_equal {0} [$master del testkey1]
             assert_equal {0} [$slave del testkey1]
         }
+
+        test {Active replica different databases} {
+            $master select 3
+            $master set testkey abcd
+            $master select 2
+            $master del testkey
+            $slave select 3
+            wait_for_condition 50 1000 {
+                [string match abcd [$slave get testkey]]
+            } else {
+                fail "Replication failed to propogate DB 3"
+            }
+        }
     }
 }

@@ -126,8 +126,12 @@ void mixStringObjectDigest(unsigned char *digest, robj_roptr o) {
 void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj_roptr o) {
     uint32_t aux = htonl(o->type);
     mixDigest(digest,&aux,sizeof(aux));
-    long long expiretime = getExpire(db,keyobj);
+    expireEntry *pexpire = getExpire(db,keyobj);
+    long long expiretime = -1;
     char buf[128];
+
+    if (pexpire != nullptr)
+        pexpire->FGetPrimaryExpire(&expiretime);
 
     /* Save the key and associated value */
     if (o->type == OBJ_STRING) {
@@ -438,7 +442,7 @@ NULL
             "Value at:%p refcount:%d "
             "encoding:%s serializedlength:%zu "
             "lru:%d lru_seconds_idle:%llu%s",
-            (void*)val, static_cast<int>(val->refcount),
+            (void*)val, static_cast<int>(val->getrefcount(std::memory_order_relaxed)),
             strenc, rdbSavedObjectLen(val),
             val->lru, estimateObjectIdleTime(val)/1000, extra);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"sdslen") && c->argc == 3) {
@@ -640,9 +644,9 @@ NULL
         dictGetStats(buf,sizeof(buf),g_pserver->db[dbid].pdict);
         stats = sdscat(stats,buf);
 
-        stats = sdscatprintf(stats,"[Expires HT]\n");
-        dictGetStats(buf,sizeof(buf),g_pserver->db[dbid].expires);
-        stats = sdscat(stats,buf);
+        stats = sdscatprintf(stats,"[Expires set]\n");
+        g_pserver->db[dbid].setexpire->getstats(buf, sizeof(buf));
+        stats = sdscat(stats, buf);
 
         addReplyBulkSds(c,stats);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"htstats-key") && c->argc == 3) {
@@ -678,10 +682,12 @@ NULL
         changeReplicationId();
         clearReplicationId2();
         addReply(c,shared.ok);
-    } else if (!strcasecmp(szFromObj(c->argv[1]),"stringmatch-test") && c->argc == 2)
-    {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"stringmatch-test") && c->argc == 2) {
         stringmatchlen_fuzz_test();
         addReplyStatus(c,"Apparently Redis did not crash: test passed");
+    } else if (!strcasecmp(szFromObj(c->argv[1]), "force-master") && c->argc == 2) {
+        c->flags |= CLIENT_MASTER | CLIENT_MASTER_FORCE_REPLY;
+        addReply(c, shared.ok);
     } else {
         addReplySubcommandSyntaxError(c);
         return;
@@ -708,7 +714,7 @@ void _serverAssertPrintClientInfo(const client *c) {
 
     bugReportStart();
     serverLog(LL_WARNING,"=== ASSERTION FAILED CLIENT CONTEXT ===");
-    serverLog(LL_WARNING,"client->flags = %d", static_cast<int>(c->flags));
+    serverLog(LL_WARNING,"client->flags = %llu", static_cast<unsigned long long>(c->flags));
     serverLog(LL_WARNING,"client->fd = %d", c->fd);
     serverLog(LL_WARNING,"client->argc = %d", c->argc);
     for (j=0; j < c->argc; j++) {
@@ -723,14 +729,14 @@ void _serverAssertPrintClientInfo(const client *c) {
             arg = buf;
         }
         serverLog(LL_WARNING,"client->argv[%d] = \"%s\" (refcount: %d)",
-            j, arg, static_cast<int>(c->argv[j]->refcount));
+            j, arg, static_cast<int>(c->argv[j]->getrefcount(std::memory_order_relaxed)));
     }
 }
 
 void serverLogObjectDebugInfo(robj_roptr o) {
     serverLog(LL_WARNING,"Object type: %d", o->type);
     serverLog(LL_WARNING,"Object encoding: %d", o->encoding);
-    serverLog(LL_WARNING,"Object refcount: %d", static_cast<int>(o->refcount));
+    serverLog(LL_WARNING,"Object refcount: %d", static_cast<int>(o->getrefcount(std::memory_order_relaxed)));
     if (o->type == OBJ_STRING && sdsEncodedObject(o)) {
         serverLog(LL_WARNING,"Object raw string len: %zu", sdslen(szFromObj(o)));
         if (sdslen(szFromObj(o)) < 4096) {

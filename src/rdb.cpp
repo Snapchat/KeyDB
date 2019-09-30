@@ -278,8 +278,8 @@ void *rdbLoadIntegerObject(rio *rdb, int enctype, int flags, size_t *lenptr) {
         v = enc[0]|(enc[1]<<8)|(enc[2]<<16)|(enc[3]<<24);
         val = (int32_t)v;
     } else {
-        val = 0; /* anti-warning */
         rdbExitReportCorruptRDB("Unknown RDB integer encoding type %d",enctype);
+        return nullptr; /* Never reached. */
     }
     if (plain || sds) {
         char buf[LONG_STR_SIZE], *p;
@@ -382,8 +382,7 @@ void *rdbLoadLzfStringObject(rio *rdb, int flags, size_t *lenptr) {
     /* Load the compressed representation and uncompress it to target. */
     if (rioRead(rdb,c,clen) == 0) goto err;
     if (lzf_decompress(c,clen,val,len) == 0) {
-        if (rdbCheckMode) rdbCheckSetError("Invalid LZF compressed string");
-        goto err;
+        rdbExitReportCorruptRDB("Invalid LZF compressed string");
     }
     zfree(c);
 
@@ -497,6 +496,7 @@ void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
             return rdbLoadLzfStringObject(rdb,flags,lenptr);
         default:
             rdbExitReportCorruptRDB("Unknown RDB string encoding type %d",len);
+            return nullptr; /* Never reached. */
         }
     }
 
@@ -1031,12 +1031,13 @@ size_t rdbSavedObjectLen(robj *o) {
  * On error -1 is returned.
  * On success if the key was actually saved 1 is returned, otherwise 0
  * is returned (the key was already expired). */
-int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
+int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, expireEntry *pexpire) {
     int savelru = g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LRU;
     int savelfu = g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU;
 
     /* Save the expire time */
-    if (expiretime != -1) {
+    long long expiretime = -1;
+    if (pexpire != nullptr && pexpire->FGetPrimaryExpire(&expiretime)) {
         if (rdbSaveType(rdb,RDB_OPCODE_EXPIRETIME_MS) == -1) return -1;
         if (rdbSaveMillisecondTime(rdb,expiretime) == -1) return -1;
     }
@@ -1061,14 +1062,29 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
         if (rdbWriteRaw(rdb,buf,1) == -1) return -1;
     }
 
-    char szMvcc[32];
-    snprintf(szMvcc, 32, "%" PRIu64, val->mvcc_tstamp);
-    if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szMvcc) == -1) return -1;
+    char szT[32];
+    snprintf(szT, 32, "%" PRIu64, val->mvcc_tstamp);
+    if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szT) == -1) return -1;
 
     /* Save type, key, value */
     if (rdbSaveObjectType(rdb,val) == -1) return -1;
     if (rdbSaveStringObject(rdb,key) == -1) return -1;
     if (rdbSaveObject(rdb,val,key) == -1) return -1;
+
+    /* Save expire entry after as it will apply to the previously loaded key */
+    /*  This is because we update the expire datastructure directly without buffering */
+    if (pexpire != nullptr)
+    {
+        for (auto itr : *pexpire)
+        {
+            if (itr.subkey() == nullptr)
+                continue;   // already saved
+            snprintf(szT, 32, "%lld", itr.when());
+            rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-key",itr.subkey());
+            rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-when",szT);
+        }
+    }
+
     return 1;
 }
 
@@ -1093,6 +1109,28 @@ int rdbSaveInfoAuxFields(rio *rdb, int flags, rdbSaveInfo *rsi) {
             == -1) return -1;
     }
     if (rdbSaveAuxFieldStrInt(rdb,"aof-preamble",aof_preamble) == -1) return -1;
+    return 1;
+}
+
+int saveKey(rio *rdb, redisDb *db, int flags, size_t *processed, const char *keystr, robj *o)
+{    
+    robj key;
+
+    initStaticStringObject(key,(char*)keystr);
+    expireEntry *pexpire = getExpire(db, &key);
+
+    if (rdbSaveKeyValuePair(rdb,&key,o,pexpire) == -1)
+        return 0;
+
+    /* When this RDB is produced as part of an AOF rewrite, move
+        * accumulated diff from parent to child while rewriting in
+        * order to have a smaller final write. */
+    if (flags & RDB_SAVE_AOF_PREAMBLE &&
+        rdb->processed_bytes > *processed+AOF_READ_DIFF_INTERVAL_BYTES)
+    {
+        *processed = rdb->processed_bytes;
+        aofReadDiffFromParent();
+    }
     return 1;
 }
 
@@ -1134,31 +1172,24 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
          * these sizes are just hints to resize the hash tables. */
         uint64_t db_size, expires_size;
         db_size = dictSize(db->pdict);
-        expires_size = dictSize(db->expires);
+        expires_size = db->setexpire->size();
         if (rdbSaveType(rdb,RDB_OPCODE_RESIZEDB) == -1) goto werr;
         if (rdbSaveLen(rdb,db_size) == -1) goto werr;
         if (rdbSaveLen(rdb,expires_size) == -1) goto werr;
-
+        
         /* Iterate this DB writing every entry */
+        size_t ckeysExpired = 0;
         while((de = dictNext(di)) != NULL) {
             sds keystr = (sds)dictGetKey(de);
-            robj key, *o = (robj*)dictGetVal(de);
-            long long expire;
+            robj *o = (robj*)dictGetVal(de);
 
-            initStaticStringObject(key,keystr);
-            expire = getExpire(db,&key);
-            if (rdbSaveKeyValuePair(rdb,&key,o,expire) == -1) goto werr;
-
-            /* When this RDB is produced as part of an AOF rewrite, move
-             * accumulated diff from parent to child while rewriting in
-             * order to have a smaller final write. */
-            if (flags & RDB_SAVE_AOF_PREAMBLE &&
-                rdb->processed_bytes > processed+AOF_READ_DIFF_INTERVAL_BYTES)
-            {
-                processed = rdb->processed_bytes;
-                aofReadDiffFromParent();
-            }
+            if (o->FExpires())
+                ++ckeysExpired;
+            
+            if (!saveKey(rdb, db, flags, &processed, keystr, o))
+                goto werr;
         }
+        serverAssert(ckeysExpired == db->setexpire->size());
         dictReleaseIterator(di);
         di = NULL; /* So that we don't release it again on error. */
     }
@@ -1822,6 +1853,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
     }
 
     o->mvcc_tstamp = mvcc_tstamp;
+    serverAssert(!o->FExpires());
     return o;
 }
 
@@ -1890,6 +1922,8 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
     long long lru_clock = 0;
     uint64_t mvcc_tstamp = OBJ_MVCC_INVALID;
+    robj *subexpireKey = nullptr;
+    robj *key = nullptr;
 
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = g_pserver->loading_process_events_interval_bytes;
@@ -1909,9 +1943,9 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
 
     now = mstime();
     lru_clock = LRU_CLOCK();
-
+    
     while(1) {
-        robj *key, *val;
+        robj *val;
 
         /* Read type. */
         if ((type = rdbLoadType(rdb)) == -1) goto eoferr;
@@ -1965,7 +1999,6 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
             if ((expires_size = rdbLoadLen(rdb,NULL)) == RDB_LENERR)
                 goto eoferr;
             dictExpand(db->pdict,db_size);
-            dictExpand(db->expires,expires_size);
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB
@@ -2020,6 +2053,18 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
             } else if (!strcasecmp(szFromObj(auxkey),"mvcc-tstamp")) {
                 static_assert(sizeof(unsigned long long) == sizeof(uint64_t), "Ensure long long is 64-bits");
                 mvcc_tstamp = strtoull(szFromObj(auxval), nullptr, 10);
+            } else if (!strcasecmp(szFromObj(auxkey), "keydb-subexpire-key")) {
+                subexpireKey = auxval;
+                incrRefCount(subexpireKey);
+            } else if (!strcasecmp(szFromObj(auxkey), "keydb-subexpire-when")) {
+                if (key == nullptr || subexpireKey == nullptr) {
+                    serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping.");
+                }
+                else {
+                    setExpire(NULL, db, key, subexpireKey, strtoll(szFromObj(auxval), nullptr, 10));
+                    decrRefCount(subexpireKey);
+                    subexpireKey = nullptr;
+                }
             } else {
                 /* We ignore fields we don't understand, as by AUX field
                  * contract. */
@@ -2061,6 +2106,12 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
         }
 
         /* Read key */
+        if (key != nullptr)
+        {
+            decrRefCount(key);
+            key = nullptr;
+        }
+
         if ((key = rdbLoadStringObject(rdb)) == NULL) goto eoferr;
         /* Read value */
         if ((val = rdbLoadObject(type,rdb,key, mvcc_tstamp)) == NULL) goto eoferr;
@@ -2071,27 +2122,26 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
          * snapshot taken by the master may not be reflected on the slave. */
         if (listLength(g_pserver->masters) == 0 && !loading_aof && expiretime != -1 && expiretime < now) {
             decrRefCount(key);
+            key = nullptr;
             decrRefCount(val);
+            val = nullptr;
         } else {
             /* Add the new object in the hash table */
-            int fInserted = dbMerge(db, key, val, rsi->fForceSetKey);
+            int fInserted = dbMerge(db, key, val, rsi->fForceSetKey);   // Note: dbMerge will incrRef
 
             if (fInserted)
             {
                 /* Set the expire time if needed */
-                if (expiretime != -1) setExpire(NULL,db,key,expiretime);
+                if (expiretime != -1)
+                    setExpire(NULL,db,key,nullptr,expiretime);
 
                 /* Set usage information (for eviction). */
                 objectSetLRUOrLFU(val,lfu_freq,lru_idle,lru_clock);
-
-                /* Decrement the key refcount since dbMerge() will take its
-                * own reference. */
-                decrRefCount(key);
             }
             else
             {
-                decrRefCount(key);
                 decrRefCount(val);
+                val = nullptr;
             }
         }
 
@@ -2101,6 +2151,17 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
         lfu_freq = -1;
         lru_idle = -1;
     }
+
+    if (key != nullptr)
+        decrRefCount(key);
+
+    if (subexpireKey != nullptr)
+    {
+        serverLog(LL_WARNING, "Corrupt subexpire entry in RDB.");
+        decrRefCount(subexpireKey);
+        subexpireKey = nullptr;
+    }
+    
     /* Verify the checksum if RDB version is >= 5 */
     if (rdbver >= 5) {
         uint64_t cksum, expected = rdb->cksum;
@@ -2124,7 +2185,6 @@ eoferr: /* unexpected end of file is handled here with a fatal exit */
     return C_ERR; /* Just to avoid warning */
 }
 
-int rdbLoadFile(char *filename, rdbSaveInfo *rsi);
 int rdbLoad(rdbSaveInfo *rsi)
 {
     int err = C_ERR;
@@ -2144,7 +2204,7 @@ int rdbLoad(rdbSaveInfo *rsi)
  *
  * If you pass an 'rsi' structure initialied with RDB_SAVE_OPTION_INIT, the
  * loading code will fiil the information fields in the structure. */
-int rdbLoadFile(char *filename, rdbSaveInfo *rsi) {
+int rdbLoadFile(const char *filename, rdbSaveInfo *rsi) {
     FILE *fp;
     rio rdb;
     int retval;

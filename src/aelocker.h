@@ -61,6 +61,11 @@ public:
         return m_fArmed;
     }
 
+    void release()
+    {
+        m_fArmed = false;
+    }
+
     ~AeLocker()
     {
         if (m_fArmed)

@@ -85,7 +85,7 @@ struct bio_job {
 
 void *bioProcessBackgroundJobs(void *arg);
 void lazyfreeFreeObjectFromBioThread(robj *o);
-void lazyfreeFreeDatabaseFromBioThread(dict *ht1, dict *ht2);
+void lazyfreeFreeDatabaseFromBioThread(dict *ht1, expireset *set);
 void lazyfreeFreeSlotsMapFromBioThread(rax *rt);
 
 /* Make sure we have enough stack to perform all the things we do in the
@@ -196,7 +196,7 @@ void *bioProcessBackgroundJobs(void *arg) {
             if (job->arg1)
                 lazyfreeFreeObjectFromBioThread((robj*)job->arg1);
             else if (job->arg2 && job->arg3)
-                lazyfreeFreeDatabaseFromBioThread((dict*)job->arg2,(dict*)job->arg3);
+                lazyfreeFreeDatabaseFromBioThread((dict*)job->arg2,(expireset*)job->arg3);
             else if (job->arg3)
                 lazyfreeFreeSlotsMapFromBioThread((rax*)job->arg3);
         } else {

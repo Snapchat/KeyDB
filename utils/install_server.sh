@@ -202,7 +202,7 @@ REDIS_CHKCONFIG_INFO=\
 # chkconfig: - 58 74\n
 # description: redis_${REDIS_PORT} is the redis daemon.\n
 ### BEGIN INIT INFO\n
-# Provides: redis_6379\n
+# Provides: redis_${REDIS_PORT}\n
 # Required-Start: \$network \$local_fs \$remote_fs\n
 # Required-Stop: \$network \$local_fs \$remote_fs\n
 # Default-Start: 2 3 4 5\n

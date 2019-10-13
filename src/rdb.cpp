@@ -2608,12 +2608,12 @@ rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
      * synchronization, at the same time we will use a new replid and clear
      * replid2. */
     if (g_pserver->fActiveReplica || (!listLength(g_pserver->masters) && g_pserver->repl_backlog)) {
-        /* Note that when g_pserver->slaveseldb is -1, it means that this master
+        /* Note that when g_pserver->replicaseldb is -1, it means that this master
          * didn't apply any write commands after a full synchronization.
          * So we can let repl_stream_db be 0, this allows a restarted slave
          * to reload replication ID/offset, it's safe because the next write
          * command must generate a SELECT statement. */
-        rsi->repl_stream_db = g_pserver->slaveseldb == -1 ? 0 : g_pserver->slaveseldb;
+        rsi->repl_stream_db = g_pserver->replicaseldb == -1 ? 0 : g_pserver->replicaseldb;
         return rsi;
     }
 

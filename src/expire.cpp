@@ -156,7 +156,7 @@ void expireMemberCore(client *c, robj *key, robj *subkey, long long basetime, lo
     when += basetime;
 
     /* No key, return zero. */
-    dictEntry *de = dictFind(c->db->pdict, szFromObj(c->argv[1]));
+    dictEntry *de = dictFind(c->db->pdict, szFromObj(key));
     if (de == NULL) {
         addReply(c,shared.czero);
         return;
@@ -167,7 +167,10 @@ void expireMemberCore(client *c, robj *key, robj *subkey, long long basetime, lo
     switch (val->type)
     {
     case OBJ_SET:
-        // these types are safe
+        if (!setTypeIsMember(val, szFromObj(subkey))) {
+            addReplyError(c, "subkey does not exist");
+            return;
+        }
         break;
 
     default:
@@ -175,7 +178,7 @@ void expireMemberCore(client *c, robj *key, robj *subkey, long long basetime, lo
         return;
     }
 
-    setExpire(c, c->db, c->argv[1], c->argv[2], when);
+    setExpire(c, c->db, key, subkey, when);
 
     addReply(c, shared.ok);
 }

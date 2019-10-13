@@ -623,7 +623,7 @@ struct redisCommand redisCommandTable[] = {
      "write fast @keyspace",
      0,NULL,1,1,1,0,0,0},
 
-    {"expiremember", expireMemberCommand, 4,
+    {"expiremember", expireMemberCommand, -4,
      "write fast @keyspace",
      0,NULL,1,1,1,0,0,0},
 

@@ -1227,6 +1227,39 @@ int removeExpireCore(redisDb *db, robj *key, dictEntry *de) {
     return 1;
 }
 
+int removeSubkeyExpire(redisDb *db, robj *key, robj *subkey) {
+    dictEntry *de = dictFind(db->pdict,ptrFromObj(key));
+    serverAssertWithInfo(NULL,key,de != NULL);
+    
+    robj *val = (robj*)dictGetVal(de);
+    if (!val->FExpires())
+        return 0;
+    
+    auto itr = db->setexpire->find((sds)dictGetKey(de));
+    serverAssert(itr != db->setexpire->end());
+    serverAssert(itr->key() == (sds)dictGetKey(de));
+    if (!itr->FFat())
+        return 0;
+
+    int found = 0;
+    for (auto subitr : *itr)
+    {
+        if (subitr.subkey() == nullptr)
+            continue;
+        if (sdscmp((sds)subitr.subkey(), szFromObj(subkey)) == 0)
+        {
+            itr->erase(subitr);
+            found = 1;
+            break;
+        }
+    }
+
+    if (itr->pfatentry()->size() == 0)
+        removeExpireCore(db, key, de);
+
+    return found;
+}
+
 /* Set an expire to the specified key. If the expire is set in the context
  * of an user calling a command 'c' is the client, otherwise 'c' is set
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds

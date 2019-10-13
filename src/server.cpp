@@ -2106,7 +2106,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         argv[0] = createStringObject("REPLCONF",8);
         argv[1] = createStringObject("GETACK",6);
         argv[2] = createStringObject("*",1); /* Not used argument. */
-        replicationFeedSlaves(g_pserver->slaves, g_pserver->slaveseldb, argv, 3);
+        replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb, argv, 3);
         decrRefCount(argv[0]);
         decrRefCount(argv[1]);
         decrRefCount(argv[2]);
@@ -2961,7 +2961,7 @@ void initServer(void) {
     cserver.pid = getpid();
     g_pserver->clients_index = raxNew();
     g_pserver->clients_to_close = listCreate();
-    g_pserver->slaveseldb = -1; /* Force to emit the first SELECT command. */
+    g_pserver->replicaseldb = -1; /* Force to emit the first SELECT command. */
     g_pserver->ready_keys = listCreate();
     g_pserver->clients_waiting_acks = listCreate();
     g_pserver->get_ack_from_slaves = 0;

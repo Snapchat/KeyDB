@@ -237,7 +237,7 @@ void replicationFeedSlave(client *slave, int dictid, robj **argv, int argc, bool
     std::unique_lock<decltype(slave->lock)> lock(slave->lock);
 
     /* Send SELECT command to every slave if needed. */
-    if (g_pserver->slaveseldb != dictid) {
+    if (g_pserver->replicaseldb != dictid) {
         robj *selectcmd;
 
         /* For a few DBs we have pre-computed SELECT command. */
@@ -263,7 +263,7 @@ void replicationFeedSlave(client *slave, int dictid, robj **argv, int argc, bool
         if (dictid < 0 || dictid >= PROTO_SHARED_SELECT_CMDS)
             decrRefCount(selectcmd);
     }
-    g_pserver->slaveseldb = dictid;
+    g_pserver->replicaseldb = dictid;
 
     /* Feed slaves that are waiting for the initial SYNC (so these commands
      * are queued in the output buffer until the initial SYNC completes),
@@ -571,9 +571,9 @@ int replicationSetupSlaveForFullResync(client *slave, long long offset) {
     slave->psync_initial_offset = offset;
     slave->replstate = SLAVE_STATE_WAIT_BGSAVE_END;
     /* We are going to accumulate the incremental changes for this
-     * slave as well. Set slaveseldb to -1 in order to force to re-emit
+     * slave as well. Set replicaseldb to -1 in order to force to re-emit
      * a SELECT statement in the replication stream. */
-    g_pserver->slaveseldb = -1;
+    g_pserver->replicaseldb = -1;
 
     /* Don't send this reply to slaves that approached us with
      * the old SYNC command. */
@@ -680,7 +680,7 @@ int masterTryPartialResynchronization(client *c) {
         "Partial resynchronization request from %s accepted. Sending %lld bytes of backlog starting from offset %lld.",
             replicationGetSlaveName(c),
             psync_len, psync_offset);
-    /* Note that we don't need to set the selected DB at g_pserver->slaveseldb
+    /* Note that we don't need to set the selected DB at g_pserver->replicaseldb
      * to -1 to force the master to emit SELECT, since the slave already
      * has this state from the previous connection with the master. */
 
@@ -2374,7 +2374,7 @@ void replicationUnsetMaster(redisMaster *mi) {
      * with a SELECT statement. This is forced after a full resync, but
      * with PSYNC version 2, there is no need for full resync after a
      * master switch. */
-    g_pserver->slaveseldb = -1;
+    g_pserver->replicaseldb = -1;
 
     /* Once we turn from slave to master, we consider the starting time without
      * slaves (that is used to count the replication backlog time to live) as
@@ -3031,7 +3031,7 @@ void replicationCron(void) {
 
         if (!manual_failover_in_progress) {
             ping_argv[0] = createStringObject("PING",4);
-            replicationFeedSlaves(g_pserver->slaves, g_pserver->slaveseldb,
+            replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb,
                 ping_argv, 1);
             decrRefCount(ping_argv[0]);
         }

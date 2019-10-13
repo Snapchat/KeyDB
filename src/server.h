@@ -2628,6 +2628,7 @@ void monitorCommand(client *c);
 void expireCommand(client *c);
 void expireatCommand(client *c);
 void expireMemberCommand(client *c);
+void expireMemberAtCommand(client *c);
 void pexpireCommand(client *c);
 void pexpireatCommand(client *c);
 void getsetCommand(client *c);

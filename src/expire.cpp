@@ -139,22 +139,8 @@ int parseUnitString(const char *sz)
     return -1;
 }
 
-void expireMemberCommand(client *c)
+void expireMemberCore(client *c, robj *key, robj *subkey, long long basetime, long long when, int unit)
 {
-    long long when;
-    if (getLongLongFromObjectOrReply(c, c->argv[3], &when, NULL) != C_OK)
-        return;
-
-    if (c->argc > 5) {
-        addReplyError(c, "Invalid number of arguments");
-        return;
-    }
-
-    int unit = UNIT_SECONDS;
-    if (c->argc == 5) {
-        unit = parseUnitString(szFromObj(c->argv[4]));
-    }
-
     switch (unit)
     {
     case UNIT_SECONDS:
@@ -167,7 +153,7 @@ void expireMemberCommand(client *c)
         return;
     }
     
-    when += mstime();
+    when += basetime;
 
     /* No key, return zero. */
     dictEntry *de = dictFind(c->db->pdict, szFromObj(c->argv[1]));
@@ -193,6 +179,35 @@ void expireMemberCommand(client *c)
 
     addReply(c, shared.ok);
 }
+
+void expireMemberCommand(client *c)
+{
+    long long when;
+    if (getLongLongFromObjectOrReply(c, c->argv[3], &when, NULL) != C_OK)
+        return;
+
+    if (c->argc > 5) {
+        addReplyError(c, "Invalid number of arguments");
+        return;
+    }
+
+    int unit = UNIT_SECONDS;
+    if (c->argc == 5) {
+        unit = parseUnitString(szFromObj(c->argv[4]));
+    }
+
+    expireMemberCore(c, c->argv[1], c->argv[2], mstime(), when, unit);
+}
+
+void expireMemberAtCommand(client *c)
+{
+    long long when;
+    if (getLongLongFromObjectOrReply(c, c->argv[3], &when, NULL) != C_OK)
+        return;
+
+    expireMemberCore(c, c->argv[1], c->argv[2], 0, when, UNIT_SECONDS);
+}
+
 
 /* Try to expire a few timed out keys. The algorithm used is adaptive and
  * will use few CPU cycles if there are few expiring keys, otherwise

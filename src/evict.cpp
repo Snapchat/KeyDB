@@ -374,8 +374,8 @@ size_t freeMemoryGetNotCountedMemory(void) {
 
         listRewind(g_pserver->slaves,&li);
         while((ln = listNext(&li))) {
-            client *slave = (client*)listNodeValue(ln);
-            overhead += getClientOutputBufferMemoryUsage(slave);
+            client *replica = (client*)listNodeValue(ln);
+            overhead += getClientOutputBufferMemoryUsage(replica);
         }
     }
     if (g_pserver->aof_state != AOF_OFF) {

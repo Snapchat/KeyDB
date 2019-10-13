@@ -124,8 +124,8 @@ extern "C" void freeClusterManager(void) {
  *
  * The score is calculated as follows:
  *
- * SAME_AS_MASTER = 10000 * each slave in the same IP of its master.
- * SAME_AS_SLAVE  = 1 * each slave having the same IP as another slave
+ * SAME_AS_MASTER = 10000 * each replica in the same IP of its master.
+ * SAME_AS_SLAVE  = 1 * each replica having the same IP as another replica
                       of the same master.
  * FINAL_SCORE = SAME_AS_MASTER + SAME_AS_SLAVE
  *

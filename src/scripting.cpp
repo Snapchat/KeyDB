@@ -1479,7 +1479,7 @@ void evalGenericCommand(client *c, int evalsha) {
      * To do so we use a cache of SHA1s of scripts that we already propagated
      * as full EVAL, that's called the Replication Script Cache.
      *
-     * For repliation, everytime a new slave attaches to the master, we need to
+     * For repliation, everytime a new replica attaches to the master, we need to
      * flush our cache of scripts that can be replicated as EVALSHA, while
      * for AOF we need to do so every time we rewrite the AOF file. */
     if (evalsha && !g_pserver->lua_replicate_commands) {

@@ -152,7 +152,7 @@ typedef struct clusterNode {
     int port;
     sds name;
     int flags;
-    sds replicate;  /* Master ID if node is a slave */
+    sds replicate;  /* Master ID if node is a replica */
     int *slots;
     int slots_count;
     int current_slot_index;

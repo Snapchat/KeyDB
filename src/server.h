@@ -800,6 +800,16 @@ public:
 
     void expireSubKey(const char *szSubkey, long long when)
     {
+        // First check if the subkey already has an expiration
+        for (auto &entry : m_vecexpireEntries)
+        {
+            if (entry.spsubkey == nullptr)
+                continue;
+            if (sdscmp((sds)entry.spsubkey.get(), (sds)szSubkey) == 0) {
+                m_vecexpireEntries.erase(m_vecexpireEntries.begin() + (&entry - m_vecexpireEntries.data()));
+                break;
+            }
+        }
         auto itrInsert = std::lower_bound(m_vecexpireEntries.begin(), m_vecexpireEntries.end(), when);
         const char *subkey = (szSubkey) ? sdsdup(szSubkey) : nullptr;
         m_vecexpireEntries.emplace(itrInsert, when, subkey);
@@ -823,6 +833,7 @@ class expireEntry {
 public:
     class iter
     {
+        friend class expireEntry;
         expireEntry *m_pentry = nullptr;
         size_t m_idx = 0;
 
@@ -957,6 +968,14 @@ public:
         if (FFat())
             return iter(this, u.m_pfatentry->size());
         return iter(this, 1);
+    }
+    
+    void erase(iter &itr)
+    {
+        if (!FFat())
+            throw -1;   // assert
+        pfatentry()->m_vecexpireEntries.erase(
+            pfatentry()->m_vecexpireEntries.begin() + itr.m_idx);
     }
 
     bool FGetPrimaryExpire(long long *pwhen)
@@ -2408,6 +2427,7 @@ int rewriteConfig(char *path);
 /* db.c -- Keyspace access API */
 int removeExpire(redisDb *db, robj *key);
 int removeExpireCore(redisDb *db, robj *key, dictEntry *de);
+int removeSubkeyExpire(redisDb *db, robj *key, robj *subkey);
 void propagateExpire(redisDb *db, robj *key, int lazy);
 int expireIfNeeded(redisDb *db, robj *key);
 expireEntry *getExpire(redisDb *db, robj_roptr key);

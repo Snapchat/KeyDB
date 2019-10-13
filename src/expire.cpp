@@ -544,11 +544,32 @@ void ttlGenericCommand(client *c, int output_ms) {
         addReplyLongLong(c,-2);
         return;
     }
+
     /* The key exists. Return -1 if it has no expire, or the actual
-     * TTL value otherwise. */
+        * TTL value otherwise. */
     expireEntry *pexpire = getExpire(c->db,c->argv[1]);
-    if (pexpire != nullptr)
-        pexpire->FGetPrimaryExpire(&expire);
+
+    if (c->argc == 2) {
+        // primary expire    
+        if (pexpire != nullptr)
+            pexpire->FGetPrimaryExpire(&expire);
+    } else if (c->argc == 3) {
+        // We want a subkey expire
+        if (pexpire && pexpire->FFat()) {
+            for (auto itr : *pexpire) {
+                if (itr.subkey() == nullptr)
+                    continue;
+                if (sdscmp((sds)itr.subkey(), szFromObj(c->argv[2])) == 0) {
+                    expire = itr.when();
+                    break;
+                }
+            }
+        }
+    } else {
+        addReplyError(c, "Invalid arguments");
+        return;
+    }
+
     
     if (expire != -1) {
         ttl = expire-mstime();
@@ -574,11 +595,22 @@ void pttlCommand(client *c) {
 /* PERSIST key */
 void persistCommand(client *c) {
     if (lookupKeyWrite(c->db,c->argv[1])) {
-        if (removeExpire(c->db,c->argv[1])) {
-            addReply(c,shared.cone);
-            g_pserver->dirty++;
+        if (c->argc == 2) {
+            if (removeExpire(c->db,c->argv[1])) {
+                addReply(c,shared.cone);
+                g_pserver->dirty++;
+            } else {
+                addReply(c,shared.czero);
+            }
+        } else if (c->argc == 3) {
+            if (removeSubkeyExpire(c->db, c->argv[1], c->argv[2])) {
+                addReply(c,shared.cone);
+                g_pserver->dirty++;
+            } else {
+                addReply(c,shared.czero);
+            }
         } else {
-            addReply(c,shared.czero);
+            addReplyError(c, "Invalid arguments");
         }
     } else {
         addReply(c,shared.czero);

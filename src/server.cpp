@@ -730,7 +730,7 @@ struct redisCommand redisCommandTable[] = {
      "admin no-script",
      0,NULL,0,0,0,0,0,0},
 
-    {"ttl",ttlCommand,2,
+    {"ttl",ttlCommand,-2,
      "read-only fast random @keyspace",
      0,NULL,1,1,1,0,0,0},
 
@@ -738,11 +738,11 @@ struct redisCommand redisCommandTable[] = {
      "read-only fast @keyspace",
      0,NULL,1,-1,1,0,0,0},
 
-    {"pttl",pttlCommand,2,
+    {"pttl",pttlCommand,-2,
      "read-only fast random @keyspace",
      0,NULL,1,1,1,0,0,0},
 
-    {"persist",persistCommand,2,
+    {"persist",persistCommand,-2,
      "write fast @keyspace",
      0,NULL,1,1,1,0,0,0},
 

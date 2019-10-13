@@ -154,7 +154,7 @@ volatile unsigned long lru_clock; /* Server global current LRU time. */
  *
  * ok-loading:  Allow the command while loading the database.
  *
- * ok-stale:    Allow the command while a slave has stale data but is not
+ * ok-stale:    Allow the command while a replica has stale data but is not
  *              allowed to serve this data. Normally no command is accepted
  *              in this condition but just a few.
  *
@@ -2511,7 +2511,7 @@ void initServerConfig(void) {
 
     /* By default we want scripts to be always replicated by effects
      * (single commands executed by the script), and not by sending the
-     * script to the slave / AOF. This is the new way starting from
+     * script to the replica / AOF. This is the new way starting from
      * Redis 5. However it is possible to revert it via redis.conf. */
     g_pserver->lua_always_replicate_commands = 1;
 
@@ -3588,8 +3588,8 @@ int processCommand(client *c, int callFlags) {
      * propagation of DELs due to eviction. */
     if (g_pserver->maxmemory && !g_pserver->lua_timedout) {
         int out_of_memory = freeMemoryIfNeededAndSafe() == C_ERR;
-        /* freeMemoryIfNeeded may flush slave output buffers. This may result
-         * into a slave, that may be the active client, to be freed. */
+        /* freeMemoryIfNeeded may flush replica output buffers. This may result
+         * into a replica, that may be the active client, to be freed. */
         if (serverTL->current_client == NULL) return C_ERR;
 
         /* It was impossible to free enough memory, and the command the client
@@ -3636,7 +3636,7 @@ int processCommand(client *c, int callFlags) {
         return C_OK;
     }
 
-    /* Don't accept write commands if this is a read only slave. But
+    /* Don't accept write commands if this is a read only replica. But
      * accept write commands if this is our master. */
     if (listLength(g_pserver->masters) && g_pserver->repl_slave_ro &&
         !(c->flags & CLIENT_MASTER) &&
@@ -3659,7 +3659,7 @@ int processCommand(client *c, int callFlags) {
     }
 
     /* Only allow commands with flag "t", such as INFO, SLAVEOF and so on,
-     * when slave-serve-stale-data is no and we are a slave with a broken
+     * when replica-serve-stale-data is no and we are a replica with a broken
      * link with master. */
     if (FBrokenLinkToMaster() &&
         g_pserver->repl_serve_stale_data == 0 &&
@@ -3792,7 +3792,7 @@ int prepareForShutdown(int flags) {
         unlink(cserver.pidfile);
     }
 
-    /* Best effort flush of slave output buffers, so that we hopefully
+    /* Best effort flush of replica output buffers, so that we hopefully
      * send them pending writes. */
     flushSlavesOutputBuffers();
 
@@ -4470,18 +4470,18 @@ sds genRedisInfoString(const char *section) {
 
             listRewind(g_pserver->slaves,&li);
             while((ln = listNext(&li))) {
-                client *slave = (client*)listNodeValue(ln);
+                client *replica = (client*)listNodeValue(ln);
                 const char *state = NULL;
-                char ip[NET_IP_STR_LEN], *slaveip = slave->slave_ip;
+                char ip[NET_IP_STR_LEN], *slaveip = replica->slave_ip;
                 int port;
                 long lag = 0;
 
                 if (slaveip[0] == '\0') {
-                    if (anetPeerToString(slave->fd,ip,sizeof(ip),&port) == -1)
+                    if (anetPeerToString(replica->fd,ip,sizeof(ip),&port) == -1)
                         continue;
                     slaveip = ip;
                 }
-                switch(slave->replstate) {
+                switch(replica->replstate) {
                 case SLAVE_STATE_WAIT_BGSAVE_START:
                 case SLAVE_STATE_WAIT_BGSAVE_END:
                     state = "wait_bgsave";
@@ -4494,14 +4494,14 @@ sds genRedisInfoString(const char *section) {
                     break;
                 }
                 if (state == NULL) continue;
-                if (slave->replstate == SLAVE_STATE_ONLINE)
-                    lag = time(NULL) - slave->repl_ack_time;
+                if (replica->replstate == SLAVE_STATE_ONLINE)
+                    lag = time(NULL) - replica->repl_ack_time;
 
                 info = sdscatprintf(info,
                     "slave%d:ip=%s,port=%d,state=%s,"
                     "offset=%lld,lag=%ld\r\n",
-                    slaveid,slaveip,slave->slave_listening_port,state,
-                    (slave->repl_ack_off + slave->reploff_skipped), lag);
+                    slaveid,slaveip,replica->slave_listening_port,state,
+                    (replica->repl_ack_off + replica->reploff_skipped), lag);
                 slaveid++;
             }
         }
@@ -4609,7 +4609,7 @@ void infoCommand(client *c) {
 }
 
 void monitorCommand(client *c) {
-    /* ignore MONITOR if already slave or in monitor mode */
+    /* ignore MONITOR if already replica or in monitor mode */
     serverAssert(GlobalLocksAcquired());
     if (c->flags & CLIENT_SLAVE) return;
 
@@ -4836,7 +4836,7 @@ void loadDataFromDisk(void) {
                 while ((ln = listNext(&li)))
                 {
                     redisMaster *mi = (redisMaster*)listNodeValue(ln);
-                    /* If we are a slave, create a cached master from this
+                    /* If we are a replica, create a cached master from this
                     * information, in order to allow partial resynchronizations
                     * with masters. */
                     replicationCacheMasterUsingMyself(mi);

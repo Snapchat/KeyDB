@@ -803,7 +803,7 @@ void streamPropagateXCLAIM(client *c, robj *key, streamCG *group, robj *groupnam
      *        RETRYCOUNT <count> FORCE JUSTID LASTID <id>.
      *
      * Note that JUSTID is useful in order to avoid that XCLAIM will do
-     * useless work in the slave side, trying to fetch the stream item. */
+     * useless work in the replica side, trying to fetch the stream item. */
     robj *argv[14];
     argv[0] = createStringObject("XCLAIM",6);
     argv[1] = key;

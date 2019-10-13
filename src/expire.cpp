@@ -130,13 +130,43 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
     }
 }
 
+int parseUnitString(const char *sz)
+{
+    if (strcasecmp(sz, "s") == 0)
+        return UNIT_SECONDS;
+    if (strcasecmp(sz, "ms") == 0)
+        return UNIT_MILLISECONDS;
+    return -1;
+}
+
 void expireMemberCommand(client *c)
 {
     long long when;
     if (getLongLongFromObjectOrReply(c, c->argv[3], &when, NULL) != C_OK)
         return;
 
-    when *= 1000;
+    if (c->argc > 5) {
+        addReplyError(c, "Invalid number of arguments");
+        return;
+    }
+
+    int unit = UNIT_SECONDS;
+    if (c->argc == 5) {
+        unit = parseUnitString(szFromObj(c->argv[4]));
+    }
+
+    switch (unit)
+    {
+    case UNIT_SECONDS:
+        when *= 1000;
+    case UNIT_MILLISECONDS:
+        break;
+    
+    default:
+        addReplyError(c, "Invalid unit arg");
+        return;
+    }
+    
     when += mstime();
 
     /* No key, return zero. */

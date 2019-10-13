@@ -219,9 +219,9 @@ int setTypeRandomElement(robj *setobj, sds *sdsele, int64_t *llele) {
     return setobj->encoding;
 }
 
-int setTypeRandomElement(robj_roptr setobj, const char **sdsele, const int64_t *llele)
+int setTypeRandomElement(robj_roptr setobj, const char **sdsele, int64_t *llele)
 {
-    return setTypeRandomElement(setobj.unsafe_robjcast(), (sds*)sdsele, const_cast<int64_t*>(llele));
+    return setTypeRandomElement(setobj.unsafe_robjcast(), (sds*)sdsele, llele);
 }
 
 unsigned long setTypeSize(robj_roptr subject) {

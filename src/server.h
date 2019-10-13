@@ -1042,7 +1042,7 @@ typedef struct clientReplyBlock {
 struct dictEntry;
 class dict_const_iter
 {
-    friend class redisDb;
+    friend struct redisDb;
     friend class redisDbPersistentData;
 protected:
     dictEntry *de;

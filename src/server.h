@@ -2014,7 +2014,7 @@ const char *getClientTypeName(int cclass);
 void flushSlavesOutputBuffers(void);
 void disconnectSlaves(void);
 void disconnectSlavesExcept(unsigned char *uuid);
-int listenToPort(int port, int *fds, int *count, int fReusePort);
+int listenToPort(int port, int *fds, int *count, int fReusePort, int fFirstListen);
 void pauseClients(mstime_t duration);
 int clientsArePaused(void);
 int processEventsWhileBlocked(int iel);

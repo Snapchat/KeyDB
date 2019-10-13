@@ -42,6 +42,7 @@
 #include <stdlib.h>
 #include <cmath>
 #include <string.h>
+#include <string>
 #include <time.h>
 #include <limits.h>
 #include <unistd.h>

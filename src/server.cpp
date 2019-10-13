@@ -2704,7 +2704,7 @@ void checkTcpBacklogSettings(void) {
  * impossible to bind, or no bind addresses were specified in the server
  * configuration but the function is not able to bind * for at least
  * one of the IPv4 or IPv6 protocols. */
-int listenToPort(int port, int *fds, int *count, int fReusePort) {
+int listenToPort(int port, int *fds, int *count, int fReusePort, int fFirstListen) {
     int j;
 
     /* Force binding of 0.0.0.0 if no bind address is specified, always
@@ -2716,7 +2716,7 @@ int listenToPort(int port, int *fds, int *count, int fReusePort) {
             /* Bind * for both IPv6 and IPv4, we enter here only if
              * g_pserver->bindaddr_count == 0. */
             fds[*count] = anetTcp6Server(serverTL->neterr,port,NULL,
-                g_pserver->tcp_backlog, fReusePort);
+                g_pserver->tcp_backlog, fReusePort, fFirstListen);
             if (fds[*count] != ANET_ERR) {
                 anetNonBlock(NULL,fds[*count]);
                 (*count)++;
@@ -2728,7 +2728,7 @@ int listenToPort(int port, int *fds, int *count, int fReusePort) {
             if (*count == 1 || unsupported) {
                 /* Bind the IPv4 address as well. */
                 fds[*count] = anetTcpServer(serverTL->neterr,port,NULL,
-                    g_pserver->tcp_backlog, fReusePort);
+                    g_pserver->tcp_backlog, fReusePort, fFirstListen);
                 if (fds[*count] != ANET_ERR) {
                     anetNonBlock(NULL,fds[*count]);
                     (*count)++;
@@ -2744,11 +2744,11 @@ int listenToPort(int port, int *fds, int *count, int fReusePort) {
         } else if (strchr(g_pserver->bindaddr[j],':')) {
             /* Bind IPv6 address. */
             fds[*count] = anetTcp6Server(serverTL->neterr,port,g_pserver->bindaddr[j],
-                g_pserver->tcp_backlog, fReusePort);
+                g_pserver->tcp_backlog, fReusePort, fFirstListen);
         } else {
             /* Bind IPv4 address. */
             fds[*count] = anetTcpServer(serverTL->neterr,port,g_pserver->bindaddr[j],
-                g_pserver->tcp_backlog, fReusePort);
+                g_pserver->tcp_backlog, fReusePort, fFirstListen);
         }
         if (fds[*count] == ANET_ERR) {
             serverLog(LL_WARNING,
@@ -2810,7 +2810,7 @@ static void initNetworkingThread(int iel, int fReusePort)
     if (fReusePort || (iel == IDX_EVENT_LOOP_MAIN))
     {
         if (g_pserver->port != 0 &&
-            listenToPort(g_pserver->port,g_pserver->rgthreadvar[iel].ipfd,&g_pserver->rgthreadvar[iel].ipfd_count, fReusePort) == C_ERR)
+            listenToPort(g_pserver->port,g_pserver->rgthreadvar[iel].ipfd,&g_pserver->rgthreadvar[iel].ipfd_count, fReusePort, (iel == IDX_EVENT_LOOP_MAIN)) == C_ERR)
             exit(1);
     }
     else

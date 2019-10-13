@@ -1302,6 +1302,10 @@ NULL
          * because we update the access time only
          * when the key is read or overwritten. */
         addReplyLongLong(c,LFUDecrAndReturn(o));
+    } else if (!strcasecmp(szFromObj(c->argv[1]), "lastmodified") && c->argc == 3) {
+        if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
+                == NULL) return;
+        addReplyLongLong(c, (g_pserver->mstime - (o->mvcc_tstamp >> MVCC_MS_SHIFT)) / 1000);
     } else {
         addReplySubcommandSyntaxError(c);
     }

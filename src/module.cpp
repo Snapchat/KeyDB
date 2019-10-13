@@ -1439,7 +1439,7 @@ int RM_GetSelectedDb(RedisModuleCtx *ctx) {
  *
  *  * REDISMODULE_CTX_FLAGS_MASTER: The Redis instance is a master
  *
- *  * REDISMODULE_CTX_FLAGS_SLAVE: The Redis instance is a slave
+ *  * REDISMODULE_CTX_FLAGS_SLAVE: The Redis instance is a replica
  *
  *  * REDISMODULE_CTX_FLAGS_READONLY: The Redis instance is read-only
  *
@@ -4289,7 +4289,7 @@ size_t RM_GetClusterSize(void) {
  *
  * The arguments ip, master_id, port and flags can be NULL in case we don't
  * need to populate back certain info. If an ip and master_id (only populated
- * if the instance is a slave) are specified, they point to buffers holding
+ * if the instance is a replica) are specified, they point to buffers holding
  * at least REDISMODULE_NODE_ID_LEN bytes. The strings written back as ip
  * and master_id are not null terminated.
  *
@@ -4300,7 +4300,7 @@ size_t RM_GetClusterSize(void) {
  * * REDISMODULE_NODE_SLAVE         The node is a replica
  * * REDISMODULE_NODE_PFAIL         We see the node as failing
  * * REDISMODULE_NODE_FAIL          The cluster agrees the node is failing
- * * REDISMODULE_NODE_NOFAILOVER    The slave is configured to never failover
+ * * REDISMODULE_NODE_NOFAILOVER    The replica is configured to never failover
  */
 
 clusterNode *clusterLookupNode(const char *name); /* We need access to internals */
@@ -5181,7 +5181,7 @@ void moduleInitModulesSystem(void) {
  * The function aborts the server on errors, since to start with missing
  * modules is not considered sane: clients may rely on the existence of
  * given commands, loading AOF also may need some modules to exist, and
- * if this instance is a slave, it must understand commands from master. */
+ * if this instance is a replica, it must understand commands from master. */
 void moduleLoadFromQueue(void) {
     listIter li;
     listNode *ln;

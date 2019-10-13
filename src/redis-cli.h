@@ -187,7 +187,7 @@ typedef struct clusterManagerNode {
     time_t ping_recv;
     int flags;
     list *flags_str; /* Flags string representations */
-    sds replicate;  /* Master ID if node is a slave */
+    sds replicate;  /* Master ID if node is a replica */
     int dirty;      /* Node has changes that can be flushed */
     uint8_t slots[CLUSTER_MANAGER_SLOTS];
     int slots_count;

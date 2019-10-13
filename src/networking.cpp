@@ -195,7 +195,7 @@ client *createClient(int fd, int iel) {
  * buffers can hold, then we'll really install the handler. */
 void clientInstallWriteHandler(client *c) {
     /* Schedule the client to write the output buffers to the socket only
-     * if not already done and, for slaves, if the slave can actually receive
+     * if not already done and, for slaves, if the replica can actually receive
      * writes at this stage. */
     if (!(c->flags & CLIENT_PENDING_WRITE) &&
         (c->replstate == REPL_STATE_NONE ||
@@ -239,7 +239,7 @@ void clientInstallAsyncWriteHandler(client *c) {
  *
  * 1) The event handler should already be installed since the output buffer
  *    already contains something.
- * 2) The client is a slave but not yet online, so we want to just accumulate
+ * 2) The client is a replica but not yet online, so we want to just accumulate
  *    writes in the buffer but not actually sending them yet.
  *
  * Typically gets called every time a reply is built, before adding more
@@ -442,7 +442,7 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
     addReplyProtoCore(c,s,len,fAsync);
     addReplyProtoCore(c,"\r\n",2,fAsync);
 
-    /* Sometimes it could be normal that a slave replies to a master with
+    /* Sometimes it could be normal that a replica replies to a master with
      * an error and this function gets called. Actually the error will never
      * be sent because addReply*() against master clients has no effect...
      * A notable example is:
@@ -1214,7 +1214,7 @@ void unlinkClient(client *c) {
 
         /* In the case of diskless replication the fork is writing to the
          * sockets and just closing the fd isn't enough, if we don't also
-         * shutdown the socket the fork will continue to write to the slave
+         * shutdown the socket the fork will continue to write to the replica
          * and the salve will only find out that it was disconnected when
          * it will finish reading the rdb. */
         if ((c->flags & CLIENT_SLAVE) &&
@@ -1299,7 +1299,7 @@ bool freeClient(client *c) {
         }
     }
 
-    /* Log link disconnection with slave */
+    /* Log link disconnection with replica */
     if ((c->flags & CLIENT_SLAVE) && !(c->flags & CLIENT_MONITOR)) {
         serverLog(LL_WARNING,"Connection with replica %s lost.",
             replicationGetSlaveName(c));
@@ -1333,8 +1333,8 @@ bool freeClient(client *c) {
      * places where active clients may be referenced. */
     unlinkClient(c);
 
-    /* Master/slave cleanup Case 1:
-     * we lost the connection with a slave. */
+    /* Master/replica cleanup Case 1:
+     * we lost the connection with a replica. */
     if (c->flags & CLIENT_SLAVE) {
         if (c->replstate == SLAVE_STATE_SEND_BULK) {
             if (c->repldbfd != -1) close(c->repldbfd);
@@ -1352,7 +1352,7 @@ bool freeClient(client *c) {
         refreshGoodSlavesCount();
     }
 
-    /* Master/slave cleanup Case 2:
+    /* Master/replica cleanup Case 2:
      * we lost the connection with the master. */
     if (c->flags & CLIENT_MASTER) replicationHandleMasterDisconnection(MasterInfoFromClient(c));
 
@@ -1494,7 +1494,7 @@ int writeToClient(int fd, client *c, int handler_installed) {
          * just deliver as much data as it is possible to deliver.
          *
          * Moreover, we also send as much as possible if the client is
-         * a slave (otherwise, on high-speed traffic, the replication
+         * a replica (otherwise, on high-speed traffic, the replication
          * buffer will grow indefinitely) */
         if (totwritten > NET_MAX_WRITES_PER_EVENT &&
             (g_pserver->maxmemory == 0 ||
@@ -1805,7 +1805,7 @@ int processInlineBuffer(client *c) {
     }
 
     /* Newline from slaves can be used to refresh the last ACK time.
-     * This is useful for a slave to ping back while loading a big
+     * This is useful for a replica to ping back while loading a big
      * RDB file. */
     if (querylen == 0 && c->flags & CLIENT_SLAVE)
         c->repl_ack_time = g_pserver->unixtime;
@@ -2038,8 +2038,8 @@ int processCommandAndResetClient(client *c, int flags) {
     }
     if (serverTL->current_client == NULL) deadclient = 1;
     serverTL->current_client = NULL;
-    /* freeMemoryIfNeeded may flush slave output buffers. This may
-     * result into a slave, that may be the active client, to be
+    /* freeMemoryIfNeeded may flush replica output buffers. This may
+     * result into a replica, that may be the active client, to be
      * freed. */
     return deadclient ? C_ERR : C_OK;
 }
@@ -2060,7 +2060,7 @@ void processInputBuffer(client *c, int callFlags) {
         if (c->flags & CLIENT_BLOCKED) break;
 
         /* Don't process input from the master while there is a busy script
-         * condition on the slave. We want just to accumulate the replication
+         * condition on the replica. We want just to accumulate the replication
          * stream (instead of replying -BUSY like we do with other clients) and
          * later resume the processing. */
         if (g_pserver->lua_timedout && c->flags & CLIENT_MASTER) break;
@@ -2910,10 +2910,10 @@ void flushSlavesOutputBuffers(void) {
 
     listRewind(g_pserver->slaves,&li);
     while((ln = listNext(&li))) {
-        client *slave = (client*)listNodeValue(ln);
+        client *replica = (client*)listNodeValue(ln);
         int events;
 
-        if (!FCorrectThread(slave))
+        if (!FCorrectThread(replica))
             continue;   // we cannot synchronously flush other thread's clients
 
         /* Note that the following will not flush output buffers of slaves
@@ -2922,12 +2922,12 @@ void flushSlavesOutputBuffers(void) {
          * of put_online_on_ack is to postpone the moment it is installed.
          * This is what we want since slaves in this state should not receive
          * writes before the first ACK. */
-        events = aeGetFileEvents(g_pserver->rgthreadvar[slave->iel].el,slave->fd);
+        events = aeGetFileEvents(g_pserver->rgthreadvar[replica->iel].el,replica->fd);
         if (events & AE_WRITABLE &&
-            slave->replstate == SLAVE_STATE_ONLINE &&
-            clientHasPendingReplies(slave))
+            replica->replstate == SLAVE_STATE_ONLINE &&
+            clientHasPendingReplies(replica))
         {
-            writeToClient(slave->fd,slave,0);
+            writeToClient(replica->fd,replica,0);
         }
     }
 }

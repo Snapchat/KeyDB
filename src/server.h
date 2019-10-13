@@ -722,6 +722,8 @@ typedef struct RedisModuleDigest {
 #define OBJ_SHARED_REFCOUNT (0x7FFFFFFF) 
 #define OBJ_MVCC_INVALID (0xFFFFFFFFFFFFFFFFULL)
 
+#define MVCC_MS_SHIFT 20
+
 typedef struct redisObject {
     unsigned type:4;
     unsigned encoding:4;

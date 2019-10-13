@@ -4988,7 +4988,7 @@ void incrementMvccTstamp()
 {
     uint64_t msPrev;
     __atomic_load(&g_pserver->mvcc_tstamp, &msPrev, __ATOMIC_ACQUIRE);
-    msPrev >>= 20;  // convert to milliseconds
+    msPrev >>= MVCC_MS_SHIFT;  // convert to milliseconds
 
     long long mst;
     __atomic_load(&g_pserver->mstime, &mst, __ATOMIC_RELAXED);
@@ -4998,7 +4998,7 @@ void incrementMvccTstamp()
     }
     else
     {
-        atomicSet(g_pserver->mvcc_tstamp, ((uint64_t)g_pserver->mstime) << 20);
+        atomicSet(g_pserver->mvcc_tstamp, ((uint64_t)g_pserver->mstime) << MVCC_MS_SHIFT);
     }
 }
 

@@ -288,6 +288,8 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listIter li, liReply;
     int j, len;
     serverAssert(GlobalLocksAcquired());
+    if (dictid < 0)
+        dictid = 0; // this can happen if we send a PING before any real operation
 
     /* If the instance is not a top level master, return ASAP: we'll just proxy
      * the stream of data we receive from our master instead, in order to
@@ -327,7 +329,6 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     cchProto = std::min((int)sizeof(proto), cchProto);
     long long master_repl_offset_start = g_pserver->master_repl_offset;
     
-    serverAssert(dictid >= 0);
     char szDbNum[128];
     int cchDbNum = snprintf(szDbNum, sizeof(szDbNum), "$%d\r\n%d\r\n", (dictid/10)+1, dictid);
 

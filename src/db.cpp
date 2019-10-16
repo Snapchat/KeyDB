@@ -115,7 +115,7 @@ static robj *lookupKey(redisDb *db, robj *key, int flags) {
  *  LOOKUP_NOTOUCH: don't alter the last access time of the key.
  *
  * Note: this function also returns NULL if the key is logically expired
- * but still existing, in case this is a slave, since this API is called only
+ * but still existing, in case this is a replica, since this API is called only
  * for read operations. Even if the key expiry is master-driven, we can
  * correctly report a key is expired on slaves even if the master is lagging
  * expiring our key via DELs in the replication link. */
@@ -133,7 +133,7 @@ robj_roptr lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
             return NULL;
         }
 
-        /* However if we are in the context of a slave, expireIfNeeded() will
+        /* However if we are in the context of a replica, expireIfNeeded() will
          * not really try to expire the key, it only returns information
          * about the "logical" status of the key: key expiring is up to the
          * master in order to have a consistent view of master's data set.
@@ -344,7 +344,7 @@ robj *dbRandomKey(redisDb *db) {
             if (allvolatile && listLength(g_pserver->masters) && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
                     * it could happen that all the keys are already logically
-                    * expired in the slave, so the function cannot stop because
+                    * expired in the replica, so the function cannot stop because
                     * expireIfNeeded() is false, nor it can stop because
                     * dictGetRandomKey() returns NULL (there are keys to return).
                     * To prevent the infinite loop we do some tries, but if there
@@ -1227,6 +1227,39 @@ int removeExpireCore(redisDb *db, robj *key, dictEntry *de) {
     return 1;
 }
 
+int removeSubkeyExpire(redisDb *db, robj *key, robj *subkey) {
+    dictEntry *de = dictFind(db->pdict,ptrFromObj(key));
+    serverAssertWithInfo(NULL,key,de != NULL);
+    
+    robj *val = (robj*)dictGetVal(de);
+    if (!val->FExpires())
+        return 0;
+    
+    auto itr = db->setexpire->find((sds)dictGetKey(de));
+    serverAssert(itr != db->setexpire->end());
+    serverAssert(itr->key() == (sds)dictGetKey(de));
+    if (!itr->FFat())
+        return 0;
+
+    int found = 0;
+    for (auto subitr : *itr)
+    {
+        if (subitr.subkey() == nullptr)
+            continue;
+        if (sdscmp((sds)subitr.subkey(), szFromObj(subkey)) == 0)
+        {
+            itr->erase(subitr);
+            found = 1;
+            break;
+        }
+    }
+
+    if (itr->pfatentry()->size() == 0)
+        removeExpireCore(db, key, de);
+
+    return found;
+}
+
 /* Set an expire to the specified key. If the expire is set in the context
  * of an user calling a command 'c' is the client, otherwise 'c' is set
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds
@@ -1335,7 +1368,7 @@ expireEntry *getExpire(redisDb *db, robj_roptr key) {
  * to all the slaves and the AOF file if enabled.
  *
  * This way the key expiry is centralized in one place, and since both
- * AOF and the master->slave link guarantee operation ordering, everything
+ * AOF and the master->replica link guarantee operation ordering, everything
  * will be consistent even if we allow write operations against expiring
  * keys. */
 void propagateExpire(redisDb *db, robj *key, int lazy) {
@@ -1393,10 +1426,10 @@ int keyIsExpired(redisDb *db, robj *key) {
  * is via lookupKey*() family of functions.
  *
  * The behavior of the function depends on the replication role of the
- * instance, because slave instances do not expire keys, they wait
+ * instance, because replica instances do not expire keys, they wait
  * for DELs from the master for consistency matters. However even
  * slaves will try to have a coherent return value for the function,
- * so that read commands executed in the slave side will be able to
+ * so that read commands executed in the replica side will be able to
  * behave like if the key is expired even if still present (because the
  * master has yet to propagate the DEL).
  *
@@ -1409,9 +1442,9 @@ int keyIsExpired(redisDb *db, robj *key) {
 int expireIfNeeded(redisDb *db, robj *key) {
     if (!keyIsExpired(db,key)) return 0;
 
-    /* If we are running in the context of a slave, instead of
+    /* If we are running in the context of a replica, instead of
      * evicting the expired key from the database, we return ASAP:
-     * the slave key expiration is controlled by the master that will
+     * the replica key expiration is controlled by the master that will
      * send us synthesized DEL operations for expired keys.
      *
      * Still we try to return the right information to the caller,

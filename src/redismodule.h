@@ -71,9 +71,9 @@ extern "C" {
 #define REDISMODULE_CTX_FLAGS_MULTI (1<<1)
 /* The instance is a master */
 #define REDISMODULE_CTX_FLAGS_MASTER (1<<2)
-/* The instance is a slave */
+/* The instance is a replica */
 #define REDISMODULE_CTX_FLAGS_SLAVE (1<<3)
-/* The instance is read-only (usually meaning it's a slave as well) */
+/* The instance is read-only (usually meaning it's a replica as well) */
 #define REDISMODULE_CTX_FLAGS_READONLY (1<<4)
 /* The instance is running in cluster mode */
 #define REDISMODULE_CTX_FLAGS_CLUSTER (1<<5)

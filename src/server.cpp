@@ -154,7 +154,7 @@ volatile unsigned long lru_clock; /* Server global current LRU time. */
  *
  * ok-loading:  Allow the command while loading the database.
  *
- * ok-stale:    Allow the command while a slave has stale data but is not
+ * ok-stale:    Allow the command while a replica has stale data but is not
  *              allowed to serve this data. Normally no command is accepted
  *              in this condition but just a few.
  *
@@ -623,7 +623,11 @@ struct redisCommand redisCommandTable[] = {
      "write fast @keyspace",
      0,NULL,1,1,1,0,0,0},
 
-    {"expiremember", expireMemberCommand, 4,
+    {"expiremember", expireMemberCommand, -4,
+     "write fast @keyspace",
+     0,NULL,1,1,1,0,0,0},
+    
+    {"expirememberat", expireMemberAtCommand, 4,
      "write fast @keyspace",
      0,NULL,1,1,1,0,0,0},
 
@@ -730,7 +734,7 @@ struct redisCommand redisCommandTable[] = {
      "admin no-script",
      0,NULL,0,0,0,0,0,0},
 
-    {"ttl",ttlCommand,2,
+    {"ttl",ttlCommand,-2,
      "read-only fast random @keyspace",
      0,NULL,1,1,1,0,0,0},
 
@@ -738,11 +742,11 @@ struct redisCommand redisCommandTable[] = {
      "read-only fast @keyspace",
      0,NULL,1,-1,1,0,0,0},
 
-    {"pttl",pttlCommand,2,
+    {"pttl",pttlCommand,-2,
      "read-only fast random @keyspace",
      0,NULL,1,1,1,0,0,0},
 
-    {"persist",persistCommand,2,
+    {"persist",persistCommand,-2,
      "write fast @keyspace",
      0,NULL,1,1,1,0,0,0},
 
@@ -2106,7 +2110,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         argv[0] = createStringObject("REPLCONF",8);
         argv[1] = createStringObject("GETACK",6);
         argv[2] = createStringObject("*",1); /* Not used argument. */
-        replicationFeedSlaves(g_pserver->slaves, g_pserver->slaveseldb, argv, 3);
+        replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb, argv, 3);
         decrRefCount(argv[0]);
         decrRefCount(argv[1]);
         decrRefCount(argv[2]);
@@ -2511,7 +2515,7 @@ void initServerConfig(void) {
 
     /* By default we want scripts to be always replicated by effects
      * (single commands executed by the script), and not by sending the
-     * script to the slave / AOF. This is the new way starting from
+     * script to the replica / AOF. This is the new way starting from
      * Redis 5. However it is possible to revert it via redis.conf. */
     g_pserver->lua_always_replicate_commands = 1;
 
@@ -2704,7 +2708,7 @@ void checkTcpBacklogSettings(void) {
  * impossible to bind, or no bind addresses were specified in the server
  * configuration but the function is not able to bind * for at least
  * one of the IPv4 or IPv6 protocols. */
-int listenToPort(int port, int *fds, int *count, int fReusePort) {
+int listenToPort(int port, int *fds, int *count, int fReusePort, int fFirstListen) {
     int j;
 
     /* Force binding of 0.0.0.0 if no bind address is specified, always
@@ -2716,7 +2720,7 @@ int listenToPort(int port, int *fds, int *count, int fReusePort) {
             /* Bind * for both IPv6 and IPv4, we enter here only if
              * g_pserver->bindaddr_count == 0. */
             fds[*count] = anetTcp6Server(serverTL->neterr,port,NULL,
-                g_pserver->tcp_backlog, fReusePort);
+                g_pserver->tcp_backlog, fReusePort, fFirstListen);
             if (fds[*count] != ANET_ERR) {
                 anetNonBlock(NULL,fds[*count]);
                 (*count)++;
@@ -2728,7 +2732,7 @@ int listenToPort(int port, int *fds, int *count, int fReusePort) {
             if (*count == 1 || unsupported) {
                 /* Bind the IPv4 address as well. */
                 fds[*count] = anetTcpServer(serverTL->neterr,port,NULL,
-                    g_pserver->tcp_backlog, fReusePort);
+                    g_pserver->tcp_backlog, fReusePort, fFirstListen);
                 if (fds[*count] != ANET_ERR) {
                     anetNonBlock(NULL,fds[*count]);
                     (*count)++;
@@ -2744,11 +2748,11 @@ int listenToPort(int port, int *fds, int *count, int fReusePort) {
         } else if (strchr(g_pserver->bindaddr[j],':')) {
             /* Bind IPv6 address. */
             fds[*count] = anetTcp6Server(serverTL->neterr,port,g_pserver->bindaddr[j],
-                g_pserver->tcp_backlog, fReusePort);
+                g_pserver->tcp_backlog, fReusePort, fFirstListen);
         } else {
             /* Bind IPv4 address. */
             fds[*count] = anetTcpServer(serverTL->neterr,port,g_pserver->bindaddr[j],
-                g_pserver->tcp_backlog, fReusePort);
+                g_pserver->tcp_backlog, fReusePort, fFirstListen);
         }
         if (fds[*count] == ANET_ERR) {
             serverLog(LL_WARNING,
@@ -2810,7 +2814,7 @@ static void initNetworkingThread(int iel, int fReusePort)
     if (fReusePort || (iel == IDX_EVENT_LOOP_MAIN))
     {
         if (g_pserver->port != 0 &&
-            listenToPort(g_pserver->port,g_pserver->rgthreadvar[iel].ipfd,&g_pserver->rgthreadvar[iel].ipfd_count, fReusePort) == C_ERR)
+            listenToPort(g_pserver->port,g_pserver->rgthreadvar[iel].ipfd,&g_pserver->rgthreadvar[iel].ipfd_count, fReusePort, (iel == IDX_EVENT_LOOP_MAIN)) == C_ERR)
             exit(1);
     }
     else
@@ -2961,7 +2965,7 @@ void initServer(void) {
     cserver.pid = getpid();
     g_pserver->clients_index = raxNew();
     g_pserver->clients_to_close = listCreate();
-    g_pserver->slaveseldb = -1; /* Force to emit the first SELECT command. */
+    g_pserver->replicaseldb = -1; /* Force to emit the first SELECT command. */
     g_pserver->ready_keys = listCreate();
     g_pserver->clients_waiting_acks = listCreate();
     g_pserver->get_ack_from_slaves = 0;
@@ -3588,8 +3592,8 @@ int processCommand(client *c, int callFlags) {
      * propagation of DELs due to eviction. */
     if (g_pserver->maxmemory && !g_pserver->lua_timedout) {
         int out_of_memory = freeMemoryIfNeededAndSafe() == C_ERR;
-        /* freeMemoryIfNeeded may flush slave output buffers. This may result
-         * into a slave, that may be the active client, to be freed. */
+        /* freeMemoryIfNeeded may flush replica output buffers. This may result
+         * into a replica, that may be the active client, to be freed. */
         if (serverTL->current_client == NULL) return C_ERR;
 
         /* It was impossible to free enough memory, and the command the client
@@ -3636,7 +3640,7 @@ int processCommand(client *c, int callFlags) {
         return C_OK;
     }
 
-    /* Don't accept write commands if this is a read only slave. But
+    /* Don't accept write commands if this is a read only replica. But
      * accept write commands if this is our master. */
     if (listLength(g_pserver->masters) && g_pserver->repl_slave_ro &&
         !(c->flags & CLIENT_MASTER) &&
@@ -3659,7 +3663,7 @@ int processCommand(client *c, int callFlags) {
     }
 
     /* Only allow commands with flag "t", such as INFO, SLAVEOF and so on,
-     * when slave-serve-stale-data is no and we are a slave with a broken
+     * when replica-serve-stale-data is no and we are a replica with a broken
      * link with master. */
     if (FBrokenLinkToMaster() &&
         g_pserver->repl_serve_stale_data == 0 &&
@@ -3792,7 +3796,7 @@ int prepareForShutdown(int flags) {
         unlink(cserver.pidfile);
     }
 
-    /* Best effort flush of slave output buffers, so that we hopefully
+    /* Best effort flush of replica output buffers, so that we hopefully
      * send them pending writes. */
     flushSlavesOutputBuffers();
 
@@ -4470,18 +4474,18 @@ sds genRedisInfoString(const char *section) {
 
             listRewind(g_pserver->slaves,&li);
             while((ln = listNext(&li))) {
-                client *slave = (client*)listNodeValue(ln);
+                client *replica = (client*)listNodeValue(ln);
                 const char *state = NULL;
-                char ip[NET_IP_STR_LEN], *slaveip = slave->slave_ip;
+                char ip[NET_IP_STR_LEN], *slaveip = replica->slave_ip;
                 int port;
                 long lag = 0;
 
                 if (slaveip[0] == '\0') {
-                    if (anetPeerToString(slave->fd,ip,sizeof(ip),&port) == -1)
+                    if (anetPeerToString(replica->fd,ip,sizeof(ip),&port) == -1)
                         continue;
                     slaveip = ip;
                 }
-                switch(slave->replstate) {
+                switch(replica->replstate) {
                 case SLAVE_STATE_WAIT_BGSAVE_START:
                 case SLAVE_STATE_WAIT_BGSAVE_END:
                     state = "wait_bgsave";
@@ -4494,14 +4498,14 @@ sds genRedisInfoString(const char *section) {
                     break;
                 }
                 if (state == NULL) continue;
-                if (slave->replstate == SLAVE_STATE_ONLINE)
-                    lag = time(NULL) - slave->repl_ack_time;
+                if (replica->replstate == SLAVE_STATE_ONLINE)
+                    lag = time(NULL) - replica->repl_ack_time;
 
                 info = sdscatprintf(info,
                     "slave%d:ip=%s,port=%d,state=%s,"
                     "offset=%lld,lag=%ld\r\n",
-                    slaveid,slaveip,slave->slave_listening_port,state,
-                    (slave->repl_ack_off + slave->reploff_skipped), lag);
+                    slaveid,slaveip,replica->slave_listening_port,state,
+                    (replica->repl_ack_off + replica->reploff_skipped), lag);
                 slaveid++;
             }
         }
@@ -4609,7 +4613,7 @@ void infoCommand(client *c) {
 }
 
 void monitorCommand(client *c) {
-    /* ignore MONITOR if already slave or in monitor mode */
+    /* ignore MONITOR if already replica or in monitor mode */
     serverAssert(GlobalLocksAcquired());
     if (c->flags & CLIENT_SLAVE) return;
 
@@ -4836,7 +4840,7 @@ void loadDataFromDisk(void) {
                 while ((ln = listNext(&li)))
                 {
                     redisMaster *mi = (redisMaster*)listNodeValue(ln);
-                    /* If we are a slave, create a cached master from this
+                    /* If we are a replica, create a cached master from this
                     * information, in order to allow partial resynchronizations
                     * with masters. */
                     replicationCacheMasterUsingMyself(mi);
@@ -4984,7 +4988,7 @@ void incrementMvccTstamp()
 {
     uint64_t msPrev;
     __atomic_load(&g_pserver->mvcc_tstamp, &msPrev, __ATOMIC_ACQUIRE);
-    msPrev >>= 20;  // convert to milliseconds
+    msPrev >>= MVCC_MS_SHIFT;  // convert to milliseconds
 
     long long mst;
     __atomic_load(&g_pserver->mstime, &mst, __ATOMIC_RELAXED);
@@ -4994,7 +4998,7 @@ void incrementMvccTstamp()
     }
     else
     {
-        atomicSet(g_pserver->mvcc_tstamp, ((uint64_t)g_pserver->mstime) << 20);
+        atomicSet(g_pserver->mvcc_tstamp, ((uint64_t)g_pserver->mstime) << MVCC_MS_SHIFT);
     }
 }
 

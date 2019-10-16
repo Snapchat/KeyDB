@@ -142,7 +142,7 @@ void execCommand(client *c) {
     }
 
     /* If there are write commands inside the transaction, and this is a read
-     * only slave, we want to send an error. This happens when the transaction
+     * only replica, we want to send an error. This happens when the transaction
      * was initiated when the instance was a master or a writable replica and
      * then the configuration changed (for example instance was turned into
      * a replica). */
@@ -195,7 +195,7 @@ void execCommand(client *c) {
         int is_master = listLength(g_pserver->masters) == 0;
         g_pserver->dirty++;
         /* If inside the MULTI/EXEC block this instance was suddenly
-         * switched from master to slave (using the SLAVEOF command), the
+         * switched from master to replica (using the SLAVEOF command), the
          * initial MULTI was propagated into the replication backlog, but the
          * rest was not. We need to make sure to at least terminate the
          * backlog with the final EXEC. */

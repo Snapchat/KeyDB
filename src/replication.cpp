@@ -46,13 +46,13 @@
 void replicationDiscardCachedMaster(redisMaster *mi);
 void replicationResurrectCachedMaster(redisMaster *mi, int newfd);
 void replicationSendAck(redisMaster *mi);
-void putSlaveOnline(client *slave);
+void putSlaveOnline(client *replica);
 int cancelReplicationHandshake(redisMaster *mi);
 
 /* --------------------------- Utility functions ---------------------------- */
 
-/* Return the pointer to a string representing the slave ip:listening_port
- * pair. Mostly useful for logging, since we want to log a slave using its
+/* Return the pointer to a string representing the replica ip:listening_port
+ * pair. Mostly useful for logging, since we want to log a replica using its
  * IP address and its listening port which is more clear for the user, for
  * example: "Closing connection with replica 10.1.2.3:6380". */
 char *replicationGetSlaveName(client *c) {
@@ -231,13 +231,13 @@ void feedReplicationBacklogWithObject(robj *o) {
     feedReplicationBacklog(p,len);
 }
 
-void replicationFeedSlave(client *slave, int dictid, robj **argv, int argc, bool fSendRaw)
+void replicationFeedSlave(client *replica, int dictid, robj **argv, int argc, bool fSendRaw)
 {
     char llstr[LONG_STR_SIZE];
-    std::unique_lock<decltype(slave->lock)> lock(slave->lock);
+    std::unique_lock<decltype(replica->lock)> lock(replica->lock);
 
-    /* Send SELECT command to every slave if needed. */
-    if (g_pserver->slaveseldb != dictid) {
+    /* Send SELECT command to every replica if needed. */
+    if (g_pserver->replicaseldb != dictid) {
         robj *selectcmd;
 
         /* For a few DBs we have pre-computed SELECT command. */
@@ -258,40 +258,42 @@ void replicationFeedSlave(client *slave, int dictid, robj **argv, int argc, bool
         if (g_pserver->repl_backlog && fSendRaw) feedReplicationBacklogWithObject(selectcmd);
 
         /* Send it to slaves */
-        addReply(slave,selectcmd);
+        addReply(replica,selectcmd);
 
         if (dictid < 0 || dictid >= PROTO_SHARED_SELECT_CMDS)
             decrRefCount(selectcmd);
     }
-    g_pserver->slaveseldb = dictid;
+    g_pserver->replicaseldb = dictid;
 
     /* Feed slaves that are waiting for the initial SYNC (so these commands
      * are queued in the output buffer until the initial SYNC completes),
      * or are already in sync with the master. */
 
     /* Add the multi bulk length. */
-    addReplyArrayLen(slave,argc);
+    addReplyArrayLen(replica,argc);
 
     /* Finally any additional argument that was not stored inside the
         * static buffer if any (from j to argc). */
     for (int j = 0; j < argc; j++)
-        addReplyBulk(slave,argv[j]);
+        addReplyBulk(replica,argv[j]);
 }
 
 /* Propagate write commands to slaves, and populate the replication backlog
  * as well. This function is used if the instance is a master: we use
  * the commands received by our clients in order to create the replication
- * stream. Instead if the instance is a slave and has sub-slaves attached,
+ * stream. Instead if the instance is a replica and has sub-slaves attached,
  * we use replicationFeedSlavesFromMaster() */
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listNode *ln, *lnReply;
     listIter li, liReply;
     int j, len;
     serverAssert(GlobalLocksAcquired());
+    if (dictid < 0)
+        dictid = 0; // this can happen if we send a PING before any real operation
 
     /* If the instance is not a top level master, return ASAP: we'll just proxy
      * the stream of data we receive from our master instead, in order to
-     * propagate *identical* replication stream. In this way this slave can
+     * propagate *identical* replication stream. In this way this replica can
      * advertise the same replication ID as the master (since it shares the
      * master replication history and has the same backlog and offsets). */
     if (!g_pserver->fActiveReplica && listLength(g_pserver->masters)) return;
@@ -327,7 +329,6 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     cchProto = std::min((int)sizeof(proto), cchProto);
     long long master_repl_offset_start = g_pserver->master_repl_offset;
     
-    serverAssert(dictid >= 0);
     char szDbNum[128];
     int cchDbNum = snprintf(szDbNum, sizeof(szDbNum), "$%d\r\n%d\r\n", (dictid/10)+1, dictid);
 
@@ -376,34 +377,34 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         }
     }
 
-    /* Write the command to every slave. */
+    /* Write the command to every replica. */
     listRewind(slaves,&li);
     while((ln = listNext(&li))) {
-        client *slave = (client*)ln->value;
+        client *replica = (client*)ln->value;
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
-        if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
-        std::unique_lock<decltype(slave->lock)> lock(slave->lock);
-        if (serverTL->current_client && FSameHost(serverTL->current_client, slave))
+        if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
+        std::unique_lock<decltype(replica->lock)> lock(replica->lock);
+        if (serverTL->current_client && FSameHost(serverTL->current_client, replica))
         {
-            slave->reploff_skipped += g_pserver->master_repl_offset - master_repl_offset_start;
+            replica->reploff_skipped += g_pserver->master_repl_offset - master_repl_offset_start;
             continue;
         }
 
         if (!fSendRaw)
-            addReplyProtoAsync(slave, proto, cchProto);
+            addReplyProtoAsync(replica, proto, cchProto);
 
-        addReplyProtoAsync(slave,fake->buf,fake->bufpos);
+        addReplyProtoAsync(replica,fake->buf,fake->bufpos);
         listRewind(fake->reply, &liReply);
         while ((lnReply = listNext(&liReply)))
         {
             clientReplyBlock* reply = (clientReplyBlock*)listNodeValue(lnReply);
-            addReplyProtoAsync(slave, reply->buf(), reply->used);
+            addReplyProtoAsync(replica, reply->buf(), reply->used);
         }
         if (!fSendRaw)
         {
-            addReplyAsync(slave,shared.crlf);
-            addReplyProtoAsync(slave, szDbNum, cchDbNum);
+            addReplyAsync(replica,shared.crlf);
+            addReplyProtoAsync(replica, szDbNum, cchDbNum);
         }
     }
 
@@ -431,15 +432,15 @@ void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t bufle
     listRewind(slaves,&li);
 
     while((ln = listNext(&li))) {
-        client *slave = (client*)ln->value;
-        std::lock_guard<decltype(slave->lock)> ulock(slave->lock);
-        if (FMasterHost(slave))
+        client *replica = (client*)ln->value;
+        std::lock_guard<decltype(replica->lock)> ulock(replica->lock);
+        if (FMasterHost(replica))
             continue;   // Active Active case, don't feed back
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
-        if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
+        if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
 
-        addReplyProtoAsync(slave,buf,buflen);
+        addReplyProtoAsync(replica,buf,buflen);
     }
     
     if (listLength(slaves))
@@ -487,7 +488,7 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
     decrRefCount(cmdobj);
 }
 
-/* Feed the slave 'c' with the replication backlog starting from the
+/* Feed the replica 'c' with the replication backlog starting from the
  * specified 'offset' up to the end of the backlog. */
 long long addReplyReplicationBacklog(client *c, long long offset) {
     long long j, skip, len;
@@ -522,7 +523,7 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
     /* Discard the amount of data to seek to the specified 'offset'. */
     j = (j + skip) % g_pserver->repl_backlog_size;
 
-    /* Feed slave with data. Since it is a circular buffer we have to
+    /* Feed replica with data. Since it is a circular buffer we have to
      * split the reply in two parts if we are cross-boundary. */
     len = g_pserver->repl_backlog_histlen - skip;
     serverLog(LL_DEBUG, "[PSYNC] Reply total length: %lld", len);
@@ -540,7 +541,7 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
 }
 
 /* Return the offset to provide as reply to the PSYNC command received
- * from the slave. The returned value is only valid immediately after
+ * from the replica. The returned value is only valid immediately after
  * the BGSAVE process started and before executing any other command
  * from clients. */
 long long getPsyncInitialOffset(void) {
@@ -548,39 +549,39 @@ long long getPsyncInitialOffset(void) {
 }
 
 /* Send a FULLRESYNC reply in the specific case of a full resynchronization,
- * as a side effect setup the slave for a full sync in different ways:
+ * as a side effect setup the replica for a full sync in different ways:
  *
- * 1) Remember, into the slave client structure, the replication offset
+ * 1) Remember, into the replica client structure, the replication offset
  *    we sent here, so that if new slaves will later attach to the same
  *    background RDB saving process (by duplicating this client output
- *    buffer), we can get the right offset from this slave.
- * 2) Set the replication state of the slave to WAIT_BGSAVE_END so that
+ *    buffer), we can get the right offset from this replica.
+ * 2) Set the replication state of the replica to WAIT_BGSAVE_END so that
  *    we start accumulating differences from this point.
  * 3) Force the replication stream to re-emit a SELECT statement so
- *    the new slave incremental differences will start selecting the
+ *    the new replica incremental differences will start selecting the
  *    right database number.
  *
  * Normally this function should be called immediately after a successful
  * BGSAVE for replication was started, or when there is one already in
- * progress that we attached our slave to. */
-int replicationSetupSlaveForFullResync(client *slave, long long offset) {
+ * progress that we attached our replica to. */
+int replicationSetupSlaveForFullResync(client *replica, long long offset) {
     char buf[128];
     int buflen;
 
-    slave->psync_initial_offset = offset;
-    slave->replstate = SLAVE_STATE_WAIT_BGSAVE_END;
+    replica->psync_initial_offset = offset;
+    replica->replstate = SLAVE_STATE_WAIT_BGSAVE_END;
     /* We are going to accumulate the incremental changes for this
-     * slave as well. Set slaveseldb to -1 in order to force to re-emit
+     * replica as well. Set replicaseldb to -1 in order to force to re-emit
      * a SELECT statement in the replication stream. */
-    g_pserver->slaveseldb = -1;
+    g_pserver->replicaseldb = -1;
 
     /* Don't send this reply to slaves that approached us with
      * the old SYNC command. */
-    if (!(slave->flags & CLIENT_PRE_PSYNC)) {
+    if (!(replica->flags & CLIENT_PRE_PSYNC)) {
         buflen = snprintf(buf,sizeof(buf),"+FULLRESYNC %s %lld\r\n",
                           g_pserver->replid,offset);
-        if (write(slave->fd,buf,buflen) != buflen) {
-            freeClientAsync(slave);
+        if (write(replica->fd,buf,buflen) != buflen) {
+            freeClientAsync(replica);
             return C_ERR;
         }
     }
@@ -599,14 +600,14 @@ int masterTryPartialResynchronization(client *c) {
     char buf[128];
     int buflen;
 
-    /* Parse the replication offset asked by the slave. Go to full sync
+    /* Parse the replication offset asked by the replica. Go to full sync
      * on parse error: this should never happen but we try to handle
      * it in a robust way compared to aborting. */
     if (getLongLongFromObjectOrReply(c,c->argv[2],&psync_offset,NULL) !=
        C_OK) goto need_full_resync;
 
     /* Is the replication ID of this master the same advertised by the wannabe
-     * slave via PSYNC? If the replication ID changed this master has a
+     * replica via PSYNC? If the replication ID changed this master has a
      * different replication history, and there is no way to continue.
      *
      * Note that there are two potentially valid replication IDs: the ID1
@@ -636,7 +637,7 @@ int masterTryPartialResynchronization(client *c) {
         goto need_full_resync;
     }
 
-    /* We still have the data our slave is asking for? */
+    /* We still have the data our replica is asking for? */
     if (!g_pserver->repl_backlog ||
         psync_offset < g_pserver->repl_backlog_off ||
         psync_offset > (g_pserver->repl_backlog_off + g_pserver->repl_backlog_histlen))
@@ -651,9 +652,9 @@ int masterTryPartialResynchronization(client *c) {
     }
 
     /* If we reached this point, we are able to perform a partial resync:
-     * 1) Set client state to make it a slave.
+     * 1) Set client state to make it a replica.
      * 2) Inform the client we can continue with +CONTINUE
-     * 3) Send the backlog data (from the offset to the end) to the slave. */
+     * 3) Send the backlog data (from the offset to the end) to the replica. */
     c->flags |= CLIENT_SLAVE;
     c->replstate = SLAVE_STATE_ONLINE;
     c->repl_ack_time = g_pserver->unixtime;
@@ -679,8 +680,8 @@ int masterTryPartialResynchronization(client *c) {
         "Partial resynchronization request from %s accepted. Sending %lld bytes of backlog starting from offset %lld.",
             replicationGetSlaveName(c),
             psync_len, psync_offset);
-    /* Note that we don't need to set the selected DB at g_pserver->slaveseldb
-     * to -1 to force the master to emit SELECT, since the slave already
+    /* Note that we don't need to set the selected DB at g_pserver->replicaseldb
+     * to -1 to force the master to emit SELECT, since the replica already
      * has this state from the previous connection with the master. */
 
     refreshGoodSlavesCount();
@@ -699,7 +700,7 @@ need_full_resync:
  * the script cache is flushed before to start.
  *
  * The mincapa argument is the bitwise AND among all the slaves capabilities
- * of the slaves waiting for this BGSAVE, so represents the slave capabilities
+ * of the slaves waiting for this BGSAVE, so represents the replica capabilities
  * all the slaves support. Can be tested via SLAVE_CAPA_* macros.
  *
  * Side effects, other than starting a BGSAVE:
@@ -725,7 +726,7 @@ int startBgsaveForReplication(int mincapa) {
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
     /* Only do rdbSave* when rsiptr is not NULL,
-     * otherwise slave will miss repl-stream-db. */
+     * otherwise replica will miss repl-stream-db. */
     if (rsiptr) {
         if (socket_target)
             retval = rdbSaveToSlavesSockets(rsiptr);
@@ -743,16 +744,16 @@ int startBgsaveForReplication(int mincapa) {
         serverLog(LL_WARNING,"BGSAVE for replication failed");
         listRewind(g_pserver->slaves,&li);
         while((ln = listNext(&li))) {
-            client *slave = (client*)ln->value;
-            std::unique_lock<decltype(slave->lock)> lock(slave->lock);
+            client *replica = (client*)ln->value;
+            std::unique_lock<decltype(replica->lock)> lock(replica->lock);
 
-            if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
-                slave->replstate = REPL_STATE_NONE;
-                slave->flags &= ~CLIENT_SLAVE;
+            if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
+                replica->replstate = REPL_STATE_NONE;
+                replica->flags &= ~CLIENT_SLAVE;
                 listDelNode(g_pserver->slaves,ln);
-                addReplyError(slave,
+                addReplyError(replica,
                     "BGSAVE failed, replication can't continue");
-                slave->flags |= CLIENT_CLOSE_AFTER_REPLY;
+                replica->flags |= CLIENT_CLOSE_AFTER_REPLY;
             }
         }
         return retval;
@@ -763,17 +764,17 @@ int startBgsaveForReplication(int mincapa) {
     if (!socket_target) {
         listRewind(g_pserver->slaves,&li);
         while((ln = listNext(&li))) {
-            client *slave = (client*)ln->value;
-            std::unique_lock<decltype(slave->lock)> lock(slave->lock);
+            client *replica = (client*)ln->value;
+            std::unique_lock<decltype(replica->lock)> lock(replica->lock);
 
-            if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
-                    replicationSetupSlaveForFullResync(slave,
+            if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
+                    replicationSetupSlaveForFullResync(replica,
                             getPsyncInitialOffset());
             }
         }
     }
 
-    /* Flush the script cache, since we need that slave differences are
+    /* Flush the script cache, since we need that replica differences are
      * accumulated without requiring slaves to match our cached scripts. */
     if (retval == C_OK) replicationScriptCacheFlush();
     return retval;
@@ -781,10 +782,10 @@ int startBgsaveForReplication(int mincapa) {
 
 /* SYNC and PSYNC command implemenation. */
 void syncCommand(client *c) {
-    /* ignore SYNC if already slave or in monitor mode */
+    /* ignore SYNC if already replica or in monitor mode */
     if (c->flags & CLIENT_SLAVE) return;
 
-    /* Refuse SYNC requests if we are a slave but the link with our master
+    /* Refuse SYNC requests if we are a replica but the link with our master
      * is not ok... */
     if (!g_pserver->fActiveReplica) {
         if (FAnyDisconnectedMasters()) {
@@ -812,7 +813,7 @@ void syncCommand(client *c) {
      *
      * +FULLRESYNC <replid> <offset>
      *
-     * So the slave knows the new replid and offset to try a PSYNC later
+     * So the replica knows the new replid and offset to try a PSYNC later
      * if the connection with the master is lost. */
     if (!strcasecmp((const char*)ptrFromObj(c->argv[0]),"psync")) {
         if (masterTryPartialResynchronization(c) == C_OK) {
@@ -828,8 +829,8 @@ void syncCommand(client *c) {
             if (master_replid[0] != '?') g_pserver->stat_sync_partial_err++;
         }
     } else {
-        /* If a slave uses SYNC, we are dealing with an old implementation
-         * of the replication protocol (like keydb-cli --slave). Flag the client
+        /* If a replica uses SYNC, we are dealing with an old implementation
+         * of the replication protocol (like keydb-cli --replica). Flag the client
          * so that we don't expect to receive REPLCONF ACK feedbacks. */
         c->flags |= CLIENT_PRE_PSYNC;
     }
@@ -837,8 +838,8 @@ void syncCommand(client *c) {
     /* Full resynchronization. */
     g_pserver->stat_sync_full++;
 
-    /* Setup the slave as one waiting for BGSAVE to start. The following code
-     * paths will change the state if we handle the slave differently. */
+    /* Setup the replica as one waiting for BGSAVE to start. The following code
+     * paths will change the state if we handle the replica differently. */
     c->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
     if (g_pserver->repl_disable_tcp_nodelay)
         anetDisableTcpNoDelay(NULL, c->fd); /* Non critical if it fails. */
@@ -861,25 +862,25 @@ void syncCommand(client *c) {
         g_pserver->rdb_child_type == RDB_CHILD_TYPE_DISK)
     {
         /* Ok a background save is in progress. Let's check if it is a good
-         * one for replication, i.e. if there is another slave that is
+         * one for replication, i.e. if there is another replica that is
          * registering differences since the server forked to save. */
-        client *slave;
+        client *replica;
         listNode *ln;
         listIter li;
 
         listRewind(g_pserver->slaves,&li);
         while((ln = listNext(&li))) {
-            slave = (client*)ln->value;
-            if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END) break;
+            replica = (client*)ln->value;
+            if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_END) break;
         }
         
-        /* To attach this slave, we check that it has at least all the
-         * capabilities of the slave that triggered the current BGSAVE. */
-        if (ln && ((c->slave_capa & slave->slave_capa) == slave->slave_capa)) {
+        /* To attach this replica, we check that it has at least all the
+         * capabilities of the replica that triggered the current BGSAVE. */
+        if (ln && ((c->slave_capa & replica->slave_capa) == replica->slave_capa)) {
             /* Perfect, the server is already registering differences for
-             * another slave. Set the right state, and copy the buffer. */
-            copyClientOutputBuffer(c,slave);
-            replicationSetupSlaveForFullResync(c,slave->psync_initial_offset);
+             * another replica. Set the right state, and copy the buffer. */
+            copyClientOutputBuffer(c,replica);
+            replicationSetupSlaveForFullResync(c,replica->psync_initial_offset);
             serverLog(LL_NOTICE,"Waiting for end of BGSAVE for SYNC");
         } else {
             /* No way, we need to wait for the next BGSAVE in order to
@@ -905,7 +906,7 @@ void syncCommand(client *c) {
             if (g_pserver->repl_diskless_sync_delay)
                 serverLog(LL_NOTICE,"Delay next BGSAVE for diskless SYNC");
         } else {
-            /* Target is disk (or the slave is not capable of supporting
+            /* Target is disk (or the replica is not capable of supporting
              * diskless replication) and we don't have a BGSAVE in progress,
              * let's start one. */
             if (g_pserver->aof_child_pid == -1) {
@@ -947,7 +948,7 @@ LError:
 }
 
 /* REPLCONF <option> <value> <option> <value> ...
- * This command is used by a slave in order to configure the replication
+ * This command is used by a replica in order to configure the replication
  * process before starting it with the SYNC command.
  *
  * Currently the only use of this command is to communicate to the master
@@ -993,7 +994,7 @@ void replconfCommand(client *c) {
             else if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]),"psync2"))
                 c->slave_capa |= SLAVE_CAPA_PSYNC2;
         } else if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"ack")) {
-            /* REPLCONF ACK is used by slave to inform the master the amount
+            /* REPLCONF ACK is used by replica to inform the master the amount
              * of replication stream that it processed so far. It is an
              * internal only command that normal clients should never use. */
             long long offset;
@@ -1005,15 +1006,15 @@ void replconfCommand(client *c) {
                 c->repl_ack_off = offset;
             c->repl_ack_time = g_pserver->unixtime;
             /* If this was a diskless replication, we need to really put
-             * the slave online when the first ACK is received (which
-             * confirms slave is online and ready to get more data). */
+             * the replica online when the first ACK is received (which
+             * confirms replica is online and ready to get more data). */
             if (c->repl_put_online_on_ack && c->replstate == SLAVE_STATE_ONLINE)
                 putSlaveOnline(c);
             /* Note: this command does not reply anything! */
             return;
         } else if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"getack")) {
             /* REPLCONF GETACK is used in order to request an ACK ASAP
-             * to the slave. */
+             * to the replica. */
             listIter li;
             listNode *ln;
             listRewind(g_pserver->masters, &li);
@@ -1035,59 +1036,59 @@ void replconfCommand(client *c) {
     addReply(c,shared.ok);
 }
 
-/* This function puts a slave in the online state, and should be called just
- * after a slave received the RDB file for the initial synchronization, and
+/* This function puts a replica in the online state, and should be called just
+ * after a replica received the RDB file for the initial synchronization, and
  * we are finally ready to send the incremental stream of commands.
  *
  * It does a few things:
  *
- * 1) Put the slave in ONLINE state (useless when the function is called
+ * 1) Put the replica in ONLINE state (useless when the function is called
  *    because state is already ONLINE but repl_put_online_on_ack is true).
  * 2) Make sure the writable event is re-installed, since calling the SYNC
  *    command disables it, so that we can accumulate output buffer without
- *    sending it to the slave.
+ *    sending it to the replica.
  * 3) Update the count of good slaves. */
-void putSlaveOnline(client *slave) {
-    slave->replstate = SLAVE_STATE_ONLINE;
-    slave->repl_put_online_on_ack = 0;
-    slave->repl_ack_time = g_pserver->unixtime; /* Prevent false timeout. */
-    AssertCorrectThread(slave);
-    if (aeCreateFileEvent(g_pserver->rgthreadvar[slave->iel].el, slave->fd, AE_WRITABLE|AE_WRITE_THREADSAFE,
-        sendReplyToClient, slave) == AE_ERR) {
+void putSlaveOnline(client *replica) {
+    replica->replstate = SLAVE_STATE_ONLINE;
+    replica->repl_put_online_on_ack = 0;
+    replica->repl_ack_time = g_pserver->unixtime; /* Prevent false timeout. */
+    AssertCorrectThread(replica);
+    if (aeCreateFileEvent(g_pserver->rgthreadvar[replica->iel].el, replica->fd, AE_WRITABLE|AE_WRITE_THREADSAFE,
+        sendReplyToClient, replica) == AE_ERR) {
         serverLog(LL_WARNING,"Unable to register writable event for replica bulk transfer: %s", strerror(errno));
-        freeClient(slave);
+        freeClient(replica);
         return;
     }
     refreshGoodSlavesCount();
     serverLog(LL_NOTICE,"Synchronization with replica %s succeeded",
-        replicationGetSlaveName(slave));
+        replicationGetSlaveName(replica));
 }
 
 void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
-    client *slave = (client*)privdata;
+    client *replica = (client*)privdata;
     UNUSED(el);
     UNUSED(mask);
-    serverAssert(ielFromEventLoop(el) == slave->iel);
+    serverAssert(ielFromEventLoop(el) == replica->iel);
     char buf[PROTO_IOBUF_LEN];
     ssize_t nwritten, buflen;
 
     /* Before sending the RDB file, we send the preamble as configured by the
      * replication process. Currently the preamble is just the bulk count of
      * the file in the form "$<length>\r\n". */
-    if (slave->replpreamble) {
-        serverAssert(slave->replpreamble[0] == '$');
-        nwritten = write(fd,slave->replpreamble,sdslen(slave->replpreamble));
+    if (replica->replpreamble) {
+        serverAssert(replica->replpreamble[0] == '$');
+        nwritten = write(fd,replica->replpreamble,sdslen(replica->replpreamble));
         if (nwritten == -1) {
             serverLog(LL_VERBOSE,"Write error sending RDB preamble to replica: %s",
                 strerror(errno));
-            freeClient(slave);
+            freeClient(replica);
             return;
         }
         g_pserver->stat_net_output_bytes += nwritten;
-        sdsrange(slave->replpreamble,nwritten,-1);
-        if (sdslen(slave->replpreamble) == 0) {
-            sdsfree(slave->replpreamble);
-            slave->replpreamble = NULL;
+        sdsrange(replica->replpreamble,nwritten,-1);
+        if (sdslen(replica->replpreamble) == 0) {
+            sdsfree(replica->replpreamble);
+            replica->replpreamble = NULL;
             /* fall through sending data. */
         } else {
             return;
@@ -1095,29 +1096,29 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 
     /* If the preamble was already transferred, send the RDB bulk data. */
-    lseek(slave->repldbfd,slave->repldboff,SEEK_SET);
-    buflen = read(slave->repldbfd,buf,PROTO_IOBUF_LEN);
+    lseek(replica->repldbfd,replica->repldboff,SEEK_SET);
+    buflen = read(replica->repldbfd,buf,PROTO_IOBUF_LEN);
     if (buflen <= 0) {
         serverLog(LL_WARNING,"Read error sending DB to replica: %s",
             (buflen == 0) ? "premature EOF" : strerror(errno));
-        freeClient(slave);
+        freeClient(replica);
         return;
     }
     if ((nwritten = write(fd,buf,buflen)) == -1) {
         if (errno != EAGAIN) {
             serverLog(LL_WARNING,"Write error sending DB to replica: %s",
                 strerror(errno));
-            freeClient(slave);
+            freeClient(replica);
         }
         return;
     }
-    slave->repldboff += nwritten;
+    replica->repldboff += nwritten;
     g_pserver->stat_net_output_bytes += nwritten;
-    if (slave->repldboff == slave->repldbsize) {
-        close(slave->repldbfd);
-        slave->repldbfd = -1;
-        aeDeleteFileEvent(el,slave->fd,AE_WRITABLE);
-        putSlaveOnline(slave);
+    if (replica->repldboff == replica->repldbsize) {
+        close(replica->repldbfd);
+        replica->repldbfd = -1;
+        aeDeleteFileEvent(el,replica->fd,AE_WRITABLE);
+        putSlaveOnline(replica);
     }
 }
 
@@ -1129,7 +1130,7 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
  * background saving in order to perform non-blocking synchronization, and
  * to schedule a new BGSAVE if there are slaves that attached while a
  * BGSAVE was in progress, but it was not a good one for replication (no
- * other slave was accumulating differences).
+ * other replica was accumulating differences).
  *
  * The argument bgsaveerr is C_OK if the background saving succeeded
  * otherwise C_ERR is passed to the function.
@@ -1145,69 +1146,69 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
 
     listRewind(g_pserver->slaves,&li);
     while((ln = listNext(&li))) {
-        client *slave = (client*)ln->value;
+        client *replica = (client*)ln->value;
 
-        if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
+        if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
             startbgsave = 1;
-            mincapa = (mincapa == -1) ? slave->slave_capa :
-                        (mincapa & slave->slave_capa);
-        } else if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
+            mincapa = (mincapa == -1) ? replica->slave_capa :
+                        (mincapa & replica->slave_capa);
+        } else if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
             struct redis_stat buf;
 
             /* If this was an RDB on disk save, we have to prepare to send
-             * the RDB from disk to the slave socket. Otherwise if this was
+             * the RDB from disk to the replica socket. Otherwise if this was
              * already an RDB -> Slaves socket transfer, used in the case of
              * diskless replication, our work is trivial, we can just put
-             * the slave online. */
+             * the replica online. */
             if (type == RDB_CHILD_TYPE_SOCKET) {
                 serverLog(LL_NOTICE,
-                    "Streamed RDB transfer with replica %s succeeded (socket). Waiting for REPLCONF ACK from slave to enable streaming",
-                        replicationGetSlaveName(slave));
-                /* Note: we wait for a REPLCONF ACK message from slave in
+                    "Streamed RDB transfer with replica %s succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming",
+                        replicationGetSlaveName(replica));
+                /* Note: we wait for a REPLCONF ACK message from replica in
                  * order to really put it online (install the write handler
                  * so that the accumulated data can be transferred). However
-                 * we change the replication state ASAP, since our slave
+                 * we change the replication state ASAP, since our replica
                  * is technically online now. */
-                slave->replstate = SLAVE_STATE_ONLINE;
-                slave->repl_put_online_on_ack = 1;
-                slave->repl_ack_time = g_pserver->unixtime; /* Timeout otherwise. */
+                replica->replstate = SLAVE_STATE_ONLINE;
+                replica->repl_put_online_on_ack = 1;
+                replica->repl_ack_time = g_pserver->unixtime; /* Timeout otherwise. */
             } else {
                 if (bgsaveerr != C_OK) {
-                    if (FCorrectThread(slave))
-                        freeClient(slave);
+                    if (FCorrectThread(replica))
+                        freeClient(replica);
                     else
-                        freeClientAsync(slave);
+                        freeClientAsync(replica);
                     serverLog(LL_WARNING,"SYNC failed. BGSAVE child returned an error");
                     continue;
                 }
-                if ((slave->repldbfd = open(g_pserver->rdb_filename,O_RDONLY)) == -1 ||
-                    redis_fstat(slave->repldbfd,&buf) == -1) {
-                    if (FCorrectThread(slave))
-                        freeClient(slave);
+                if ((replica->repldbfd = open(g_pserver->rdb_filename,O_RDONLY)) == -1 ||
+                    redis_fstat(replica->repldbfd,&buf) == -1) {
+                    if (FCorrectThread(replica))
+                        freeClient(replica);
                     else
-                        freeClientAsync(slave);
+                        freeClientAsync(replica);
                     serverLog(LL_WARNING,"SYNC failed. Can't open/stat DB after BGSAVE: %s", strerror(errno));
                     continue;
                 }
-                slave->repldboff = 0;
-                slave->repldbsize = buf.st_size;
-                slave->replstate = SLAVE_STATE_SEND_BULK;
-                slave->replpreamble = sdscatprintf(sdsempty(),"$%lld\r\n",
-                    (unsigned long long) slave->repldbsize);
+                replica->repldboff = 0;
+                replica->repldbsize = buf.st_size;
+                replica->replstate = SLAVE_STATE_SEND_BULK;
+                replica->replpreamble = sdscatprintf(sdsempty(),"$%lld\r\n",
+                    (unsigned long long) replica->repldbsize);
 
-                if (FCorrectThread(slave))
+                if (FCorrectThread(replica))
                 {
-                    aeDeleteFileEvent(g_pserver->rgthreadvar[slave->iel].el,slave->fd,AE_WRITABLE);
-                    if (aeCreateFileEvent(g_pserver->rgthreadvar[slave->iel].el, slave->fd, AE_WRITABLE, sendBulkToSlave, slave) == AE_ERR) {
-                        freeClient(slave);
+                    aeDeleteFileEvent(g_pserver->rgthreadvar[replica->iel].el,replica->fd,AE_WRITABLE);
+                    if (aeCreateFileEvent(g_pserver->rgthreadvar[replica->iel].el, replica->fd, AE_WRITABLE, sendBulkToSlave, replica) == AE_ERR) {
+                        freeClient(replica);
                     }
                 }
                 else
                 {
-                    aePostFunction(g_pserver->rgthreadvar[slave->iel].el, [slave]{
-                        aeDeleteFileEvent(g_pserver->rgthreadvar[slave->iel].el,slave->fd,AE_WRITABLE);
-                        if (aeCreateFileEvent(g_pserver->rgthreadvar[slave->iel].el, slave->fd, AE_WRITABLE, sendBulkToSlave, slave) == AE_ERR) {
-                            freeClient(slave);
+                    aePostFunction(g_pserver->rgthreadvar[replica->iel].el, [replica]{
+                        aeDeleteFileEvent(g_pserver->rgthreadvar[replica->iel].el,replica->fd,AE_WRITABLE);
+                        if (aeCreateFileEvent(g_pserver->rgthreadvar[replica->iel].el, replica->fd, AE_WRITABLE, sendBulkToSlave, replica) == AE_ERR) {
+                            freeClient(replica);
                         }
                     });
                 }
@@ -1257,17 +1258,17 @@ void clearReplicationId2(void) {
 
 /* Use the current replication ID / offset as secondary replication
  * ID, and change the current one in order to start a new history.
- * This should be used when an instance is switched from slave to master
+ * This should be used when an instance is switched from replica to master
  * so that it can serve PSYNC requests performed using the master
  * replication ID. */
 void shiftReplicationId(void) {
     memcpy(g_pserver->replid2,g_pserver->replid,sizeof(g_pserver->replid));
     /* We set the second replid offset to the master offset + 1, since
-     * the slave will ask for the first byte it has not yet received, so
-     * we need to add one to the offset: for example if, as a slave, we are
+     * the replica will ask for the first byte it has not yet received, so
+     * we need to add one to the offset: for example if, as a replica, we are
      * sure we have the same history as the master for 50 bytes, after we
      * are turned into a master, we can accept a PSYNC request with offset
-     * 51, since the slave asking has the same history up to the 50th
+     * 51, since the replica asking has the same history up to the 50th
      * byte, and is asking for the new bytes starting at offset 51. */
     g_pserver->second_replid_offset = g_pserver->master_repl_offset+1;
     changeReplicationId();
@@ -1283,7 +1284,7 @@ int slaveIsInHandshakeState(redisMaster *mi) {
            mi->repl_state <= REPL_STATE_RECEIVE_PSYNC;
 }
 
-/* Avoid the master to detect the slave is timing out while loading the
+/* Avoid the master to detect the replica is timing out while loading the
  * RDB file in initial synchronization. We send a single newline character
  * that is valid protocol but is guaranteed to either be sent entirely or
  * not, since the byte is indivisible.
@@ -1560,7 +1561,7 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
             if (aof_is_enabled) restartAOFAfterSYNC();
             return;
         }
-        /* Final setup of the connected slave <- master link */
+        /* Final setup of the connected replica <- master link */
         if (fUpdate)
             unlink(mi->repl_transfer_tmpfile);  // if we're not updating this became the backup RDB
         zfree(mi->repl_transfer_tmpfile);
@@ -2005,8 +2006,8 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         // fallthrough
     }
 
-    /* Set the slave port, so that Master's INFO command can list the
-     * slave listening port correctly. */
+    /* Set the replica port, so that Master's INFO command can list the
+     * replica listening port correctly. */
     if (mi->repl_state == REPL_STATE_SEND_PORT) {
         sds port = sdsfromlonglong(g_pserver->slave_announce_port ?
             g_pserver->slave_announce_port : g_pserver->port);
@@ -2032,15 +2033,15 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         mi->repl_state = REPL_STATE_SEND_IP;
     }
 
-    /* Skip REPLCONF ip-address if there is no slave-announce-ip option set. */
+    /* Skip REPLCONF ip-address if there is no replica-announce-ip option set. */
     if (mi->repl_state == REPL_STATE_SEND_IP &&
         g_pserver->slave_announce_ip == NULL)
     {
             mi->repl_state = REPL_STATE_SEND_CAPA;
     }
 
-    /* Set the slave ip, so that Master's INFO command can list the
-     * slave IP address port correctly in case of port forwarding or NAT. */
+    /* Set the replica ip, so that Master's INFO command can list the
+     * replica IP address port correctly in case of port forwarding or NAT. */
     if (mi->repl_state == REPL_STATE_SEND_IP) {
         err = sendSynchronousCommand(mi, SYNC_CMD_WRITE,fd,"REPLCONF",
                 "ip-address",g_pserver->slave_announce_ip, NULL);
@@ -2063,7 +2064,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         mi->repl_state = REPL_STATE_SEND_CAPA;
     }
 
-    /* Inform the master of our (slave) capabilities.
+    /* Inform the master of our (replica) capabilities.
      *
      * EOF: supports EOF-style RDB transfer for diskless replication.
      * PSYNC2: supports PSYNC v2, so understands +CONTINUE <new repl ID>.
@@ -2321,7 +2322,7 @@ struct redisMaster *replicationAddMaster(char *ip, int port) {
         else
             freeClientAsync(mi->master);
     }
-    disconnectAllBlockedClients(); /* Clients blocked in master, now slave. */
+    disconnectAllBlockedClients(); /* Clients blocked in master, now replica. */
 
     /* Force our slaves to resync with us as well. They may hopefully be able
      * to partially resync with us, but we can notify the replid change. */
@@ -2348,7 +2349,7 @@ void replicationUnsetMaster(redisMaster *mi) {
     sdsfree(mi->masterhost);
     
     mi->masterhost = NULL;
-    /* When a slave is turned into a master, the current replication ID
+    /* When a replica is turned into a master, the current replication ID
      * (that was inherited from the master at synchronization time) is
      * used as secondary ID up to the current offset, and a new replication
      * ID is created to continue with a new replication history. */
@@ -2373,9 +2374,9 @@ void replicationUnsetMaster(redisMaster *mi) {
      * with a SELECT statement. This is forced after a full resync, but
      * with PSYNC version 2, there is no need for full resync after a
      * master switch. */
-    g_pserver->slaveseldb = -1;
+    g_pserver->replicaseldb = -1;
 
-    /* Once we turn from slave to master, we consider the starting time without
+    /* Once we turn from replica to master, we consider the starting time without
      * slaves (that is used to count the replication backlog time to live) as
      * starting from now. Otherwise the backlog will be freed after a
      * failover if slaves do not connect immediately. */
@@ -2387,7 +2388,7 @@ void replicationUnsetMaster(redisMaster *mi) {
     freeMasterInfo(mi);
 }
 
-/* This function is called when the slave lose the connection with the
+/* This function is called when the replica lose the connection with the
  * master into an unexpected way. */
 void replicationHandleMasterDisconnection(redisMaster *mi) {
     if (mi != nullptr)
@@ -2459,7 +2460,7 @@ void replicaofCommand(client *c) {
 }
 
 /* ROLE command: provide information about the role of the instance
- * (master or slave) and additional information related to replication
+ * (master or replica) and additional information related to replication
  * in an easy to process format. */
 void roleCommand(client *c) {
     if (listLength(g_pserver->masters) == 0) {
@@ -2474,19 +2475,19 @@ void roleCommand(client *c) {
         mbcount = addReplyDeferredLen(c);
         listRewind(g_pserver->slaves,&li);
         while((ln = listNext(&li))) {
-            client *slave = (client*)ln->value;
-            char ip[NET_IP_STR_LEN], *slaveip = slave->slave_ip;
+            client *replica = (client*)ln->value;
+            char ip[NET_IP_STR_LEN], *slaveip = replica->slave_ip;
 
             if (slaveip[0] == '\0') {
-                if (anetPeerToString(slave->fd,ip,sizeof(ip),NULL) == -1)
+                if (anetPeerToString(replica->fd,ip,sizeof(ip),NULL) == -1)
                     continue;
                 slaveip = ip;
             }
-            if (slave->replstate != SLAVE_STATE_ONLINE) continue;
+            if (replica->replstate != SLAVE_STATE_ONLINE) continue;
             addReplyArrayLen(c,3);
             addReplyBulkCString(c,slaveip);
-            addReplyBulkLongLong(c,slave->slave_listening_port);
-            addReplyBulkLongLong(c,slave->repl_ack_off+slave->reploff_skipped);
+            addReplyBulkLongLong(c,replica->slave_listening_port);
+            addReplyBulkLongLong(c,replica->repl_ack_off+replica->reploff_skipped);
             slaves++;
         }
         setDeferredArrayLen(c,mbcount,slaves);
@@ -2601,9 +2602,9 @@ void replicationCacheMaster(redisMaster *mi, client *c) {
     replicationHandleMasterDisconnection(mi);
 }
 
-/* This function is called when a master is turend into a slave, in order to
+/* This function is called when a master is turend into a replica, in order to
  * create from scratch a cached master for the new client, that will allow
- * to PSYNC with the slave that was promoted as the new master after a
+ * to PSYNC with the replica that was promoted as the new master after a
  * failover.
  *
  * Assuming this instance was previously the master instance of the new master,
@@ -2695,10 +2696,10 @@ void refreshGoodSlavesCount(void) {
 
     listRewind(g_pserver->slaves,&li);
     while((ln = listNext(&li))) {
-        client *slave = (client*)ln->value;
-        time_t lag = g_pserver->unixtime - slave->repl_ack_time;
+        client *replica = (client*)ln->value;
+        time_t lag = g_pserver->unixtime - replica->repl_ack_time;
 
-        if (slave->replstate == SLAVE_STATE_ONLINE &&
+        if (replica->replstate == SLAVE_STATE_ONLINE &&
             lag <= g_pserver->repl_min_slaves_max_lag) good++;
     }
     g_pserver->repl_good_slaves_count = good;
@@ -2706,14 +2707,14 @@ void refreshGoodSlavesCount(void) {
 
 /* ----------------------- REPLICATION SCRIPT CACHE --------------------------
  * The goal of this code is to keep track of scripts already sent to every
- * connected slave, in order to be able to replicate EVALSHA as it is without
+ * connected replica, in order to be able to replicate EVALSHA as it is without
  * translating it to EVAL every time it is possible.
  *
  * We use a capped collection implemented by a hash table for fast lookup
  * of scripts we can send as EVALSHA, plus a linked list that is used for
  * eviction of the oldest entry when the max number of items is reached.
  *
- * We don't care about taking a different cache for every different slave
+ * We don't care about taking a different cache for every different replica
  * since to fill the cache again is not very costly, the goal of this code
  * is to avoid that the same big script is trasmitted a big number of times
  * per second wasting bandwidth and processor speed, but it is not a problem
@@ -2722,15 +2723,15 @@ void refreshGoodSlavesCount(void) {
  *
  * This is how the system works:
  *
- * 1) Every time a new slave connects, we flush the whole script cache.
+ * 1) Every time a new replica connects, we flush the whole script cache.
  * 2) We only send as EVALSHA what was sent to the master as EVALSHA, without
  *    trying to convert EVAL into EVALSHA specifically for slaves.
  * 3) Every time we trasmit a script as EVAL to the slaves, we also add the
  *    corresponding SHA1 of the script into the cache as we are sure every
- *    slave knows about the script starting from now.
+ *    replica knows about the script starting from now.
  * 4) On SCRIPT FLUSH command, we replicate the command to all the slaves
  *    and at the same time flush the script cache.
- * 5) When the last slave disconnects, flush the cache.
+ * 5) When the last replica disconnects, flush the cache.
  * 6) We handle SCRIPT LOAD as well since that's how scripts are loaded
  *    in the master sometimes.
  */
@@ -2743,11 +2744,11 @@ void replicationScriptCacheInit(void) {
 }
 
 /* Empty the script cache. Should be called every time we are no longer sure
- * that every slave knows about all the scripts in our set, or when the
+ * that every replica knows about all the scripts in our set, or when the
  * current AOF "context" is no longer aware of the script. In general we
  * should flush the cache:
  *
- * 1) Every time a new slave reconnects to this master and performs a
+ * 1) Every time a new replica reconnects to this master and performs a
  *    full SYNC (PSYNC does not require flushing).
  * 2) Every time an AOF rewrite is performed.
  * 3) Every time we are left without slaves at all, and AOF is off, in order
@@ -2831,10 +2832,10 @@ int replicationCountAcksByOffset(long long offset) {
 
     listRewind(g_pserver->slaves,&li);
     while((ln = listNext(&li))) {
-        client *slave = (client*)ln->value;
+        client *replica = (client*)ln->value;
 
-        if (slave->replstate != SLAVE_STATE_ONLINE) continue;
-        if ((slave->repl_ack_off + slave->reploff_skipped) >= offset) count++;
+        if (replica->replstate != SLAVE_STATE_ONLINE) continue;
+        if ((replica->repl_ack_off + replica->reploff_skipped) >= offset) count++;
     }
     return count;
 }
@@ -2924,7 +2925,7 @@ void processClientsWaitingReplicas(void) {
     }
 }
 
-/* Return the slave replication offset for this instance, that is
+/* Return the replica replication offset for this instance, that is
  * the offset for which we already processed the master replication stream. */
 long long replicationGetSlaveOffset(redisMaster *mi) {
     long long offset = 0;
@@ -2979,7 +2980,7 @@ void replicationCron(void) {
             cancelReplicationHandshake(mi);
         }
 
-        /* Timed out master when we are an already connected slave? */
+        /* Timed out master when we are an already connected replica? */
         if (mi->masterhost && mi->repl_state == REPL_STATE_CONNECTED &&
             (time(NULL)-mi->master->lastinteraction) > g_pserver->repl_timeout)
         {
@@ -3021,7 +3022,7 @@ void replicationCron(void) {
     {
         /* Note that we don't send the PING if the clients are paused during
          * a Redis Cluster manual failover: the PING we send will otherwise
-         * alter the replication offsets of master and slave, and will no longer
+         * alter the replication offsets of master and replica, and will no longer
          * match the one stored into 'mf_master_offset' state. */
         int manual_failover_in_progress =
             g_pserver->cluster_enabled &&
@@ -3030,7 +3031,7 @@ void replicationCron(void) {
 
         if (!manual_failover_in_progress) {
             ping_argv[0] = createStringObject("PING",4);
-            replicationFeedSlaves(g_pserver->slaves, g_pserver->slaveseldb,
+            replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb,
                 ping_argv, 1);
             decrRefCount(ping_argv[0]);
         }
@@ -3046,21 +3047,21 @@ void replicationCron(void) {
     * to avoid altering the replication offsets. This special out of band
     * pings (newlines) can be sent, they will have no effect in the offset.
     *
-    * The newline will be ignored by the slave but will refresh the
+    * The newline will be ignored by the replica but will refresh the
     * last interaction timer preventing a timeout. In this case we ignore the
     * ping period and refresh the connection once per second since certain
     * timeouts are set at a few seconds (example: PSYNC response). */
     listRewind(g_pserver->slaves,&li);
     while((ln = listNext(&li))) {
-        client *slave = (client*)ln->value;
+        client *replica = (client*)ln->value;
 
         int is_presync =
-            (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START ||
-            (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END &&
+            (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START ||
+            (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_END &&
             g_pserver->rdb_child_type != RDB_CHILD_TYPE_SOCKET));
 
         if (is_presync) {
-            if (write(slave->fd, "\n", 1) == -1) {
+            if (write(replica->fd, "\n", 1) == -1) {
                 /* Don't worry about socket errors, it's just a ping. */
             }
         }
@@ -3073,18 +3074,18 @@ void replicationCron(void) {
 
         listRewind(g_pserver->slaves,&li);
         while((ln = listNext(&li))) {
-            client *slave = (client*)ln->value;
+            client *replica = (client*)ln->value;
 
-            if (slave->replstate != SLAVE_STATE_ONLINE) continue;
-            if (slave->flags & CLIENT_PRE_PSYNC) continue;
-            if ((g_pserver->unixtime - slave->repl_ack_time) > g_pserver->repl_timeout)
+            if (replica->replstate != SLAVE_STATE_ONLINE) continue;
+            if (replica->flags & CLIENT_PRE_PSYNC) continue;
+            if ((g_pserver->unixtime - replica->repl_ack_time) > g_pserver->repl_timeout)
             {
                 serverLog(LL_WARNING, "Disconnecting timedout replica: %s",
-                    replicationGetSlaveName(slave));
-                if (FCorrectThread(slave))
-                    freeClient(slave);
+                    replicationGetSlaveName(replica));
+                if (FCorrectThread(replica))
+                    freeClient(replica);
                 else
-                    freeClientAsync(slave);
+                    freeClientAsync(replica);
             }
         }
     }
@@ -3108,11 +3109,11 @@ void replicationCron(void) {
             * ID, leading to the following problem:
             *
             * 1. We are a master instance.
-            * 2. Our slave is promoted to master. It's repl-id-2 will
+            * 2. Our replica is promoted to master. It's repl-id-2 will
             *    be the same as our repl-id.
             * 3. We, yet as master, receive some updates, that will not
             *    increment the master_repl_offset.
-            * 4. Later we are turned into a slave, connect to the new
+            * 4. Later we are turned into a replica, connect to the new
             *    master that will accept our PSYNC request by second
             *    replication ID, but there will be data inconsistency
             *    because we received writes. */
@@ -3151,13 +3152,13 @@ void replicationCron(void) {
 
         listRewind(g_pserver->slaves,&li);
         while((ln = listNext(&li))) {
-            client *slave = (client*)ln->value;
-            if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
-                idle = g_pserver->unixtime - slave->lastinteraction;
+            client *replica = (client*)ln->value;
+            if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
+                idle = g_pserver->unixtime - replica->lastinteraction;
                 if (idle > max_idle) max_idle = idle;
                 slaves_waiting++;
-                mincapa = (mincapa == -1) ? slave->slave_capa :
-                                            (mincapa & slave->slave_capa);
+                mincapa = (mincapa == -1) ? replica->slave_capa :
+                                            (mincapa & replica->slave_capa);
             }
         }
 

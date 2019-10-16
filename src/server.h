@@ -331,7 +331,7 @@ public:
 /* Client flags */
 #define CLIENT_SLAVE (1<<0)   /* This client is a repliaca */
 #define CLIENT_MASTER (1<<1)  /* This client is a master */
-#define CLIENT_MONITOR (1<<2) /* This client is a slave monitor, see MONITOR */
+#define CLIENT_MONITOR (1<<2) /* This client is a replica monitor, see MONITOR */
 #define CLIENT_MULTI (1<<3)   /* This client is in a MULTI context */
 #define CLIENT_BLOCKED (1<<4) /* The client is waiting in a blocking operation */
 #define CLIENT_DIRTY_CAS (1<<5) /* Watched keys modified. EXEC will fail. */
@@ -395,7 +395,7 @@ public:
 #define CLIENT_TYPE_MASTER 3 /* Master. */
 #define CLIENT_TYPE_OBUF_COUNT 3 /* Number of clients to expose to output
                                     buffer configuration. Just the first
-                                    three: normal, slave, pubsub. */
+                                    three: normal, replica, pubsub. */
 
 /* Slave replication state. Used in g_pserver->repl_state for slaves to remember
  * what to do next. */
@@ -421,12 +421,12 @@ public:
 #define REPL_STATE_CONNECTED 17 /* Connected to master */
 
 /* State of slaves from the POV of the master. Used in client->replstate.
- * In SEND_BULK and ONLINE state the slave receives new updates
+ * In SEND_BULK and ONLINE state the replica receives new updates
  * in its output queue. In the WAIT_BGSAVE states instead the server is waiting
  * to start the next background saving in order to send updates to it. */
 #define SLAVE_STATE_WAIT_BGSAVE_START 6 /* We need to produce a new RDB file. */
 #define SLAVE_STATE_WAIT_BGSAVE_END 7 /* Waiting RDB file creation to finish. */
-#define SLAVE_STATE_SEND_BULK 8 /* Sending RDB file to slave. */
+#define SLAVE_STATE_SEND_BULK 8 /* Sending RDB file to replica. */
 #define SLAVE_STATE_ONLINE 9 /* RDB file transmitted, sending just updates. */
 
 /* Slave capabilities. */
@@ -434,7 +434,7 @@ public:
 #define SLAVE_CAPA_EOF (1<<0)    /* Can parse the RDB EOF streaming format. */
 #define SLAVE_CAPA_PSYNC2 (1<<1) /* Supports PSYNC2 protocol. */
 
-/* Synchronous read timeout - slave side */
+/* Synchronous read timeout - replica side */
 #define CONFIG_REPL_SYNCIO_TIMEOUT 5
 
 /* List related stuff */
@@ -543,7 +543,7 @@ public:
 /* RDB active child save type. */
 #define RDB_CHILD_TYPE_NONE 0
 #define RDB_CHILD_TYPE_DISK 1     /* RDB is written to disk. */
-#define RDB_CHILD_TYPE_SOCKET 2   /* RDB is written to slave socket. */
+#define RDB_CHILD_TYPE_SOCKET 2   /* RDB is written to replica socket. */
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
@@ -722,6 +722,8 @@ typedef struct RedisModuleDigest {
 #define OBJ_SHARED_REFCOUNT (0x7FFFFFFF) 
 #define OBJ_MVCC_INVALID (0xFFFFFFFFFFFFFFFFULL)
 
+#define MVCC_MS_SHIFT 20
+
 typedef struct redisObject {
     unsigned type:4;
     unsigned encoding:4;
@@ -800,6 +802,24 @@ public:
 
     void expireSubKey(const char *szSubkey, long long when)
     {
+        // First check if the subkey already has an expiration
+        for (auto &entry : m_vecexpireEntries)
+        {
+            if (szSubkey != nullptr)
+            {
+                // if this is a subkey expiry then its not a match if the expireEntry is either for the
+                //  primary key or a different subkey
+                if (entry.spsubkey == nullptr || sdscmp((sds)entry.spsubkey.get(), (sds)szSubkey) != 0)
+                    continue;
+            }
+            else
+            {
+                if (entry.spsubkey != nullptr)
+                    continue;
+            }
+            m_vecexpireEntries.erase(m_vecexpireEntries.begin() + (&entry - m_vecexpireEntries.data()));
+            break;
+        }
         auto itrInsert = std::lower_bound(m_vecexpireEntries.begin(), m_vecexpireEntries.end(), when);
         const char *subkey = (szSubkey) ? sdsdup(szSubkey) : nullptr;
         m_vecexpireEntries.emplace(itrInsert, when, subkey);
@@ -823,6 +843,7 @@ class expireEntry {
 public:
     class iter
     {
+        friend class expireEntry;
         expireEntry *m_pentry = nullptr;
         size_t m_idx = 0;
 
@@ -957,6 +978,14 @@ public:
         if (FFat())
             return iter(this, u.m_pfatentry->size());
         return iter(this, 1);
+    }
+    
+    void erase(iter &itr)
+    {
+        if (!FFat())
+            throw -1;   // assert
+        pfatentry()->m_vecexpireEntries.erase(
+            pfatentry()->m_vecexpireEntries.begin() + itr.m_idx);
     }
 
     bool FGetPrimaryExpire(long long *pwhen)
@@ -1173,8 +1202,8 @@ typedef struct client {
     int casyncOpsPending;
     int fPendingAsyncWrite; /* NOTE: Not a flag because it is written to outside of the client lock (locked by the global lock instead) */
     int authenticated;      /* Needed when the default user requires auth. */
-    int replstate;          /* Replication state if this is a slave. */
-    int repl_put_online_on_ack; /* Install slave write handler on ACK. */
+    int replstate;          /* Replication state if this is a replica. */
+    int repl_put_online_on_ack; /* Install replica write handler on ACK. */
     int repldbfd;           /* Replication DB file descriptor. */
     off_t repldboff;        /* Replication DB file offset. */
     off_t repldbsize;       /* Replication DB file size. */
@@ -1182,10 +1211,10 @@ typedef struct client {
     long long read_reploff; /* Read replication offset if this is a master. */
     long long reploff;      /* Applied replication offset if this is a master. */
     long long reploff_skipped;  /* Repl backlog we did not send to this client */
-    long long repl_ack_off; /* Replication ack offset, if this is a slave. */
-    long long repl_ack_time;/* Replication ack time, if this is a slave. */
+    long long repl_ack_off; /* Replication ack offset, if this is a replica. */
+    long long repl_ack_time;/* Replication ack time, if this is a replica. */
     long long psync_initial_offset; /* FULLRESYNC reply offset other slaves
-                                       copying this slave output buffer
+                                       copying this replica output buffer
                                        should use. */
     char replid[CONFIG_RUN_ID_SIZE+1]; /* Master replication ID (if master). */
     int slave_listening_port; /* As configured with: SLAVECONF listening-port */
@@ -1426,7 +1455,7 @@ struct redisMaster {
     char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid. */
     long long master_initial_offset;           /* Master PSYNC offset. */
 
-    int repl_state;          /* Replication status if the instance is a slave */
+    int repl_state;          /* Replication status if the instance is a replica */
     off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
     off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
     off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
@@ -1636,7 +1665,7 @@ struct redisServer {
     int lastbgsave_status;          /* C_OK or C_ERR */
     int stop_writes_on_bgsave_err;  /* Don't allow writes if can't BGSAVE */
     int rdb_pipe_write_result_to_parent; /* RDB pipes used to return the state */
-    int rdb_pipe_read_result_from_child; /* of each slave in diskless SYNC. */
+    int rdb_pipe_read_result_from_child; /* of each replica in diskless SYNC. */
     /* Pipe and data structures for child -> parent info sharing. */
     int child_info_pipe[2];         /* Pipe used to write the child_info_data. */
     struct {
@@ -1656,8 +1685,8 @@ struct redisServer {
     char replid2[CONFIG_RUN_ID_SIZE+1]; /* replid inherited from master*/
     long long master_repl_offset;   /* My current replication offset */
     long long second_replid_offset; /* Accept offsets up to this for replid2. */
-    int slaveseldb;                 /* Last SELECTed DB in replication output */
-    int repl_ping_slave_period;     /* Master pings the slave every N seconds */
+    int replicaseldb;                 /* Last SELECTed DB in replication output */
+    int repl_ping_slave_period;     /* Master pings the replica every N seconds */
     char *repl_backlog;             /* Replication backlog for partial syncs */
     long long repl_backlog_size;    /* Backlog circular buffer size */
     long long repl_backlog_histlen; /* Backlog actual data length */
@@ -1674,7 +1703,7 @@ struct redisServer {
     int repl_good_slaves_count;     /* Number of slaves with lag <= max_lag. */
     int repl_diskless_sync;         /* Send RDB to slaves sockets directly. */
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
-    /* Replication (slave) */
+    /* Replication (replica) */
     list *masters;
     int enable_multimaster; 
     int repl_timeout;               /* Timeout after N seconds of master idle */
@@ -1745,7 +1774,7 @@ struct redisServer {
     int cluster_slave_validity_factor; /* Slave max data age for failover. */
     int cluster_require_full_coverage; /* If true, put the cluster down if
                                           there is at least an uncovered slot.*/
-    int cluster_slave_no_failover;  /* Prevent slave from starting a failover
+    int cluster_slave_no_failover;  /* Prevent replica from starting a failover
                                        if the master is in failure state. */
     char *cluster_announce_ip;  /* IP address to announce on cluster bus. */
     int cluster_announce_port;     /* base port to announce on cluster bus. */
@@ -2014,7 +2043,7 @@ const char *getClientTypeName(int cclass);
 void flushSlavesOutputBuffers(void);
 void disconnectSlaves(void);
 void disconnectSlavesExcept(unsigned char *uuid);
-int listenToPort(int port, int *fds, int *count, int fReusePort);
+int listenToPort(int port, int *fds, int *count, int fReusePort, int fFirstListen);
 void pauseClients(mstime_t duration);
 int clientsArePaused(void);
 int processEventsWhileBlocked(int iel);
@@ -2168,7 +2197,7 @@ void replicationSendNewlineToMaster(struct redisMaster *mi);
 long long replicationGetSlaveOffset(struct redisMaster *mi);
 char *replicationGetSlaveName(client *c);
 long long getPsyncInitialOffset(void);
-int replicationSetupSlaveForFullResync(client *slave, long long offset);
+int replicationSetupSlaveForFullResync(client *replica, long long offset);
 void changeReplicationId(void);
 void clearReplicationId2(void);
 void mergeReplicationId(const char *);
@@ -2408,6 +2437,7 @@ int rewriteConfig(char *path);
 /* db.c -- Keyspace access API */
 int removeExpire(redisDb *db, robj *key);
 int removeExpireCore(redisDb *db, robj *key, dictEntry *de);
+int removeSubkeyExpire(redisDb *db, robj *key, robj *subkey);
 void propagateExpire(redisDb *db, robj *key, int lazy);
 int expireIfNeeded(redisDb *db, robj *key);
 expireEntry *getExpire(redisDb *db, robj_roptr key);
@@ -2608,6 +2638,7 @@ void monitorCommand(client *c);
 void expireCommand(client *c);
 void expireatCommand(client *c);
 void expireMemberCommand(client *c);
+void expireMemberAtCommand(client *c);
 void pexpireCommand(client *c);
 void pexpireatCommand(client *c);
 void getsetCommand(client *c);

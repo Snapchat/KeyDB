@@ -256,13 +256,13 @@ void evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct ev
 {
     if (setexpire != nullptr)
     {
-        visitFunctor visitor { dbid, db->m_persistentData.dictUnsafeKeyOnly(), pool, 0 };
+        visitFunctor visitor { dbid, db->dictUnsafeKeyOnly(), pool, 0 };
         setexpire->random_visit(visitor);
     }
     else
     {
         dictEntry **samples = (dictEntry**)alloca(g_pserver->maxmemory_samples * sizeof(dictEntry*));
-        int count = dictGetSomeKeys(db->m_persistentData.dictUnsafeKeyOnly(),samples,g_pserver->maxmemory_samples);
+        int count = dictGetSomeKeys(db->dictUnsafeKeyOnly(),samples,g_pserver->maxmemory_samples);
         for (int j = 0; j < count; j++) {
             robj *o = (robj*)dictGetVal(samples[j]);
             serverAssert(o != nullptr); // BUG!!! We have to get the info we need here without permanently rehydrating the obj
@@ -514,7 +514,7 @@ int freeMemoryIfNeeded(void) {
                     {
                         keys = db->expireSize();
                         if (keys != 0)
-                            evictionPoolPopulate(i, db, db->m_persistentData.setexpireUnsafe(), pool);
+                            evictionPoolPopulate(i, db, db->setexpireUnsafe(), pool);
                         total_keys += keys;
                     }
                 }

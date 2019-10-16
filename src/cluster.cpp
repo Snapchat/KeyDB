@@ -499,7 +499,7 @@ void clusterInit(void) {
     }
 
     if (listenToPort(g_pserver->port+CLUSTER_PORT_INCR,
-        g_pserver->cfd,&g_pserver->cfd_count, 0 /*fReusePort*/) == C_ERR)
+        g_pserver->cfd,&g_pserver->cfd_count, 0 /*fReusePort*/, 0 /*fFirstListen*/) == C_ERR)
     {
         exit(1);
     } else {

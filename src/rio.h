@@ -70,6 +70,7 @@ struct _rio {
         struct {
             sds ptr;
             off_t pos;
+            off_t len;  // For const buffers only
         } buffer;
         /* Stdio file pointer target. */
         struct {
@@ -130,6 +131,7 @@ static inline int rioFlush(rio *r) {
 
 void rioInitWithFile(rio *r, FILE *fp);
 void rioInitWithBuffer(rio *r, sds s);
+void rioInitWithConstBuffer(rio *r, const void *rgch, size_t cch);
 void rioInitWithFdset(rio *r, int *fds, int numfds);
 
 void rioFreeFdset(rio *r);

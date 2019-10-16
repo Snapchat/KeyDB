@@ -73,6 +73,14 @@ static size_t rioBufferRead(rio *r, void *buf, size_t len) {
     return 1;
 }
 
+static size_t rioConstBufferRead(rio *r, void *buf, size_t len) {
+     if (r->io.buffer.len-r->io.buffer.pos < (off_t)len)
+        return 0; /* not enough buffer to return len bytes. */
+    memcpy(buf,r->io.buffer.ptr+r->io.buffer.pos,len);
+    r->io.buffer.pos += len;
+    return 1;
+}
+
 /* Returns read/write position in buffer. */
 static off_t rioBufferTell(rio *r) {
     return r->io.buffer.pos;
@@ -97,10 +105,30 @@ static const rio rioBufferIO = {
     { { NULL, 0 } } /* union for io-specific vars */
 };
 
+static const rio rioConstBufferIO = {
+    rioConstBufferRead,
+    nullptr,
+    rioBufferTell,
+    rioBufferFlush,
+    NULL,           /* update_checksum */
+    0,              /* current checksum */
+    0,              /* bytes read or written */
+    0,              /* read/write chunk size */
+    { { NULL, 0 } } /* union for io-specific vars */
+};
+
 void rioInitWithBuffer(rio *r, sds s) {
     *r = rioBufferIO;
     r->io.buffer.ptr = s;
     r->io.buffer.pos = 0;
+}
+
+void rioInitWithConstBuffer(rio *r, const void *buf, size_t cb)
+{
+    *r = rioConstBufferIO;
+    r->io.buffer.ptr = (sds)buf;
+    r->io.buffer.pos = 0;
+    r->io.buffer.len = cb;
 }
 
 /* --------------------- Stdio file pointer implementation ------------------- */

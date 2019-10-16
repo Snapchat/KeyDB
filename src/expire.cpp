@@ -155,9 +155,8 @@ void expireMemberCore(client *c, robj *key, robj *subkey, long long basetime, lo
     when += basetime;
 
     /* No key, return zero. */
-    robj *val = c->db->find(key);
+    robj *val = lookupKeyWriteOrReply(c, key, shared.czero);
     if (val == nullptr) {
-        addReply(c,shared.czero);
         return;
     }
 
@@ -165,7 +164,7 @@ void expireMemberCore(client *c, robj *key, robj *subkey, long long basetime, lo
     {
     case OBJ_SET:
         if (!setTypeIsMember(val, szFromObj(subkey))) {
-            addReplyError(c, "subkey does not exist");
+            addReply(c,shared.czero);
             return;
         }
         break;
@@ -177,7 +176,7 @@ void expireMemberCore(client *c, robj *key, robj *subkey, long long basetime, lo
 
     setExpire(c, c->db, key, subkey, when);
 
-    addReply(c, shared.ok);
+    addReply(c, shared.cone);
 }
 
 void expireMemberCommand(client *c)

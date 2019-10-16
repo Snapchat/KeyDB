@@ -1498,7 +1498,24 @@ sds serializeStoredStringObject(robj_roptr o)
 {
     sds str = sdsempty();
     sdscatlen(str, &(*o), sizeof(robj));
-    sdscat(str, szFromObj(o));
+    switch (o->encoding)
+    {
+    case OBJ_ENCODING_RAW:
+        sdscat(str, szFromObj(o));
+        break;
+
+    case OBJ_ENCODING_INT:
+        break;  //nop
+
+    case OBJ_ENCODING_EMBSTR:
+        size_t cch = sdslen(szFromObj(o));
+        if (cch > sizeof(redisObject::m_ptr))
+        {
+            sdscatlen(str, szFromObj(o) + sizeof(redisObject::m_ptr), cch - sizeof(redisObject::m_ptr));
+        }
+        break;
+    }
+        
     return str;
 }
 
@@ -1509,6 +1526,7 @@ robj *deserializeStoredStringObject(const char *data, size_t cb)
     switch (oT->encoding)
     {
     case OBJ_ENCODING_EMBSTR:
+    case OBJ_ENCODING_INT:
         newObject = (robj*)zmalloc(cb, MALLOC_LOCAL);
         memcpy(newObject, data, cb);
         return newObject;
@@ -1531,6 +1549,18 @@ robj *deserializeStoredObject(const void *data, size_t cb)
     {
         case OBJ_STRING:
             return deserializeStoredStringObject((char*)data, cb);
+
+        default:
+            rio payload;
+            int type;
+            robj *obj;
+            rioInitWithConstBuffer(&payload,data,cb);
+            if (((type = rdbLoadObjectType(&payload)) == -1) ||
+                ((obj = rdbLoadObject(type,&payload,nullptr, OBJ_MVCC_INVALID)) == nullptr))
+            {
+                serverPanic("Bad data format");
+            }
+            return obj;
     }
     serverPanic("Unknown object type loading from storage");
 }
@@ -1541,6 +1571,11 @@ sds serializeStoredObject(robj_roptr o)
     {
         case OBJ_STRING:
             return serializeStoredStringObject(o);
+            
+        default:
+            rio rdb;
+            createDumpPayload(&rdb,o,nullptr);
+            return (sds)rdb.io.buffer.ptr;
     }
     serverPanic("Attempting to store unknown object type");
 }

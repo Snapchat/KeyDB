@@ -813,12 +813,20 @@ public:
         // First check if the subkey already has an expiration
         for (auto &entry : m_vecexpireEntries)
         {
-            if (entry.spsubkey == nullptr)
-                continue;
-            if (sdscmp((sds)entry.spsubkey.get(), (sds)szSubkey) == 0) {
-                m_vecexpireEntries.erase(m_vecexpireEntries.begin() + (&entry - m_vecexpireEntries.data()));
-                break;
+            if (szSubkey != nullptr)
+            {
+                // if this is a subkey expiry then its not a match if the expireEntry is either for the
+                //  primary key or a different subkey
+                if (entry.spsubkey == nullptr || sdscmp((sds)entry.spsubkey.get(), (sds)szSubkey) != 0)
+                    continue;
             }
+            else
+            {
+                if (entry.spsubkey != nullptr)
+                    continue;
+            }
+            m_vecexpireEntries.erase(m_vecexpireEntries.begin() + (&entry - m_vecexpireEntries.data()));
+            break;
         }
         auto itrInsert = std::lower_bound(m_vecexpireEntries.begin(), m_vecexpireEntries.end(), when);
         const char *subkey = (szSubkey) ? sdsdup(szSubkey) : nullptr;

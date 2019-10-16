@@ -130,28 +130,44 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
     }
 }
 
-void expireMemberCommand(client *c)
+int parseUnitString(const char *sz)
 {
-    long long when;
-    if (getLongLongFromObjectOrReply(c, c->argv[3], &when, NULL) != C_OK)
-        return;
+    if (strcasecmp(sz, "s") == 0)
+        return UNIT_SECONDS;
+    if (strcasecmp(sz, "ms") == 0)
+        return UNIT_MILLISECONDS;
+    return -1;
+}
 
-    when *= 1000;
-    when += mstime();
-
-    /* No key, return zero. */
-    dictEntry *de = dictFind(c->db->pdict, szFromObj(c->argv[1]));
-    if (de == NULL) {
-        addReply(c,shared.czero);
+void expireMemberCore(client *c, robj *key, robj *subkey, long long basetime, long long when, int unit)
+{
+    switch (unit)
+    {
+    case UNIT_SECONDS:
+        when *= 1000;
+    case UNIT_MILLISECONDS:
+        break;
+    
+    default:
+        addReplyError(c, "Invalid unit arg");
         return;
     }
+    
+    when += basetime;
 
-    robj *val = (robj*)dictGetVal(de);
+    /* No key, return zero. */
+    robj *val = lookupKeyWriteOrReply(c, key, shared.czero);
+    if (val == NULL) {
+        return;
+    }
 
     switch (val->type)
     {
     case OBJ_SET:
-        // these types are safe
+        if (!setTypeIsMember(val, szFromObj(subkey))) {
+            addReply(c,shared.czero);
+            return;
+        }
         break;
 
     default:
@@ -159,10 +175,39 @@ void expireMemberCommand(client *c)
         return;
     }
 
-    setExpire(c, c->db, c->argv[1], c->argv[2], when);
+    setExpire(c, c->db, key, subkey, when);
 
-    addReply(c, shared.ok);
+    addReply(c, shared.cone);
 }
+
+void expireMemberCommand(client *c)
+{
+    long long when;
+    if (getLongLongFromObjectOrReply(c, c->argv[3], &when, NULL) != C_OK)
+        return;
+
+    if (c->argc > 5) {
+        addReplyError(c, "Invalid number of arguments");
+        return;
+    }
+
+    int unit = UNIT_SECONDS;
+    if (c->argc == 5) {
+        unit = parseUnitString(szFromObj(c->argv[4]));
+    }
+
+    expireMemberCore(c, c->argv[1], c->argv[2], mstime(), when, unit);
+}
+
+void expireMemberAtCommand(client *c)
+{
+    long long when;
+    if (getLongLongFromObjectOrReply(c, c->argv[3], &when, NULL) != C_OK)
+        return;
+
+    expireMemberCore(c, c->argv[1], c->argv[2], 0, when, UNIT_SECONDS);
+}
+
 
 /* Try to expire a few timed out keys. The algorithm used is adaptive and
  * will use few CPU cycles if there are few expiring keys, otherwise
@@ -307,17 +352,17 @@ void activeExpireCycle(int type) {
  *
  * Normally slaves do not process expires: they wait the masters to synthesize
  * DEL operations in order to retain consistency. However writable slaves are
- * an exception: if a key is created in the slave and an expire is assigned
+ * an exception: if a key is created in the replica and an expire is assigned
  * to it, we need a way to expire such a key, since the master does not know
  * anything about such a key.
  *
- * In order to do so, we track keys created in the slave side with an expire
+ * In order to do so, we track keys created in the replica side with an expire
  * set, and call the expireSlaveKeys() function from time to time in order to
  * reclaim the keys if they already expired.
  *
  * Note that the use case we are trying to cover here, is a popular one where
  * slaves are put in writable mode in order to compute slow operations in
- * the slave side that are mostly useful to actually read data in a more
+ * the replica side that are mostly useful to actually read data in a more
  * processed way. Think at sets intersections in a tmp key, with an expire so
  * that it is also used as a cache to avoid intersecting every time.
  *
@@ -326,7 +371,7 @@ void activeExpireCycle(int type) {
  *----------------------------------------------------------------------------*/
 
 /* The dictionary where we remember key names and database ID of keys we may
- * want to expire from the slave. Since this function is not often used we
+ * want to expire from the replica. Since this function is not often used we
  * don't even care to initialize the database at startup. We'll do it once
  * the feature is used the first time, that is, when rememberSlaveKeyWithExpire()
  * is called.
@@ -389,7 +434,7 @@ void expireSlaveKeys(void) {
         }
 
         /* Set the new bitmap as value of the key, in the dictionary
-         * of keys with an expire set directly in the writable slave. Otherwise
+         * of keys with an expire set directly in the writable replica. Otherwise
          * if the bitmap is zero, we no longer need to keep track of it. */
         if (new_dbids)
             dictSetUnsignedIntegerVal(de,new_dbids);
@@ -406,7 +451,7 @@ void expireSlaveKeys(void) {
 }
 
 /* Track keys that received an EXPIRE or similar command in the context
- * of a writable slave. */
+ * of a writable replica. */
 void rememberSlaveKeyWithExpire(redisDb *db, robj *key) {
     if (slaveKeysWithExpire == NULL) {
         static dictType dt = {
@@ -448,7 +493,7 @@ size_t getSlaveKeyWithExpireCount(void) {
  *
  * Note: technically we should handle the case of a single DB being flushed
  * but it is not worth it since anyway race conditions using the same set
- * of key names in a wriatable slave and in its master will lead to
+ * of key names in a wriatable replica and in its master will lead to
  * inconsistencies. This is just a best-effort thing we do. */
 void flushSlaveKeysWithExpireList(void) {
     if (slaveKeysWithExpire) {
@@ -486,7 +531,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
 
     /* EXPIRE with negative TTL, or EXPIREAT with a timestamp into the past
      * should never be executed as a DEL when load the AOF or in the context
-     * of a slave instance.
+     * of a replica instance.
      *
      * Instead we take the other branch of the IF statement setting an expire
      * (possibly in the past) and wait for an explicit DEL from the master. */
@@ -544,11 +589,32 @@ void ttlGenericCommand(client *c, int output_ms) {
         addReplyLongLong(c,-2);
         return;
     }
+
     /* The key exists. Return -1 if it has no expire, or the actual
-     * TTL value otherwise. */
+        * TTL value otherwise. */
     expireEntry *pexpire = getExpire(c->db,c->argv[1]);
-    if (pexpire != nullptr)
-        pexpire->FGetPrimaryExpire(&expire);
+
+    if (c->argc == 2) {
+        // primary expire    
+        if (pexpire != nullptr)
+            pexpire->FGetPrimaryExpire(&expire);
+    } else if (c->argc == 3) {
+        // We want a subkey expire
+        if (pexpire && pexpire->FFat()) {
+            for (auto itr : *pexpire) {
+                if (itr.subkey() == nullptr)
+                    continue;
+                if (sdscmp((sds)itr.subkey(), szFromObj(c->argv[2])) == 0) {
+                    expire = itr.when();
+                    break;
+                }
+            }
+        }
+    } else {
+        addReplyError(c, "Invalid arguments");
+        return;
+    }
+
     
     if (expire != -1) {
         ttl = expire-mstime();
@@ -574,11 +640,22 @@ void pttlCommand(client *c) {
 /* PERSIST key */
 void persistCommand(client *c) {
     if (lookupKeyWrite(c->db,c->argv[1])) {
-        if (removeExpire(c->db,c->argv[1])) {
-            addReply(c,shared.cone);
-            g_pserver->dirty++;
+        if (c->argc == 2) {
+            if (removeExpire(c->db,c->argv[1])) {
+                addReply(c,shared.cone);
+                g_pserver->dirty++;
+            } else {
+                addReply(c,shared.czero);
+            }
+        } else if (c->argc == 3) {
+            if (removeSubkeyExpire(c->db, c->argv[1], c->argv[2])) {
+                addReply(c,shared.cone);
+                g_pserver->dirty++;
+            } else {
+                addReply(c,shared.czero);
+            }
         } else {
-            addReply(c,shared.czero);
+            addReplyError(c, "Invalid arguments");
         }
     } else {
         addReply(c,shared.czero);

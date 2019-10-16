@@ -156,13 +156,10 @@ void expireMemberCore(client *c, robj *key, robj *subkey, long long basetime, lo
     when += basetime;
 
     /* No key, return zero. */
-    dictEntry *de = dictFind(c->db->pdict, szFromObj(key));
-    if (de == NULL) {
-        addReply(c,shared.czero);
+    robj *val = lookupKeyWriteOrReply(c, key, shared.czero);
+    if (val == NULL) {
         return;
     }
-
-    robj *val = (robj*)dictGetVal(de);
 
     switch (val->type)
     {

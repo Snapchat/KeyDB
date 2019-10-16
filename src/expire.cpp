@@ -295,7 +295,7 @@ void activeExpireCycle(int type) {
         now = mstime();
 
         /* If there is nothing to expire try next DB ASAP. */
-        if (db->m_persistentData.setexpireUnsafe()->empty())
+        if (db->setexpireUnsafe()->empty())
         {
             db->avg_ttl = 0;
             db->last_expire_set = now;
@@ -305,7 +305,7 @@ void activeExpireCycle(int type) {
         size_t expired = 0;
         size_t tried = 0;
         long long check = ACTIVE_EXPIRE_CYCLE_FAST_DURATION;    // assume a check is roughly 1us.  It isn't but good enough
-        db->expireitr = db->m_persistentData.setexpireUnsafe()->enumerate(db->expireitr, now, [&](expireEntry &e) __attribute__((always_inline)) {
+        db->expireitr = db->setexpireUnsafe()->enumerate(db->expireitr, now, [&](expireEntry &e) __attribute__((always_inline)) {
             if (e.when() < now)
             {
                 activeExpireCycleExpire(db, e, now);
@@ -406,12 +406,12 @@ void expireSlaveKeys(void) {
 
                 // the expire is hashed based on the key pointer, so we need the point in the main db
                 auto itrDB = db->find(keyname);
-                auto itrExpire = db->m_persistentData.setexpire()->end();
+                auto itrExpire = db->setexpire()->end();
                 if (itrDB != nullptr)
-                    itrExpire = db->m_persistentData.setexpireUnsafe()->find(itrDB.key());
+                    itrExpire = db->setexpireUnsafe()->find(itrDB.key());
                 int expired = 0;
 
-                if (itrExpire != db->m_persistentData.setexpire()->end())
+                if (itrExpire != db->setexpire()->end())
                 {
                     if (itrExpire->when() < start) {
                         activeExpireCycleExpire(g_pserver->db+dbid,*itrExpire,start);
@@ -423,7 +423,7 @@ void expireSlaveKeys(void) {
                  * corresponding bit in the new bitmap we set as value.
                  * At the end of the loop if the bitmap is zero, it means we
                  * no longer need to keep track of this key. */
-                if (itrExpire != db->m_persistentData.setexpire()->end() && !expired) {
+                if (itrExpire != db->setexpire()->end() && !expired) {
                     noexpire++;
                     new_dbids |= (uint64_t)1 << dbid;
                 }

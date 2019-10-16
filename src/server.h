@@ -1138,7 +1138,7 @@ public:
     int removeSubkeyExpire(robj *key, robj *subkey);
     void clear(void(callback)(void*));
     void emptyDbAsync();
-    bool iterate(std::function<bool(const char*, robj*)> &fn);
+    bool iterate(std::function<bool(const char*, robj*)> fn);
     void setExpire(robj *key, robj *subkey, long long when);
     void setExpire(expireEntry &&e);
     void initialize();
@@ -1172,7 +1172,8 @@ private:
 /* Redis database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
-typedef struct redisDb {
+typedef struct redisDb : protected redisDbPersistentData 
+{
     // Legacy C API, Do not add more
     friend void tryResizeHashTables(int);
     friend int dbSyncDelete(redisDb *db, robj *key);
@@ -1195,57 +1196,40 @@ typedef struct redisDb {
     redisDb()
         : expireitr(nullptr)
     {}
-
     void initialize(int id);
 
-    size_t slots() const { return m_persistentData.slots(); }
-    size_t size() const { return m_persistentData.size(); }
-    size_t expireSize() const { return m_persistentData.expireSize(); }
-    void expand(uint64_t slots) { m_persistentData.expand(slots); }
-    void tryResize() { m_persistentData.tryResize(); }
-    const expireset *setexpire() { return m_persistentData.setexpire(); }
-
-    void trackChanges() { m_persistentData.trackChanges(); }
-    void processChanges() { m_persistentData.processChanges(); }
-    void trackkey(robj_roptr o) { m_persistentData.trackkey(o); }
+    // Forward Persistent Data APIs
+    using redisDbPersistentData::slots;
+    using redisDbPersistentData::size;
+    using redisDbPersistentData::expireSize;
+    using redisDbPersistentData::expand;
+    using redisDbPersistentData::random;
+    using redisDbPersistentData::incrementallyRehash;
+    using redisDbPersistentData::trackkey;
+    using redisDbPersistentData::setexpire;
+    using redisDbPersistentData::insert;
+    using redisDbPersistentData::iterate;
+    using redisDbPersistentData::trackChanges;
+    using redisDbPersistentData::processChanges;
+    using redisDbPersistentData::getStats;
+    using redisDbPersistentData::getExpireStats;
+    using redisDbPersistentData::removeSubkeyExpire;
     
+    using redisDbPersistentData::find;
     iter find(robj_roptr key)
     {
-        return find(szFromObj(key));
-    }
-    iter find(const char *key) 
-    {
-        return m_persistentData.find(key);
-    }
-
-    iter random()
-    {
-        return m_persistentData.random();
-    }
-
-    const expireEntry &random_expire()
-    {
-        return m_persistentData.random_expire();
+        return redisDbPersistentData::find(szFromObj(key));
     }
 
     const_iter end() { return const_iter(nullptr); }
 
-    bool iterate(std::function<bool(const char*, robj*)> fn) { return m_persistentData.iterate(fn); }
-    void getStats(char *buf, size_t bufsize) { m_persistentData.getStats(buf, bufsize); }
-    void getExpireStats(char *buf, size_t bufsize) { m_persistentData.getExpireStats(buf, bufsize); }
-
-    bool insert(char *key, robj *o) { return m_persistentData.insert(key, o); }
     void dbOverwriteCore(redisDb::iter itr, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire);
 
-    int incrementallyRehash() { return m_persistentData.incrementallyRehash(); };
-    int removeSubkeyExpire(robj *key, robj *subkey) { return m_persistentData.removeSubkeyExpire(key, subkey); }
 
     bool FKeyExpires(const char *key);
     size_t clear(bool fAsync, void(callback)(void*));
-    dict *dictUnsafeKeyOnly() { return m_persistentData.dictUnsafeKeyOnly(); }
     expireEntry *getExpire(robj_roptr key);
-private:
-    redisDbPersistentData m_persistentData;
+
 public:
     expireset::setiter expireitr;
     dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/

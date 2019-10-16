@@ -94,7 +94,7 @@ bool redisDbPersistentData::asyncDelete(robj *key) {
 }
 
 int dbAsyncDelete(redisDb *db, robj *key) {
-    return db->m_persistentData.asyncDelete(key);
+    return db->asyncDelete(key);
 }
 
 /* Free an object, if the object is huge enough, free it in async way. */

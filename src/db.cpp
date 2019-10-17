@@ -1017,7 +1017,7 @@ void renameGenericCommand(client *c, int nx) {
     std::unique_ptr<expireEntry> spexpire;
 
     {   // scope pexpireOld since it will be invalid soon
-    expireEntry *pexpireOld = getExpire(c->db,c->argv[1]);
+    expireEntry *pexpireOld = c->db->getExpire(c->argv[1]);
     if (pexpireOld != nullptr)
         spexpire = std::make_unique<expireEntry>(std::move(*pexpireOld));
     }
@@ -1095,7 +1095,7 @@ void moveCommand(client *c) {
 
     std::unique_ptr<expireEntry> spexpire;
     {   // scope pexpireOld
-    expireEntry *pexpireOld = getExpire(c->db,c->argv[1]);
+    expireEntry *pexpireOld = c->db->getExpire(c->argv[1]);
     if (pexpireOld != nullptr)
         spexpire = std::make_unique<expireEntry>(std::move(*pexpireOld));
     }
@@ -1321,12 +1321,12 @@ void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
 
 /* Return the expire time of the specified key, or null if no expire
  * is associated with this key (i.e. the key is non volatile) */
-expireEntry *redisDb::getExpire(robj_roptr key) {
+expireEntry *redisDbPersistentData::getExpire(robj_roptr key) {
     /* No expire? return ASAP */
     if (expireSize() == 0)
         return nullptr;
 
-    auto itr = find(key);
+    auto itr = find(szFromObj(key));
     if (itr == nullptr)
         return nullptr;
     if (!itr.val()->FExpires())
@@ -1334,11 +1334,6 @@ expireEntry *redisDb::getExpire(robj_roptr key) {
 
     auto itrExpire = findExpire(itr.key());
     return itrExpire.operator->();
-}
-
-expireEntry *getExpire(redisDb *db, robj_roptr key)
-{
-    return db->getExpire(key);
 }
 
 /* Propagate expires into slaves and the AOF file.
@@ -1368,7 +1363,7 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
 
 /* Check if the key is expired. Note, this does not check subexpires */
 int keyIsExpired(redisDb *db, robj *key) {
-    expireEntry *pexpire = getExpire(db,key);
+    expireEntry *pexpire = db->getExpire(key);
 
     if (pexpire == nullptr) return 0; /* No expire for this key */
 

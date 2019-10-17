@@ -591,7 +591,7 @@ void ttlGenericCommand(client *c, int output_ms) {
 
     /* The key exists. Return -1 if it has no expire, or the actual
         * TTL value otherwise. */
-    expireEntry *pexpire = getExpire(c->db,c->argv[1]);
+    expireEntry *pexpire = c->db->getExpire(c->argv[1]);
 
     if (c->argc == 2) {
         // primary expire    

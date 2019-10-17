@@ -1107,6 +1107,11 @@ public:
         return dict_iter(de);
     }
 
+    dict_iter find(robj_roptr key)
+    {
+        return find(szFromObj(key));
+    }
+
     dict_iter random()
     {
         dictEntry *de = dictGetRandomKey(m_pdict);
@@ -1141,6 +1146,7 @@ public:
     bool iterate(std::function<bool(const char*, robj*)> fn);
     void setExpire(robj *key, robj *subkey, long long when);
     void setExpire(expireEntry &&e);
+    expireEntry *getExpire(robj_roptr key);
     void initialize();
 
     void trackChanges() { m_fTrackingChanges++; }
@@ -1172,7 +1178,7 @@ private:
 /* Redis database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
-typedef struct redisDb : protected redisDbPersistentData 
+typedef struct redisDb : public redisDbPersistentData 
 {
     // Legacy C API, Do not add more
     friend void tryResizeHashTables(int);
@@ -1198,29 +1204,6 @@ typedef struct redisDb : protected redisDbPersistentData
     {}
     void initialize(int id);
 
-    // Forward Persistent Data APIs
-    using redisDbPersistentData::slots;
-    using redisDbPersistentData::size;
-    using redisDbPersistentData::expireSize;
-    using redisDbPersistentData::expand;
-    using redisDbPersistentData::random;
-    using redisDbPersistentData::incrementallyRehash;
-    using redisDbPersistentData::trackkey;
-    using redisDbPersistentData::setexpire;
-    using redisDbPersistentData::insert;
-    using redisDbPersistentData::iterate;
-    using redisDbPersistentData::trackChanges;
-    using redisDbPersistentData::processChanges;
-    using redisDbPersistentData::getStats;
-    using redisDbPersistentData::getExpireStats;
-    using redisDbPersistentData::removeSubkeyExpire;
-    
-    using redisDbPersistentData::find;
-    iter find(robj_roptr key)
-    {
-        return redisDbPersistentData::find(szFromObj(key));
-    }
-
     const_iter end() { return const_iter(nullptr); }
 
     void dbOverwriteCore(redisDb::iter itr, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire);
@@ -1228,7 +1211,6 @@ typedef struct redisDb : protected redisDbPersistentData
 
     bool FKeyExpires(const char *key);
     size_t clear(bool fAsync, void(callback)(void*));
-    expireEntry *getExpire(robj_roptr key);
 
 public:
     expireset::setiter expireitr;
@@ -2626,7 +2608,6 @@ int removeExpire(redisDb *db, robj *key);
 int removeSubkeyExpire(redisDb *db, robj *key, robj *subkey);
 void propagateExpire(redisDb *db, robj *key, int lazy);
 int expireIfNeeded(redisDb *db, robj *key);
-expireEntry *getExpire(redisDb *db, robj_roptr key);
 void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when);
 void setExpire(client *c, redisDb *db, robj *key, expireEntry &&entry);
 robj_roptr lookupKeyRead(redisDb *db, robj *key);

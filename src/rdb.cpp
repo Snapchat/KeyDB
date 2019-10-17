@@ -1112,12 +1112,12 @@ int rdbSaveInfoAuxFields(rio *rdb, int flags, rdbSaveInfo *rsi) {
     return 1;
 }
 
-int saveKey(rio *rdb, redisDb *db, int flags, size_t *processed, const char *keystr, robj *o)
+int saveKey(rio *rdb, redisDbPersistentData *db, int flags, size_t *processed, const char *keystr, robj *o)
 {    
     robj key;
 
     initStaticStringObject(key,(char*)keystr);
-    expireEntry *pexpire = getExpire(db, &key);
+    expireEntry *pexpire = db->getExpire(&key);
 
     if (rdbSaveKeyValuePair(rdb,&key,o,pexpire) == -1)
         return 0;
@@ -1157,7 +1157,7 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
     if (rdbSaveInfoAuxFields(rdb,flags,rsi) == -1) goto werr;
 
     for (j = 0; j < cserver.dbnum; j++) {
-        redisDb *db = g_pserver->db+j;
+        redisDbPersistentData *db = static_cast<redisDbPersistentData*>(g_pserver->db+j);
         if (db->size() == 0) continue;
 
         /* Write the SELECT DB opcode */

@@ -1318,7 +1318,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
 
             initStaticStringObject(key,(sds)keystr);
 
-            expireEntry *pexpire = getExpire(db,&key);
+            expireEntry *pexpire = db->getExpire(&key);
 
             /* Save the key and associated value */
             if (o->type == OBJ_STRING) {

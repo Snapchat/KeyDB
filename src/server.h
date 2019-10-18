@@ -1083,6 +1083,8 @@ public:
 class redisDbPersistentData
 {
 public:
+    ~redisDbPersistentData();
+
     static void swap(redisDbPersistentData *db1, redisDbPersistentData *db2);
 
     size_t slots() const { return dictSlots(m_pdict); }
@@ -1159,7 +1161,11 @@ public:
     expireset *setexpireUnsafe() { return m_setexpire; }
     const expireset *setexpire() { return m_setexpire; }
 
+    std::shared_ptr<redisDbPersistentData> createSnapshot();
+    void endSnapshot(const redisDbPersistentData *psnapshot);
+
 private:
+    void ensure(const char *key);
     void ensure(dictEntry *de);
     void storeDatabase();
     void storeKey(const char *key, size_t cchKey, robj *o);
@@ -1173,6 +1179,8 @@ private:
 
     // Expire
     expireset *m_setexpire;
+
+    std::shared_ptr<redisDbPersistentData> m_spdbSnapshot;
 };
 
 /* Redis database representation. There are multiple databases identified
@@ -2387,7 +2395,7 @@ int writeCommandsDeniedByDiskError(void);
 
 /* RDB persistence */
 #include "rdb.h"
-int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi);
+int rdbSaveRio(rio *rdb, redisDbPersistentData **rgpdb, int *error, int flags, rdbSaveInfo *rsi);
 void killRDBChild(void);
 
 /* AOF persistence */

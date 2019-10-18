@@ -42,6 +42,8 @@
 #include <arpa/inet.h>
 #include <sys/stat.h>
 #include <sys/param.h>
+#include <thread>
+#include <future>
 
 #define rdbExitReportCorruptRDB(...) rdbCheckThenExit(__LINE__,__VA_ARGS__)
 
@@ -1142,7 +1144,7 @@ int saveKey(rio *rdb, redisDbPersistentData *db, int flags, size_t *processed, c
  * When the function returns C_ERR and if 'error' is not NULL, the
  * integer pointed by 'error' is set to the value of errno just after the I/O
  * error. */
-int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
+int rdbSaveRio(rio *rdb, redisDbPersistentData **rgpdb, int *error, int flags, rdbSaveInfo *rsi) {
     dictEntry *de;
     dictIterator *di = NULL;
     char magic[10];
@@ -1157,7 +1159,7 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
     if (rdbSaveInfoAuxFields(rdb,flags,rsi) == -1) goto werr;
 
     for (j = 0; j < cserver.dbnum; j++) {
-        redisDbPersistentData *db = static_cast<redisDbPersistentData*>(g_pserver->db+j);
+        redisDbPersistentData *db = rgpdb[j];
         if (db->size() == 0) continue;
 
         /* Write the SELECT DB opcode */
@@ -1229,7 +1231,7 @@ werr:
  * While the suffix is the 40 bytes hex string we announced in the prefix.
  * This way processes receiving the payload can understand when it ends
  * without doing any processing of the content. */
-int rdbSaveRioWithEOFMark(rio *rdb, int *error, rdbSaveInfo *rsi) {
+int rdbSaveRioWithEOFMark(rio *rdb, redisDbPersistentData **rgpdb, int *error, rdbSaveInfo *rsi) {
     char eofmark[RDB_EOF_MARK_SIZE];
 
     getRandomHexChars(eofmark,RDB_EOF_MARK_SIZE);
@@ -1237,7 +1239,7 @@ int rdbSaveRioWithEOFMark(rio *rdb, int *error, rdbSaveInfo *rsi) {
     if (rioWrite(rdb,"$EOF:",5) == 0) goto werr;
     if (rioWrite(rdb,eofmark,RDB_EOF_MARK_SIZE) == 0) goto werr;
     if (rioWrite(rdb,"\r\n",2) == 0) goto werr;
-    if (rdbSaveRio(rdb,error,RDB_SAVE_NONE,rsi) == C_ERR) goto werr;
+    if (rdbSaveRio(rdb,rgpdb,error,RDB_SAVE_NONE,rsi) == C_ERR) goto werr;
     if (rioWrite(rdb,eofmark,RDB_EOF_MARK_SIZE) == 0) goto werr;
     return C_OK;
 
@@ -1247,7 +1249,7 @@ werr: /* Write error. */
     return C_ERR;
 }
 
-int rdbSaveFp(FILE *fp, rdbSaveInfo *rsi)
+int rdbSaveFp(FILE *fp, redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
 {
     int error = 0;
     rio rdb;
@@ -1257,26 +1259,36 @@ int rdbSaveFp(FILE *fp, rdbSaveInfo *rsi)
     if (g_pserver->rdb_save_incremental_fsync)
         rioSetAutoSync(&rdb,REDIS_AUTOSYNC_BYTES);
 
-    if (rdbSaveRio(&rdb,&error,RDB_SAVE_NONE,rsi) == C_ERR) {
+    if (rdbSaveRio(&rdb,rgpdb,&error,RDB_SAVE_NONE,rsi) == C_ERR) {
         errno = error;
         return C_ERR;
     }
     return C_OK;
 }
 
-int rdbSave(rdbSaveInfo *rsi)
+int rdbSave(redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
 {
+    std::vector<redisDbPersistentData*> vecdb;
+    if (rgpdb == nullptr)
+    {
+        for (int idb = 0; idb < cserver.dbnum; ++idb)
+        {
+            vecdb.push_back(&g_pserver->db[idb]);
+        }
+        rgpdb = vecdb.data();
+    }
+
     int err = C_OK;
     if (g_pserver->rdb_filename != NULL)
-        err = rdbSaveFile(g_pserver->rdb_filename, rsi);
+        err = rdbSaveFile(g_pserver->rdb_filename, rgpdb, rsi);
 
     if (err == C_OK && g_pserver->rdb_s3bucketpath != NULL)
-        err = rdbSaveS3(g_pserver->rdb_s3bucketpath, rsi);
+        err = rdbSaveS3(g_pserver->rdb_s3bucketpath, rgpdb, rsi);
     return err;
 }
 
 /* Save the DB on disk. Return C_ERR on error, C_OK on success. */
-int rdbSaveFile(char *filename, rdbSaveInfo *rsi) {
+int rdbSaveFile(char *filename, redisDbPersistentData **rgpdb, rdbSaveInfo *rsi) {
     char tmpfile[256];
     char cwd[MAXPATHLEN]; /* Current working dir path for error messages. */
     FILE *fp;
@@ -1294,7 +1306,7 @@ int rdbSaveFile(char *filename, rdbSaveInfo *rsi) {
         return C_ERR;
     }
 
-    if (rdbSaveFp(fp, rsi) == C_ERR){
+    if (rdbSaveFp(fp, rgpdb, rsi) == C_ERR){
         goto werr;
     }
 
@@ -1331,6 +1343,24 @@ werr:
     return C_ERR;
 }
 
+int rdbSaveThread(redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
+{
+    int retval = rdbSave(rgpdb, rsi);
+    if (retval == C_OK) {
+        size_t private_dirty = zmalloc_get_private_dirty(-1);
+
+        if (private_dirty) {
+            serverLog(LL_NOTICE,
+                "RDB: %zu MB of memory used by copy-on-write",
+                private_dirty/(1024*1024));
+        }
+
+        g_pserver->child_info_data.cow_size = private_dirty;
+        sendChildInfo(CHILD_INFO_TYPE_RDB);
+    }
+    return (retval == C_OK) ? 0 : 1;
+}
+
 int rdbSaveBackground(rdbSaveInfo *rsi) {
     pid_t childpid;
     long long start;
@@ -1343,25 +1373,11 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
 
     start = ustime();
     if ((childpid = fork()) == 0) {
-        int retval;
-
         /* Child */
         closeListeningSockets(0);
         redisSetProcTitle("keydb-rdb-bgsave");
-        retval = rdbSave(rsi);
-        if (retval == C_OK) {
-            size_t private_dirty = zmalloc_get_private_dirty(-1);
-
-            if (private_dirty) {
-                serverLog(LL_NOTICE,
-                    "RDB: %zu MB of memory used by copy-on-write",
-                    private_dirty/(1024*1024));
-            }
-
-            g_pserver->child_info_data.cow_size = private_dirty;
-            sendChildInfo(CHILD_INFO_TYPE_RDB);
-        }
-        exitFromChild((retval == C_OK) ? 0 : 1);
+        int rval = rdbSaveThread(nullptr, rsi);
+        exitFromChild(rval);
     } else {
         /* Parent */
         g_pserver->stat_fork_time = ustime()-start;
@@ -1379,6 +1395,7 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
         g_pserver->rdb_child_pid = childpid;
         g_pserver->rdb_child_type = RDB_CHILD_TYPE_DISK;
         updateDictResizePolicy();
+
         return C_OK;
     }
     return C_OK; /* unreached */
@@ -2431,7 +2448,13 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
         closeListeningSockets(0);
         redisSetProcTitle("keydb-rdb-to-slaves");
 
-        retval = rdbSaveRioWithEOFMark(&slave_sockets,NULL,rsi);
+        std::vector<redisDbPersistentData*> vecpdb;
+        for (int idb = 0; idb < cserver.dbnum; ++idb)
+        {
+            vecpdb.push_back(&g_pserver->db[idb]);
+        }
+
+        retval = rdbSaveRioWithEOFMark(&slave_sockets,vecpdb.data(),NULL,rsi);
         if (retval == C_OK && rioFlush(&slave_sockets) == 0)
             retval = C_ERR;
 
@@ -2539,7 +2562,7 @@ void saveCommand(client *c) {
     }
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
-    if (rdbSave(rsiptr) == C_OK) {
+    if (rdbSave(nullptr, rsiptr) == C_OK) {
         addReply(c,shared.ok);
     } else {
         addReply(c,shared.err);

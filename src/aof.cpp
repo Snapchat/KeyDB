@@ -264,7 +264,7 @@ int startAppendOnly(void) {
             strerror(errno));
         return C_ERR;
     }
-    if (g_pserver->rdb_child_pid != -1) {
+    if (g_pserver->FRdbSaveInProgress()) {
         g_pserver->aof_rewrite_scheduled = 1;
         serverLog(LL_WARNING,"AOF was enabled but there is already a child process saving an RDB file on disk. An AOF background was scheduled to start when possible.");
     } else {
@@ -397,7 +397,7 @@ void flushAppendOnlyFile(int force) {
      * useful for graphing / monitoring purposes. */
     if (sync_in_progress) {
         latencyAddSampleIfNeeded("aof-write-pending-fsync",latency);
-    } else if (g_pserver->aof_child_pid != -1 || g_pserver->rdb_child_pid != -1) {
+    } else if (g_pserver->aof_child_pid != -1 || g_pserver->FRdbSaveInProgress()) {
         latencyAddSampleIfNeeded("aof-write-active-child",latency);
     } else {
         latencyAddSampleIfNeeded("aof-write-alone",latency);
@@ -494,7 +494,7 @@ try_fsync:
     /* Don't fsync if no-appendfsync-on-rewrite is set to yes and there are
      * children doing I/O in the background. */
     if (g_pserver->aof_no_fsync_on_rewrite &&
-        (g_pserver->aof_child_pid != -1 || g_pserver->rdb_child_pid != -1))
+        (g_pserver->aof_child_pid != -1 || g_pserver->FRdbSaveInProgress()))
             return;
 
     /* Perform the fsync if needed. */
@@ -1593,7 +1593,7 @@ int rewriteAppendOnlyFileBackground(void) {
     pid_t childpid;
     long long start;
 
-    if (g_pserver->aof_child_pid != -1 || g_pserver->rdb_child_pid != -1) return C_ERR;
+    if (g_pserver->aof_child_pid != -1 || g_pserver->FRdbSaveInProgress()) return C_ERR;
     if (aofCreatePipes() != C_OK) return C_ERR;
     openChildInfoPipe();
     start = ustime();
@@ -1652,7 +1652,7 @@ int rewriteAppendOnlyFileBackground(void) {
 void bgrewriteaofCommand(client *c) {
     if (g_pserver->aof_child_pid != -1) {
         addReplyError(c,"Background append only file rewriting already in progress");
-    } else if (g_pserver->rdb_child_pid != -1) {
+    } else if (g_pserver->FRdbSaveInProgress()) {
         g_pserver->aof_rewrite_scheduled = 1;
         addReplyStatus(c,"Background append only file rewriting scheduled");
     } else if (rewriteAppendOnlyFileBackground() == C_OK) {

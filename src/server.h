@@ -2000,6 +2000,8 @@ struct redisServer {
 
     /* System hardware info */
     size_t system_memory_size;  /* Total memory in system as reported by OS */
+
+    bool FRdbSaveInProgress() const { return rdb_child_pid != -1; }
 };
 
 typedef struct pubsubPattern {

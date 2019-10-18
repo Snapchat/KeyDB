@@ -552,7 +552,7 @@ void flushallCommand(client *c) {
         int saved_dirty = g_pserver->dirty;
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
-        rdbSave(rsiptr);
+        rdbSave(nullptr, rsiptr);
         g_pserver->dirty = saved_dirty;
     }
     g_pserver->dirty++;
@@ -1917,17 +1917,34 @@ void redisDbPersistentData::updateValue(dict_iter itr, robj *val)
     dictSetVal(m_pdict, itr.de, val);
 }
 
+void redisDbPersistentData::ensure(const char *key)
+{
+    dictEntry *de = dictFind(m_pdict, key);
+    ensure(de);
+}
+
 void redisDbPersistentData::ensure(dictEntry *de)
 {
     if (de != nullptr && dictGetVal(de) == nullptr)
     {
-        serverAssert(m_pstorage != nullptr);
-        sds key = (sds)dictGetKey(de);
-        m_pstorage->retrieve(key, sdslen(key), true, [&](const char *, size_t, const void *data, size_t cb){
-            robj *o = deserializeStoredObject(data, cb);
-            serverAssert(o != nullptr);
-            dictSetVal(m_pdict, de, o);
-        });
+        if (m_spdbSnapshot != nullptr)
+        {
+            auto itr = m_spdbSnapshot->find((const char*)dictGetKey(de));
+            sds strT = serializeStoredObject(itr.val());
+            robj *objNew = deserializeStoredObject(strT, sdslen(strT));
+            sdsfree(strT);
+            dictSetVal(m_pdict, de, objNew);
+        }
+        else
+        {
+            serverAssert(m_pstorage != nullptr);
+            sds key = (sds)dictGetKey(de);
+            m_pstorage->retrieve(key, sdslen(key), true, [&](const char *, size_t, const void *data, size_t cb){
+                robj *o = deserializeStoredObject(data, cb);
+                serverAssert(o != nullptr);
+                dictSetVal(m_pdict, de, o);
+            });
+        }
     }
 }
 
@@ -1984,4 +2001,66 @@ void redisDbPersistentData::processChanges()
         }
     }
     m_setchanged.clear();
+}
+
+std::shared_ptr<redisDbPersistentData> redisDbPersistentData::createSnapshot()
+{
+    serverAssert(m_spdbSnapshot == nullptr);
+    auto spdb = std::make_shared<redisDbPersistentData>();
+    spdb->initialize();
+
+    for (unsigned iht = 0; iht < 2; ++iht)
+    {
+        spdb->m_pdict->ht[iht] = m_pdict->ht[iht];
+        if (m_pdict->ht[iht].size)
+            m_pdict->ht[iht].table = (dictEntry**)zcalloc(m_pdict->ht[iht].size*sizeof(dictEntry*), MALLOC_SHARED);
+        else
+            m_pdict->ht[iht].table = nullptr;
+
+        for (size_t idx = 0; idx < m_pdict->ht[iht].size; ++idx)
+        {
+            const dictEntry *deSrc = spdb->m_pdict->ht[iht].table[idx];
+            dictEntry **pdeDst = &m_pdict->ht[iht].table[idx];
+            if (deSrc != nullptr)
+            {
+                *pdeDst = (dictEntry*)zmalloc(sizeof(dictEntry), MALLOC_SHARED);
+                (*pdeDst)->key = deSrc->key;
+                (*pdeDst)->v.val = nullptr;
+                (*pdeDst)->next = nullptr;
+                pdeDst = &(*pdeDst)->next;
+                deSrc = deSrc->next;
+            }
+        }
+    }
+    
+    m_spdbSnapshot = std::move(spdb);
+    return m_spdbSnapshot;
+}
+
+void redisDbPersistentData::endSnapshot(const redisDbPersistentData *psnapshot)
+{
+    serverAssert(m_spdbSnapshot.get() == psnapshot);
+
+    dictIterator *di = dictGetIterator(m_pdict);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL)
+    {
+        if (dictGetVal(de) == nullptr)
+        {
+            dictEntry *deSnapshot = dictFind(m_spdbSnapshot->m_pdict, dictGetKey(de));
+            if (deSnapshot != nullptr)
+            {
+                dictSetVal(m_pdict, de, dictGetVal(deSnapshot));
+            }
+        }
+    }
+    dictReleaseIterator(di);
+    m_spdbSnapshot = nullptr;
+}
+
+redisDbPersistentData::~redisDbPersistentData()
+{
+    dictRelease(m_pdict);
+    if (m_setexpire)
+        delete m_setexpire;
 }

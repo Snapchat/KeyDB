@@ -1411,7 +1411,12 @@ int rewriteAppendOnlyFile(char *filename) {
 
     if (g_pserver->aof_use_rdb_preamble) {
         int error;
-        if (rdbSaveRio(&aof,&error,RDB_SAVE_AOF_PREAMBLE,NULL) == C_ERR) {
+        std::vector<redisDbPersistentData*> vecpdb;
+        for (int idb = 0; idb < cserver.dbnum; ++idb)
+        {
+            vecpdb.push_back(&g_pserver->db[idb]);
+        }
+        if (rdbSaveRio(&aof,vecpdb.data(),&error,RDB_SAVE_AOF_PREAMBLE,NULL) == C_ERR) {
             errno = error;
             goto werr;
         }

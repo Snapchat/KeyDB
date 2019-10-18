@@ -6,7 +6,7 @@ extern "C" {
 #include <sys/wait.h>
 
 /* Save the DB on disk. Return C_ERR on error, C_OK on success. */
-int rdbSaveS3(char *s3bucket, rdbSaveInfo *rsi)
+int rdbSaveS3(char *s3bucket, redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
 {
     int status = EXIT_FAILURE;
     int fd[2];
@@ -40,7 +40,7 @@ int rdbSaveS3(char *s3bucket, rdbSaveInfo *rsi)
             return C_ERR;
         }
 
-        if (rdbSaveFp(fp, rsi) != C_OK)
+        if (rdbSaveFp(fp, rgpdb, rsi) != C_OK)
         {
             fclose(fp);
             return C_ERR;

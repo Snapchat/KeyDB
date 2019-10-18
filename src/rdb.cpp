@@ -1365,7 +1365,7 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
     pid_t childpid;
     long long start;
 
-    if (g_pserver->aof_child_pid != -1 || g_pserver->rdb_child_pid != -1) return C_ERR;
+    if (g_pserver->aof_child_pid != -1 || g_pserver->FRdbSaveInProgress()) return C_ERR;
 
     g_pserver->dirty_before_bgsave = g_pserver->dirty;
     g_pserver->lastbgsave_try = time(NULL);
@@ -2400,7 +2400,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     long long start;
     int pipefds[2];
 
-    if (g_pserver->aof_child_pid != -1 || g_pserver->rdb_child_pid != -1) return C_ERR;
+    if (g_pserver->aof_child_pid != -1 || g_pserver->FRdbSaveInProgress()) return C_ERR;
 
     /* Before to fork, create a pipe that will be used in order to
      * send back to the parent the IDs of the slaves that successfully
@@ -2556,7 +2556,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
 }
 
 void saveCommand(client *c) {
-    if (g_pserver->rdb_child_pid != -1) {
+    if (g_pserver->FRdbSaveInProgress()) {
         addReplyError(c,"Background save already in progress");
         return;
     }
@@ -2587,7 +2587,7 @@ void bgsaveCommand(client *c) {
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
 
-    if (g_pserver->rdb_child_pid != -1) {
+    if (g_pserver->FRdbSaveInProgress()) {
         addReplyError(c,"Background save already in progress");
     } else if (g_pserver->aof_child_pid != -1) {
         if (schedule) {

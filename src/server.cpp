@@ -1465,7 +1465,7 @@ int redisDbPersistentData::incrementallyRehash() {
  * for dict.c to resize the hash tables accordingly to the fact we have o not
  * running childs. */
 void updateDictResizePolicy(void) {
-    if (g_pserver->rdb_child_pid == -1 && g_pserver->aof_child_pid == -1)
+    if (!g_pserver->FRdbSaveInProgress() && g_pserver->aof_child_pid == -1)
         dictEnableResize();
     else
         dictDisableResize();
@@ -1712,7 +1712,7 @@ void databasesCron(void) {
     /* Perform hash tables rehashing if needed, but only if there are no
      * other processes saving the DB on disk. Otherwise rehashing is bad
      * as will cause a lot of copy-on-write of memory pages. */
-    if (g_pserver->rdb_child_pid == -1 && g_pserver->aof_child_pid == -1) {
+    if (!g_pserver->FRdbSaveInProgress() && g_pserver->aof_child_pid == -1) {
         /* We use global counters so if we stop the computation at a given
          * DB we'll be able to start from the successive in the next
          * cron loop iteration. */
@@ -1921,14 +1921,14 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
-    if (g_pserver->rdb_child_pid == -1 && g_pserver->aof_child_pid == -1 &&
+    if (!g_pserver->FRdbSaveInProgress() && g_pserver->aof_child_pid == -1 &&
         g_pserver->aof_rewrite_scheduled)
     {
         rewriteAppendOnlyFileBackground();
     }
 
     /* Check if a background saving or AOF rewrite in progress terminated. */
-    if (g_pserver->rdb_child_pid != -1 || g_pserver->aof_child_pid != -1 ||
+    if (g_pserver->FRdbSaveInProgress() || g_pserver->aof_child_pid != -1 ||
         ldbPendingChildren())
     {
         int statloc;
@@ -1989,7 +1989,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
         /* Trigger an AOF rewrite if needed. */
         if (g_pserver->aof_state == AOF_ON &&
-            g_pserver->rdb_child_pid == -1 &&
+            !g_pserver->FRdbSaveInProgress() &&
             g_pserver->aof_child_pid == -1 &&
             g_pserver->aof_rewrite_perc &&
             g_pserver->aof_current_size > g_pserver->aof_rewrite_min_size)
@@ -2045,7 +2045,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * Note: this code must be after the replicationCron() call above so
      * make sure when refactoring this file to keep this order. This is useful
      * because we want to give priority to RDB savings for replication. */
-    if (g_pserver->rdb_child_pid == -1 && g_pserver->aof_child_pid == -1 &&
+    if (!g_pserver->FRdbSaveInProgress() && g_pserver->aof_child_pid == -1 &&
         g_pserver->rdb_bgsave_scheduled &&
         (g_pserver->unixtime-g_pserver->lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY ||
          g_pserver->lastbgsave_status == C_OK))
@@ -3742,7 +3742,7 @@ int prepareForShutdown(int flags) {
     /* Kill the saving child if there is a background saving in progress.
        We want to avoid race conditions, for instance our saving child may
        overwrite the synchronous saving did by SHUTDOWN. */
-    if (g_pserver->rdb_child_pid != -1) {
+    if (g_pserver->FRdbSaveInProgress()) {
         serverLog(LL_WARNING,"There is a child saving an .rdb. Killing it!");
         killRDBChild();
     }
@@ -4256,12 +4256,12 @@ sds genRedisInfoString(const char *section) {
             "aof_last_cow_size:%zu\r\n",
             g_pserver->loading,
             g_pserver->dirty,
-            g_pserver->rdb_child_pid != -1,
+            g_pserver->FRdbSaveInProgress(),
             (intmax_t)g_pserver->lastsave,
             (g_pserver->lastbgsave_status == C_OK) ? "ok" : "err",
             (intmax_t)g_pserver->rdb_save_time_last,
-            (intmax_t)((g_pserver->rdb_child_pid == -1) ?
-                -1 : time(NULL)-g_pserver->rdb_save_time_start),
+            (intmax_t)(g_pserver->FRdbSaveInProgress() ?
+                time(NULL)-g_pserver->rdb_save_time_start : -1),
             g_pserver->stat_rdb_cow_bytes,
             g_pserver->aof_state != AOF_OFF,
             g_pserver->aof_child_pid != -1,

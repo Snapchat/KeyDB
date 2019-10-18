@@ -74,7 +74,7 @@ static robj *lookupKey(redisDb *db, robj *key, int flags) {
         /* Update the access time for the ageing algorithm.
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
-        if (g_pserver->rdb_child_pid == -1 &&
+        if (!g_pserver->FRdbSaveInProgress() &&
             g_pserver->aof_child_pid == -1 &&
             !(flags & LOOKUP_NOTOUCH))
         {
@@ -545,7 +545,7 @@ void flushallCommand(client *c) {
     signalFlushedDb(-1);
     g_pserver->dirty += emptyDb(-1,flags,NULL);
     addReply(c,shared.ok);
-    if (g_pserver->rdb_child_pid != -1) killRDBChild();
+    if (g_pserver->FRdbSaveInProgress()) killRDBChild();
     if (g_pserver->saveparamslen > 0) {
         /* Normally rdbSave() will reset dirty, but we don't want this here
          * as otherwise FLUSHALL will not be replicated nor put into the AOF. */

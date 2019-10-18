@@ -858,7 +858,7 @@ void syncCommand(client *c) {
     }
 
     /* CASE 1: BGSAVE is in progress, with disk target. */
-    if (g_pserver->rdb_child_pid != -1 &&
+    if (g_pserver->FRdbSaveInProgress() &&
         g_pserver->rdb_child_type == RDB_CHILD_TYPE_DISK)
     {
         /* Ok a background save is in progress. Let's check if it is a good
@@ -889,7 +889,7 @@ void syncCommand(client *c) {
         }
 
     /* CASE 2: BGSAVE is in progress, with socket target. */
-    } else if (g_pserver->rdb_child_pid != -1 &&
+    } else if (g_pserver->FRdbSaveInProgress() &&
                g_pserver->rdb_child_type == RDB_CHILD_TYPE_SOCKET)
     {
         /* There is an RDB child process but it is writing directly to
@@ -1510,7 +1510,7 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
         int aof_is_enabled = g_pserver->aof_state != AOF_OFF;
 
         /* Ensure background save doesn't overwrite synced data */
-        if (g_pserver->rdb_child_pid != -1) {
+        if (g_pserver->FRdbSaveInProgress()) {
             serverLog(LL_NOTICE,
                 "Replica is about to load the RDB file received from the "
                 "master, but there is a pending RDB child running. "
@@ -3143,7 +3143,7 @@ void replicationCron(void) {
     * In case of diskless replication, we make sure to wait the specified
     * number of seconds (according to configuration) so that other slaves
     * have the time to arrive before we start streaming. */
-    if (g_pserver->rdb_child_pid == -1 && g_pserver->aof_child_pid == -1) {
+    if (!g_pserver->FRdbSaveInProgress() && g_pserver->aof_child_pid == -1) {
         time_t idle, max_idle = 0;
         int slaves_waiting = 0;
         int mincapa = -1;

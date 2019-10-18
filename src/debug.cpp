@@ -359,7 +359,7 @@ NULL
     } else if (!strcasecmp(szFromObj(c->argv[1]),"reload")) {
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
-        if (rdbSave(rsiptr) != C_OK) {
+        if (rdbSave(nullptr, rsiptr) != C_OK) {
             addReply(c,shared.err);
             return;
         }

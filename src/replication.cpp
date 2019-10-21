@@ -1514,9 +1514,8 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
             serverLog(LL_NOTICE,
                 "Replica is about to load the RDB file received from the "
                 "master, but there is a pending RDB child running. "
-                "Killing process %ld and removing its temp file to avoid "
-                "any race",
-                    (long) g_pserver->rdb_child_pid);
+                "Cancelling RDB the save and removing its temp file to avoid "
+                "any race");
             killRDBChild();
         }
 

@@ -139,7 +139,7 @@ int rdbLoad(rdbSaveInfo *rsi);
 int rdbLoadFile(const char *filename, rdbSaveInfo *rsi);
 int rdbSaveBackground(rdbSaveInfo *rsi);
 int rdbSaveToSlavesSockets(rdbSaveInfo *rsi);
-void rdbRemoveTempFile(pid_t childpid);
+void rdbRemoveTempFile(int childpid);
 int rdbSave(redisDbPersistentData **rgpdb, rdbSaveInfo *rsi);
 int rdbSaveFile(char *filename, redisDbPersistentData **rgpdb, rdbSaveInfo *rsi);
 int rdbSaveFp(FILE *pf, redisDbPersistentData **rgpdb, rdbSaveInfo *rsi);

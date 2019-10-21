@@ -791,6 +791,16 @@ public:
             : when(when), spsubkey(subkey, sdsfree)
         {}
 
+        subexpireEntry(const subexpireEntry &e)
+            : when(e.when), spsubkey(nullptr, sdsfree)
+        {
+            if (e.spsubkey)
+                spsubkey = std::unique_ptr<const char, void(*)(const char*)>((const char*)sdsdup((sds)e.spsubkey.get()), sdsfree);
+        }
+
+        subexpireEntry(subexpireEntry &&e) = default;
+        subexpireEntry& operator=(subexpireEntry &&e) = default;
+
         bool operator<(long long when) const noexcept { return this->when < when; }
         bool operator<(const subexpireEntry &se) { return this->when < se.when; }
     };
@@ -803,6 +813,10 @@ public:
     expireEntryFat(sds keyPrimary)
         : m_keyPrimary(keyPrimary)
         {}
+        
+    expireEntryFat(const expireEntryFat &e) = default;
+    expireEntryFat(expireEntryFat &&e) = default;
+
     long long when() const noexcept { return m_vecexpireEntries.front().when; }
     const char *key() const noexcept { return m_keyPrimary; }
 
@@ -902,6 +916,14 @@ public:
     {
         u.m_pfatentry = pfatentry;
         m_when = LLONG_MIN;
+    }
+
+    expireEntry(const expireEntry &e)
+    {
+        u.m_key = e.u.m_key;
+        m_when = e.m_when;
+        if (e.FFat())
+            u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(*e.u.m_pfatentry);
     }
 
     expireEntry(expireEntry &&e)
@@ -1082,6 +1104,7 @@ public:
 
 class redisDbPersistentData
 {
+    friend void dictDbKeyDestructor(void *privdata, void *key);
 public:
     ~redisDbPersistentData();
 
@@ -1131,6 +1154,9 @@ public:
         return m_setexpire->find(key);
     }
 
+    dict_iter end()  { return dict_iter(nullptr); }
+    dict_const_iter end() const { return dict_const_iter(nullptr); }
+
     void getStats(char *buf, size_t bufsize) { dictGetStats(buf, bufsize, m_pdict); }
     void getExpireStats(char *buf, size_t bufsize) { m_setexpire->getstats(buf, bufsize); }
 
@@ -1171,14 +1197,14 @@ private:
     void storeKey(const char *key, size_t cchKey, robj *o);
 
     // Keyspace
-    dict *m_pdict;                 /* The keyspace for this DB */
+    dict *m_pdict = nullptr;                 /* The keyspace for this DB */
     int m_fTrackingChanges = 0;     // Note: Stack based
     bool m_fAllChanged = false;
     std::set<std::string> m_setchanged;
     IStorage *m_pstorage = nullptr;
 
     // Expire
-    expireset *m_setexpire;
+    expireset *m_setexpire = nullptr;
 
     std::shared_ptr<redisDbPersistentData> m_spdbSnapshot;
 };
@@ -1211,8 +1237,6 @@ typedef struct redisDb : public redisDbPersistentData
         : expireitr(nullptr)
     {}
     void initialize(int id);
-
-    const_iter end() { return const_iter(nullptr); }
 
     void dbOverwriteCore(redisDb::iter itr, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire);
 
@@ -1564,6 +1588,9 @@ typedef struct rdbSaveInfo {
     char repl_id[CONFIG_RUN_ID_SIZE+1];     /* Replication ID. */
     long long repl_offset;                  /* Replication offset. */
     int fForceSetKey;
+
+    /* Used In Save */
+    long long master_repl_offset;
 } rdbSaveInfo;
 
 #define RDB_SAVE_INFO_INIT {-1,0,"000000000000000000000000000000",-1, TRUE}
@@ -1821,7 +1848,13 @@ struct redisServer {
     /* RDB persistence */
     long long dirty;                /* Changes to DB from the last save */
     long long dirty_before_bgsave;  /* Used to restore dirty on failed BGSAVE */
-    pid_t rdb_child_pid;            /* PID of RDB saving child */
+    struct _rdbThreadVars
+    {
+        bool fRdbThreadActive = false;
+        volatile bool fRdbThreadCancel = false;
+        pthread_t rdb_child_thread;     /* PID of RDB saving child */
+        int tmpfileNum = 0;
+    } rdbThreadVars;
     struct saveparam *saveparams;   /* Save points array for RDB */
     int saveparamslen;              /* Number of saving points */
     char *rdb_filename;             /* Name of RDB file */
@@ -2001,7 +2034,7 @@ struct redisServer {
     /* System hardware info */
     size_t system_memory_size;  /* Total memory in system as reported by OS */
 
-    bool FRdbSaveInProgress() const { return rdb_child_pid != -1; }
+    bool FRdbSaveInProgress() const { return rdbThreadVars.fRdbThreadActive; }
 };
 
 typedef struct pubsubPattern {
@@ -2107,6 +2140,7 @@ extern dictType zsetDictType;
 extern dictType clusterNodesDictType;
 extern dictType clusterNodesBlackListDictType;
 extern dictType dbDictType;
+extern dictType dbSnapshotDictType;
 extern dictType shaScriptObjectDictType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
 extern dictType hashDictType;

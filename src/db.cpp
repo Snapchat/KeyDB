@@ -197,7 +197,8 @@ bool dbAddCore(redisDb *db, robj *key, robj *val) {
     serverAssert(!val->FExpires());
     sds copy = sdsdup(szFromObj(key));
     bool fInserted = db->insert(copy, val);
-    val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
+    if (g_pserver->fActiveReplica)
+        val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
 
     if (fInserted)
     {
@@ -635,6 +636,7 @@ bool redisDbPersistentData::iterate(std::function<bool(const char*, robj*)> fn)
     bool fResult = true;
     while((de = dictNext(di)) != nullptr)
     {
+        ensure(de);
         if (!fn((const char*)dictGetKey(de), (robj*)dictGetVal(de)))
         {
             fResult = false;
@@ -1798,7 +1800,7 @@ unsigned int countKeysInSlot(unsigned int hashslot) {
 
 void redisDbPersistentData::initialize()
 {
-    m_pdict = dictCreate(&dbDictType,NULL);
+    m_pdict = dictCreate(&dbDictType,this);
     m_setexpire = new(MALLOC_LOCAL) expireset();
     m_fAllChanged = false;
     m_fTrackingChanges = 0;
@@ -1862,12 +1864,17 @@ void redisDbPersistentData::clear(void(callback)(void*))
     db1->m_fAllChanged = db2->m_fAllChanged;
     db1->m_setexpire = db2->m_setexpire;
     db1->m_pstorage = db2->m_pstorage;
+    db1->m_spdbSnapshot = db2->m_spdbSnapshot;
 
     db2->m_pdict = aux.m_pdict;
     db2->m_fTrackingChanges = aux.m_fTrackingChanges;
     db2->m_fAllChanged = aux.m_fAllChanged;
     db2->m_setexpire = aux.m_setexpire;
     db2->m_pstorage = aux.m_pstorage;
+    db2->m_spdbSnapshot = aux.m_spdbSnapshot;
+
+    db1->m_pdict->privdata = static_cast<redisDbPersistentData*>(db1);
+    db2->m_pdict->privdata = static_cast<redisDbPersistentData*>(db2);
 }
 
 void redisDbPersistentData::setExpire(robj *key, robj *subkey, long long when)
@@ -1930,10 +1937,20 @@ void redisDbPersistentData::ensure(dictEntry *de)
         if (m_spdbSnapshot != nullptr)
         {
             auto itr = m_spdbSnapshot->find((const char*)dictGetKey(de));
-            sds strT = serializeStoredObject(itr.val());
-            robj *objNew = deserializeStoredObject(strT, sdslen(strT));
-            sdsfree(strT);
-            dictSetVal(m_pdict, de, objNew);
+            serverAssert(itr != m_spdbSnapshot->end());
+            if (itr.val()->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
+            {
+                dictSetVal(m_pdict, de, itr.val());
+            }
+            else
+            {
+                sds strT = serializeStoredObject(itr.val());
+                robj *objNew = deserializeStoredObject(strT, sdslen(strT));
+                sdsfree(strT);
+                dictSetVal(m_pdict, de, objNew);
+                serverAssert(objNew->getrefcount(std::memory_order_relaxed) == 1);
+                serverAssert(objNew->mvcc_tstamp == itr.val()->mvcc_tstamp);
+            }
         }
         else
         {
@@ -2005,9 +2022,16 @@ void redisDbPersistentData::processChanges()
 
 std::shared_ptr<redisDbPersistentData> redisDbPersistentData::createSnapshot()
 {
+    serverAssert(GlobalLocksAcquired());
     serverAssert(m_spdbSnapshot == nullptr);
     auto spdb = std::make_shared<redisDbPersistentData>();
-    spdb->initialize();
+    spdb->m_pdict = dictCreate(&dbDictType,spdb.get());
+    spdb->m_fAllChanged = false;
+    spdb->m_fTrackingChanges = 0;
+    spdb->m_pdict->rehashidx = m_pdict->rehashidx;
+    spdb->m_pdict->iterators++; // fake an iterator so it doesn't rehash
+    if (m_setexpire != nullptr)
+        spdb->m_setexpire = new (MALLOC_LOCAL) expireset(*m_setexpire);
 
     for (unsigned iht = 0; iht < 2; ++iht)
     {
@@ -2021,7 +2045,7 @@ std::shared_ptr<redisDbPersistentData> redisDbPersistentData::createSnapshot()
         {
             const dictEntry *deSrc = spdb->m_pdict->ht[iht].table[idx];
             dictEntry **pdeDst = &m_pdict->ht[iht].table[idx];
-            if (deSrc != nullptr)
+            while (deSrc != nullptr)
             {
                 *pdeDst = (dictEntry*)zmalloc(sizeof(dictEntry), MALLOC_SHARED);
                 (*pdeDst)->key = deSrc->key;
@@ -2039,28 +2063,38 @@ std::shared_ptr<redisDbPersistentData> redisDbPersistentData::createSnapshot()
 
 void redisDbPersistentData::endSnapshot(const redisDbPersistentData *psnapshot)
 {
+    serverAssert(GlobalLocksAcquired());
     serverAssert(m_spdbSnapshot.get() == psnapshot);
 
     dictIterator *di = dictGetIterator(m_pdict);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL)
     {
+        dictEntry *deSnapshot = dictFind(m_spdbSnapshot->m_pdict, dictGetKey(de));
         if (dictGetVal(de) == nullptr)
         {
-            dictEntry *deSnapshot = dictFind(m_spdbSnapshot->m_pdict, dictGetKey(de));
             if (deSnapshot != nullptr)
             {
-                dictSetVal(m_pdict, de, dictGetVal(deSnapshot));
+                de->v.val = deSnapshot->v.val;
+                deSnapshot->v.val = nullptr;
             }
+        }
+        if (deSnapshot && (dictGetKey(deSnapshot) == dictGetKey(de)))
+        {
+            // The key is owned by the parent snapshot, so we modify the DB key dtor
+            //  to ensure the key is not free'd during the delete
+            m_spdbSnapshot->m_pdict->type = &dbSnapshotDictType;
+            dictDelete(m_spdbSnapshot->m_pdict, dictGetKey(de));
+            m_spdbSnapshot->m_pdict->type = &dbDictType;
         }
     }
     dictReleaseIterator(di);
+    m_spdbSnapshot->m_pdict->iterators--;
     m_spdbSnapshot = nullptr;
 }
 
 redisDbPersistentData::~redisDbPersistentData()
 {
     dictRelease(m_pdict);
-    if (m_setexpire)
-        delete m_setexpire;
+    delete m_setexpire;
 }

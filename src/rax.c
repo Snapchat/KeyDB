@@ -705,7 +705,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
             nodesize = sizeof(raxNode)+trimmedlen+raxPadding(trimmedlen)+
                        sizeof(raxNode*);
             if (h->iskey && !h->isnull) nodesize += sizeof(void*);
-            trimmed = rax_malloc(nodesize);
+            trimmed = zcalloc(nodesize, MALLOC_LOCAL);//rax_malloc(nodesize);
         }
 
         if (postfixlen) {

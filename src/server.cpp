@@ -1179,6 +1179,21 @@ int dictSdsKeyCompare(void *privdata, const void *key1,
     return memcmp(key1, key2, l1) == 0;
 }
 
+void dictSdsNOPDestructor(void *, void *) {}
+
+void dictDbKeyDestructor(void *privdata, void *key)
+{
+    redisDbPersistentData *owner = (redisDbPersistentData*)privdata;
+    serverAssert(owner != nullptr);
+    if (owner->m_spdbSnapshot != nullptr)
+    {
+        dictEntry *deSnapshot = dictFind(owner->m_spdbSnapshot->m_pdict, key);
+        if (deSnapshot && (key == dictGetKey(deSnapshot)))
+            return; // don't free, it's now owned by the snapshot
+    }
+    sdsfree((sds)key);
+}
+
 /* A case insensitive version used for the command lookup table and other
  * places where case insensitive non binary-safe comparison is needed. */
 int dictSdsKeyCaseCompare(void *privdata, const void *key1,
@@ -1314,8 +1329,17 @@ dictType dbDictType = {
     NULL,                       /* key dup */
     NULL,                       /* val dup */
     dictSdsKeyCompare,          /* key compare */
-    dictSdsDestructor,          /* key destructor */
+    dictDbKeyDestructor,          /* key destructor */
     dictObjectDestructor   /* val destructor */
+};
+
+dictType dbSnapshotDictType = {
+    dictSdsHash,
+    NULL,
+    NULL,
+    dictSdsKeyCompare,
+    dictSdsNOPDestructor,
+    dictObjectDestructor,
 };
 
 /* g_pserver->lua_scripts sha (as sds string) -> scripts (as robj) cache. */
@@ -1934,7 +1958,24 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         int statloc;
         pid_t pid;
 
-        if ((pid = wait3(&statloc,WNOHANG,NULL)) != 0) {
+        if (g_pserver->FRdbSaveInProgress())
+        {
+            void *rval = nullptr;
+            if (pthread_tryjoin_np(g_pserver->rdbThreadVars.rdb_child_thread, &rval))
+            {
+                if (errno != EBUSY && errno != EAGAIN)
+                    serverLog(LL_WARNING, "Error joining the background RDB save thread: %s\n", strerror(errno));
+            }
+            else
+            {
+                int exitcode = (int)reinterpret_cast<ptrdiff_t>(rval);
+                backgroundSaveDoneHandler(exitcode,0);
+                if (exitcode == 0) receiveChildInfo();
+                updateDictResizePolicy();
+                closeChildInfoPipe();
+            }
+        }
+        else if ((pid = wait3(&statloc,WNOHANG,NULL)) != 0) {
             int exitcode = WEXITSTATUS(statloc);
             int bysignal = 0;
 
@@ -1942,13 +1983,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
             if (pid == -1) {
                 serverLog(LL_WARNING,"wait3() returned an error: %s. "
-                    "rdb_child_pid = %d, aof_child_pid = %d",
+                    "aof_child_pid = %d",
                     strerror(errno),
-                    (int) g_pserver->rdb_child_pid,
                     (int) g_pserver->aof_child_pid);
-            } else if (pid == g_pserver->rdb_child_pid) {
-                backgroundSaveDoneHandler(exitcode,bysignal);
-                if (!bysignal && exitcode == 0) receiveChildInfo();
             } else if (pid == g_pserver->aof_child_pid) {
                 backgroundRewriteDoneHandler(exitcode,bysignal);
                 if (!bysignal && exitcode == 0) receiveChildInfo();
@@ -2971,7 +3008,7 @@ void initServer(void) {
     listSetFreeMethod(g_pserver->pubsub_patterns,freePubsubPattern);
     listSetMatchMethod(g_pserver->pubsub_patterns,listMatchPubsubPattern);
     g_pserver->cronloops = 0;
-    g_pserver->rdb_child_pid = -1;
+    g_pserver->rdbThreadVars.fRdbThreadActive = false;
     g_pserver->aof_child_pid = -1;
     g_pserver->rdb_child_type = RDB_CHILD_TYPE_NONE;
     g_pserver->rdb_bgsave_scheduled = 0;
@@ -4757,7 +4794,7 @@ static void sigShutdownHandler(int sig) {
      * on disk. */
     if (g_pserver->shutdown_asap && sig == SIGINT) {
         serverLogFromHandler(LL_WARNING, "You insist... exiting now.");
-        rdbRemoveTempFile(getpid());
+        rdbRemoveTempFile(g_pserver->rdbThreadVars.tmpfileNum);
         exit(1); /* Exit with an error since this was not a clean shutdown. */
     } else if (g_pserver->loading) {
         serverLogFromHandler(LL_WARNING, "Received shutdown signal during loading, exiting now.");

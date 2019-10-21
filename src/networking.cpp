@@ -1678,6 +1678,8 @@ int handleClientsWithPendingWrites(int iel) {
 
         std::unique_lock<decltype(c->lock)> lock(c->lock);
 
+        AeLocker locker;
+        locker.arm(c);
         /* Try to write buffers to the client socket. */
         if (writeToClient(c->fd,c,0) == C_ERR) 
         {

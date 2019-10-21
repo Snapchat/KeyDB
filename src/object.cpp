@@ -1494,24 +1494,23 @@ void redisObject::setrefcount(unsigned ref)
     refcount.store(ref, std::memory_order_relaxed); 
 }
 
-sds serializeStoredStringObject(robj_roptr o)
+sds serializeStoredStringObject(sds str, robj_roptr o)
 {
-    sds str = sdsempty();
-    sdscatlen(str, &(*o), sizeof(robj));
+    str = sdscatlen(str, &(*o), sizeof(robj));
     switch (o->encoding)
     {
     case OBJ_ENCODING_RAW:
-        sdscat(str, szFromObj(o));
+        str = sdscatsds(str, (sds)szFromObj(o));
         break;
 
     case OBJ_ENCODING_INT:
         break;  //nop
 
     case OBJ_ENCODING_EMBSTR:
-        size_t cch = sdslen(szFromObj(o));
+        size_t cch = sdslen(szFromObj(o)) + sizeof(struct sdshdr8);
         if (cch > sizeof(redisObject::m_ptr))
         {
-            sdscatlen(str, szFromObj(o) + sizeof(redisObject::m_ptr), cch - sizeof(redisObject::m_ptr));
+            str = sdscatlen(str, szFromObj(o) + sizeof(redisObject::m_ptr), cch - sizeof(redisObject::m_ptr));
         }
         break;
     }
@@ -1525,10 +1524,14 @@ robj *deserializeStoredStringObject(const char *data, size_t cb)
     robj *newObject = nullptr;
     switch (oT->encoding)
     {
-    case OBJ_ENCODING_EMBSTR:
     case OBJ_ENCODING_INT:
-        newObject = (robj*)zmalloc(cb, MALLOC_LOCAL);
+        serverAssert(cb == sizeof(robj));
+        [[fallthrough]];
+    case OBJ_ENCODING_EMBSTR:
+        newObject = (robj*)zmalloc(cb+1, MALLOC_LOCAL);
+        ((char*)newObject)[cb] = '\0';
         memcpy(newObject, data, cb);
+        newObject->setrefcount(1);
         return newObject;
 
     case OBJ_ENCODING_RAW:
@@ -1536,6 +1539,7 @@ robj *deserializeStoredStringObject(const char *data, size_t cb)
         memcpy(newObject, data, sizeof(robj));
         newObject->m_ptr = sdsnewlen(SDS_NOINIT,cb-sizeof(robj));
         memcpy(newObject->m_ptr, data+sizeof(robj), cb-sizeof(robj));
+        newObject->setrefcount(1);
         return newObject;
     }
     serverPanic("Unknown string object encoding from storage");
@@ -1544,11 +1548,10 @@ robj *deserializeStoredStringObject(const char *data, size_t cb)
 
 robj *deserializeStoredObject(const void *data, size_t cb)
 {
-    const robj *oT = (const robj*)data;
-    switch (oT->type)
+    switch (((char*)data)[0])
     {
-        case OBJ_STRING:
-            return deserializeStoredStringObject((char*)data, cb);
+        //case RDB_TYPE_STRING:
+        //    return deserializeStoredStringObject(((char*)data)+1, cb-1);
 
         default:
             rio payload;
@@ -1560,6 +1563,21 @@ robj *deserializeStoredObject(const void *data, size_t cb)
             {
                 serverPanic("Bad data format");
             }
+            if (rdbLoadType(&payload) == RDB_OPCODE_AUX)
+            {
+                robj *auxkey, *auxval;
+                if ((auxkey = rdbLoadStringObject(&payload)) == NULL) goto eoferr;
+                if ((auxval = rdbLoadStringObject(&payload)) == NULL) {
+                    decrRefCount(auxkey);
+                    goto eoferr;
+                }
+                if (strcasecmp(szFromObj(auxkey), "mvcc-tstamp") == 0) {
+                    obj->mvcc_tstamp = strtoull(szFromObj(auxval), nullptr, 10);
+                }
+                decrRefCount(auxkey);
+                decrRefCount(auxval);
+            }
+        eoferr:
             return obj;
     }
     serverPanic("Unknown object type loading from storage");
@@ -1569,8 +1587,12 @@ sds serializeStoredObject(robj_roptr o)
 {
     switch (o->type)
     {
-        case OBJ_STRING:
-            return serializeStoredStringObject(o);
+        //case OBJ_STRING:
+        //{
+        //    sds sdsT = sdsnewlen(nullptr, 1);
+        //    sdsT[0] = RDB_TYPE_STRING;
+        //    return serializeStoredStringObject(sdsT, o);
+        //}
             
         default:
             rio rdb;

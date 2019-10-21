@@ -30,7 +30,16 @@ public:
         zfree(m_data);
     }
 
-    compactvector(compactvector &) noexcept = delete;
+    compactvector(const compactvector &src)
+    {
+        m_celem = src.m_celem;
+        m_max = src.m_max;
+        m_data = (T*)zmalloc(sizeof(T) * m_max, MALLOC_LOCAL);
+        for (size_t ielem = 0; ielem < m_celem; ++ielem)
+        {
+            new (m_data+ielem) T(src[ielem]);
+        }
+    }
 
     compactvector(compactvector &&src) noexcept
     {
@@ -42,7 +51,6 @@ public:
         src.m_max = 0;
     }
 
-    compactvector &operator=(const compactvector&) noexcept = delete;
     compactvector &operator=(compactvector &&src) noexcept
     {
         zfree(m_data);

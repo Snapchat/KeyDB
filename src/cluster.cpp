@@ -4794,6 +4794,7 @@ NULL
 /* -----------------------------------------------------------------------------
  * DUMP, RESTORE and MIGRATE commands
  * -------------------------------------------------------------------------- */
+ssize_t rdbSaveAuxFieldStrStr(rio *rdb, const char *key, const char *val);
 
 /* Generates a DUMP-format representation of the object 'o', adding it to the
  * io stream pointed by 'rio'. This function can't fail. */
@@ -4806,6 +4807,9 @@ void createDumpPayload(rio *payload, robj_roptr o, robj *key) {
     rioInitWithBuffer(payload,sdsempty());
     serverAssert(rdbSaveObjectType(payload,o));
     serverAssert(rdbSaveObject(payload,o,key));
+    char szT[32];
+    snprintf(szT, 32, "%" PRIu64, o->mvcc_tstamp);
+    serverAssert(rdbSaveAuxFieldStrStr(payload,"mvcc-tstamp", szT) != -1);
 
     /* Write the footer, this is how it looks like:
      * ----------------+---------------------+---------------+
@@ -4941,6 +4945,21 @@ void restoreCommand(client *c) {
         addReplyError(c,"Bad data format");
         return;
     }
+    if (rdbLoadType(&payload) == RDB_OPCODE_AUX)
+    {
+        robj *auxkey, *auxval;
+        if ((auxkey = rdbLoadStringObject(&payload)) == NULL) goto eoferr;
+        if ((auxval = rdbLoadStringObject(&payload)) == NULL) {
+            decrRefCount(auxkey);
+            goto eoferr;
+        }
+        if (strcasecmp(szFromObj(auxkey), "mvcc-tstamp") == 0) {
+            obj->mvcc_tstamp = strtoull(szFromObj(auxval), nullptr, 10);
+        }
+        decrRefCount(auxkey);
+        decrRefCount(auxval);
+    }
+eoferr:
 
     /* Remove the old key if needed. */
     if (replace) dbDelete(c->db,c->argv[1]);

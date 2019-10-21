@@ -1507,10 +1507,10 @@ sds serializeStoredStringObject(sds str, robj_roptr o)
         break;  //nop
 
     case OBJ_ENCODING_EMBSTR:
-        size_t cch = sdslen(szFromObj(o)) + sizeof(struct sdshdr8);
-        if (cch > sizeof(redisObject::m_ptr))
+        size_t cb = zmalloc_size(o.unsafe_robjcast());
+        if (cb > sizeof(robj))
         {
-            str = sdscatlen(str, szFromObj(o) + sizeof(redisObject::m_ptr), cch - sizeof(redisObject::m_ptr));
+            str = sdscatlen(str, o.unsafe_robjcast() + 1, cb - sizeof(robj));
         }
         break;
     }
@@ -1528,8 +1528,7 @@ robj *deserializeStoredStringObject(const char *data, size_t cb)
         serverAssert(cb == sizeof(robj));
         [[fallthrough]];
     case OBJ_ENCODING_EMBSTR:
-        newObject = (robj*)zmalloc(cb+1, MALLOC_LOCAL);
-        ((char*)newObject)[cb] = '\0';
+        newObject = (robj*)zmalloc(cb, MALLOC_LOCAL);
         memcpy(newObject, data, cb);
         newObject->setrefcount(1);
         return newObject;
@@ -1550,8 +1549,8 @@ robj *deserializeStoredObject(const void *data, size_t cb)
 {
     switch (((char*)data)[0])
     {
-        //case RDB_TYPE_STRING:
-        //    return deserializeStoredStringObject(((char*)data)+1, cb-1);
+        case RDB_TYPE_STRING:
+            return deserializeStoredStringObject(((char*)data)+1, cb-1);
 
         default:
             rio payload;
@@ -1587,12 +1586,12 @@ sds serializeStoredObject(robj_roptr o)
 {
     switch (o->type)
     {
-        //case OBJ_STRING:
-        //{
-        //    sds sdsT = sdsnewlen(nullptr, 1);
-        //    sdsT[0] = RDB_TYPE_STRING;
-        //    return serializeStoredStringObject(sdsT, o);
-        //}
+        case OBJ_STRING:
+        {
+            sds sdsT = sdsnewlen(nullptr, 1);
+            sdsT[0] = RDB_TYPE_STRING;
+            return serializeStoredStringObject(sdsT, o);
+        }
             
         default:
             rio rdb;

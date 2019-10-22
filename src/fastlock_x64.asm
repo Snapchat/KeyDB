@@ -3,6 +3,8 @@ section .text
 extern gettid
 extern sched_yield
 extern g_longwaits
+extern registerwait
+extern clearwait
 
 ;	This is the first use of assembly in this codebase, a valid question is WHY?
 ;	The spinlock we implement here is performance critical, and simply put GCC
@@ -31,11 +33,24 @@ fastlock_lock:
 	inc eax                 ; we want to add one
 	lock xadd [rdi+2], ax   ; do the xadd, ax contains the value before the addition
 	; ax now contains the ticket
+	mov edx, [rdi]
+	cmp dx, ax              ; is our ticket up?
+	je .LLocked             ; no need to loop
+	; Lock is contended, so inform the deadlock detector
+	push rax
+	push rdi
+	push rsi
+	call registerwait
+	pop rsi
+	pop rdi
+	pop rax
+	; OK Start the wait loop
+	xor ecx, ecx
 ALIGN 16
 .LLoop:
 	mov edx, [rdi]
 	cmp dx, ax              ; is our ticket up?
-	je .LLocked             ; leave the loop
+	je .LExitLoop           ; leave the loop
 	pause
 	add ecx, 1000h          ; Have we been waiting a long time? (oflow if we have)
 	                        ;	1000h is set so we overflow on the 1024*1024'th iteration (like the C code)
@@ -68,6 +83,13 @@ ALIGN 16
 	pop rsi
 	xor ecx, ecx            ; Reset our loop counter
 	jmp .LLoop              ; Get back in the game
+ALIGN 16
+.LExitLoop:
+	push rsi
+	push rdi
+	call clearwait
+	pop rdi
+	pop rsi
 ALIGN 16
 .LLocked:
 	mov [rdi+4], esi        ; lock->m_pidOwner = gettid()

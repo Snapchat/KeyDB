@@ -36,6 +36,7 @@
 #include <assert.h>
 #include <pthread.h>
 #include <limits.h>
+#include <map>
 #ifdef __linux__
 #include <linux/futex.h>
 #endif
@@ -125,6 +126,60 @@
 
 #endif
 
+#pragma weak _serverPanic
+extern "C" void _serverPanic(const char * /*file*/, int /*line*/, const char * /*msg*/, ...)
+{
+    *((char*)-1) = 'x';
+}
+
+class DeadlockDetector
+{
+    std::map<pid_t, fastlock *> m_mapwait;
+    fastlock m_lock;
+public:
+    void registerwait(fastlock *lock, pid_t thispid)
+    {
+        if (lock == &m_lock)
+            return;
+        fastlock_lock(&m_lock);
+        m_mapwait.insert(std::make_pair(thispid, lock));
+
+        // Detect cycles
+        pid_t pidCheck = thispid;
+        for (;;)
+        {
+            auto itr = m_mapwait.find(pidCheck);
+            if (itr == m_mapwait.end())
+                break;
+            pidCheck = itr->second->m_pidOwner;
+            if (pidCheck == thispid)
+                _serverPanic(__FILE__, __LINE__, "Deadlock detected");
+        }
+        fastlock_unlock(&m_lock);
+    }
+
+    void clearwait(fastlock *lock, pid_t thispid)
+    {
+        if (lock == &m_lock)
+            return;
+        fastlock_lock(&m_lock);
+        m_mapwait.erase(thispid);
+        fastlock_unlock(&m_lock);
+    }
+};
+
+DeadlockDetector g_dlock;
+
+extern "C" void registerwait(fastlock *lock, pid_t thispid)
+{
+    g_dlock.registerwait(lock, thispid);
+}
+
+extern "C" void clearwait(fastlock *lock, pid_t thispid)
+{
+    g_dlock.clearwait(lock, thispid);
+}
+
 static_assert(sizeof(pid_t) <= sizeof(fastlock::m_pidOwner), "fastlock::m_pidOwner not large enough");
 uint64_t g_longwaits = 0;
 
@@ -184,34 +239,41 @@ extern "C" void fastlock_lock(struct fastlock *lock)
         return;
     }
 
+    int tid = gettid();
     unsigned myticket = __atomic_fetch_add(&lock->m_ticket.m_avail, 1, __ATOMIC_RELEASE);
 #ifdef __linux__
     unsigned mask = (1U << (myticket % 32));
 #endif
     int cloops = 0;
     ticket ticketT;
-    for (;;)
+
+    __atomic_load(&lock->m_ticket.u, &ticketT.u, __ATOMIC_ACQUIRE);
+    if ((ticketT.u & 0xffff) != myticket)
     {
-        __atomic_load(&lock->m_ticket.u, &ticketT.u, __ATOMIC_ACQUIRE);
-        if ((ticketT.u & 0xffff) == myticket)
-            break;
+        registerwait(lock, tid);
+        for (;;)
+        {
+            __atomic_load(&lock->m_ticket.u, &ticketT.u, __ATOMIC_ACQUIRE);
+            if ((ticketT.u & 0xffff) == myticket)
+                break;
 
 #if defined(__i386__) || defined(__amd64__)
-        __asm__ ("pause");
+            __asm__ ("pause");
 #endif
-        if ((++cloops % 1024*1024) == 0)
-        {
+            if ((++cloops % 1024*1024) == 0)
+            {
 #ifdef __linux__
-            __atomic_fetch_or(&lock->futex, mask, __ATOMIC_ACQUIRE);
-            futex(&lock->m_ticket.u, FUTEX_WAIT_BITSET_PRIVATE, ticketT.u, nullptr, mask);
-            __atomic_fetch_and(&lock->futex, ~mask, __ATOMIC_RELEASE);
+                __atomic_fetch_or(&lock->futex, mask, __ATOMIC_ACQUIRE);
+                futex(&lock->m_ticket.u, FUTEX_WAIT_BITSET_PRIVATE, ticketT.u, nullptr, mask);
+                __atomic_fetch_and(&lock->futex, ~mask, __ATOMIC_RELEASE);
 #endif
-            __atomic_fetch_add(&g_longwaits, 1, __ATOMIC_RELAXED);
+                __atomic_fetch_add(&g_longwaits, 1, __ATOMIC_RELAXED);
+            }
         }
+        clearwait(lock, tid);
     }
 
     lock->m_depth = 1;
-    int tid = gettid();
     __atomic_store(&lock->m_pidOwner, &tid, __ATOMIC_RELEASE);
     ANNOTATE_RWLOCK_ACQUIRED(lock, true);
     std::atomic_thread_fence(std::memory_order_acquire);

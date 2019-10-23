@@ -7,7 +7,7 @@ extern "C" {
 
 /* Begin C API */
 struct fastlock;
-void fastlock_init(struct fastlock *lock);
+void fastlock_init(struct fastlock *lock, const char *name);
 void fastlock_lock(struct fastlock *lock);
 int fastlock_trylock(struct fastlock *lock, int fWeak);
 void fastlock_unlock(struct fastlock *lock);
@@ -45,24 +45,25 @@ struct fastlock
     volatile int m_pidOwner;
     volatile int m_depth;
     unsigned futex;
+    const char *szName;
 
 #ifdef __cplusplus
-    fastlock()
+    fastlock(const char *name)
     {
-        fastlock_init(this);
+        fastlock_init(this, name);
     }
 
-    void lock()
+    inline void lock()
     {
         fastlock_lock(this);
     }
 
-    bool try_lock(bool fWeak = false)
+    inline bool try_lock(bool fWeak = false)
     {
         return !!fastlock_trylock(this, fWeak);
     }
 
-    void unlock()
+    inline void unlock()
     {
         fastlock_unlock(this);
     }

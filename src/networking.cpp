@@ -116,7 +116,7 @@ client *createClient(int fd, int iel) {
     uint64_t client_id;
     client_id = g_pserver->next_client_id.fetch_add(1);
     c->iel = iel;
-    fastlock_init(&c->lock);
+    fastlock_init(&c->lock, "client");
     c->id = client_id;
     c->resp = 2;
     c->fd = fd;

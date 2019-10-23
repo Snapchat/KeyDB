@@ -1044,7 +1044,7 @@ typedef struct clientReplyBlock {
  * database. The database number is the 'id' field in the structure. */
 typedef struct redisDb {
     redisDb() 
-        : expireitr(nullptr)
+        : expireitr(nullptr), lock("redisDB")
     {};
     dict *pdict;                 /* The keyspace for this DB */
     expireset *setexpire;
@@ -1437,7 +1437,7 @@ struct redisServerThreadVars {
                                 client blocked on a module command needs
                                 to be processed. */
     client *lua_client = nullptr;   /* The "fake client" to query Redis from Lua */
-    struct fastlock lockPendingWrite;
+    struct fastlock lockPendingWrite { "thread pending write" };
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     long unsigned commandsExecuted = 0;
 };
@@ -1818,8 +1818,6 @@ struct redisServer {
     int watchdog_period;  /* Software watchdog period in ms. 0 = off */
 
     int fActiveReplica;                          /* Can this replica also be a master? */
-
-    struct fastlock flock;
 
     // Format:
     //  Lower 20 bits: a counter incrementing for each command executed in the same millisecond

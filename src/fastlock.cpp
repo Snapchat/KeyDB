@@ -42,6 +42,7 @@
 #endif
 #include <string.h>
 #include <stdarg.h>
+#include <stdio.h>
 
 #ifdef __APPLE__
 #include <TargetConditionals.h>

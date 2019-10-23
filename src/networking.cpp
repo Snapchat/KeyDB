@@ -2998,6 +2998,14 @@ int processEventsWhileBlocked(int iel) {
     int iterations = 4; /* See the function top-comment. */
     int count = 0;
 
+    client *c = serverTL->current_client;
+    if (c != nullptr)
+    {
+        serverAssert(c->flags & CLIENT_PROTECTED);
+        c->lock.unlock();
+        c->db->lock.unlock();
+    }
+    aeReleaseLock();
     while (iterations--) {
         int events = 0;
         events += aeProcessEvents(g_pserver->rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
@@ -3005,6 +3013,13 @@ int processEventsWhileBlocked(int iel) {
         if (!events) break;
         count += events;
     }
+    AeLocker locker;
+    if (c != nullptr)
+        c->lock.lock();
+    locker.arm(c);
+    if (c != nullptr)
+        c->db->lock.lock();
+    locker.release();
     return count;
 }
 

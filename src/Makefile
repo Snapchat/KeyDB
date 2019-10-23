@@ -190,7 +190,7 @@ endif
 
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
 REDIS_CXX=$(QUIET_CC)$(CC) $(FINAL_CXXFLAGS)
-REDIS_NASM=$(QUIET_CC)nasm -felf64 
+KEYDB_AS=$(QUIET_CC) as --64 -g
 REDIS_LD=$(QUIET_LINK)$(CXX) $(FINAL_LDFLAGS)
 REDIS_INSTALL=$(QUIET_INSTALL)$(INSTALL)
 
@@ -295,7 +295,7 @@ dict-benchmark: dict.cpp zmalloc.cpp sds.c siphash.c
 	$(REDIS_CXX) -c $<
 
 %.o: %.asm .make-prerequisites
-	$(REDIS_NASM) $<
+	$(KEYDB_AS) $< -o $@
 
 clean:
 	rm -rf $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) *.o *.gcda *.gcno *.gcov redis.info lcov-html Makefile.dep dict-benchmark

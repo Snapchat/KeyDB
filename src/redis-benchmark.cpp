@@ -173,6 +173,8 @@ typedef struct redisConfig {
     sds appendonly;
 } redisConfig;
 
+int g_fInCrash = false;
+
 /* Prototypes */
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 static void createMissingClients(client c);

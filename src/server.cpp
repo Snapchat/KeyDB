@@ -2878,7 +2878,7 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
         exit(1);
     }
 
-    fastlock_init(&pvar->lockPendingWrite);
+    fastlock_init(&pvar->lockPendingWrite, "lockPendingWrite");
 
     if (!fMain)
     {
@@ -2924,8 +2924,6 @@ void initServer(void) {
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
-
-    fastlock_init(&g_pserver->flock);
 
     g_pserver->db = (redisDb*)zmalloc(sizeof(redisDb)*cserver.dbnum, MALLOC_LOCAL);
 

@@ -1509,7 +1509,6 @@ int writeToClient(int fd, client *c, int handler_installed) {
         } else {
             serverLog(LL_VERBOSE,
                 "Error writing to client: %s", strerror(errno));
-            lock.unlock();
             freeClientAsync(c);
             
             return C_ERR;
@@ -1528,7 +1527,6 @@ int writeToClient(int fd, client *c, int handler_installed) {
 
         /* Close connection after entire reply has been sent. */
         if (c->flags & CLIENT_CLOSE_AFTER_REPLY) {
-            lock.unlock();
             freeClientAsync(c);
             return C_ERR;
         }
@@ -3000,7 +2998,6 @@ int processEventsWhileBlocked(int iel) {
     int iterations = 4; /* See the function top-comment. */
     int count = 0;
 
-    aeReleaseLock();
     while (iterations--) {
         int events = 0;
         events += aeProcessEvents(g_pserver->rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
@@ -3008,7 +3005,6 @@ int processEventsWhileBlocked(int iel) {
         if (!events) break;
         count += events;
     }
-    aeAcquireLock();
     return count;
 }
 

@@ -59,6 +59,7 @@
 #define UNUSED(x) ((void)x)
 #endif
 
+extern int g_fInCrash;
 
 /****************************************************
  *
@@ -150,7 +151,7 @@ class DeadlockDetector
 public:
     void registerwait(fastlock *lock, pid_t thispid)
     {
-        if (lock == &m_lock)
+        if (lock == &m_lock || g_fInCrash)
             return;
         fastlock_lock(&m_lock);
         m_mapwait.insert(std::make_pair(thispid, lock));
@@ -191,7 +192,7 @@ public:
 
     void clearwait(fastlock *lock, pid_t thispid)
     {
-        if (lock == &m_lock)
+        if (lock == &m_lock || g_fInCrash)
             return;
         fastlock_lock(&m_lock);
         m_mapwait.erase(thispid);

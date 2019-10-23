@@ -2797,7 +2797,7 @@ void xorDigest(unsigned char *digest, const void *ptr, size_t len);
 int populateCommandTableParseFlags(struct redisCommand *c, const char *strflags);
 
 int moduleGILAcquiredByModule(void);
-extern bool g_fInCrash;
+extern int g_fInCrash;
 static inline int GlobalLocksAcquired(void)  // Used in asserts to verify all global locks are correctly acquired for a server-thread to operate
 {
     return aeThreadOwnsLock() || moduleGILAcquiredByModule() || g_fInCrash;

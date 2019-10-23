@@ -384,6 +384,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
         if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
+        if (replica->flags & CLIENT_CLOSE_ASAP) continue;
         std::unique_lock<decltype(replica->lock)> lock(replica->lock);
         if (serverTL->current_client && FSameHost(serverTL->current_client, replica))
         {

@@ -248,7 +248,11 @@ void clientInstallAsyncWriteHandler(client *c) {
 int prepareClientToWrite(client *c, bool fAsync) {
     fAsync = fAsync && !FCorrectThread(c);  // Not async if we're on the right thread
     serverAssert(FCorrectThread(c) || fAsync);
-    serverAssert(c->fd <= 0 || c->lock.fOwnLock());
+	if (FCorrectThread(c)) {
+		serverAssert(c->fd <= 0 || c->lock.fOwnLock());
+	} else {
+		serverAssert(GlobalLocksAcquired());
+	}
 
     if (c->flags & CLIENT_FORCE_REPLY) return C_OK; // FORCE REPLY means we're doing something else with the buffer.
                                                 // do not install a write handler

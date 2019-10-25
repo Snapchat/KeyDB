@@ -47,8 +47,6 @@ endif
 USEASM?=true
 
 ifneq ($(SANITIZE),)
-	CC=clang
-	CXX=clang++
 	CFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE
 	CXXFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE
 	LDFLAGS+= -fsanitize=$(SANITIZE)

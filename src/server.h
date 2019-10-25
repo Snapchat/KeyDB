@@ -1044,7 +1044,7 @@ typedef struct clientReplyBlock {
  * database. The database number is the 'id' field in the structure. */
 typedef struct redisDb {
     redisDb() 
-        : expireitr(nullptr), lock("redisDB")
+        : expireitr(nullptr)
     {};
     dict *pdict;                 /* The keyspace for this DB */
     expireset *setexpire;
@@ -1057,8 +1057,6 @@ typedef struct redisDb {
     long long last_expire_set;  /* when the last expire was set */
     double avg_ttl;             /* Average TTL, just for stats */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
-
-    fastlock lock;
 } redisDb;
 
 /* Client MULTI/EXEC state */

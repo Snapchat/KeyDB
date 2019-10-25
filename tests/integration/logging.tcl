@@ -6,7 +6,7 @@ if {$system_name eq {linux} || $system_name eq {darwin}} {
         test "Server is able to generate a stack trace on selected systems" {
             r config set watchdog-period 200
             r debug sleep 1
-            set pattern "*debugCommand*"
+            set pattern "*watchdogSignalHandler*"
             set retry 10
             while {$retry} {
                 set result [exec tail -100 < [srv 0 stdout]]

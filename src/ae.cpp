@@ -80,7 +80,7 @@ public:
 mutex_wrapper g_lock;
 
 #else
-fastlock g_lock;
+fastlock g_lock("AE (global)");
 #endif
 thread_local aeEventLoop *g_eventLoopThisThread = NULL;
 
@@ -327,7 +327,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     for (i = 0; i < setsize; i++)
         eventLoop->events[i].mask = AE_NONE;
 
-    fastlock_init(&eventLoop->flock);
+    fastlock_init(&eventLoop->flock, "event loop");
     int rgfd[2];
     if (pipe(rgfd) < 0)
         goto err;

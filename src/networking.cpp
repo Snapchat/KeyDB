@@ -3003,7 +3003,6 @@ int processEventsWhileBlocked(int iel) {
     {
         serverAssert(c->flags & CLIENT_PROTECTED);
         c->lock.unlock();
-        c->db->lock.unlock();
     }
     aeReleaseLock();
     while (iterations--) {
@@ -3017,8 +3016,6 @@ int processEventsWhileBlocked(int iel) {
     if (c != nullptr)
         c->lock.lock();
     locker.arm(c);
-    if (c != nullptr)
-        c->db->lock.lock();
     locker.release();
     return count;
 }

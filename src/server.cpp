@@ -2878,7 +2878,7 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
         exit(1);
     }
 
-    fastlock_init(&pvar->lockPendingWrite);
+    fastlock_init(&pvar->lockPendingWrite, "lockPendingWrite");
 
     if (!fMain)
     {
@@ -2924,8 +2924,6 @@ void initServer(void) {
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
-
-    fastlock_init(&g_pserver->flock);
 
     g_pserver->db = (redisDb*)zmalloc(sizeof(redisDb)*cserver.dbnum, MALLOC_LOCAL);
 
@@ -3706,7 +3704,6 @@ int processCommand(client *c, int callFlags) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
-        std::unique_lock<decltype(c->db->lock)> ulock(c->db->lock);
         call(c,callFlags);
         c->woff = g_pserver->master_repl_offset;
         if (listLength(g_pserver->ready_keys))

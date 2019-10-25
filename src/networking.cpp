@@ -116,7 +116,7 @@ client *createClient(int fd, int iel) {
     uint64_t client_id;
     client_id = g_pserver->next_client_id.fetch_add(1);
     c->iel = iel;
-    fastlock_init(&c->lock);
+    fastlock_init(&c->lock, "client");
     c->id = client_id;
     c->resp = 2;
     c->fd = fd;
@@ -248,7 +248,11 @@ void clientInstallAsyncWriteHandler(client *c) {
 int prepareClientToWrite(client *c, bool fAsync) {
     fAsync = fAsync && !FCorrectThread(c);  // Not async if we're on the right thread
     serverAssert(FCorrectThread(c) || fAsync);
-    serverAssert(c->fd <= 0 || c->lock.fOwnLock());
+	if (FCorrectThread(c)) {
+		serverAssert(c->fd <= 0 || c->lock.fOwnLock());
+	} else {
+		serverAssert(GlobalLocksAcquired());
+	}
 
     if (c->flags & CLIENT_FORCE_REPLY) return C_OK; // FORCE REPLY means we're doing something else with the buffer.
                                                 // do not install a write handler
@@ -1509,7 +1513,6 @@ int writeToClient(int fd, client *c, int handler_installed) {
         } else {
             serverLog(LL_VERBOSE,
                 "Error writing to client: %s", strerror(errno));
-            lock.unlock();
             freeClientAsync(c);
             
             return C_ERR;
@@ -1528,7 +1531,6 @@ int writeToClient(int fd, client *c, int handler_installed) {
 
         /* Close connection after entire reply has been sent. */
         if (c->flags & CLIENT_CLOSE_AFTER_REPLY) {
-            lock.unlock();
             freeClientAsync(c);
             return C_ERR;
         }
@@ -3000,6 +3002,12 @@ int processEventsWhileBlocked(int iel) {
     int iterations = 4; /* See the function top-comment. */
     int count = 0;
 
+    client *c = serverTL->current_client;
+    if (c != nullptr)
+    {
+        serverAssert(c->flags & CLIENT_PROTECTED);
+        c->lock.unlock();
+    }
     aeReleaseLock();
     while (iterations--) {
         int events = 0;
@@ -3008,7 +3016,11 @@ int processEventsWhileBlocked(int iel) {
         if (!events) break;
         count += events;
     }
-    aeAcquireLock();
+    AeLocker locker;
+    if (c != nullptr)
+        c->lock.lock();
+    locker.arm(c);
+    locker.release();
     return count;
 }
 

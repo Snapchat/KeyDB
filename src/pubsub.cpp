@@ -301,9 +301,11 @@ int pubsubPublishMessage(robj *channel, robj *message) {
             client *c = reinterpret_cast<client*>(ln->value);
             if (c->flags & CLIENT_CLOSE_ASAP)   // avoid blocking if the write will be ignored
                 continue;
-            fastlock_lock(&c->lock);
+            if (FCorrectThread(c))
+                fastlock_lock(&c->lock);
             addReplyPubsubMessage(c,channel,message);
-            fastlock_unlock(&c->lock);
+            if (FCorrectThread(c))
+                fastlock_unlock(&c->lock);
             receivers++;
         }
     }
@@ -321,10 +323,12 @@ int pubsubPublishMessage(robj *channel, robj *message) {
             {
                 if (pat->pclient->flags & CLIENT_CLOSE_ASAP)
                     continue;
-                fastlock_lock(&pat->pclient->lock);
+                if (FCorrectThread(pat->pclient))
+                    fastlock_lock(&pat->pclient->lock);
                 addReplyPubsubPatMessage(pat->pclient,
                     pat->pattern,channel,message);
-                fastlock_unlock(&pat->pclient->lock);
+                if (FCorrectThread(pat->pclient))
+                    fastlock_unlock(&pat->pclient->lock);
                 receivers++;
             }
         }

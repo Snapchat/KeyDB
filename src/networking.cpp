@@ -2521,9 +2521,17 @@ NULL
                 close_this_client = 1;
             } else {
                 if (FCorrectThread(client))
+                {
                     freeClient(client);
+                }
                 else
+                {
+                    int iel = client->iel;
                     freeClientAsync(client);
+                    aePostFunction(g_pserver->rgthreadvar[client->iel].el, [iel] {
+                        freeClientsInAsyncFreeQueue(iel);
+                    });
+                }
             }
             killed++;
         }

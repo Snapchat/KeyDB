@@ -1426,6 +1426,7 @@ struct redisServerThreadVars {
     aeEventLoop *el;
     int ipfd[CONFIG_BINDADDR_MAX]; /* TCP socket file descriptors */
     int ipfd_count;             /* Used slots in ipfd[] */
+    int clients_paused;         /* True if clients are currently paused */
     std::vector<client*> clients_pending_write; /* There is to write or install handler. */
     list *unblocked_clients;     /* list of clients to unblock before next loop NOT THREADSAFE */
     list *clients_pending_asyncwrite;
@@ -1518,7 +1519,7 @@ struct redisServer {
     int config_hz;              /* Configured HZ value. May be different than
                                    the actual 'hz' field value if dynamic-hz
                                    is enabled. */
-    int hz;                     /* serverCron() calls frequency in hertz */
+    std::atomic<int> hz;                     /* serverCron() calls frequency in hertz */
     redisDb *db;
     dict *commands;             /* Command table */
     dict *orig_commands;        /* Command table before command renaming. */
@@ -1553,7 +1554,6 @@ struct redisServer {
     list *clients_to_close;     /* Clients to close asynchronously */
     list *slaves, *monitors;    /* List of slaves and MONITORs */
     rax *clients_index;         /* Active clients dictionary by client ID. */
-    int clients_paused;         /* True if clients are currently paused */
     mstime_t clients_pause_end_time; /* Time when we undo clients_paused */
     dict *migrate_cached_sockets;/* MIGRATE cached sockets */
     std::atomic<uint64_t> next_client_id; /* Next client unique ID. Incremental. */
@@ -2042,6 +2042,7 @@ void disconnectSlavesExcept(unsigned char *uuid);
 int listenToPort(int port, int *fds, int *count, int fReusePort, int fFirstListen);
 void pauseClients(mstime_t duration);
 int clientsArePaused(void);
+void unpauseClientsIfNecessary();
 int processEventsWhileBlocked(int iel);
 int handleClientsWithPendingWrites(int iel);
 int clientHasPendingReplies(client *c);

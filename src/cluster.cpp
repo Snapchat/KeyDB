@@ -617,6 +617,17 @@ clusterLink *createClusterLink(clusterNode *node) {
  * This function will just make sure that the original node associated
  * with this link will have the 'link' field set to NULL. */
 void freeClusterLink(clusterLink *link) {
+    if (ielFromEventLoop(serverTL->el) != IDX_EVENT_LOOP_MAIN)
+    {
+        // we can't perform this operation on this thread, queue it on the main thread
+        if (link->node)
+            link->node->link = NULL;
+        link->node = nullptr;
+        aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [link]{
+            freeClusterLink(link);
+        });
+        return;
+    }
     if (link->fd != -1) {
         aeDeleteFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, link->fd, AE_READABLE|AE_WRITABLE);
     }
@@ -2139,21 +2150,35 @@ void handleLinkIOError(clusterLink *link) {
  * consumed by write(). We don't try to optimize this for speed too much
  * as this is a very low traffic channel. */
 void clusterWriteHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
+    serverAssert(ielFromEventLoop(el) == IDX_EVENT_LOOP_MAIN);
     clusterLink *link = (clusterLink*) privdata;
     ssize_t nwritten;
     UNUSED(el);
     UNUSED(mask);
 
-    nwritten = write(fd, link->sndbuf, sdslen(link->sndbuf));
+    // We're about to release the lock, so the link's sndbuf needs to be owned fully by us
+    //  allocate a new one in case anyone tries to write while we're waiting
+    sds sndbuf = link->sndbuf;
+    link->sndbuf = sdsempty();
+
+    aeReleaseLock();
+    nwritten = write(fd, sndbuf, sdslen(sndbuf));
+    aeAcquireLock();
+
     if (nwritten <= 0) {
         serverLog(LL_DEBUG,"I/O error writing to node link: %s",
             (nwritten == -1) ? strerror(errno) : "short write");
+        sdsfree(sndbuf);
         handleLinkIOError(link);
         return;
     }
-    sdsrange(link->sndbuf,nwritten,-1);
+    sdsrange(sndbuf,nwritten,-1);
+    // Restore our send buffer, ensuring any unsent data is first
+    sndbuf = sdscat(sndbuf, link->sndbuf);
+    sdsfree(link->sndbuf);
+    link->sndbuf = sndbuf;
     if (sdslen(link->sndbuf) == 0)
-        aeDeleteFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, link->fd, AE_WRITABLE);
+        aeDeleteFileEvent(el, link->fd, AE_WRITABLE);
 }
 
 /* Read data. Try to read the first field of the header first to check the
@@ -2228,9 +2253,10 @@ void clusterReadHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  * the link to be invalidated, so it is safe to call this function
  * from event handlers that will do stuff with the same link later. */
 void clusterSendMessage(clusterLink *link, unsigned char *msg, size_t msglen) {
+    serverAssert(GlobalLocksAcquired());
     if (sdslen(link->sndbuf) == 0 && msglen != 0)
-        aeCreateFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,link->fd,AE_WRITABLE|AE_BARRIER,
-                    clusterWriteHandler,link);
+        aeCreateRemoteFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,link->fd,AE_WRITABLE|AE_BARRIER,
+                    clusterWriteHandler,link,false);
 
     link->sndbuf = sdscatlen(link->sndbuf, msg, msglen);
 
@@ -3284,7 +3310,7 @@ void clusterHandleSlaveMigration(int max_slaves) {
 void resetManualFailover(void) {
     if (g_pserver->cluster->mf_end && clientsArePaused()) {
         g_pserver->clients_pause_end_time = 0;
-        clientsArePaused(); /* Just use the side effect of the function. */
+        unpauseClientsIfNecessary();
     }
     g_pserver->cluster->mf_end = 0; /* No manual failover in progress. */
     g_pserver->cluster->mf_can_start = 0;

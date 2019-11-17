@@ -4180,57 +4180,76 @@ void clusterReplyMultiBulkSlots(client *c) {
     dictIterator *di = dictGetSafeIterator(g_pserver->cluster->nodes);
     while((de = dictNext(di)) != NULL) {
         clusterNode *node = (clusterNode*)dictGetVal(de);
-        int j = 0, start = -1;
+        int start = -1;
 
         /* Skip slaves (that are iterated when producing the output of their
          * master) and  masters not serving any slot. */
         if (!nodeIsMaster(node) || node->numslots == 0) continue;
+        
+        static_assert((CLUSTER_SLOTS % (sizeof(uint32_t)*8)) == 0, "code below assumes the bitfield is a multiple of sizeof(unsinged)");
 
-        for (j = 0; j < CLUSTER_SLOTS; j++) {
-            int bit, i;
-
-            if ((bit = clusterNodeGetSlotBit(node,j)) != 0) {
-                if (start == -1) start = j;
+        for (unsigned iw = 0; iw < (CLUSTER_SLOTS/sizeof(uint32_t)/8); ++iw)
+        {
+            uint32_t wordCur = reinterpret_cast<uint32_t*>(node->slots)[iw];
+            if (iw != ((CLUSTER_SLOTS/sizeof(uint32_t)/8)-1))
+            {
+                if (start == -1 && wordCur == 0)
+                    continue;
+                if (start != -1 && (wordCur+1)==0)
+                    continue;
             }
-            if (start != -1 && (!bit || j == CLUSTER_SLOTS-1)) {
-                int nested_elements = 3; /* slots (2) + master addr (1). */
-                void *nested_replylen = addReplyDeferredLen(c);
 
-                if (bit && j == CLUSTER_SLOTS-1) j++;
-
-                /* If slot exists in output map, add to it's list.
-                 * else, create a new output map for this slot */
-                if (start == j-1) {
-                    addReplyLongLong(c, start); /* only one slot; low==high */
-                    addReplyLongLong(c, start);
-                } else {
-                    addReplyLongLong(c, start); /* low */
-                    addReplyLongLong(c, j-1);   /* high */
+            unsigned ibitStartLoop = iw*sizeof(uint32_t)*8;
+    
+            for (unsigned j = ibitStartLoop; j < (iw+1)*sizeof(uint32_t)*8; j++) {
+                int i;
+                int bit = (int)(wordCur & 1);
+                wordCur >>= 1;
+                if (bit != 0) {
+                    if (start == -1) start = j;
                 }
-                start = -1;
+                if (start != -1 && (!bit || j == CLUSTER_SLOTS-1)) {
+                    int nested_elements = 3; /* slots (2) + master addr (1). */
+                    void *nested_replylen = addReplyDeferredLen(c);
 
-                /* First node reply position is always the master */
-                addReplyArrayLen(c, 3);
-                addReplyBulkCString(c, node->ip);
-                addReplyLongLong(c, node->port);
-                addReplyBulkCBuffer(c, node->name, CLUSTER_NAMELEN);
+                    if (bit && j == CLUSTER_SLOTS-1) j++;
 
-                /* Remaining nodes in reply are replicas for slot range */
-                for (i = 0; i < node->numslaves; i++) {
-                    /* This loop is copy/pasted from clusterGenNodeDescription()
-                     * with modifications for per-slot node aggregation */
-                    if (nodeFailed(node->slaves[i])) continue;
+                    /* If slot exists in output map, add to it's list.
+                    * else, create a new output map for this slot */
+                    if (start == j-1) {
+                        addReplyLongLong(c, start); /* only one slot; low==high */
+                        addReplyLongLong(c, start);
+                    } else {
+                        addReplyLongLong(c, start); /* low */
+                        addReplyLongLong(c, j-1);   /* high */
+                    }
+                    start = -1;
+
+                    /* First node reply position is always the master */
                     addReplyArrayLen(c, 3);
-                    addReplyBulkCString(c, node->slaves[i]->ip);
-                    addReplyLongLong(c, node->slaves[i]->port);
-                    addReplyBulkCBuffer(c, node->slaves[i]->name, CLUSTER_NAMELEN);
-                    nested_elements++;
+                    addReplyBulkCString(c, node->ip);
+                    addReplyLongLong(c, node->port);
+                    addReplyBulkCBuffer(c, node->name, CLUSTER_NAMELEN);
+
+                    /* Remaining nodes in reply are replicas for slot range */
+                    for (i = 0; i < node->numslaves; i++) {
+                        /* This loop is copy/pasted from clusterGenNodeDescription()
+                        * with modifications for per-slot node aggregation */
+                        if (nodeFailed(node->slaves[i])) continue;
+                        addReplyArrayLen(c, 3);
+                        addReplyBulkCString(c, node->slaves[i]->ip);
+                        addReplyLongLong(c, node->slaves[i]->port);
+                        addReplyBulkCBuffer(c, node->slaves[i]->name, CLUSTER_NAMELEN);
+                        nested_elements++;
+                    }
+                    setDeferredArrayLen(c, nested_replylen, nested_elements);
+                    num_masters++;
                 }
-                setDeferredArrayLen(c, nested_replylen, nested_elements);
-                num_masters++;
             }
         }
+        serverAssert(start == -1);
     }
+    
     dictReleaseIterator(di);
     setDeferredArrayLen(c, slot_replylen, num_masters);
 }

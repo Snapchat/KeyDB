@@ -1,18 +1,90 @@
 .intel_syntax noprefix
-.text
+.section .note.GNU-stack,"",@progbits
 
 .extern gettid
 .extern fastlock_sleep
+
+.data
+.align 8
+fastlock_unlock_vec:
+	.quad fastlock_unlock_vanilla
+fastlock_lock_vec:
+	.quad cpuid_check_tsxrtm_polyphill
+fastlock_trylock_vec:
+	.quad fastlock_trylock_vanilla
+
+.text
+.global fastlock_unlock
+fastlock_unlock:
+	mov rax, [rip + fastlock_unlock_vec]
+	jmp rax
+.global fastlock_lock
+.type   fastlock_lock,@function
+fastlock_lock:
+	mov rax, [rip + fastlock_lock_vec]
+	jmp rax
+.global fastlock_trylock
+.type   fastlock_trylock,@function
+fastlock_trylock:
+	mov rax, [rip + fastlock_trylock_vec]
+	jmp rax
 
 #	This is the first use of assembly in this codebase, a valid question is WHY?
 #	The spinlock we implement here is performance critical, and simply put GCC
 #	emits awful code.  The original C code is left in fastlock.cpp for reference
 #	and x-plat.
 
+cpuid_check_tsxrtm_polyphill:
+	mov eax, 7
+	xor ecx, ecx
+	cpuid
+	and ebx, 0x800
+	jnz .LHasTSX
+	# CPU does not have TSX RTM support
+	lea rax, [rip+fastlock_lock_vanilla]
+	mov [rip + fastlock_lock_vec], rax
+	jmp rax
+.LHasTSX:
+	lea rax, [rip+fastlock_lock_tsxrtm]
+	mov [rip + fastlock_lock_vec], rax
+	lea rax, [rip+fastlock_trylock_tsxrtm]
+	mov [rip + fastlock_trylock_vec], rax
+	lea rax, [rip+fastlock_unlock_tsxrtm]
+	mov [rip + fastlock_unlock_vec], rax
+	jmp fastlock_lock_tsxrtm
+
 .ALIGN 16
-.global fastlock_lock
-.type   fastlock_lock,@function
-fastlock_lock:
+fastlock_lock_tsxrtm:
+	xbegin fastlock_lock_vanilla
+fastlock_lock_tsxrtmcore:
+	# make sure the lock is not taken (do this inside the TX)
+	mov eax, [rdi+64]
+	mov ecx, eax            # duplicate in ecx
+	ror ecx, 16             # swap upper and lower 16-bits
+	cmp eax, ecx            # are the upper and lower 16-bits the same?
+	jne .LContested
+	mov eax, 1				# this is not needed for the regular lock, but is for try lock which shares this body
+	ret
+.LContested:
+	xabort 0
+
+.ALIGN 16
+fastlock_trylock_tsxrtm:
+	xbegin fastlock_trylock_vanilla
+	jmp fastlock_lock_tsxrtmcore
+
+.ALIGN 16
+fastlock_unlock_tsxrtm:
+	mov eax, [rdi+64]
+	mov ecx, eax            # duplicate in ecx
+	ror ecx, 16             # swap upper and lower 16-bits
+	cmp eax, ecx            # are the upper and lower 16-bits the same?
+	jne fastlock_unlock_vanilla
+	xend
+	ret
+
+.ALIGN 16
+fastlock_lock_vanilla:
 	.cfi_startproc
 	.cfi_def_cfa rsp, 8
 	# RDI points to the struct:
@@ -79,9 +151,7 @@ fastlock_lock:
 .cfi_endproc
 
 .ALIGN 16
-.global fastlock_trylock
-.type   fastlock_trylock,@function
-fastlock_trylock:
+fastlock_trylock_vanilla:
 	# RDI points to the struct:
 	#	int32_t m_pidOwner
 	#	int32_t m_depth
@@ -125,8 +195,7 @@ fastlock_trylock:
 	ret
 
 .ALIGN 16
-.global fastlock_unlock
-fastlock_unlock:
+fastlock_unlock_vanilla:
 	# RDI points to the struct:
 	#	int32_t m_pidOwner
 	#	int32_t m_depth

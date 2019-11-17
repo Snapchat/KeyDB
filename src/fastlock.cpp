@@ -258,7 +258,10 @@ extern "C" void fastlock_init(struct fastlock *lock, const char *name)
     lock->m_depth = 0;
     lock->m_pidOwner = -1;
     lock->futex = 0;
-    lock->szName = name;
+    int cch = strlen(name);
+    cch = std::min<int>(cch, sizeof(lock->szName)-1);
+    memcpy(lock->szName, name, cch);
+    lock->szName[cch] = '\0';
     ANNOTATE_RWLOCK_CREATE(lock);
 }
 

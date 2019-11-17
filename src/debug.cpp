@@ -595,19 +595,9 @@ NULL
         double dtime = strtod(szFromObj(c->argv[2]),NULL);
         long long utime = dtime*1000000;
         struct timespec tv;
+
         tv.tv_sec = utime / 1000000;
         tv.tv_nsec = (utime % 1000000) * 1000;
-        
-        // Ensure all threads sleep
-        for (int iel = 0; iel < cserver.cthreads; ++iel)
-        {
-            if (iel == ielFromEventLoop(serverTL->el))
-                continue;   // we will sleep ourselves below
-            aePostFunction(g_pserver->rgthreadvar[iel].el, [tv]{
-                nanosleep(&tv, NULL);
-            });
-        }
-        
         nanosleep(&tv, NULL);
         addReply(c,shared.ok);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"set-active-expire") &&

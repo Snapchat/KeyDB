@@ -1253,8 +1253,6 @@ public:
     long long last_expire_set;  /* when the last expire was set */
     double avg_ttl;             /* Average TTL, just for stats */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
-
-    fastlock lock;
 } redisDb;
 
 /* Client MULTI/EXEC state */
@@ -1627,6 +1625,7 @@ struct redisServerThreadVars {
     aeEventLoop *el;
     int ipfd[CONFIG_BINDADDR_MAX]; /* TCP socket file descriptors */
     int ipfd_count;             /* Used slots in ipfd[] */
+    int clients_paused;         /* True if clients are currently paused */
     std::vector<client*> clients_pending_write; /* There is to write or install handler. */
     list *unblocked_clients;     /* list of clients to unblock before next loop NOT THREADSAFE */
     list *clients_pending_asyncwrite;
@@ -1636,7 +1635,7 @@ struct redisServerThreadVars {
                                 client blocked on a module command needs
                                 to be processed. */
     client *lua_client = nullptr;   /* The "fake client" to query Redis from Lua */
-    struct fastlock lockPendingWrite;
+    struct fastlock lockPendingWrite { "thread pending write" };
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     long unsigned commandsExecuted = 0;
 };
@@ -1719,7 +1718,7 @@ struct redisServer {
     int config_hz;              /* Configured HZ value. May be different than
                                    the actual 'hz' field value if dynamic-hz
                                    is enabled. */
-    int hz;                     /* serverCron() calls frequency in hertz */
+    std::atomic<int> hz;                     /* serverCron() calls frequency in hertz */
     redisDb *db;
     dict *commands;             /* Command table */
     dict *orig_commands;        /* Command table before command renaming. */
@@ -1754,7 +1753,6 @@ struct redisServer {
     list *clients_to_close;     /* Clients to close asynchronously */
     list *slaves, *monitors;    /* List of slaves and MONITORs */
     rax *clients_index;         /* Active clients dictionary by client ID. */
-    int clients_paused;         /* True if clients are currently paused */
     mstime_t clients_pause_end_time; /* Time when we undo clients_paused */
     dict *migrate_cached_sockets;/* MIGRATE cached sockets */
     std::atomic<uint64_t> next_client_id; /* Next client unique ID. Incremental. */
@@ -2024,8 +2022,6 @@ struct redisServer {
 
     int fActiveReplica;                          /* Can this replica also be a master? */
 
-    struct fastlock flock;
-
     // Format:
     //  Lower 20 bits: a counter incrementing for each command executed in the same millisecond
     //  Upper 44 bits: mstime (least significant 44-bits) enough for ~500 years before rollover from date of addition
@@ -2255,6 +2251,7 @@ void disconnectSlavesExcept(unsigned char *uuid);
 int listenToPort(int port, int *fds, int *count, int fReusePort, int fFirstListen);
 void pauseClients(mstime_t duration);
 int clientsArePaused(void);
+void unpauseClientsIfNecessary();
 int processEventsWhileBlocked(int iel);
 int handleClientsWithPendingWrites(int iel);
 int clientHasPendingReplies(client *c);
@@ -3010,7 +3007,7 @@ void xorDigest(unsigned char *digest, const void *ptr, size_t len);
 int populateCommandTableParseFlags(struct redisCommand *c, const char *strflags);
 
 int moduleGILAcquiredByModule(void);
-extern bool g_fInCrash;
+extern int g_fInCrash;
 static inline int GlobalLocksAcquired(void)  // Used in asserts to verify all global locks are correctly acquired for a server-thread to operate
 {
     return aeThreadOwnsLock() || moduleGILAcquiredByModule() || g_fInCrash;

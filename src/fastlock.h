@@ -1,5 +1,6 @@
 #pragma once
 #include <inttypes.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -7,7 +8,7 @@ extern "C" {
 
 /* Begin C API */
 struct fastlock;
-void fastlock_init(struct fastlock *lock);
+void fastlock_init(struct fastlock *lock, const char *name);
 void fastlock_lock(struct fastlock *lock);
 int fastlock_trylock(struct fastlock *lock, int fWeak);
 void fastlock_unlock(struct fastlock *lock);
@@ -40,29 +41,31 @@ struct ticket
 
 struct fastlock
 {
-    volatile struct ticket m_ticket;
-
     volatile int m_pidOwner;
     volatile int m_depth;
+    char szName[56];
+    /* Volatile data on seperate cache line */
+    volatile struct ticket m_ticket;
     unsigned futex;
+    char padding[56];   // ensure ticket and futex are on their own independent cache line
 
 #ifdef __cplusplus
-    fastlock()
+    fastlock(const char *name)
     {
-        fastlock_init(this);
+        fastlock_init(this, name);
     }
 
-    void lock()
+    inline void lock()
     {
         fastlock_lock(this);
     }
 
-    bool try_lock(bool fWeak = false)
+    inline bool try_lock(bool fWeak = false)
     {
         return !!fastlock_trylock(this, fWeak);
     }
 
-    void unlock()
+    inline void unlock()
     {
         fastlock_unlock(this);
     }
@@ -80,3 +83,5 @@ struct fastlock
     bool fOwnLock();   // true if this thread owns the lock, NOTE: not 100% reliable, use for debugging only
 #endif
 };
+
+static_assert(offsetof(struct fastlock, m_ticket) == 64, "ensure padding is correct");

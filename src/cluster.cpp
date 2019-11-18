@@ -617,6 +617,17 @@ clusterLink *createClusterLink(clusterNode *node) {
  * This function will just make sure that the original node associated
  * with this link will have the 'link' field set to NULL. */
 void freeClusterLink(clusterLink *link) {
+    if (ielFromEventLoop(serverTL->el) != IDX_EVENT_LOOP_MAIN)
+    {
+        // we can't perform this operation on this thread, queue it on the main thread
+        if (link->node)
+            link->node->link = NULL;
+        link->node = nullptr;
+        aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [link]{
+            freeClusterLink(link);
+        });
+        return;
+    }
     if (link->fd != -1) {
         aeDeleteFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, link->fd, AE_READABLE|AE_WRITABLE);
     }
@@ -2139,21 +2150,35 @@ void handleLinkIOError(clusterLink *link) {
  * consumed by write(). We don't try to optimize this for speed too much
  * as this is a very low traffic channel. */
 void clusterWriteHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
+    serverAssert(ielFromEventLoop(el) == IDX_EVENT_LOOP_MAIN);
     clusterLink *link = (clusterLink*) privdata;
     ssize_t nwritten;
     UNUSED(el);
     UNUSED(mask);
 
-    nwritten = write(fd, link->sndbuf, sdslen(link->sndbuf));
+    // We're about to release the lock, so the link's sndbuf needs to be owned fully by us
+    //  allocate a new one in case anyone tries to write while we're waiting
+    sds sndbuf = link->sndbuf;
+    link->sndbuf = sdsempty();
+
+    aeReleaseLock();
+    nwritten = write(fd, sndbuf, sdslen(sndbuf));
+    aeAcquireLock();
+
     if (nwritten <= 0) {
         serverLog(LL_DEBUG,"I/O error writing to node link: %s",
             (nwritten == -1) ? strerror(errno) : "short write");
+        sdsfree(sndbuf);
         handleLinkIOError(link);
         return;
     }
-    sdsrange(link->sndbuf,nwritten,-1);
+    sdsrange(sndbuf,nwritten,-1);
+    // Restore our send buffer, ensuring any unsent data is first
+    sndbuf = sdscat(sndbuf, link->sndbuf);
+    sdsfree(link->sndbuf);
+    link->sndbuf = sndbuf;
     if (sdslen(link->sndbuf) == 0)
-        aeDeleteFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, link->fd, AE_WRITABLE);
+        aeDeleteFileEvent(el, link->fd, AE_WRITABLE);
 }
 
 /* Read data. Try to read the first field of the header first to check the
@@ -2228,9 +2253,10 @@ void clusterReadHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  * the link to be invalidated, so it is safe to call this function
  * from event handlers that will do stuff with the same link later. */
 void clusterSendMessage(clusterLink *link, unsigned char *msg, size_t msglen) {
+    serverAssert(GlobalLocksAcquired());
     if (sdslen(link->sndbuf) == 0 && msglen != 0)
-        aeCreateFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,link->fd,AE_WRITABLE|AE_BARRIER,
-                    clusterWriteHandler,link);
+        aeCreateRemoteFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,link->fd,AE_WRITABLE|AE_BARRIER,
+                    clusterWriteHandler,link,false);
 
     link->sndbuf = sdscatlen(link->sndbuf, msg, msglen);
 
@@ -3284,7 +3310,7 @@ void clusterHandleSlaveMigration(int max_slaves) {
 void resetManualFailover(void) {
     if (g_pserver->cluster->mf_end && clientsArePaused()) {
         g_pserver->clients_pause_end_time = 0;
-        clientsArePaused(); /* Just use the side effect of the function. */
+        unpauseClientsIfNecessary();
     }
     g_pserver->cluster->mf_end = 0; /* No manual failover in progress. */
     g_pserver->cluster->mf_can_start = 0;
@@ -4154,57 +4180,76 @@ void clusterReplyMultiBulkSlots(client *c) {
     dictIterator *di = dictGetSafeIterator(g_pserver->cluster->nodes);
     while((de = dictNext(di)) != NULL) {
         clusterNode *node = (clusterNode*)dictGetVal(de);
-        int j = 0, start = -1;
+        int start = -1;
 
         /* Skip slaves (that are iterated when producing the output of their
          * master) and  masters not serving any slot. */
         if (!nodeIsMaster(node) || node->numslots == 0) continue;
+        
+        static_assert((CLUSTER_SLOTS % (sizeof(uint32_t)*8)) == 0, "code below assumes the bitfield is a multiple of sizeof(unsinged)");
 
-        for (j = 0; j < CLUSTER_SLOTS; j++) {
-            int bit, i;
-
-            if ((bit = clusterNodeGetSlotBit(node,j)) != 0) {
-                if (start == -1) start = j;
+        for (unsigned iw = 0; iw < (CLUSTER_SLOTS/sizeof(uint32_t)/8); ++iw)
+        {
+            uint32_t wordCur = reinterpret_cast<uint32_t*>(node->slots)[iw];
+            if (iw != ((CLUSTER_SLOTS/sizeof(uint32_t)/8)-1))
+            {
+                if (start == -1 && wordCur == 0)
+                    continue;
+                if (start != -1 && (wordCur+1)==0)
+                    continue;
             }
-            if (start != -1 && (!bit || j == CLUSTER_SLOTS-1)) {
-                int nested_elements = 3; /* slots (2) + master addr (1). */
-                void *nested_replylen = addReplyDeferredLen(c);
 
-                if (bit && j == CLUSTER_SLOTS-1) j++;
-
-                /* If slot exists in output map, add to it's list.
-                 * else, create a new output map for this slot */
-                if (start == j-1) {
-                    addReplyLongLong(c, start); /* only one slot; low==high */
-                    addReplyLongLong(c, start);
-                } else {
-                    addReplyLongLong(c, start); /* low */
-                    addReplyLongLong(c, j-1);   /* high */
+            unsigned ibitStartLoop = iw*sizeof(uint32_t)*8;
+    
+            for (unsigned j = ibitStartLoop; j < (iw+1)*sizeof(uint32_t)*8; j++) {
+                int i;
+                int bit = (int)(wordCur & 1);
+                wordCur >>= 1;
+                if (bit != 0) {
+                    if (start == -1) start = j;
                 }
-                start = -1;
+                if (start != -1 && (!bit || j == CLUSTER_SLOTS-1)) {
+                    int nested_elements = 3; /* slots (2) + master addr (1). */
+                    void *nested_replylen = addReplyDeferredLen(c);
 
-                /* First node reply position is always the master */
-                addReplyArrayLen(c, 3);
-                addReplyBulkCString(c, node->ip);
-                addReplyLongLong(c, node->port);
-                addReplyBulkCBuffer(c, node->name, CLUSTER_NAMELEN);
+                    if (bit && j == CLUSTER_SLOTS-1) j++;
 
-                /* Remaining nodes in reply are replicas for slot range */
-                for (i = 0; i < node->numslaves; i++) {
-                    /* This loop is copy/pasted from clusterGenNodeDescription()
-                     * with modifications for per-slot node aggregation */
-                    if (nodeFailed(node->slaves[i])) continue;
+                    /* If slot exists in output map, add to it's list.
+                    * else, create a new output map for this slot */
+                    if (start == j-1) {
+                        addReplyLongLong(c, start); /* only one slot; low==high */
+                        addReplyLongLong(c, start);
+                    } else {
+                        addReplyLongLong(c, start); /* low */
+                        addReplyLongLong(c, j-1);   /* high */
+                    }
+                    start = -1;
+
+                    /* First node reply position is always the master */
                     addReplyArrayLen(c, 3);
-                    addReplyBulkCString(c, node->slaves[i]->ip);
-                    addReplyLongLong(c, node->slaves[i]->port);
-                    addReplyBulkCBuffer(c, node->slaves[i]->name, CLUSTER_NAMELEN);
-                    nested_elements++;
+                    addReplyBulkCString(c, node->ip);
+                    addReplyLongLong(c, node->port);
+                    addReplyBulkCBuffer(c, node->name, CLUSTER_NAMELEN);
+
+                    /* Remaining nodes in reply are replicas for slot range */
+                    for (i = 0; i < node->numslaves; i++) {
+                        /* This loop is copy/pasted from clusterGenNodeDescription()
+                        * with modifications for per-slot node aggregation */
+                        if (nodeFailed(node->slaves[i])) continue;
+                        addReplyArrayLen(c, 3);
+                        addReplyBulkCString(c, node->slaves[i]->ip);
+                        addReplyLongLong(c, node->slaves[i]->port);
+                        addReplyBulkCBuffer(c, node->slaves[i]->name, CLUSTER_NAMELEN);
+                        nested_elements++;
+                    }
+                    setDeferredArrayLen(c, nested_replylen, nested_elements);
+                    num_masters++;
                 }
-                setDeferredArrayLen(c, nested_replylen, nested_elements);
-                num_masters++;
             }
         }
+        serverAssert(start == -1);
     }
+    
     dictReleaseIterator(di);
     setDeferredArrayLen(c, slot_replylen, num_masters);
 }

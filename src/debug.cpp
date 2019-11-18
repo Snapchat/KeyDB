@@ -55,7 +55,7 @@ typedef ucontext_t sigcontext_t;
 #endif
 #endif
 
-bool g_fInCrash = false;
+int g_fInCrash = false;
 
 /* ================================= Debugging ============================== */
 

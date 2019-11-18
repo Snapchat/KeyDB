@@ -116,7 +116,7 @@ client *createClient(int fd, int iel) {
     uint64_t client_id;
     client_id = g_pserver->next_client_id.fetch_add(1);
     c->iel = iel;
-    fastlock_init(&c->lock);
+    fastlock_init(&c->lock, "client");
     c->id = client_id;
     c->resp = 2;
     c->fd = fd;
@@ -248,7 +248,11 @@ void clientInstallAsyncWriteHandler(client *c) {
 int prepareClientToWrite(client *c, bool fAsync) {
     fAsync = fAsync && !FCorrectThread(c);  // Not async if we're on the right thread
     serverAssert(FCorrectThread(c) || fAsync);
-    serverAssert(c->fd <= 0 || c->lock.fOwnLock());
+	if (FCorrectThread(c)) {
+		serverAssert(c->fd <= 0 || c->lock.fOwnLock());
+	} else {
+		serverAssert(GlobalLocksAcquired());
+	}
 
     if (c->flags & CLIENT_FORCE_REPLY) return C_OK; // FORCE REPLY means we're doing something else with the buffer.
                                                 // do not install a write handler
@@ -1509,7 +1513,6 @@ int writeToClient(int fd, client *c, int handler_installed) {
         } else {
             serverLog(LL_VERBOSE,
                 "Error writing to client: %s", strerror(errno));
-            lock.unlock();
             freeClientAsync(c);
             
             return C_ERR;
@@ -1528,7 +1531,6 @@ int writeToClient(int fd, client *c, int handler_installed) {
 
         /* Close connection after entire reply has been sent. */
         if (c->flags & CLIENT_CLOSE_AFTER_REPLY) {
-            lock.unlock();
             freeClientAsync(c);
             return C_ERR;
         }
@@ -2519,9 +2521,17 @@ NULL
                 close_this_client = 1;
             } else {
                 if (FCorrectThread(client))
+                {
                     freeClient(client);
+                }
                 else
+                {
+                    int iel = client->iel;
                     freeClientAsync(client);
+                    aePostFunction(g_pserver->rgthreadvar[client->iel].el, [iel] {
+                        freeClientsInAsyncFreeQueue(iel);
+                    });
+                }
             }
             killed++;
         }
@@ -2950,38 +2960,48 @@ void flushSlavesOutputBuffers(void) {
  * than the time left for the previous pause, no change is made to the
  * left duration. */
 void pauseClients(mstime_t end) {
-    if (!g_pserver->clients_paused || end > g_pserver->clients_pause_end_time)
+    serverAssert(GlobalLocksAcquired());
+    if (!serverTL->clients_paused || end > g_pserver->clients_pause_end_time)
         g_pserver->clients_pause_end_time = end;
-    g_pserver->clients_paused = 1;
+    
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
+    {
+        g_pserver->rgthreadvar[iel].clients_paused = true;
+    }
 }
 
 /* Return non-zero if clients are currently paused. As a side effect the
  * function checks if the pause time was reached and clear it. */
 int clientsArePaused(void) {
-    if (g_pserver->clients_paused &&
+    return serverTL->clients_paused;
+}
+
+void unpauseClientsIfNecessary()
+{
+    serverAssert(GlobalLocksAcquired());
+    if (serverTL->clients_paused &&
         g_pserver->clients_pause_end_time < g_pserver->mstime)
     {
-        aeAcquireLock();
         listNode *ln;
         listIter li;
         client *c;
 
-        g_pserver->clients_paused = 0;
+        serverTL->clients_paused = 0;
 
         /* Put all the clients in the unblocked clients queue in order to
          * force the re-processing of the input buffer if any. */
         listRewind(g_pserver->clients,&li);
         while ((ln = listNext(&li)) != NULL) {
             c = (client*)listNodeValue(ln);
+            if (!FCorrectThread(c))
+                continue;
 
             /* Don't touch slaves and blocked clients.
              * The latter pending requests will be processed when unblocked. */
             if (c->flags & (CLIENT_SLAVE|CLIENT_BLOCKED)) continue;
             queueClientForReprocessing(c);
         }
-        aeReleaseLock();
     }
-    return g_pserver->clients_paused;
 }
 
 /* This function is called by Redis in order to process a few events from
@@ -3000,6 +3020,12 @@ int processEventsWhileBlocked(int iel) {
     int iterations = 4; /* See the function top-comment. */
     int count = 0;
 
+    client *c = serverTL->current_client;
+    if (c != nullptr)
+    {
+        serverAssert(c->flags & CLIENT_PROTECTED);
+        c->lock.unlock();
+    }
     aeReleaseLock();
     while (iterations--) {
         int events = 0;
@@ -3008,7 +3034,11 @@ int processEventsWhileBlocked(int iel) {
         if (!events) break;
         count += events;
     }
-    aeAcquireLock();
+    AeLocker locker;
+    if (c != nullptr)
+        c->lock.lock();
+    locker.arm(c);
+    locker.release();
     return count;
 }
 

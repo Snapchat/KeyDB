@@ -653,8 +653,6 @@ void keysCommand(client *c) {
     unsigned long numkeys = 0;
     void *replylen = addReplyDeferredLen(c);
 
-    aeReleaseLock();
-
     allkeys = (pattern[0] == '*' && pattern[1] == '\0');
     c->db->iterate([&](const char *key, robj *)->bool {
         robj *keyobj;
@@ -670,12 +668,6 @@ void keysCommand(client *c) {
         return true;
     });
     setDeferredArrayLen(c,replylen,numkeys);
-    
-    fastlock_unlock(&c->db->lock);  // we must release the DB lock before acquiring the AE lock to prevent deadlocks
-    AeLocker lock;
-    lock.arm(c);
-    fastlock_lock(&c->db->lock);    // we still need the DB lock
-    lock.release();
 }
 
 /* This callback is used by scanGenericCommand in order to collect elements

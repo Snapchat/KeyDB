@@ -36,10 +36,13 @@
 #include <assert.h>
 #include <pthread.h>
 #include <limits.h>
+#include <map>
 #ifdef __linux__
 #include <linux/futex.h>
 #endif
 #include <string.h>
+#include <stdarg.h>
+#include <stdio.h>
 
 #ifdef __APPLE__
 #include <TargetConditionals.h>
@@ -57,6 +60,7 @@
 #define UNUSED(x) ((void)x)
 #endif
 
+extern int g_fInCrash;
 
 /****************************************************
  *
@@ -125,6 +129,80 @@
 
 #endif
 
+#pragma weak _serverPanic
+extern "C"  __attribute__((weak)) void _serverPanic(const char * /*file*/, int /*line*/, const char * /*msg*/, ...)
+{
+    *((char*)-1) = 'x';
+}
+
+#pragma weak serverLog
+__attribute__((weak)) void serverLog(int , const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+    printf("\n");
+}
+
+class DeadlockDetector
+{
+    std::map<pid_t, fastlock *> m_mapwait;
+    fastlock m_lock { "deadlock detector" };
+public:
+    void registerwait(fastlock *lock, pid_t thispid)
+    {
+        if (lock == &m_lock || g_fInCrash)
+            return;
+        fastlock_lock(&m_lock);
+        m_mapwait.insert(std::make_pair(thispid, lock));
+
+        // Detect cycles
+        pid_t pidCheck = thispid;
+        size_t cchecks = 0;
+        for (;;)
+        {
+            auto itr = m_mapwait.find(pidCheck);
+            if (itr == m_mapwait.end())
+                break;
+            pidCheck = itr->second->m_pidOwner;
+            if (pidCheck == thispid)
+            {
+                // Deadlock detected, printout some debugging info and crash
+                serverLog(3 /*LL_WARNING*/, "\n\n");
+                serverLog(3 /*LL_WARNING*/, "!!! ERROR: Deadlock detected !!!");
+                pidCheck = thispid;
+                for (;;)
+                {
+                    auto itr = m_mapwait.find(pidCheck);
+                    serverLog(3 /* LL_WARNING */, "\t%d: (%p) %s", pidCheck, itr->second, itr->second->szName);
+                    pidCheck = itr->second->m_pidOwner;
+                    if (pidCheck == thispid)
+                        break;
+                }
+                serverLog(3 /*LL_WARNING*/, "!!! KeyDB Will Now Crash !!!");
+                _serverPanic(__FILE__, __LINE__, "Deadlock detected");
+            }
+
+            if (cchecks > m_mapwait.size())
+                break;  // There is a cycle but we're not in it
+            ++cchecks;
+        }
+        fastlock_unlock(&m_lock);
+    }
+
+    void clearwait(fastlock *lock, pid_t thispid)
+    {
+        if (lock == &m_lock || g_fInCrash)
+            return;
+        fastlock_lock(&m_lock);
+        m_mapwait.erase(thispid);
+        fastlock_unlock(&m_lock);
+    }
+};
+
+DeadlockDetector g_dlock;
+
 static_assert(sizeof(pid_t) <= sizeof(fastlock::m_pidOwner), "fastlock::m_pidOwner not large enough");
 uint64_t g_longwaits = 0;
 
@@ -135,7 +213,6 @@ uint64_t fastlock_getlongwaitcount()
     return rval;
 }
 
-#ifndef ASM_SPINLOCK
 #ifdef __linux__
 static int futex(volatile unsigned *uaddr, int futex_op, int val,
     const struct timespec *timeout, int val3)
@@ -143,7 +220,6 @@ static int futex(volatile unsigned *uaddr, int futex_op, int val,
     return syscall(SYS_futex, uaddr, futex_op, val,
                     timeout, uaddr, val3);
 }
-#endif
 #endif
 
 extern "C" pid_t gettid()
@@ -163,13 +239,29 @@ extern "C" pid_t gettid()
     return pidCache;
 }
 
-extern "C" void fastlock_init(struct fastlock *lock)
+extern "C" void fastlock_sleep(fastlock *lock, pid_t pid, unsigned wake, unsigned mask)
+{
+#ifdef __linux__
+    g_dlock.registerwait(lock, pid);
+    __atomic_fetch_or(&lock->futex, mask, __ATOMIC_ACQUIRE);
+    futex(&lock->m_ticket.u, FUTEX_WAIT_BITSET_PRIVATE, wake, nullptr, mask);
+    __atomic_fetch_and(&lock->futex, ~mask, __ATOMIC_RELEASE);
+    g_dlock.clearwait(lock, pid);
+#endif
+    __atomic_fetch_add(&g_longwaits, 1, __ATOMIC_RELAXED);
+}
+
+extern "C" void fastlock_init(struct fastlock *lock, const char *name)
 {
     lock->m_ticket.m_active = 0;
     lock->m_ticket.m_avail = 0;
     lock->m_depth = 0;
     lock->m_pidOwner = -1;
     lock->futex = 0;
+    int cch = strlen(name);
+    cch = std::min<int>(cch, sizeof(lock->szName)-1);
+    memcpy(lock->szName, name, cch);
+    lock->szName[cch] = '\0';
     ANNOTATE_RWLOCK_CREATE(lock);
 }
 
@@ -184,12 +276,12 @@ extern "C" void fastlock_lock(struct fastlock *lock)
         return;
     }
 
+    int tid = gettid();
     unsigned myticket = __atomic_fetch_add(&lock->m_ticket.m_avail, 1, __ATOMIC_RELEASE);
-#ifdef __linux__
     unsigned mask = (1U << (myticket % 32));
-#endif
     int cloops = 0;
     ticket ticketT;
+
     for (;;)
     {
         __atomic_load(&lock->m_ticket.u, &ticketT.u, __ATOMIC_ACQUIRE);
@@ -201,17 +293,11 @@ extern "C" void fastlock_lock(struct fastlock *lock)
 #endif
         if ((++cloops % 1024*1024) == 0)
         {
-#ifdef __linux__
-            __atomic_fetch_or(&lock->futex, mask, __ATOMIC_ACQUIRE);
-            futex(&lock->m_ticket.u, FUTEX_WAIT_BITSET_PRIVATE, ticketT.u, nullptr, mask);
-            __atomic_fetch_and(&lock->futex, ~mask, __ATOMIC_RELEASE);
-#endif
-            __atomic_fetch_add(&g_longwaits, 1, __ATOMIC_RELAXED);
+            fastlock_sleep(lock, tid, ticketT.u, mask);
         }
     }
 
     lock->m_depth = 1;
-    int tid = gettid();
     __atomic_store(&lock->m_pidOwner, &tid, __ATOMIC_RELEASE);
     ANNOTATE_RWLOCK_ACQUIRED(lock, true);
     std::atomic_thread_fence(std::memory_order_acquire);

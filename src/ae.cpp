@@ -80,11 +80,11 @@ public:
 mutex_wrapper g_lock;
 
 #else
-fastlock g_lock;
+fastlock g_lock("AE (global)");
 #endif
 thread_local aeEventLoop *g_eventLoopThisThread = NULL;
 
-#define AE_ASSERT(x) if (!(x)) do { fprintf(stderr, "AE_ASSER FAILURE\n"); *((volatile int*)0) = 1; } while(0)
+#define AE_ASSERT(x) if (!(x)) do { fprintf(stderr, "AE_ASSERT FAILURE %s: %d\n", __FILE__, __LINE__); *((volatile int*)0) = 1; } while(0)
 
 /* Include the best multiplexing layer supported by this system.
  * The following should be ordered by performances, descending. */
@@ -327,7 +327,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     for (i = 0; i < setsize; i++)
         eventLoop->events[i].mask = AE_NONE;
 
-    fastlock_init(&eventLoop->flock);
+    fastlock_init(&eventLoop->flock, "event loop");
     int rgfd[2];
     if (pipe(rgfd) < 0)
         goto err;

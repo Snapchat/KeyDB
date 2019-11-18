@@ -1715,6 +1715,9 @@ void clientsCron(int iel) {
             fastlock_unlock(&c->lock);
         }        
     }
+
+    /* Free any pending clients */
+    freeClientsInAsyncFreeQueue(iel);
 }
 
 /* This function handles 'background' operations we are required to do
@@ -1835,6 +1838,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Update the time cache. */
     updateCachedTime();
 
+    /* Unpause clients if enough time has elapsed */
+    unpauseClientsIfNecessary();
+
     g_pserver->hz = g_pserver->config_hz;
     /* Adapt the g_pserver->hz value to the number of configured clients. If we have
      * many clients, we want to call serverCron() with an higher frequency. */
@@ -1842,7 +1848,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         while (listLength(g_pserver->clients) / g_pserver->hz >
                MAX_CLIENTS_PER_CLOCK_TICK)
         {
-            g_pserver->hz *= 2;
+            g_pserver->hz += g_pserver->hz; // *= 2
             if (g_pserver->hz > CONFIG_MAX_HZ) {
                 g_pserver->hz = CONFIG_MAX_HZ;
                 break;
@@ -2055,9 +2061,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             flushAppendOnlyFile(0);
     }
 
-    /* Clear the paused clients flag if needed. */
-    clientsArePaused(); /* Don't check return value, just use the side effect.*/
-
     /* Replication cron function -- used to reconnect to master,
      * detect transfer failures, start background RDB transfers and so forth. */
     run_with_period(1000) replicationCron();
@@ -2114,6 +2117,9 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
     {
         processUnblockedClients(iel);
     }
+
+    /* Unpause clients if enough time has elapsed */
+    unpauseClientsIfNecessary();
     
     ProcessPendingAsyncWrites();    // A bug but leave for now, events should clean up after themselves
     clientsCron(iel);
@@ -2907,6 +2913,7 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     pvar->cclients = 0;
     pvar->el = aeCreateEventLoop(g_pserver->maxclients+CONFIG_FDSET_INCR);
     pvar->current_client = nullptr;
+    pvar->clients_paused = 0;
     if (pvar->el == NULL) {
         serverLog(LL_WARNING,
             "Failed creating the event loop. Error message: '%s'",
@@ -2914,7 +2921,7 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
         exit(1);
     }
 
-    fastlock_init(&pvar->lockPendingWrite);
+    fastlock_init(&pvar->lockPendingWrite, "lockPendingWrite");
 
     if (!fMain)
     {
@@ -2961,8 +2968,6 @@ void initServer(void) {
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
 
-    fastlock_init(&g_pserver->flock);
-
     g_pserver->db = (redisDb*)zmalloc(sizeof(redisDb)*cserver.dbnum, MALLOC_LOCAL);
 
     /* Create the Redis databases, and initialize other internal state. */
@@ -2996,7 +3001,6 @@ void initServer(void) {
     g_pserver->ready_keys = listCreate();
     g_pserver->clients_waiting_acks = listCreate();
     g_pserver->get_ack_from_slaves = 0;
-    g_pserver->clients_paused = 0;
     cserver.system_memory_size = zmalloc_get_memory_size();
 
     createSharedObjects();
@@ -3733,7 +3737,6 @@ int processCommand(client *c, int callFlags) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
-        std::unique_lock<decltype(c->db->lock)> ulock(c->db->lock);
         for (int idb = 0; idb < cserver.dbnum; ++idb)
             g_pserver->db[idb].trackChanges();
         call(c,callFlags);
@@ -4122,7 +4125,7 @@ sds genRedisInfoString(const char *section) {
             g_pserver->port,
             (intmax_t)uptime,
             (intmax_t)(uptime/(3600*24)),
-            g_pserver->hz,
+            g_pserver->hz.load(),
             g_pserver->config_hz,
             (unsigned long) lruclock,
             cserver.executable ? cserver.executable : "",

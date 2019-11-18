@@ -678,7 +678,7 @@ client *createFakeClient(void) {
     c->puser = NULL;
     listSetFreeMethod(c->reply,freeClientReplyValue);
     listSetDupMethod(c->reply,dupClientReplyValue);
-    fastlock_init(&c->lock);
+    fastlock_init(&c->lock, "fake client");
     fastlock_lock(&c->lock);
     initClientMultiState(c);
     return c;

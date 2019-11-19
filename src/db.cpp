@@ -646,6 +646,61 @@ bool redisDbPersistentData::iterate(std::function<bool(const char*, robj*)> fn)
         }
     }
     dictReleaseIterator(di);
+
+    if (m_pdbSnapshot != nullptr)
+    {
+        fResult = m_pdbSnapshot->iterate([&](const char *key){
+            // Before passing off to the user we need to make sure it's not already in the
+            //  the current set, and not deleted
+            dictEntry *deCurrent = dictFind(m_pdict, key);
+            if (deCurrent != nullptr)
+                return true;
+            dictEntry *deTombstone = dictFind(m_pdictTombstone, key);
+            if (deTombstone != nullptr)
+                return true;
+
+            // Alright it's a key in the use keyspace, lets ensure it and then pass it off
+            ensure(key);
+            deCurrent = dictFind(m_pdict, key);
+            return fn(key, (robj*)dictGetVal(deCurrent));
+        });
+    }
+    
+    return fResult;
+}
+
+bool redisDbPersistentData::iterate(std::function<bool(const char*)> fn)
+{
+    dictIterator *di = dictGetSafeIterator(m_pdict);
+    dictEntry *de = nullptr;
+    bool fResult = true;
+    while((de = dictNext(di)) != nullptr)
+    {
+        if (!fn((const char*)dictGetKey(de)))
+        {
+            fResult = false;
+            break;
+        }
+    }
+    dictReleaseIterator(di);
+    
+    if (m_pdbSnapshot != nullptr)
+    {
+        fResult = m_pdbSnapshot->iterate([&](const char *key){
+            // Before passing off to the user we need to make sure it's not already in the
+            //  the current set, and not deleted
+            dictEntry *deCurrent = dictFind(m_pdict, key);
+            if (deCurrent != nullptr)
+                return true;
+            dictEntry *deTombstone = dictFind(m_pdictTombstone, key);
+            if (deTombstone != nullptr)
+                return true;
+
+            // Alright it's a key in the use keyspace
+            return fn(key);
+        });
+    }
+    
     return fResult;
 }
 
@@ -656,7 +711,7 @@ void keysCommand(client *c) {
     void *replylen = addReplyDeferredLen(c);
 
     allkeys = (pattern[0] == '*' && pattern[1] == '\0');
-    c->db->iterate([&](const char *key, robj *)->bool {
+    c->db->iterate([&](const char *key)->bool {
         robj *keyobj;
 
         if (allkeys || stringmatchlen(pattern,plen,key,sdslen(key),0)) {

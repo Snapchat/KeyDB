@@ -1183,14 +1183,6 @@ void dictSdsNOPDestructor(void *, void *) {}
 
 void dictDbKeyDestructor(void *privdata, void *key)
 {
-    redisDbPersistentData *owner = (redisDbPersistentData*)privdata;
-    serverAssert(owner != nullptr);
-    if (owner->m_spdbSnapshot != nullptr)
-    {
-        dictEntry *deSnapshot = dictFind(owner->m_spdbSnapshot->m_pdict, key);
-        if (deSnapshot && (key == dictGetKey(deSnapshot)))
-            return; // don't free, it's now owned by the snapshot
-    }
     sdsfree((sds)key);
 }
 

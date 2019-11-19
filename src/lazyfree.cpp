@@ -56,6 +56,8 @@ bool redisDbPersistentData::asyncDelete(robj *key) {
      * is actually just slower... So under a certain limit we just free
      * the object synchronously. */
     dictEntry *de = dictUnlink(m_pdict,ptrFromObj(key));
+    if (m_pdbSnapshot != nullptr)
+        dictAdd(m_pdictTombstone, sdsdup((sds)dictGetKey(de)), nullptr);
     if (de) {
         robj *val = (robj*)dictGetVal(de);
         if (val->FExpires())

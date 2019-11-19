@@ -1211,7 +1211,7 @@ public:
     expireset *setexpireUnsafe() { return m_setexpire; }
     const expireset *setexpire() { return m_setexpire; }
 
-    redisDbPersistentData *createSnapshot();
+    redisDbPersistentData *createSnapshot(uint64_t mvccCheckpoint);
     void endSnapshot(const redisDbPersistentData *psnapshot);
 
 private:
@@ -1227,6 +1227,7 @@ private:
     bool m_fAllChanged = false;
     std::set<std::string> m_setchanged;
     IStorage *m_pstorage = nullptr;
+    uint64_t mvccCheckpoint = 0;
 
     // Expire
     expireset *m_setexpire = nullptr;
@@ -1236,6 +1237,7 @@ private:
     //      in a snapshot
     redisDbPersistentData *m_pdbSnapshot = nullptr;
     std::unique_ptr<redisDbPersistentData> m_spdbSnapshotHOLDER;
+    int m_snapshotRefcount = 0;
 };
 
 /* Redis database representation. There are multiple databases identified
@@ -1471,6 +1473,8 @@ typedef struct client {
     int bufposAsync;
     int buflenAsync;
     char *bufAsync;
+
+    uint64_t mvccCheckpoint = 0;    // the MVCC checkpoint of our last write
 
     int iel; /* the event loop index we're registered with */
     struct fastlock lock;

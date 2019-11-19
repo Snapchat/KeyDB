@@ -3385,6 +3385,9 @@ void call(client *c, int flags) {
     dirty = g_pserver->dirty-dirty;
     if (dirty < 0) dirty = 0;
 
+    if (dirty)
+        c->mvccCheckpoint = getMvccTstamp();
+
     /* When EVAL is called loading the AOF we don't want commands called
      * from Lua to go into the slowlog or to populate statistics. */
     if (g_pserver->loading && c->flags & CLIENT_LUA)

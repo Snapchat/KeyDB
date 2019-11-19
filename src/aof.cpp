@@ -676,6 +676,7 @@ client *createFakeClient(void) {
     c->peerid = NULL;
     c->resp = 2;
     c->puser = NULL;
+    c->mvccCheckpoint = 0;
     listSetFreeMethod(c->reply,freeClientReplyValue);
     listSetDupMethod(c->reply,dupClientReplyValue);
     fastlock_init(&c->lock, "fake client");

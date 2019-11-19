@@ -724,6 +724,7 @@ void keysCommand(client *c) {
         }
         return true;
     });
+    
     setDeferredArrayLen(c,replylen,numkeys);
 }
 
@@ -2077,10 +2078,18 @@ void redisDbPersistentData::processChanges()
     m_setchanged.clear();
 }
 
-redisDbPersistentData *redisDbPersistentData::createSnapshot()
+redisDbPersistentData *redisDbPersistentData::createSnapshot(uint64_t mvccCheckpoint)
 {
     serverAssert(GlobalLocksAcquired());
-    serverAssert(m_spdbSnapshotHOLDER == nullptr);
+    if (m_spdbSnapshotHOLDER != nullptr)
+    {
+        if (mvccCheckpoint <= m_spdbSnapshotHOLDER->mvccCheckpoint)
+        {
+            ++m_snapshotRefcount;
+            return m_spdbSnapshotHOLDER.get();            
+        }
+        return nullptr;
+    }
     auto spdb = std::make_unique<redisDbPersistentData>();
     
     spdb->m_fAllChanged = false;
@@ -2095,6 +2104,7 @@ redisDbPersistentData *redisDbPersistentData::createSnapshot()
     
     m_spdbSnapshotHOLDER = std::move(spdb);
     m_pdbSnapshot = m_spdbSnapshotHOLDER.get();
+    ++m_snapshotRefcount;
     return m_pdbSnapshot;
 }
 
@@ -2103,6 +2113,11 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentData *psnapshot)
     if (!GlobalLocksAcquired())
         serverLog(LL_WARNING, "Global locks not acquired");
     serverAssert(m_spdbSnapshotHOLDER.get() == psnapshot);
+
+    --m_snapshotRefcount;
+    if (m_snapshotRefcount > 0)
+        return;
+
     m_spdbSnapshotHOLDER->m_pdict->iterators--;
 
     if (m_pdbSnapshot == nullptr)

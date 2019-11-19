@@ -1348,7 +1348,10 @@ int rdbSaveFile(char *filename, redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
     return C_OK;
 
 werr:
-    serverLog(LL_WARNING,"Write error saving DB on disk: %s", strerror(errno));
+    if (g_pserver->rdbThreadVars.fRdbThreadCancel)
+        serverLog(LL_WARNING, "Background save cancelled");
+    else
+        serverLog(LL_WARNING,"Write error saving DB on disk: %s", strerror(errno));
     fclose(fp);
     unlink(tmpfile);
     return C_ERR;
@@ -1378,10 +1381,13 @@ void *rdbSaveThread(void *vargs)
         sendChildInfo(CHILD_INFO_TYPE_RDB);
     }
 
-    aeAcquireLock();
+    // If we were told to cancel the requesting thread holds the lock for us
+    if (!g_pserver->rdbThreadVars.fRdbThreadCancel)
+        aeAcquireLock();
     for (int idb = 0; idb < cserver.dbnum; ++idb)
         g_pserver->db[idb].endSnapshot(args->rgpdb[idb]);
-    aeReleaseLock();
+    if (!g_pserver->rdbThreadVars.fRdbThreadCancel)
+        aeReleaseLock();
     zfree(args);
     return (retval == C_OK) ? (void*)0 : (void*)1;
 }
@@ -1397,7 +1403,7 @@ int launchRdbSaveThread(pthread_t &child, rdbSaveInfo *rsi)
     args->rsi.master_repl_offset = g_pserver->master_repl_offset;
         
     for (int idb = 0; idb < cserver.dbnum; ++idb)
-        args->rgpdb[idb] = g_pserver->db[idb].createSnapshot().get();
+        args->rgpdb[idb] = g_pserver->db[idb].createSnapshot();
 
     g_pserver->rdbThreadVars.tmpfileNum++;
     g_pserver->rdbThreadVars.fRdbThreadCancel = false;
@@ -2423,6 +2429,7 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
  * the child did not exit for an error, but because we wanted), and performs
  * the cleanup needed. */
 void killRDBChild(void) {
+    serverAssert(GlobalLocksAcquired());
     g_pserver->rdbThreadVars.fRdbThreadCancel = true;
     void *rval;
     pthread_join(g_pserver->rdbThreadVars.rdb_child_thread,&rval);
@@ -2508,10 +2515,14 @@ void *rdbSaveToSlavesSocketsThread(void *vargs)
         }
         zfree(msg);
     }
-    aeAcquireLock();
+
+    // If we were told to cancel the requesting thread is holding the lock for us
+    if (!g_pserver->rdbThreadVars.fRdbThreadCancel)
+        aeAcquireLock();
     for (int idb = 0; idb < cserver.dbnum; ++idb)
         g_pserver->db[idb].endSnapshot(args->rgpdb[idb]);
-    aeReleaseLock();
+    if (!g_pserver->rdbThreadVars.fRdbThreadCancel)
+        aeReleaseLock();
     zfree(args->clientids);
     zfree(args);
     rioFreeFdset(&slave_sockets);
@@ -2574,7 +2585,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     start = ustime();
 
     for (int idb = 0; idb < cserver.dbnum; ++idb)
-        args->rgpdb[idb] = g_pserver->db[idb].createSnapshot().get();
+        args->rgpdb[idb] = g_pserver->db[idb].createSnapshot();
 
     g_pserver->rdbThreadVars.tmpfileNum++;
     g_pserver->rdbThreadVars.fRdbThreadCancel = false;

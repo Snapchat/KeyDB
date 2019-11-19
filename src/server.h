@@ -1108,10 +1108,16 @@ class redisDbPersistentData
 public:
     ~redisDbPersistentData();
 
+    redisDbPersistentData() = default;
+    redisDbPersistentData(redisDbPersistentData &&) = default;
+
     static void swap(redisDbPersistentData *db1, redisDbPersistentData *db2);
 
     size_t slots() const { return dictSlots(m_pdict); }
-    size_t size() const { return dictSize(m_pdict); }
+    size_t size() const 
+    { 
+        return dictSize(m_pdict) + (m_pdbSnapshot ? (m_pdbSnapshot->size() - dictSize(m_pdictTombstone)) : 0); 
+    }
     void expand(uint64_t slots) { dictExpand(m_pdict, slots); }
     
     void trackkey(robj_roptr o)
@@ -1128,7 +1134,7 @@ public:
     dict_iter find(const char *key) 
     {
         dictEntry *de = dictFind(m_pdict, key);
-        ensure(de);
+        ensure(key, &de);
         return dict_iter(de);
     }
 
@@ -1139,8 +1145,24 @@ public:
 
     dict_iter random()
     {
+        if (size() == 0)
+            return dict_iter(nullptr);
+        if (m_pdbSnapshot != nullptr && m_pdbSnapshot->size() > 0)
+        {
+            dict_iter iter(nullptr);
+            double pctInSnapshot = (double)m_pdbSnapshot->size() / (size() + m_pdbSnapshot->size());
+            double randval = (double)rand()/RAND_MAX;
+            if (randval <= pctInSnapshot)
+            {
+                iter = m_pdbSnapshot->random();
+                ensure(iter.key());
+                dictEntry *de = dictFind(m_pdict, iter.key());
+                return dict_iter(de);
+            }
+        }
         dictEntry *de = dictGetRandomKey(m_pdict);
-        ensure(de);
+        if (de != nullptr)
+            ensure((const char*)dictGetKey(de), &de);
         return dict_iter(de);
     }
 
@@ -1187,17 +1209,18 @@ public:
     expireset *setexpireUnsafe() { return m_setexpire; }
     const expireset *setexpire() { return m_setexpire; }
 
-    std::shared_ptr<redisDbPersistentData> createSnapshot();
+    redisDbPersistentData *createSnapshot();
     void endSnapshot(const redisDbPersistentData *psnapshot);
 
 private:
     void ensure(const char *key);
-    void ensure(dictEntry *de);
+    void ensure(const char *key, dictEntry **de);
     void storeDatabase();
     void storeKey(const char *key, size_t cchKey, robj *o);
 
     // Keyspace
     dict *m_pdict = nullptr;                 /* The keyspace for this DB */
+    dict *m_pdictTombstone = nullptr;        /* Track deletes when we have a snapshot */
     int m_fTrackingChanges = 0;     // Note: Stack based
     bool m_fAllChanged = false;
     std::set<std::string> m_setchanged;
@@ -1206,7 +1229,11 @@ private:
     // Expire
     expireset *m_setexpire = nullptr;
 
-    std::shared_ptr<redisDbPersistentData> m_spdbSnapshot;
+    // These two pointers are the same, UNLESS the database has been cleared.
+    //      in which case m_pdbSnapshot is NULL and we continue as though we weren'
+    //      in a snapshot
+    redisDbPersistentData *m_pdbSnapshot = nullptr;
+    std::unique_ptr<redisDbPersistentData> m_spdbSnapshotHOLDER;
 };
 
 /* Redis database representation. There are multiple databases identified

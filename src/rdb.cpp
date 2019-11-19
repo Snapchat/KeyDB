@@ -1403,7 +1403,7 @@ int launchRdbSaveThread(pthread_t &child, rdbSaveInfo *rsi)
     args->rsi.master_repl_offset = g_pserver->master_repl_offset;
         
     for (int idb = 0; idb < cserver.dbnum; ++idb)
-        args->rgpdb[idb] = g_pserver->db[idb].createSnapshot();
+        args->rgpdb[idb] = g_pserver->db[idb].createSnapshot(getMvccTstamp());
 
     g_pserver->rdbThreadVars.tmpfileNum++;
     g_pserver->rdbThreadVars.fRdbThreadCancel = false;
@@ -2585,7 +2585,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     start = ustime();
 
     for (int idb = 0; idb < cserver.dbnum; ++idb)
-        args->rgpdb[idb] = g_pserver->db[idb].createSnapshot();
+        args->rgpdb[idb] = g_pserver->db[idb].createSnapshot(getMvccTstamp());
 
     g_pserver->rdbThreadVars.tmpfileNum++;
     g_pserver->rdbThreadVars.fRdbThreadCancel = false;

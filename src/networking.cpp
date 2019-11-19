@@ -176,6 +176,7 @@ client *createClient(int fd, int iel) {
     c->bufposAsync = 0;
     c->client_tracking_redirection = 0;
     c->casyncOpsPending = 0;
+    c->mvccCheckpoint = 0;
     memset(c->uuid, 0, UUID_BINARY_LEN);
 
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);

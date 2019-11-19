@@ -1193,7 +1193,9 @@ public:
     int removeSubkeyExpire(robj *key, robj *subkey);
     void clear(void(callback)(void*));
     void emptyDbAsync();
+    // Note: If you do not need the obj then use the objless iterator version.  It's faster
     bool iterate(std::function<bool(const char*, robj*)> fn);
+    bool iterate(std::function<bool(const char*)> fn);
     void setExpire(robj *key, robj *subkey, long long when);
     void setExpire(expireEntry &&e);
     expireEntry *getExpire(robj_roptr key);

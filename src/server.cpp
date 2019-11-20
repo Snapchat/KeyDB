@@ -3076,6 +3076,8 @@ void initServer(void) {
     latencyMonitorInit();
     bioInit();
     g_pserver->initial_memory_usage = zmalloc_used_memory();
+
+    g_pserver->asyncworkqueue = new (MALLOC_LOCAL) AsyncWorkQueue(cserver.cthreads);
 }
 
 /* Parse the flags string description 'strflags' and set them to the
@@ -3831,6 +3833,7 @@ int prepareForShutdown(int flags) {
 
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
+
     serverLog(LL_WARNING,"%s is now ready to exit, bye bye...",
         g_pserver->sentinel_mode ? "Sentinel" : "KeyDB");
     return C_OK;

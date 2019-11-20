@@ -190,6 +190,8 @@ void unblockClient(client *c) {
         unblockClientWaitingReplicas(c);
     } else if (c->btype == BLOCKED_MODULE) {
         unblockClientFromModule(c);
+    } else if (c->btype == BLOCKED_ASYNC) {
+
     } else {
         serverPanic("Unknown btype in unblockClient().");
     }

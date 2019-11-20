@@ -92,6 +92,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #include "endianconv.h"
 #include "crc64.h"
 #include "IStorage.h"
+#include "AsyncWorkQueue.h"
 
 extern int g_fTestMode;
 
@@ -389,7 +390,8 @@ public:
 #define BLOCKED_MODULE 3  /* Blocked by a loadable module. */
 #define BLOCKED_STREAM 4  /* XREAD. */
 #define BLOCKED_ZSET 5    /* BZPOP et al. */
-#define BLOCKED_NUM 6     /* Number of blocked states. */
+#define BLOCKED_ASYNC 6
+#define BLOCKED_NUM 7     /* Number of blocked states. */
 
 /* Client request types */
 #define PROTO_REQ_INLINE 1
@@ -2059,6 +2061,8 @@ struct redisServer {
     //  Lower 20 bits: a counter incrementing for each command executed in the same millisecond
     //  Upper 44 bits: mstime (least significant 44-bits) enough for ~500 years before rollover from date of addition
     uint64_t mvcc_tstamp;
+
+    AsyncWorkQueue *asyncworkqueue;
 
     /* System hardware info */
     size_t system_memory_size;  /* Total memory in system as reported by OS */

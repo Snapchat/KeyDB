@@ -704,20 +704,25 @@ bool redisDbPersistentData::iterate(std::function<bool(const char*)> fn)
     return fResult;
 }
 
-void keysCommand(client *c) {
-    sds pattern = szFromObj(c->argv[1]);
+void keysCommandCore(client *c, redisDbPersistentData *db, sds pattern)
+{
     int plen = sdslen(pattern), allkeys;
     unsigned long numkeys = 0;
-    void *replylen = addReplyDeferredLen(c);
+
+    aeAcquireLock();
+    void *replylen = addReplyDeferredLenAsync(c);
+    aeReleaseLock();
 
     allkeys = (pattern[0] == '*' && pattern[1] == '\0');
-    c->db->iterate([&](const char *key)->bool {
+    db->iterate([&](const char *key)->bool {
         robj *keyobj;
 
         if (allkeys || stringmatchlen(pattern,plen,key,sdslen(key),0)) {
             keyobj = createStringObject(key,sdslen(key));
             if (!keyIsExpired(c->db,keyobj)) {
-                addReplyBulk(c,keyobj);
+                aeAcquireLock();
+                addReplyBulkAsync(c,keyobj);
+                aeReleaseLock();
                 numkeys++;
             }
             decrRefCount(keyobj);
@@ -725,7 +730,42 @@ void keysCommand(client *c) {
         return true;
     });
     
-    setDeferredArrayLen(c,replylen,numkeys);
+    setDeferredArrayLenAsync(c,replylen,numkeys);
+}
+
+int prepareClientToWrite(client *c, bool fAsync);
+void keysCommand(client *c) {
+    sds pattern = szFromObj(c->argv[1]);
+
+    redisDbPersistentData *snapshot = nullptr;
+    if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
+        snapshot = c->db->createSnapshot(c->mvccCheckpoint);
+    if (snapshot != nullptr)
+    {
+        sds patternCopy = sdsdup(pattern);
+        aeEventLoop *el = serverTL->el;
+        blockClient(c, BLOCKED_ASYNC);
+        redisDb *db = c->db;
+        g_pserver->asyncworkqueue->AddWorkFunction([el, c, db, patternCopy, snapshot]{
+            keysCommandCore(c, snapshot, patternCopy);
+            sdsfree(patternCopy);
+            aePostFunction(el, [c, db, snapshot]{
+                aeReleaseLock();    // we need to lock with coordination of the client
+
+                std::unique_lock<decltype(c->lock)> lock(c->lock);
+                AeLocker locker;
+                locker.arm(c);
+
+                unblockClient(c);
+                db->endSnapshot(snapshot);
+                aeAcquireLock();
+            });
+        });
+    }
+    else
+    {
+        keysCommandCore(c, c->db, pattern);
+    }
 }
 
 /* This callback is used by scanGenericCommand in order to collect elements

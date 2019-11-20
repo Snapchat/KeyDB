@@ -530,6 +530,7 @@ void *addReplyDeferredLenAsync(client *c) {
     if (FCorrectThread(c))
         return addReplyDeferredLen(c);
         
+    prepareClientToWrite(c, true);
     return (void*)((ssize_t)c->bufposAsync);
 }
 
@@ -1316,7 +1317,11 @@ bool freeClient(client *c) {
     c->querybuf = NULL;
 
     /* Deallocate structures used to block on blocking ops. */
-    if (c->flags & CLIENT_BLOCKED) unblockClient(c);
+    if (c->flags & CLIENT_BLOCKED)
+    {
+        serverAssert(c->btype != BLOCKED_ASYNC);
+        unblockClient(c);
+    }
     dictRelease(c->bpop.keys);
 
     /* UNWATCH all the keys */

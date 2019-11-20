@@ -1,0 +1,36 @@
+#pragma once
+#include "fastlock.h"
+#include <vector>
+#include <queue>
+#include <mutex>
+#include <thread>
+#include <condition_variable>
+#include <atomic>
+#include <functional>
+
+class AsyncWorkQueue
+{
+    struct WorkItem
+    {
+        WorkItem(std::function<void()> &&fnAsync)
+            : fnAsync(std::move(fnAsync))
+            {}
+
+        WorkItem(WorkItem&&) = default;
+        std::function<void()> fnAsync;
+    };
+    std::vector<std::thread> m_vecthreads;
+    std::queue<WorkItem> m_workqueue;
+    std::mutex m_mutex;
+    std::condition_variable m_cvWakeup;
+    std::atomic<bool> m_fQuitting { false };
+
+    void WorkerThreadMain();
+public:
+    AsyncWorkQueue(int nthreads);
+    ~AsyncWorkQueue();
+
+    void AddWorkFunction(std::function<void()> &&fnAsync);
+
+    void abandonThreads();
+};

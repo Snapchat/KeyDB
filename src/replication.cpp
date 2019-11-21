@@ -669,6 +669,7 @@ int masterTryPartialResynchronization(client *c) {
     c->repl_ack_time = g_pserver->unixtime;
     c->repl_put_online_on_ack = 0;
     listAddNodeTail(g_pserver->slaves,c);
+
     /* We can't use the connection buffers since they are used to accumulate
      * new commands at this stage. But we are sure the socket send buffer is
      * empty so this write will never fail actually. */
@@ -1002,6 +1003,8 @@ void replconfCommand(client *c) {
                 c->slave_capa |= SLAVE_CAPA_EOF;
             else if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]),"psync2"))
                 c->slave_capa |= SLAVE_CAPA_PSYNC2;
+            else if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]), "activeExpire"))
+                c->slave_capa |= SLAVE_CAPA_ACTIVE_EXPIRE;
         } else if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"ack")) {
             /* REPLCONF ACK is used by replica to inform the master the amount
              * of replication stream that it processed so far. It is an
@@ -1071,6 +1074,14 @@ void putSlaveOnline(client *replica) {
     refreshGoodSlavesCount();
     serverLog(LL_NOTICE,"Synchronization with replica %s succeeded",
         replicationGetSlaveName(replica));
+    
+    if (!(replica->slave_capa & SLAVE_CAPA_ACTIVE_EXPIRE) && g_pserver->fActiveReplica)
+    {
+        serverLog(LL_WARNING, "Warning: replica %s does not support active expiration.  This client may not correctly process key expirations."
+            "\n\tThis is OK if you are in the process of an active upgrade.", replicationGetSlaveName(replica));
+        serverLog(LL_WARNING, "Connections between active replicas and traditional replicas is deprecated.  This will be refused in future versions."
+            "\n\tPlease fix your replica topology");
+    }
 }
 
 void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
@@ -2094,8 +2105,16 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
      *
      * The master will ignore capabilities it does not understand. */
     if (mi->repl_state == REPL_STATE_SEND_CAPA) {
-        err = sendSynchronousCommand(mi, SYNC_CMD_WRITE,fd,"REPLCONF",
-                "capa","eof","capa","psync2",NULL);
+        if (g_pserver->fActiveReplica)
+        {
+            err = sendSynchronousCommand(mi, SYNC_CMD_WRITE,fd,"REPLCONF",
+                    "capa","eof","capa","psync2","capa","activeExpire",NULL);
+        }
+        else
+        {
+            err = sendSynchronousCommand(mi, SYNC_CMD_WRITE,fd,"REPLCONF",
+                    "capa","eof","capa","psync2",NULL);
+        }
         if (err) goto write_error;
         sdsfree(err);
         mi->repl_state = REPL_STATE_RECEIVE_CAPA;

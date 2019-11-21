@@ -535,7 +535,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
      *
      * Instead we take the other branch of the IF statement setting an expire
      * (possibly in the past) and wait for an explicit DEL from the master. */
-    if (when <= mstime() && !g_pserver->loading && !listLength(g_pserver->masters)) {
+    if (when <= mstime() && !g_pserver->loading && (!listLength(g_pserver->masters) || g_pserver->fActiveReplica)) {
         robj *aux;
 
         int deleted = g_pserver->lazyfree_lazy_expire ? dbAsyncDelete(c->db,key) :

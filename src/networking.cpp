@@ -1624,7 +1624,7 @@ void ProcessPendingAsyncWrites()
         
         std::atomic_thread_fence(std::memory_order_seq_cst);
         
-        if (c->casyncOpsPending == 0)
+        if (c->casyncOpsPending == 0 || c->btype == BLOCKED_ASYNC)  // It's ok to send data if we're in a bgthread op
         {
             if (FCorrectThread(c))
             {

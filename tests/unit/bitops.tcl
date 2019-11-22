@@ -238,7 +238,7 @@ start_server {tags {"bitops"}} {
         r set a "abcdefg"
         r bitop lshift x a 8
         r get x
-    } "\x00abcdefg"
+    } "\000abcdefg"
 
     test {BITOP lshift char} {
         r set a "\xAA"

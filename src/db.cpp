@@ -1374,7 +1374,9 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
 
     if (g_pserver->aof_state != AOF_OFF)
         feedAppendOnlyFile(cserver.delCommand,db->id,argv,2);
-    replicationFeedSlaves(g_pserver->slaves,db->id,argv,2);
+    // Active replicas do their own expiries, do not propogate
+    if (!g_pserver->fActiveReplica)
+        replicationFeedSlaves(g_pserver->slaves,db->id,argv,2);
 
     decrRefCount(argv[0]);
     decrRefCount(argv[1]);
@@ -1442,7 +1444,7 @@ int expireIfNeeded(redisDb *db, robj *key) {
      * Still we try to return the right information to the caller,
      * that is, 0 if we think the key should be still valid, 1 if
      * we think the key is expired at this time. */
-    if (listLength(g_pserver->masters)) return 1;
+    if (listLength(g_pserver->masters) && !g_pserver->fActiveReplica) return 1;
 
     /* Delete the key */
     g_pserver->stat_expiredkeys++;

@@ -54,6 +54,7 @@
 #include <vector>
 #include <algorithm>
 #include <memory>
+#include <map>
 #ifdef __cplusplus
 extern "C" {
 #include <lua.h>
@@ -142,6 +143,87 @@ public:
     {
         return (redisObject*)m_ptr;
     }
+};
+
+void decrRefCount(robj_roptr o);
+void incrRefCount(robj_roptr o);
+class robj_sharedptr
+{
+    redisObject *m_ptr;
+
+public:
+    robj_sharedptr()
+        : m_ptr(nullptr)
+        {}
+    robj_sharedptr(redisObject *ptr)
+        : m_ptr(ptr)
+        {
+            incrRefCount(ptr);
+        }
+    ~robj_sharedptr()
+    {
+        if (m_ptr)
+            decrRefCount(m_ptr);
+    }
+    robj_sharedptr(const robj_sharedptr& other)
+    {
+        m_ptr = other.m_ptr;
+        incrRefCount(m_ptr);
+    }
+
+    robj_sharedptr(robj_sharedptr&& other)
+    {
+        m_ptr = other.m_ptr;
+        other.m_ptr = nullptr;
+    }
+
+    robj_sharedptr &operator=(const robj_sharedptr& other)
+    {
+        if (m_ptr)
+            decrRefCount(m_ptr);
+        m_ptr = other.m_ptr;
+        incrRefCount(m_ptr);
+        return *this;
+    }
+    robj_sharedptr &operator=(redisObject *ptr)
+    {
+        if (m_ptr)
+            decrRefCount(m_ptr);
+        m_ptr = ptr;
+        incrRefCount(m_ptr);
+        return *this;
+    }
+
+    bool operator==(const robj_sharedptr &other) const
+    {
+        return m_ptr == other.m_ptr;
+    }
+
+    bool operator!=(const robj_sharedptr &other) const
+    {
+        return m_ptr != other.m_ptr;
+    }
+
+    redisObject* operator->() const
+    {
+        return m_ptr;
+    }
+
+    bool operator!() const
+    {
+        return !m_ptr;
+    }
+
+    operator bool() const{
+        return !!m_ptr;
+    }
+
+    operator redisObject *()
+    {
+        return (redisObject*)m_ptr;
+    }
+
+    redisObject *get() { return m_ptr; }
 };
 
 /* Error codes */
@@ -1391,9 +1473,11 @@ typedef struct rdbSaveInfo {
     char repl_id[CONFIG_RUN_ID_SIZE+1];     /* Replication ID. */
     long long repl_offset;                  /* Replication offset. */
     int fForceSetKey;
+    uint64_t mvccMinThreshold;
+    struct redisMaster *mi;
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1,0,"000000000000000000000000000000",-1, TRUE}
+#define RDB_SAVE_INFO_INIT {-1,0,"000000000000000000000000000000",-1, TRUE, 0, nullptr}
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -1467,6 +1551,9 @@ struct redisMaster {
 
     unsigned char master_uuid[UUID_BINARY_LEN];  /* Used during sync with master, this is our master's UUID */
                                                 /* After we've connected with our master use the UUID in g_pserver->master */
+    uint64_t mvccLastSync;
+    /* During a handshake the server may have stale keys, we track these here to share once a reciprocal connection is made */
+    std::map<int, std::vector<robj_sharedptr>> *staleKeyMap;
 };
 
 // Const vars are not changed after worker threads are launched
@@ -2156,6 +2243,7 @@ int getLongLongFromObjectOrReply(client *c, robj *o, long long *target, const ch
 int getDoubleFromObjectOrReply(client *c, robj *o, double *target, const char *msg);
 int getDoubleFromObject(const robj *o, double *target);
 int getLongLongFromObject(robj *o, long long *target);
+int getUnsignedLongLongFromObject(robj *o, uint64_t *target);
 int getLongDoubleFromObject(robj *o, long double *target);
 int getLongDoubleFromObjectOrReply(client *c, robj *o, long double *target, const char *msg);
 const char *strEncoding(int encoding);

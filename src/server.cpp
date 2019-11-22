@@ -2319,6 +2319,7 @@ void initMasterInfo(redisMaster *master)
 
     master->repl_state = REPL_STATE_NONE;
     master->repl_down_since = 0; /* Never connected, repl is down since EVER. */
+    master->mvccLastSync = 0;
 }
 
 void initServerConfig(void) {

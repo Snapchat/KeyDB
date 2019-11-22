@@ -9,6 +9,7 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
         set master [srv 0 client]
         set master_host [srv 0 host]
         set master_port [srv 0 port]
+    	set master_pid [s process_id]
 
         # Use a short replication timeout on the slave, so that if there
         # are no bugs the timeout is triggered in a reasonable amount
@@ -93,6 +94,26 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
             assert_equal {0} [$master del testkey1]
             assert_equal {0} [$slave del testkey1]
         }
+
+	test {Active replica expire propogates when source is down} {
+            $slave flushall
+	    $slave set testkey2 foo
+            $slave set testkey1 foo
+            wait_for_condition 50 1000 {
+                [string match *foo* [$master get testkey1]]
+            } else {
+                fail "Replication failed to propogate"
+            }
+            $slave expire testkey1 2
+	    assert_equal {1} [$slave wait 1 500] { "value should propogate
+		                    within 0.5 seconds" }
+	    exec kill -SIGSTOP $slave_pid
+            after 3000
+	    # Ensure testkey1 is gone.  Note, we can't do this directly as the normal commands lie to us
+	    # about what is actually in the dict.  The only way to know is with a count from info
+            assert_equal {1} [expr [string first {keys=1} [$master info keyspace]] >= 0]  {"slave expired"}
+	}
+	exec kill -SIGCONT $slave_pid
 
         test {Active replica different databases} {
             $master select 3

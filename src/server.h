@@ -54,6 +54,7 @@
 #include <vector>
 #include <algorithm>
 #include <memory>
+#include <map>
 #ifdef __cplusplus
 extern "C" {
 #include <lua.h>
@@ -142,6 +143,87 @@ public:
     {
         return (redisObject*)m_ptr;
     }
+};
+
+void decrRefCount(robj_roptr o);
+void incrRefCount(robj_roptr o);
+class robj_sharedptr
+{
+    redisObject *m_ptr;
+
+public:
+    robj_sharedptr()
+        : m_ptr(nullptr)
+        {}
+    robj_sharedptr(redisObject *ptr)
+        : m_ptr(ptr)
+        {
+            incrRefCount(ptr);
+        }
+    ~robj_sharedptr()
+    {
+        if (m_ptr)
+            decrRefCount(m_ptr);
+    }
+    robj_sharedptr(const robj_sharedptr& other)
+    {
+        m_ptr = other.m_ptr;
+        incrRefCount(m_ptr);
+    }
+
+    robj_sharedptr(robj_sharedptr&& other)
+    {
+        m_ptr = other.m_ptr;
+        other.m_ptr = nullptr;
+    }
+
+    robj_sharedptr &operator=(const robj_sharedptr& other)
+    {
+        if (m_ptr)
+            decrRefCount(m_ptr);
+        m_ptr = other.m_ptr;
+        incrRefCount(m_ptr);
+        return *this;
+    }
+    robj_sharedptr &operator=(redisObject *ptr)
+    {
+        if (m_ptr)
+            decrRefCount(m_ptr);
+        m_ptr = ptr;
+        incrRefCount(m_ptr);
+        return *this;
+    }
+
+    bool operator==(const robj_sharedptr &other) const
+    {
+        return m_ptr == other.m_ptr;
+    }
+
+    bool operator!=(const robj_sharedptr &other) const
+    {
+        return m_ptr != other.m_ptr;
+    }
+
+    redisObject* operator->() const
+    {
+        return m_ptr;
+    }
+
+    bool operator!() const
+    {
+        return !m_ptr;
+    }
+
+    operator bool() const{
+        return !!m_ptr;
+    }
+
+    operator redisObject *()
+    {
+        return (redisObject*)m_ptr;
+    }
+
+    redisObject *get() { return m_ptr; }
 };
 
 /* Error codes */
@@ -433,6 +515,7 @@ public:
 #define SLAVE_CAPA_NONE 0
 #define SLAVE_CAPA_EOF (1<<0)    /* Can parse the RDB EOF streaming format. */
 #define SLAVE_CAPA_PSYNC2 (1<<1) /* Supports PSYNC2 protocol. */
+#define SLAVE_CAPA_ACTIVE_EXPIRE (1<<2) /* Will the slave perform its own expirations? (Don't send delete) */
 
 /* Synchronous read timeout - replica side */
 #define CONFIG_REPL_SYNCIO_TIMEOUT 5
@@ -1390,9 +1473,11 @@ typedef struct rdbSaveInfo {
     char repl_id[CONFIG_RUN_ID_SIZE+1];     /* Replication ID. */
     long long repl_offset;                  /* Replication offset. */
     int fForceSetKey;
+    uint64_t mvccMinThreshold;
+    struct redisMaster *mi;
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1,0,"000000000000000000000000000000",-1, TRUE}
+#define RDB_SAVE_INFO_INIT {-1,0,"000000000000000000000000000000",-1, TRUE, 0, nullptr}
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -1426,6 +1511,7 @@ struct redisServerThreadVars {
     aeEventLoop *el;
     int ipfd[CONFIG_BINDADDR_MAX]; /* TCP socket file descriptors */
     int ipfd_count;             /* Used slots in ipfd[] */
+    int clients_paused;         /* True if clients are currently paused */
     std::vector<client*> clients_pending_write; /* There is to write or install handler. */
     list *unblocked_clients;     /* list of clients to unblock before next loop NOT THREADSAFE */
     list *clients_pending_asyncwrite;
@@ -1465,6 +1551,9 @@ struct redisMaster {
 
     unsigned char master_uuid[UUID_BINARY_LEN];  /* Used during sync with master, this is our master's UUID */
                                                 /* After we've connected with our master use the UUID in g_pserver->master */
+    uint64_t mvccLastSync;
+    /* During a handshake the server may have stale keys, we track these here to share once a reciprocal connection is made */
+    std::map<int, std::vector<robj_sharedptr>> *staleKeyMap;
 };
 
 // Const vars are not changed after worker threads are launched
@@ -1518,7 +1607,7 @@ struct redisServer {
     int config_hz;              /* Configured HZ value. May be different than
                                    the actual 'hz' field value if dynamic-hz
                                    is enabled. */
-    int hz;                     /* serverCron() calls frequency in hertz */
+    std::atomic<int> hz;                     /* serverCron() calls frequency in hertz */
     redisDb *db;
     dict *commands;             /* Command table */
     dict *orig_commands;        /* Command table before command renaming. */
@@ -1553,7 +1642,6 @@ struct redisServer {
     list *clients_to_close;     /* Clients to close asynchronously */
     list *slaves, *monitors;    /* List of slaves and MONITORs */
     rax *clients_index;         /* Active clients dictionary by client ID. */
-    int clients_paused;         /* True if clients are currently paused */
     mstime_t clients_pause_end_time; /* Time when we undo clients_paused */
     dict *migrate_cached_sockets;/* MIGRATE cached sockets */
     std::atomic<uint64_t> next_client_id; /* Next client unique ID. Incremental. */
@@ -2042,6 +2130,7 @@ void disconnectSlavesExcept(unsigned char *uuid);
 int listenToPort(int port, int *fds, int *count, int fReusePort, int fFirstListen);
 void pauseClients(mstime_t duration);
 int clientsArePaused(void);
+void unpauseClientsIfNecessary();
 int processEventsWhileBlocked(int iel);
 int handleClientsWithPendingWrites(int iel);
 int clientHasPendingReplies(client *c);
@@ -2154,6 +2243,7 @@ int getLongLongFromObjectOrReply(client *c, robj *o, long long *target, const ch
 int getDoubleFromObjectOrReply(client *c, robj *o, double *target, const char *msg);
 int getDoubleFromObject(const robj *o, double *target);
 int getLongLongFromObject(robj *o, long long *target);
+int getUnsignedLongLongFromObject(robj *o, uint64_t *target);
 int getLongDoubleFromObject(robj *o, long double *target);
 int getLongDoubleFromObjectOrReply(client *c, robj *o, long double *target, const char *msg);
 const char *strEncoding(int encoding);

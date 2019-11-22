@@ -1718,9 +1718,9 @@ void clientsCron(int iel) {
 void databasesCron(void) {
     /* Expire keys by random sampling. Not required for slaves
      * as master will synthesize DELs for us. */
-    if (g_pserver->active_expire_enabled && listLength(g_pserver->masters) == 0) {
+    if (g_pserver->active_expire_enabled && (listLength(g_pserver->masters) == 0 || g_pserver->fActiveReplica)) {
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
-    } else if (listLength(g_pserver->masters)) {
+    } else if (listLength(g_pserver->masters) && !g_pserver->fActiveReplica) {
         expireSlaveKeys();
     }
 
@@ -2133,7 +2133,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    if (g_pserver->active_expire_enabled && listLength(g_pserver->masters) == 0)
+    if (g_pserver->active_expire_enabled && (listLength(g_pserver->masters) == 0 || g_pserver->fActiveReplica))
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
     /* Send all the slaves an ACK request if at least one client blocked
@@ -2347,6 +2347,7 @@ void initMasterInfo(redisMaster *master)
 
     master->repl_state = REPL_STATE_NONE;
     master->repl_down_since = 0; /* Never connected, repl is down since EVER. */
+    master->mvccLastSync = 0;
 }
 
 void initServerConfig(void) {

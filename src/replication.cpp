@@ -48,6 +48,7 @@ void replicationResurrectCachedMaster(redisMaster *mi, int newfd);
 void replicationSendAck(redisMaster *mi);
 void putSlaveOnline(client *replica);
 int cancelReplicationHandshake(redisMaster *mi);
+static void propagateMasterStaleKeys();
 
 /* --------------------------- Utility functions ---------------------------- */
 
@@ -127,6 +128,23 @@ static bool FAnyDisconnectedMasters()
             return true;
     }
     return false;
+}
+
+client *replicaFromMaster(redisMaster *mi)
+{
+    if (mi->master == nullptr)
+        return nullptr;
+
+    listIter liReplica;
+    listNode *lnReplica;
+    listRewind(g_pserver->slaves, &liReplica);
+    while ((lnReplica = listNext(&liReplica)) != nullptr)
+    {
+        client *replica = (client*)listNodeValue(lnReplica);
+        if (FSameHost(mi->master, replica))
+            return replica;
+    }
+    return nullptr;
 }
 
 /* ---------------------------------- MASTER -------------------------------- */
@@ -325,12 +343,20 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     char uuid[40] = {'\0'};
     uuid_unparse(cserver.uuid, uuid);
     char proto[1024];
-    int cchProto = snprintf(proto, sizeof(proto), "*4\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
+    int cchProto = snprintf(proto, sizeof(proto), "*5\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
     cchProto = std::min((int)sizeof(proto), cchProto);
     long long master_repl_offset_start = g_pserver->master_repl_offset;
     
     char szDbNum[128];
-    int cchDbNum = snprintf(szDbNum, sizeof(szDbNum), "$%d\r\n%d\r\n", (dictid/10)+1, dictid);
+    int cchDictIdNum = snprintf(szDbNum, sizeof(szDbNum), "%d", dictid);
+    int cchDbNum = snprintf(szDbNum, sizeof(szDbNum), "$%d\r\n%d\r\n", cchDictIdNum, dictid);
+    cchDbNum = std::min<int>(cchDbNum, sizeof(szDbNum)); // snprintf is tricky like that
+
+    char szMvcc[128];
+    uint64_t mvccTstamp = getMvccTstamp();
+    int cchMvccNum = snprintf(szMvcc, sizeof(szMvcc), "%lu", mvccTstamp);
+    int cchMvcc = snprintf(szMvcc, sizeof(szMvcc), "$%d\r\n%lu\r\n", cchMvccNum, mvccTstamp);
+    cchMvcc = std::min<int>(cchMvcc, sizeof(szMvcc));    // tricky snprintf
 
     /* Write the command to the replication backlog if any. */
     if (g_pserver->repl_backlog) 
@@ -374,6 +400,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
             const char *crlf = "\r\n";
             feedReplicationBacklog(crlf, 2);
             feedReplicationBacklog(szDbNum, cchDbNum);
+            feedReplicationBacklog(szMvcc, cchMvcc);
         }
     }
 
@@ -409,6 +436,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         {
             addReplyAsync(replica,shared.crlf);
             addReplyProtoAsync(replica, szDbNum, cchDbNum);
+            addReplyProtoAsync(replica, szMvcc, cchMvcc);
         }
     }
 
@@ -669,6 +697,7 @@ int masterTryPartialResynchronization(client *c) {
     c->repl_ack_time = g_pserver->unixtime;
     c->repl_put_online_on_ack = 0;
     listAddNodeTail(g_pserver->slaves,c);
+
     /* We can't use the connection buffers since they are used to accumulate
      * new commands at this stage. But we are sure the socket send buffer is
      * empty so this write will never fail actually. */
@@ -1002,6 +1031,8 @@ void replconfCommand(client *c) {
                 c->slave_capa |= SLAVE_CAPA_EOF;
             else if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]),"psync2"))
                 c->slave_capa |= SLAVE_CAPA_PSYNC2;
+            else if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]), "activeExpire"))
+                c->slave_capa |= SLAVE_CAPA_ACTIVE_EXPIRE;
         } else if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"ack")) {
             /* REPLCONF ACK is used by replica to inform the master the amount
              * of replication stream that it processed so far. It is an
@@ -1071,6 +1102,14 @@ void putSlaveOnline(client *replica) {
     refreshGoodSlavesCount();
     serverLog(LL_NOTICE,"Synchronization with replica %s succeeded",
         replicationGetSlaveName(replica));
+    
+    if (!(replica->slave_capa & SLAVE_CAPA_ACTIVE_EXPIRE) && g_pserver->fActiveReplica)
+    {
+        serverLog(LL_WARNING, "Warning: replica %s does not support active expiration.  This client may not correctly process key expirations."
+            "\n\tThis is OK if you are in the process of an active upgrade.", replicationGetSlaveName(replica));
+        serverLog(LL_WARNING, "Connections between active replicas and traditional replicas is deprecated.  This will be refused in future versions."
+            "\n\tPlease fix your replica topology");
+    }
 }
 
 void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
@@ -1575,6 +1614,15 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
         aeDeleteFileEvent(el,mi->repl_transfer_s,AE_READABLE);
         serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Loading DB in memory");
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+        if (g_pserver->fActiveReplica)
+        {
+            rsi.mvccMinThreshold = mi->mvccLastSync;
+            if (mi->staleKeyMap != nullptr)
+                mi->staleKeyMap->clear();
+            else
+                mi->staleKeyMap = new (MALLOC_LOCAL) std::map<int, std::vector<robj_sharedptr>>();
+            rsi.mi = mi;
+        }
         if (rdbLoadFile(rdb_filename, &rsi) != C_OK) {
             serverLog(LL_WARNING,"Failed trying to load the MASTER synchronization DB from disk");
             cancelReplicationHandshake(mi);
@@ -2093,8 +2141,16 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
      *
      * The master will ignore capabilities it does not understand. */
     if (mi->repl_state == REPL_STATE_SEND_CAPA) {
-        err = sendSynchronousCommand(mi, SYNC_CMD_WRITE,fd,"REPLCONF",
-                "capa","eof","capa","psync2",NULL);
+        if (g_pserver->fActiveReplica)
+        {
+            err = sendSynchronousCommand(mi, SYNC_CMD_WRITE,fd,"REPLCONF",
+                    "capa","eof","capa","psync2","capa","activeExpire",NULL);
+        }
+        else
+        {
+            err = sendSynchronousCommand(mi, SYNC_CMD_WRITE,fd,"REPLCONF",
+                    "capa","eof","capa","psync2",NULL);
+        }
         if (err) goto write_error;
         sdsfree(err);
         mi->repl_state = REPL_STATE_RECEIVE_CAPA;
@@ -2362,6 +2418,7 @@ void freeMasterInfo(redisMaster *mi)
 {
     zfree(mi->masterauth);
     zfree(mi->masteruser);
+    delete mi->staleKeyMap;
     zfree(mi);
 }
 
@@ -3195,6 +3252,8 @@ void replicationCron(void) {
         }
     }
 
+    propagateMasterStaleKeys();
+
     /* Refresh the number of slaves with lag <= min-slaves-max-lag. */
     refreshGoodSlavesCount();
     replication_cron_loops++; /* Incremented with frequency 1 HZ. */
@@ -3341,6 +3400,17 @@ void replicaReplayCommand(client *c)
         }
     }
 
+    uint64_t mvcc = 0;
+    if (c->argc >= 5)
+    {
+        if (getUnsignedLongLongFromObject(c->argv[4], &mvcc) != C_OK)
+        {
+            addReplyError(c, "Invalid MVCC Timestamp");
+            s_pstate->Cancel();
+            return;
+        }
+    }
+
     if (FSameUuidNoNil(uuid, cserver.uuid))
     {
         addReply(c, shared.ok);
@@ -3367,6 +3437,11 @@ void replicaReplayCommand(client *c)
     {
         addReply(c, shared.ok);
         selectDb(c, cFake->db->id);
+        redisMaster *mi = MasterInfoFromClient(c);
+        if (mi != nullptr)  // this should never be null but I'd prefer not to crash
+        {
+            mi->mvccLastSync = mvcc;
+        }
     }
     else
     {
@@ -3400,4 +3475,44 @@ void updateMasterAuth()
         if (cserver.default_masteruser)
             mi->masteruser = zstrdup(cserver.default_masteruser);
     }
+}
+
+static void propagateMasterStaleKeys()
+{
+    listIter li;
+    listNode *ln;
+    listRewind(g_pserver->masters, &li);
+    robj *rgobj[2];
+
+    rgobj[0] = createEmbeddedStringObject("DEL", 3);
+
+    while ((ln = listNext(&li)) != nullptr)
+    {
+        redisMaster *mi = (redisMaster*)listNodeValue(ln);
+        if (mi->staleKeyMap != nullptr)
+        {
+            if (mi->master != nullptr)
+            {
+                for (auto &pair : *mi->staleKeyMap)
+                {
+                    if (pair.second.empty())
+                        continue;
+                    
+                    client *replica = replicaFromMaster(mi);
+                    if (replica == nullptr)
+                        continue;
+
+                    for (auto &spkey : pair.second)
+                    {
+                        rgobj[1] = spkey.get();
+                        replicationFeedSlave(replica, pair.first, rgobj, 2, false);
+                    }
+                }
+                delete mi->staleKeyMap;
+                mi->staleKeyMap = nullptr;
+            }
+        }
+    }
+
+    decrRefCount(rgobj[0]);
 }

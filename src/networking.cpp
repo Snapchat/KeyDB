@@ -99,6 +99,7 @@ client *createClient(int fd, int iel) {
      * in the context of a client. When commands are executed in other
      * contexts (for instance a Lua script) we need a non connected client. */
     if (fd != -1) {
+        serverAssert(iel == (serverTL - g_pserver->rgthreadvar));
         anetNonBlock(NULL,fd);
         anetEnableTcpNoDelay(NULL,fd);
         if (cserver.tcpkeepalive)

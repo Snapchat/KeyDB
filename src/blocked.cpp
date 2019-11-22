@@ -111,6 +111,8 @@ void blockClient(client *c, int btype) {
     serverAssert(GlobalLocksAcquired());
     c->flags |= CLIENT_BLOCKED;
     c->btype = btype;
+    if (btype == BLOCKED_ASYNC)
+        c->casyncOpsPending++;
     g_pserver->blocked_clients++;
     g_pserver->blocked_clients_by_type[btype]++;
 }
@@ -191,7 +193,8 @@ void unblockClient(client *c) {
     } else if (c->btype == BLOCKED_MODULE) {
         unblockClientFromModule(c);
     } else if (c->btype == BLOCKED_ASYNC) {
-
+        serverAssert(c->casyncOpsPending > 0);
+        c->casyncOpsPending--;
     } else {
         serverPanic("Unknown btype in unblockClient().");
     }

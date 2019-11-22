@@ -2176,12 +2176,19 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
         if ((key = rdbLoadStringObject(rdb)) == NULL) goto eoferr;
         /* Read value */
         if ((val = rdbLoadObject(type,rdb,key, mvcc_tstamp)) == NULL) goto eoferr;
+        bool fStaleMvccKey = val->mvcc_tstamp < rsi->mvccMinThreshold;
         /* Check if the key already expired. This function is used when loading
          * an RDB file from disk, either at startup, or when an RDB was
          * received from the master. In the latter case, the master is
          * responsible for key expiry. If we would expire keys here, the
          * snapshot taken by the master may not be reflected on the replica. */
-        if (listLength(g_pserver->masters) == 0 && !loading_aof && expiretime != -1 && expiretime < now) {
+        bool fExpiredKey = (listLength(g_pserver->masters) == 0 || g_pserver->fActiveReplica) && !loading_aof && expiretime != -1 && expiretime < now;
+        if (fStaleMvccKey || fExpiredKey) {
+            if (fStaleMvccKey && !fExpiredKey && rsi->mi != nullptr && rsi->mi->staleKeyMap != nullptr && lookupKeyRead(db, key) == nullptr) {
+                // We have a key that we've already deleted and is not back in our database.
+                //  We'll need to inform the sending master of the delete if it is also a replica of us
+                rsi->mi->staleKeyMap->operator[](db - g_pserver->db).push_back(key);
+            }
             decrRefCount(key);
             key = nullptr;
             decrRefCount(val);

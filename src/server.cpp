@@ -1183,6 +1183,7 @@ void dictSdsNOPDestructor(void *, void *) {}
 
 void dictDbKeyDestructor(void *privdata, void *key)
 {
+    DICT_NOTUSED(privdata);
     sdsfree((sds)key);
 }
 

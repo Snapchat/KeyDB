@@ -755,7 +755,7 @@ size_t rdbSaveStreamConsumers(rio *rdb, streamCG *cg) {
 
 /* Save a Redis object.
  * Returns -1 on error, number of bytes written on success. */
-ssize_t rdbSaveObject(rio *rdb, robj_roptr o, robj *key) {
+ssize_t rdbSaveObject(rio *rdb, robj_roptr o, robj_roptr key) {
     ssize_t n = 0, nwritten = 0;
 
     if (o->type == OBJ_STRING) {
@@ -970,7 +970,7 @@ ssize_t rdbSaveObject(rio *rdb, robj_roptr o, robj *key) {
         RedisModuleIO io;
         moduleValue *mv = (moduleValue*)ptrFromObj(o);
         moduleType *mt = mv->type;
-        moduleInitIOContext(io,mt,rdb,key);
+        moduleInitIOContext(io,mt,rdb,key.unsafe_robjcast());
 
         /* Write the "module" identifier as prefix, so that we'll be able
          * to call the right module during loading. */
@@ -1034,7 +1034,7 @@ size_t rdbSavedObjectLen(robj *o) {
  * On error -1 is returned.
  * On success if the key was actually saved 1 is returned, otherwise 0
  * is returned (the key was already expired). */
-int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, expireEntry *pexpire) {
+int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEntry *pexpire) {
     int savelru = g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LRU;
     int savelfu = g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU;
 
@@ -1115,12 +1115,12 @@ int rdbSaveInfoAuxFields(rio *rdb, int flags, rdbSaveInfo *rsi) {
     return 1;
 }
 
-int saveKey(rio *rdb, redisDbPersistentData *db, int flags, size_t *processed, const char *keystr, robj *o)
+int saveKey(rio *rdb, const redisDbPersistentData *db, int flags, size_t *processed, const char *keystr, robj_roptr o)
 {    
     robj key;
 
     initStaticStringObject(key,(char*)keystr);
-    expireEntry *pexpire = db->getExpire(&key);
+    const expireEntry *pexpire = db->getExpire(&key);
 
     if (rdbSaveKeyValuePair(rdb,&key,o,pexpire) == -1)
         return 0;
@@ -1145,7 +1145,7 @@ int saveKey(rio *rdb, redisDbPersistentData *db, int flags, size_t *processed, c
  * When the function returns C_ERR and if 'error' is not NULL, the
  * integer pointed by 'error' is set to the value of errno just after the I/O
  * error. */
-int rdbSaveRio(rio *rdb, redisDbPersistentData **rgpdb, int *error, int flags, rdbSaveInfo *rsi) {
+int rdbSaveRio(rio *rdb, const redisDbPersistentData **rgpdb, int *error, int flags, rdbSaveInfo *rsi) {
     dictEntry *de;
     dictIterator *di = NULL;
     char magic[10];
@@ -1161,7 +1161,7 @@ int rdbSaveRio(rio *rdb, redisDbPersistentData **rgpdb, int *error, int flags, r
     if (rdbSaveInfoAuxFields(rdb,flags,rsi) == -1) goto werr;
 
     for (j = 0; j < cserver.dbnum; j++) {
-        redisDbPersistentData *db = rgpdb[j];
+        const redisDbPersistentData *db = rgpdb[j];
         if (db->size() == 0) continue;
 
         /* Write the SELECT DB opcode */
@@ -1181,7 +1181,7 @@ int rdbSaveRio(rio *rdb, redisDbPersistentData **rgpdb, int *error, int flags, r
         
         /* Iterate this DB writing every entry */
         size_t ckeysExpired = 0;
-        bool fSavedAll = db->iterate([&](const char *keystr, robj *o)->bool {
+        bool fSavedAll = db->iterate_threadsafe([&](const char *keystr, robj_roptr o)->bool {
             if (o->FExpires())
                 ++ckeysExpired;
             
@@ -1239,7 +1239,7 @@ werr:
  * While the suffix is the 40 bytes hex string we announced in the prefix.
  * This way processes receiving the payload can understand when it ends
  * without doing any processing of the content. */
-int rdbSaveRioWithEOFMark(rio *rdb, redisDbPersistentData **rgpdb, int *error, rdbSaveInfo *rsi) {
+int rdbSaveRioWithEOFMark(rio *rdb, const redisDbPersistentData **rgpdb, int *error, rdbSaveInfo *rsi) {
     char eofmark[RDB_EOF_MARK_SIZE];
 
     getRandomHexChars(eofmark,RDB_EOF_MARK_SIZE);
@@ -1257,7 +1257,7 @@ werr: /* Write error. */
     return C_ERR;
 }
 
-int rdbSaveFp(FILE *fp, redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
+int rdbSaveFp(FILE *fp, const redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
 {
     int error = 0;
     rio rdb;
@@ -1274,9 +1274,9 @@ int rdbSaveFp(FILE *fp, redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
     return C_OK;
 }
 
-int rdbSave(redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
+int rdbSave(const redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
 {
-    std::vector<redisDbPersistentData*> vecdb;
+    std::vector<const redisDbPersistentData*> vecdb;
     if (rgpdb == nullptr)
     {
         for (int idb = 0; idb < cserver.dbnum; ++idb)
@@ -1296,7 +1296,7 @@ int rdbSave(redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
 }
 
 /* Save the DB on disk. Return C_ERR on error, C_OK on success. */
-int rdbSaveFile(char *filename, redisDbPersistentData **rgpdb, rdbSaveInfo *rsi) {
+int rdbSaveFile(char *filename, const redisDbPersistentData **rgpdb, rdbSaveInfo *rsi) {
     char tmpfile[256];
     char cwd[MAXPATHLEN]; /* Current working dir path for error messages. */
     FILE *fp;
@@ -1360,7 +1360,7 @@ werr:
 struct rdbSaveThreadArgs
 {
     rdbSaveInfo rsi;
-    redisDbPersistentData *rgpdb[1];    // NOTE: Variable Length
+    const redisDbPersistentData *rgpdb[1];    // NOTE: Variable Length
 };
 
 void *rdbSaveThread(void *vargs)
@@ -2453,7 +2453,7 @@ struct rdbSaveSocketThreadArgs
     int *fds;
     int numfds;
     uint64_t *clientids;
-    redisDbPersistentData *rgpdb[1];
+    const redisDbPersistentData *rgpdb[1];
 };
 void *rdbSaveToSlavesSocketsThread(void *vargs)
 {

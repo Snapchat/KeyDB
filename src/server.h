@@ -935,7 +935,7 @@ public:
     bool FEmpty() const noexcept { return m_vecexpireEntries.empty(); }
     const subexpireEntry &nextExpireEntry() const noexcept { return m_vecexpireEntries.front(); }
     void popfrontExpireEntry() { m_vecexpireEntries.erase(m_vecexpireEntries.begin()); }
-    const subexpireEntry &operator[](size_t idx) { return m_vecexpireEntries[idx]; }
+    const subexpireEntry &operator[](size_t idx) const { return m_vecexpireEntries[idx]; }
     size_t size() const noexcept { return m_vecexpireEntries.size(); }
 };
 
@@ -951,11 +951,11 @@ public:
     class iter
     {
         friend class expireEntry;
-        expireEntry *m_pentry = nullptr;
+        const expireEntry *m_pentry = nullptr;
         size_t m_idx = 0;
 
     public:
-        iter(expireEntry *pentry, size_t idx)
+        iter(const expireEntry *pentry, size_t idx)
             : m_pentry(pentry), m_idx(idx)
         {}
 
@@ -1035,6 +1035,7 @@ public:
 
     inline bool FFat() const noexcept { return m_when == LLONG_MIN; }
     expireEntryFat *pfatentry() { assert(FFat()); return u.m_pfatentry; }
+    const expireEntryFat *pfatentry() const { assert(FFat()); return u.m_pfatentry; }
 
 
     bool operator==(const char *key) const noexcept
@@ -1087,8 +1088,8 @@ public:
         u.m_pfatentry->expireSubKey(subkey, when);
     }
     
-    iter begin() { return iter(this, 0); }
-    iter end()
+    iter begin() const { return iter(this, 0); }
+    iter end() const
     {
         if (FFat())
             return iter(this, u.m_pfatentry->size());
@@ -1103,7 +1104,7 @@ public:
             pfatentry()->m_vecexpireEntries.begin() + itr.m_idx);
     }
 
-    bool FGetPrimaryExpire(long long *pwhen)
+    bool FGetPrimaryExpire(long long *pwhen) const
     {
         *pwhen = -1;
         for (auto itr : *this)
@@ -1280,10 +1281,12 @@ public:
     void emptyDbAsync();
     // Note: If you do not need the obj then use the objless iterator version.  It's faster
     bool iterate(std::function<bool(const char*, robj*)> fn);
-    bool iterate(std::function<bool(const char*)> fn);
+    bool iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn) const;
+    bool iterate(std::function<bool(const char*)> fn) const;
     void setExpire(robj *key, robj *subkey, long long when);
     void setExpire(expireEntry &&e);
     expireEntry *getExpire(robj_roptr key);
+    const expireEntry *getExpire(robj_roptr key) const;
     void initialize();
 
     void trackChanges() { m_fTrackingChanges++; }
@@ -1296,7 +1299,7 @@ public:
     expireset *setexpireUnsafe() { return m_setexpire; }
     const expireset *setexpire() { return m_setexpire; }
 
-    redisDbPersistentData *createSnapshot(uint64_t mvccCheckpoint);
+    const redisDbPersistentData *createSnapshot(uint64_t mvccCheckpoint);
     void endSnapshot(const redisDbPersistentData *psnapshot);
 
 private:
@@ -1304,6 +1307,7 @@ private:
     void ensure(const char *key, dictEntry **de);
     void storeDatabase();
     void storeKey(const char *key, size_t cchKey, robj *o);
+    void recursiveFreeSnapshots(redisDbPersistentData *psnapshot);
 
     // Keyspace
     dict *m_pdict = nullptr;                 /* The keyspace for this DB */
@@ -1322,7 +1326,7 @@ private:
     //      in a snapshot
     redisDbPersistentData *m_pdbSnapshot = nullptr;
     std::unique_ptr<redisDbPersistentData> m_spdbSnapshotHOLDER;
-    int m_snapshotRefcount = 0;
+    int m_refCount = 0;
 };
 
 /* Redis database representation. There are multiple databases identified
@@ -2555,7 +2559,7 @@ int writeCommandsDeniedByDiskError(void);
 
 /* RDB persistence */
 #include "rdb.h"
-int rdbSaveRio(rio *rdb, redisDbPersistentData **rgpdb, int *error, int flags, rdbSaveInfo *rsi);
+int rdbSaveRio(rio *rdb, const redisDbPersistentData **rgpdb, int *error, int flags, rdbSaveInfo *rsi);
 void killRDBChild(void);
 
 /* AOF persistence */
@@ -2885,7 +2889,7 @@ void evictionPoolAlloc(void);
 #define LFU_INIT_VAL 5
 unsigned long LFUGetTimeInMinutes(void);
 uint8_t LFULogIncr(uint8_t value);
-unsigned long LFUDecrAndReturn(robj *o);
+unsigned long LFUDecrAndReturn(robj_roptr o);
 
 /* Keys hashing / comparison functions for dict.c hash tables. */
 uint64_t dictSdsHash(const void *key);

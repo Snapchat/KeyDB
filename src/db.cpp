@@ -669,7 +669,43 @@ bool redisDbPersistentData::iterate(std::function<bool(const char*, robj*)> fn)
     return fResult;
 }
 
-bool redisDbPersistentData::iterate(std::function<bool(const char*)> fn)
+bool redisDbPersistentData::iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn) const
+{
+    dictIterator *di = dictGetSafeIterator(m_pdict);
+    dictEntry *de = nullptr;
+    bool fResult = true;
+
+    while((de = dictNext(di)) != nullptr)
+    {
+        if (!fn((const char*)dictGetKey(de), (robj*)dictGetVal(de)))
+        {
+            fResult = false;
+            break;
+        }
+    }
+    dictReleaseIterator(di);
+
+    if (m_pdbSnapshot != nullptr)
+    {
+        fResult = m_pdbSnapshot->iterate_threadsafe([&](const char *key, robj_roptr o){
+            // Before passing off to the user we need to make sure it's not already in the
+            //  the current set, and not deleted
+            dictEntry *deCurrent = dictFind(m_pdict, key);
+            if (deCurrent != nullptr)
+                return true;
+            dictEntry *deTombstone = dictFind(m_pdictTombstone, key);
+            if (deTombstone != nullptr)
+                return true;
+
+            // Alright it's a key in the use keyspace, lets ensure it and then pass it off
+            return fn(key, o);
+        });
+    }
+
+    return fResult;
+}
+
+bool redisDbPersistentData::iterate(std::function<bool(const char*)> fn) const
 {
     dictIterator *di = dictGetSafeIterator(m_pdict);
     dictEntry *de = nullptr;
@@ -704,7 +740,7 @@ bool redisDbPersistentData::iterate(std::function<bool(const char*)> fn)
     return fResult;
 }
 
-void keysCommandCore(client *c, redisDbPersistentData *db, sds pattern)
+void keysCommandCore(client *c, const redisDbPersistentData *db, sds pattern)
 {
     int plen = sdslen(pattern), allkeys;
     unsigned long numkeys = 0;
@@ -737,7 +773,7 @@ int prepareClientToWrite(client *c, bool fAsync);
 void keysCommand(client *c) {
     sds pattern = szFromObj(c->argv[1]);
 
-    redisDbPersistentData *snapshot = nullptr;
+    const redisDbPersistentData *snapshot = nullptr;
     if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
         snapshot = c->db->createSnapshot(c->mvccCheckpoint);
     if (snapshot != nullptr)
@@ -1428,6 +1464,11 @@ expireEntry *redisDbPersistentData::getExpire(robj_roptr key) {
     return itrExpire.operator->();
 }
 
+const expireEntry *redisDbPersistentData::getExpire(robj_roptr key) const
+{
+    return const_cast<redisDbPersistentData*>(this)->getExpire(key);
+}
+
 /* Propagate expires into slaves and the AOF file.
  * When a key expires in the master, a DEL operation for this key is sent
  * to all the slaves and the AOF file if enabled.
@@ -1892,6 +1933,7 @@ unsigned int countKeysInSlot(unsigned int hashslot) {
 
 void redisDbPersistentData::initialize()
 {
+    m_pdbSnapshot = nullptr;
     m_pdict = dictCreate(&dbDictType,this);
     m_pdictTombstone = dictCreate(&dbDictType,this);
     m_setexpire = new(MALLOC_LOCAL) expireset();
@@ -2120,45 +2162,85 @@ void redisDbPersistentData::processChanges()
     m_setchanged.clear();
 }
 
-redisDbPersistentData *redisDbPersistentData::createSnapshot(uint64_t mvccCheckpoint)
+const redisDbPersistentData *redisDbPersistentData::createSnapshot(uint64_t mvccCheckpoint)
 {
     serverAssert(GlobalLocksAcquired());
     if (m_spdbSnapshotHOLDER != nullptr)
     {
         if (mvccCheckpoint <= m_spdbSnapshotHOLDER->mvccCheckpoint)
         {
-            ++m_snapshotRefcount;
-            return m_spdbSnapshotHOLDER.get();            
+            m_spdbSnapshotHOLDER->m_refCount++;
+            return m_spdbSnapshotHOLDER.get();
         }
-        return nullptr;
+        serverLog(LL_WARNING, "Nested snapshot created");
     }
-    auto spdb = std::make_unique<redisDbPersistentData>();
+    auto spdb = std::unique_ptr<redisDbPersistentData>(new (MALLOC_LOCAL) redisDbPersistentData());
     
     spdb->m_fAllChanged = false;
     spdb->m_fTrackingChanges = 0;
     spdb->m_pdict = m_pdict;
+    spdb->m_pdictTombstone = m_pdictTombstone;
     spdb->m_pdict->iterators++; // fake an iterator so it doesn't rehash
+    spdb->m_spdbSnapshotHOLDER = std::move(m_spdbSnapshotHOLDER);
+    spdb->m_pdbSnapshot = m_pdbSnapshot;
+    spdb->m_refCount = 1;
     if (m_setexpire != nullptr)
         spdb->m_setexpire = m_setexpire;
 
     m_pdict = dictCreate(&dbDictType,this);
+    m_pdictTombstone = dictCreate(&dbDictType, this);
     m_setexpire = new (MALLOC_LOCAL) expireset();
     
     m_spdbSnapshotHOLDER = std::move(spdb);
     m_pdbSnapshot = m_spdbSnapshotHOLDER.get();
-    ++m_snapshotRefcount;
+
+    // Finally we need to take a ref on all our children snapshots.  This ensures they aren't free'd before we are
+    redisDbPersistentData *pdbSnapshotNext = m_pdbSnapshot->m_spdbSnapshotHOLDER.get();
+    while (pdbSnapshotNext != nullptr)
+    {
+        pdbSnapshotNext->m_refCount++;
+        pdbSnapshotNext = pdbSnapshotNext->m_spdbSnapshotHOLDER.get();
+    }
+
     return m_pdbSnapshot;
+}
+
+void redisDbPersistentData::recursiveFreeSnapshots(redisDbPersistentData *psnapshot)
+{
+    std::vector<redisDbPersistentData*> m_stackSnapshots;
+    // gather a stack of snapshots, we do this so we can free them in reverse
+    
+    // Note: we don't touch the incoming psnapshot since the parent is free'ing that one
+    while ((psnapshot = psnapshot->m_spdbSnapshotHOLDER.get()) != nullptr)
+    {
+        m_stackSnapshots.push_back(psnapshot);
+    }
+
+    for (auto itr = m_stackSnapshots.rbegin(); itr != m_stackSnapshots.rend(); ++itr)
+    {
+        endSnapshot(*itr);
+    }
 }
 
 void redisDbPersistentData::endSnapshot(const redisDbPersistentData *psnapshot)
 {
-    if (!GlobalLocksAcquired())
-        serverLog(LL_WARNING, "Global locks not acquired");
-    serverAssert(m_spdbSnapshotHOLDER.get() == psnapshot);
+    // Note: This function is dependent on GlobalLocksAcquried(), but rdb background saving has a weird case where
+    //  a seperate thread holds the lock for it.  Yes that's pretty crazy and should be fixed somehow...
 
-    --m_snapshotRefcount;
-    if (m_snapshotRefcount > 0)
+    if (m_spdbSnapshotHOLDER.get() != psnapshot)
+    {
+        serverAssert(m_spdbSnapshotHOLDER != nullptr);
+        m_spdbSnapshotHOLDER->endSnapshot(psnapshot);
         return;
+    }
+
+    m_spdbSnapshotHOLDER->m_refCount--;
+    if (m_spdbSnapshotHOLDER->m_refCount > 0)
+        return;
+    serverAssert(m_spdbSnapshotHOLDER->m_refCount == 0);
+
+    // Alright we're ready to be free'd, but first dump all the refs on our child snapshots
+    recursiveFreeSnapshots(m_spdbSnapshotHOLDER.get());
 
     m_spdbSnapshotHOLDER->m_pdict->iterators--;
 
@@ -2166,7 +2248,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentData *psnapshot)
     {
         // the database was cleared so we don't need to recover the snapshot
         dictEmpty(m_pdictTombstone, nullptr);
-        m_spdbSnapshotHOLDER = nullptr;
+        m_spdbSnapshotHOLDER = std::move(m_spdbSnapshotHOLDER->m_spdbSnapshotHOLDER);
         return;
     }
 
@@ -2220,12 +2302,25 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentData *psnapshot)
     std::swap(m_setexpire, m_spdbSnapshotHOLDER->m_setexpire);
     
     // Finally free the snapshot
-    m_spdbSnapshotHOLDER = nullptr;
-    m_pdbSnapshot = nullptr;
+    if (m_pdbSnapshot != nullptr && m_spdbSnapshotHOLDER->m_pdbSnapshot != nullptr)
+    {
+        m_pdbSnapshot = m_spdbSnapshotHOLDER->m_pdbSnapshot;
+        m_spdbSnapshotHOLDER->m_pdbSnapshot = nullptr;
+    }
+    else
+    {
+        m_pdbSnapshot = nullptr;
+    }
+    m_spdbSnapshotHOLDER = std::move(m_spdbSnapshotHOLDER->m_spdbSnapshotHOLDER);
+    serverAssert(m_spdbSnapshotHOLDER != nullptr || m_pdbSnapshot == nullptr);
+    serverAssert(m_pdbSnapshot == m_spdbSnapshotHOLDER.get() || m_pdbSnapshot == nullptr);
 }
 
 redisDbPersistentData::~redisDbPersistentData()
 {
+    serverAssert(m_spdbSnapshotHOLDER == nullptr);
+    serverAssert(m_pdbSnapshot == nullptr);
+    serverAssert(m_refCount == 0);
     dictRelease(m_pdict);
     if (m_pdictTombstone)
         dictRelease(m_pdictTombstone);

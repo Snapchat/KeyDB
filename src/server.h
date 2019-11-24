@@ -1278,7 +1278,7 @@ public:
     expireset *setexpireUnsafe() { return m_setexpire; }
     const expireset *setexpire() { return m_setexpire; }
 
-    const redisDbPersistentData *createSnapshot(uint64_t mvccCheckpoint);
+    const redisDbPersistentData *createSnapshot(uint64_t mvccCheckpoint, bool fOptional);
     void endSnapshot(const redisDbPersistentData *psnapshot);
 
 private:

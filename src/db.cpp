@@ -674,7 +674,6 @@ bool redisDbPersistentData::iterate_threadsafe(std::function<bool(const char*, r
     dictIterator *di = dictGetIterator(m_pdict);
     dictEntry *de = nullptr;
     bool fResult = true;
-    serverAssert(m_pdict->iterators > 0);
 
     while((de = dictNext(di)) != nullptr)
     {

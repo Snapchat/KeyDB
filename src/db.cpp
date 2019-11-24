@@ -669,7 +669,7 @@ bool redisDbPersistentData::iterate(std::function<bool(const char*, robj*)> fn)
     return fResult;
 }
 
-bool redisDbPersistentData::iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn) const
+bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn) const
 {
     dictEntry *de = nullptr;
     bool fResult = true;
@@ -707,7 +707,7 @@ bool redisDbPersistentData::iterate_threadsafe(std::function<bool(const char*, r
 
 client *createFakeClient(void);
 void freeFakeClient(client *);
-void keysCommandCore(client *cIn, const redisDbPersistentData *db, sds pattern)
+void keysCommandCore(client *cIn, const redisDbPersistentDataSnapshot *db, sds pattern)
 {
     int plen = sdslen(pattern), allkeys;
     unsigned long numkeys = 0;
@@ -752,7 +752,7 @@ int prepareClientToWrite(client *c, bool fAsync);
 void keysCommand(client *c) {
     sds pattern = szFromObj(c->argv[1]);
 
-    const redisDbPersistentData *snapshot = nullptr;
+    const redisDbPersistentDataSnapshot *snapshot = nullptr;
     if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
         snapshot = c->db->createSnapshot(c->mvccCheckpoint, true /* fOptional */);
     if (snapshot != nullptr)
@@ -2141,14 +2141,14 @@ void redisDbPersistentData::processChanges()
     m_setchanged.clear();
 }
 
-const redisDbPersistentData *redisDbPersistentData::createSnapshot(uint64_t mvccCheckpoint, bool fOptional)
+const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint64_t mvccCheckpoint, bool fOptional)
 {
     serverAssert(GlobalLocksAcquired());
     serverAssert(m_refCount == 0);  // do not call this on a snapshot
 
     // First see if we have too many levels and can bail out of this to reduce load
     int levels = 1;
-    redisDbPersistentData *psnapshot = m_spdbSnapshotHOLDER.get();
+    redisDbPersistentDataSnapshot *psnapshot = m_spdbSnapshotHOLDER.get();
     while (psnapshot != nullptr)
     {
         ++levels;
@@ -2166,7 +2166,7 @@ const redisDbPersistentData *redisDbPersistentData::createSnapshot(uint64_t mvcc
         }
         serverLog(levels > 5 ? LL_NOTICE : LL_VERBOSE, "Nested snapshot created: %d levels", levels);
     }
-    auto spdb = std::unique_ptr<redisDbPersistentData>(new (MALLOC_LOCAL) redisDbPersistentData());
+    auto spdb = std::unique_ptr<redisDbPersistentDataSnapshot>(new (MALLOC_LOCAL) redisDbPersistentDataSnapshot());
     
     spdb->m_fAllChanged = false;
     spdb->m_fTrackingChanges = 0;
@@ -2201,24 +2201,24 @@ const redisDbPersistentData *redisDbPersistentData::createSnapshot(uint64_t mvcc
     return m_pdbSnapshot;
 }
 
-void redisDbPersistentData::recursiveFreeSnapshots(redisDbPersistentData *psnapshot)
+void redisDbPersistentData::recursiveFreeSnapshots(redisDbPersistentDataSnapshot *psnapshot)
 {
-    std::vector<redisDbPersistentData*> m_stackSnapshots;
+    std::vector<redisDbPersistentDataSnapshot*> stackSnapshots;
     // gather a stack of snapshots, we do this so we can free them in reverse
     
     // Note: we don't touch the incoming psnapshot since the parent is free'ing that one
     while ((psnapshot = psnapshot->m_spdbSnapshotHOLDER.get()) != nullptr)
     {
-        m_stackSnapshots.push_back(psnapshot);
+        stackSnapshots.push_back(psnapshot);
     }
 
-    for (auto itr = m_stackSnapshots.rbegin(); itr != m_stackSnapshots.rend(); ++itr)
+    for (auto itr = stackSnapshots.rbegin(); itr != stackSnapshots.rend(); ++itr)
     {
         endSnapshot(*itr);
     }
 }
 
-void redisDbPersistentData::endSnapshot(const redisDbPersistentData *psnapshot)
+void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psnapshot)
 {
     // Note: This function is dependent on GlobalLocksAcquried(), but rdb background saving has a weird case where
     //  a seperate thread holds the lock for it.  Yes that's pretty crazy and should be fixed somehow...
@@ -2362,7 +2362,7 @@ dict_iter redisDbPersistentData::random()
     return dict_iter(de);
 }
 
-dict_iter redisDbPersistentData::random_threadsafe() const
+dict_iter redisDbPersistentDataSnapshot::random_threadsafe() const
 {
     if (size() == 0)
         return dict_iter(nullptr);
@@ -2379,4 +2379,9 @@ dict_iter redisDbPersistentData::random_threadsafe() const
     serverAssert(dictSize(m_pdict) > 0);
     dictEntry *de = dictGetRandomKey(m_pdict);
     return dict_iter(de);
+}
+
+size_t redisDbPersistentData::size() const 
+{ 
+    return dictSize(m_pdict) + (m_pdbSnapshot ? (m_pdbSnapshot->size() - dictSize(m_pdictTombstone)) : 0); 
 }

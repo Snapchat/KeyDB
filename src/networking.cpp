@@ -1269,6 +1269,7 @@ void unlinkClient(client *c) {
                 listDelNode(g_pserver->rgthreadvar[iel].clients_pending_asyncwrite,ln);
             }
         }
+        fFound = g_pserver->asyncworkqueue->removeClientAsyncWrites(c) || fFound;
         serverAssert(fFound);
         c->fPendingAsyncWrite = FALSE;
     }

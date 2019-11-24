@@ -1261,7 +1261,6 @@ public:
     // Note: If you do not need the obj then use the objless iterator version.  It's faster
     bool iterate(std::function<bool(const char*, robj*)> fn);
     bool iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn) const;
-    bool iterate(std::function<bool(const char*)> fn) const;
     void setExpire(robj *key, robj *subkey, long long when);
     void setExpire(expireEntry &&e);
     expireEntry *getExpire(robj_roptr key);

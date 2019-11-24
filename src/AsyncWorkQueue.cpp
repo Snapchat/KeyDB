@@ -19,6 +19,10 @@ void AsyncWorkQueue::WorkerThreadMain()
 
     vars.clients_pending_asyncwrite = listCreate();
 
+    aeAcquireLock();
+    m_vecpthreadVars.push_back(&vars);
+    aeReleaseLock();
+
     while (!m_fQuitting)
     {
         std::unique_lock<std::mutex> lock(m_mutex);
@@ -40,6 +44,28 @@ void AsyncWorkQueue::WorkerThreadMain()
     }
 
     listRelease(vars.clients_pending_asyncwrite);
+}
+
+bool AsyncWorkQueue::removeClientAsyncWrites(client *c)
+{
+    bool fFound = false;
+    aeAcquireLock();
+    for (auto pvars : m_vecpthreadVars)
+    {
+        listIter li;
+        listNode *ln;
+        listRewind(pvars->clients_pending_asyncwrite, &li);
+        while ((ln = listNext(&li)) != nullptr)
+        {
+            if (c == listNodeValue(ln))
+            {
+                listDelNode(pvars->clients_pending_asyncwrite, ln);
+                fFound = true;
+            }
+        }
+    }
+    aeReleaseLock();
+    return fFound;
 }
 
 void AsyncWorkQueue::abandonThreads()

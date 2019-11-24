@@ -674,6 +674,7 @@ bool redisDbPersistentData::iterate_threadsafe(std::function<bool(const char*, r
     dictIterator *di = dictGetIterator(m_pdict);
     dictEntry *de = nullptr;
     bool fResult = true;
+    serverAssert(m_pdict->iterators > 0);
 
     while((de = dictNext(di)) != nullptr)
     {
@@ -789,7 +790,7 @@ void keysCommand(client *c) {
 
     const redisDbPersistentData *snapshot = nullptr;
     if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
-        snapshot = c->db->createSnapshot(c->mvccCheckpoint);
+        snapshot = c->db->createSnapshot(c->mvccCheckpoint, true /* fOptional */);
     if (snapshot != nullptr)
     {
         sds patternCopy = sdsdup(pattern);
@@ -2176,10 +2177,21 @@ void redisDbPersistentData::processChanges()
     m_setchanged.clear();
 }
 
-const redisDbPersistentData *redisDbPersistentData::createSnapshot(uint64_t mvccCheckpoint)
+const redisDbPersistentData *redisDbPersistentData::createSnapshot(uint64_t mvccCheckpoint, bool fOptional)
 {
     serverAssert(GlobalLocksAcquired());
     serverAssert(m_refCount == 0);  // do not call this on a snapshot
+
+    // First see if we have too many levels and can bail out of this to reduce load
+    int levels = 1;
+    redisDbPersistentData *psnapshot = m_spdbSnapshotHOLDER.get();
+    while (psnapshot != nullptr)
+    {
+        ++levels;
+        psnapshot = psnapshot->m_spdbSnapshotHOLDER.get();
+    }
+    if (fOptional && (levels > 8))
+        return nullptr;
 
     if (m_spdbSnapshotHOLDER != nullptr)
     {
@@ -2188,15 +2200,17 @@ const redisDbPersistentData *redisDbPersistentData::createSnapshot(uint64_t mvcc
             m_spdbSnapshotHOLDER->m_refCount++;
             return m_spdbSnapshotHOLDER.get();
         }
-        serverLog(LL_WARNING, "Nested snapshot created");
+        serverLog(levels > 5 ? LL_NOTICE : LL_VERBOSE, "Nested snapshot created: %d levels", levels);
     }
     auto spdb = std::unique_ptr<redisDbPersistentData>(new (MALLOC_LOCAL) redisDbPersistentData());
     
     spdb->m_fAllChanged = false;
     spdb->m_fTrackingChanges = 0;
     spdb->m_pdict = m_pdict;
-    spdb->m_pdict->iterators++;
     spdb->m_pdictTombstone = m_pdictTombstone;
+    // Add a fake iterator so the dicts don't rehash (they need to be read only)
+    spdb->m_pdict->iterators++;
+    dictForceRehash(spdb->m_pdictTombstone);    // prevent rehashing by finishing the rehash now
     spdb->m_spdbSnapshotHOLDER = std::move(m_spdbSnapshotHOLDER);
     spdb->m_pdbSnapshot = m_pdbSnapshot;
     spdb->m_refCount = 1;
@@ -2264,7 +2278,9 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentData *psnapshot)
 
     serverAssert(m_spdbSnapshotHOLDER->m_pdict->iterators == 1);  // All iterators should have been free'd except the fake one from createSnapshot
     if (m_refCount == 0)
+    {
         m_spdbSnapshotHOLDER->m_pdict->iterators--;
+    }
 
     if (m_pdbSnapshot == nullptr)
     {
@@ -2336,7 +2352,9 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentData *psnapshot)
 
     // Fixup the about to free'd snapshots iterator count so the dtor doesn't complain
     if (m_refCount)
+    {
         m_spdbSnapshotHOLDER->m_pdict->iterators--;
+    }
 
     m_spdbSnapshotHOLDER = std::move(m_spdbSnapshotHOLDER->m_spdbSnapshotHOLDER);
     serverAssert(m_spdbSnapshotHOLDER != nullptr || m_pdbSnapshot == nullptr);
@@ -2350,6 +2368,7 @@ redisDbPersistentData::~redisDbPersistentData()
     serverAssert(m_pdbSnapshot == nullptr);
     serverAssert(m_refCount == 0);
     serverAssert(m_pdict->iterators == 0);
+    serverAssert(m_pdictTombstone == nullptr || m_pdictTombstone->iterators == 0);
     dictRelease(m_pdict);
     if (m_pdictTombstone)
         dictRelease(m_pdictTombstone);

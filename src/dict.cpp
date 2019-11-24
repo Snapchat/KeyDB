@@ -1132,6 +1132,11 @@ void dictGetStats(char *buf, size_t bufsize, dict *d) {
     if (orig_bufsize) orig_buf[orig_bufsize-1] = '\0';
 }
 
+void dictForceRehash(dict *d)
+{
+    while (dictIsRehashing(d)) _dictRehashStep(d);
+}
+
 /* ------------------------------- Benchmark ---------------------------------*/
 
 #ifdef DICT_BENCHMARK_MAIN

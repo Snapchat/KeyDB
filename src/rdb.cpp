@@ -1115,7 +1115,7 @@ int rdbSaveInfoAuxFields(rio *rdb, int flags, rdbSaveInfo *rsi) {
     return 1;
 }
 
-int saveKey(rio *rdb, const redisDbPersistentData *db, int flags, size_t *processed, const char *keystr, robj_roptr o)
+int saveKey(rio *rdb, const redisDbPersistentDataSnapshot *db, int flags, size_t *processed, const char *keystr, robj_roptr o)
 {    
     robj key;
 
@@ -1145,7 +1145,7 @@ int saveKey(rio *rdb, const redisDbPersistentData *db, int flags, size_t *proces
  * When the function returns C_ERR and if 'error' is not NULL, the
  * integer pointed by 'error' is set to the value of errno just after the I/O
  * error. */
-int rdbSaveRio(rio *rdb, const redisDbPersistentData **rgpdb, int *error, int flags, rdbSaveInfo *rsi) {
+int rdbSaveRio(rio *rdb, const redisDbPersistentDataSnapshot **rgpdb, int *error, int flags, rdbSaveInfo *rsi) {
     dictEntry *de;
     dictIterator *di = NULL;
     char magic[10];
@@ -1161,7 +1161,7 @@ int rdbSaveRio(rio *rdb, const redisDbPersistentData **rgpdb, int *error, int fl
     if (rdbSaveInfoAuxFields(rdb,flags,rsi) == -1) goto werr;
 
     for (j = 0; j < cserver.dbnum; j++) {
-        const redisDbPersistentData *db = rgpdb[j];
+        const redisDbPersistentDataSnapshot *db = rgpdb[j];
         if (db->size() == 0) continue;
 
         /* Write the SELECT DB opcode */
@@ -1239,7 +1239,7 @@ werr:
  * While the suffix is the 40 bytes hex string we announced in the prefix.
  * This way processes receiving the payload can understand when it ends
  * without doing any processing of the content. */
-int rdbSaveRioWithEOFMark(rio *rdb, const redisDbPersistentData **rgpdb, int *error, rdbSaveInfo *rsi) {
+int rdbSaveRioWithEOFMark(rio *rdb, const redisDbPersistentDataSnapshot **rgpdb, int *error, rdbSaveInfo *rsi) {
     char eofmark[RDB_EOF_MARK_SIZE];
 
     getRandomHexChars(eofmark,RDB_EOF_MARK_SIZE);
@@ -1257,7 +1257,7 @@ werr: /* Write error. */
     return C_ERR;
 }
 
-int rdbSaveFp(FILE *fp, const redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
+int rdbSaveFp(FILE *fp, const redisDbPersistentDataSnapshot **rgpdb, rdbSaveInfo *rsi)
 {
     int error = 0;
     rio rdb;
@@ -1274,9 +1274,9 @@ int rdbSaveFp(FILE *fp, const redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
     return C_OK;
 }
 
-int rdbSave(const redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
+int rdbSave(const redisDbPersistentDataSnapshot **rgpdb, rdbSaveInfo *rsi)
 {
-    std::vector<const redisDbPersistentData*> vecdb;
+    std::vector<const redisDbPersistentDataSnapshot*> vecdb;
     if (rgpdb == nullptr)
     {
         for (int idb = 0; idb < cserver.dbnum; ++idb)
@@ -1296,7 +1296,7 @@ int rdbSave(const redisDbPersistentData **rgpdb, rdbSaveInfo *rsi)
 }
 
 /* Save the DB on disk. Return C_ERR on error, C_OK on success. */
-int rdbSaveFile(char *filename, const redisDbPersistentData **rgpdb, rdbSaveInfo *rsi) {
+int rdbSaveFile(char *filename, const redisDbPersistentDataSnapshot **rgpdb, rdbSaveInfo *rsi) {
     char tmpfile[256];
     char cwd[MAXPATHLEN]; /* Current working dir path for error messages. */
     FILE *fp;
@@ -1360,7 +1360,7 @@ werr:
 struct rdbSaveThreadArgs
 {
     rdbSaveInfo rsi;
-    const redisDbPersistentData *rgpdb[1];    // NOTE: Variable Length
+    const redisDbPersistentDataSnapshot *rgpdb[1];    // NOTE: Variable Length
 };
 
 void *rdbSaveThread(void *vargs)
@@ -1394,7 +1394,7 @@ void *rdbSaveThread(void *vargs)
 
 int launchRdbSaveThread(pthread_t &child, rdbSaveInfo *rsi)
 {
-    rdbSaveThreadArgs *args = (rdbSaveThreadArgs*)zmalloc(sizeof(rdbSaveThreadArgs) + ((cserver.dbnum-1)*sizeof(redisDbPersistentData*)), MALLOC_LOCAL);
+    rdbSaveThreadArgs *args = (rdbSaveThreadArgs*)zmalloc(sizeof(rdbSaveThreadArgs) + ((cserver.dbnum-1)*sizeof(redisDbPersistentDataSnapshot*)), MALLOC_LOCAL);
     rdbSaveInfo rsiT = RDB_SAVE_INFO_INIT;
     if (rsi == nullptr)
         rsi = &rsiT;
@@ -2453,7 +2453,7 @@ struct rdbSaveSocketThreadArgs
     int *fds;
     int numfds;
     uint64_t *clientids;
-    const redisDbPersistentData *rgpdb[1];
+    const redisDbPersistentDataSnapshot *rgpdb[1];
 };
 void *rdbSaveToSlavesSocketsThread(void *vargs)
 {
@@ -2557,7 +2557,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     g_pserver->rdb_pipe_read_result_from_child = pipefds[0];
     g_pserver->rdb_pipe_write_result_to_parent = pipefds[1];
 
-    args = (rdbSaveSocketThreadArgs*)zmalloc(sizeof(rdbSaveSocketThreadArgs) + sizeof(redisDbPersistentData*)*(cserver.dbnum-1), MALLOC_LOCAL);
+    args = (rdbSaveSocketThreadArgs*)zmalloc(sizeof(rdbSaveSocketThreadArgs) + sizeof(redisDbPersistentDataSnapshot*)*(cserver.dbnum-1), MALLOC_LOCAL);
 
     /* Collect the file descriptors of the slaves we want to transfer
      * the RDB to, which are i WAIT_BGSAVE_START state. */

@@ -2180,7 +2180,7 @@ const redisDbPersistentData *redisDbPersistentData::createSnapshot(uint64_t mvcc
 {
     serverAssert(GlobalLocksAcquired());
     serverAssert(m_refCount == 0);  // do not call this on a snapshot
-    bool fNested = false;
+
     if (m_spdbSnapshotHOLDER != nullptr)
     {
         if (mvccCheckpoint <= m_spdbSnapshotHOLDER->mvccCheckpoint)
@@ -2189,7 +2189,6 @@ const redisDbPersistentData *redisDbPersistentData::createSnapshot(uint64_t mvcc
             return m_spdbSnapshotHOLDER.get();
         }
         serverLog(LL_WARNING, "Nested snapshot created");
-        fNested = true;
     }
     auto spdb = std::unique_ptr<redisDbPersistentData>(new (MALLOC_LOCAL) redisDbPersistentData());
     

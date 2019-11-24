@@ -20,6 +20,7 @@ class AsyncWorkQueue
         std::function<void()> fnAsync;
     };
     std::vector<std::thread> m_vecthreads;
+    std::vector<struct redisServerThreadVars*> m_vecpthreadVars;
     std::queue<WorkItem> m_workqueue;
     std::mutex m_mutex;
     std::condition_variable m_cvWakeup;
@@ -31,6 +32,7 @@ public:
     ~AsyncWorkQueue();
 
     void AddWorkFunction(std::function<void()> &&fnAsync);
+    bool removeClientAsyncWrites(struct client *c);
 
     void abandonThreads();
 };

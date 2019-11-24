@@ -1412,7 +1412,7 @@ int rewriteAppendOnlyFile(char *filename) {
 
     if (g_pserver->aof_use_rdb_preamble) {
         int error;
-        std::vector<const redisDbPersistentData*> vecpdb;
+        std::vector<const redisDbPersistentDataSnapshot*> vecpdb;
         for (int idb = 0; idb < cserver.dbnum; ++idb)
         {
             vecpdb.push_back(&g_pserver->db[idb]);

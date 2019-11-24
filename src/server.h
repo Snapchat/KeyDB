@@ -1188,9 +1188,11 @@ public:
     operator robj*() const { return de ? (robj*)dictGetVal(de) : nullptr; }
 };
 
+class redisDbPersistentDataSnapshot;
 class redisDbPersistentData
 {
     friend void dictDbKeyDestructor(void *privdata, void *key);
+    friend class redisDbPersistentDataSnapshot;
 public:
     ~redisDbPersistentData();
 
@@ -1200,10 +1202,7 @@ public:
     static void swap(redisDbPersistentData *db1, redisDbPersistentData *db2);
 
     size_t slots() const { return dictSlots(m_pdict); }
-    size_t size() const 
-    { 
-        return dictSize(m_pdict) + (m_pdbSnapshot ? (m_pdbSnapshot->size() - dictSize(m_pdictTombstone)) : 0); 
-    }
+    size_t size() const;
     void expand(uint64_t slots) { dictExpand(m_pdict, slots); }
     
     void trackkey(robj_roptr o)
@@ -1260,7 +1259,6 @@ public:
     void emptyDbAsync();
     // Note: If you do not need the obj then use the objless iterator version.  It's faster
     bool iterate(std::function<bool(const char*, robj*)> fn);
-    bool iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn) const;
     void setExpire(robj *key, robj *subkey, long long when);
     void setExpire(expireEntry &&e);
     expireEntry *getExpire(robj_roptr key);
@@ -1277,23 +1275,15 @@ public:
     expireset *setexpireUnsafe() { return m_setexpire; }
     const expireset *setexpire() { return m_setexpire; }
 
-    const redisDbPersistentData *createSnapshot(uint64_t mvccCheckpoint, bool fOptional);
-    void endSnapshot(const redisDbPersistentData *psnapshot);
+    const redisDbPersistentDataSnapshot *createSnapshot(uint64_t mvccCheckpoint, bool fOptional);
+    void endSnapshot(const redisDbPersistentDataSnapshot *psnapshot);
 
 private:
     void ensure(const char *key);
     void ensure(const char *key, dictEntry **de);
     void storeDatabase();
     void storeKey(const char *key, size_t cchKey, robj *o);
-    void recursiveFreeSnapshots(redisDbPersistentData *psnapshot);
-    
-    // These do not call ENSURE and so may have a NULL object
-    dict_iter random_threadsafe() const;
-    dict_iter find_threadsafe(const char *key) const
-    {
-        dictEntry *de = dictFind(m_pdict, key);
-        return dict_iter(de);
-    }
+    void recursiveFreeSnapshots(redisDbPersistentDataSnapshot *psnapshot);
 
     // Keyspace
     dict *m_pdict = nullptr;                 /* The keyspace for this DB */
@@ -1310,15 +1300,37 @@ private:
     // These two pointers are the same, UNLESS the database has been cleared.
     //      in which case m_pdbSnapshot is NULL and we continue as though we weren'
     //      in a snapshot
-    const redisDbPersistentData *m_pdbSnapshot = nullptr;
-    std::unique_ptr<redisDbPersistentData> m_spdbSnapshotHOLDER;
+    const redisDbPersistentDataSnapshot *m_pdbSnapshot = nullptr;
+    std::unique_ptr<redisDbPersistentDataSnapshot> m_spdbSnapshotHOLDER;
     int m_refCount = 0;
+};
+
+class redisDbPersistentDataSnapshot : protected redisDbPersistentData
+{
+    friend class redisDbPersistentData;
+public:
+    bool iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn) const;
+    using redisDbPersistentData::createSnapshot;
+    using redisDbPersistentData::endSnapshot;
+    using redisDbPersistentData::end;
+
+    dict_iter random_threadsafe() const;
+    dict_iter find_threadsafe(const char *key) const
+    {
+        dictEntry *de = dictFind(m_pdict, key);
+        return dict_iter(de);
+    }
+
+    // These need to be fixed
+    using redisDbPersistentData::size;
+    using redisDbPersistentData::expireSize;
+    using redisDbPersistentData::getExpire;
 };
 
 /* Redis database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
-typedef struct redisDb : public redisDbPersistentData 
+typedef struct redisDb : public redisDbPersistentDataSnapshot 
 {
     // Legacy C API, Do not add more
     friend void tryResizeHashTables(int);
@@ -1349,6 +1361,39 @@ typedef struct redisDb : public redisDbPersistentData
 
     bool FKeyExpires(const char *key);
     size_t clear(bool fAsync, void(callback)(void*));
+
+    // Import methods from redisDbPersistentData hidden by redisDbPersistentDataSnapshot
+    using redisDbPersistentData::slots;
+    using redisDbPersistentData::size;
+    using redisDbPersistentData::expand;
+    using redisDbPersistentData::trackkey;
+    using redisDbPersistentData::find;
+    using redisDbPersistentData::random;
+    using redisDbPersistentData::random_expire;
+    using redisDbPersistentData::findExpire;
+    using redisDbPersistentData::end;
+    using redisDbPersistentData::getStats;
+    using redisDbPersistentData::getExpireStats;
+    using redisDbPersistentData::insert;
+    using redisDbPersistentData::tryResize;
+    using redisDbPersistentData::incrementallyRehash;
+    using redisDbPersistentData::updateValue;
+    using redisDbPersistentData::syncDelete;
+    using redisDbPersistentData::asyncDelete;
+    using redisDbPersistentData::expireSize;
+    using redisDbPersistentData::removeExpire;
+    using redisDbPersistentData::removeSubkeyExpire;
+    using redisDbPersistentData::clear;
+    using redisDbPersistentData::emptyDbAsync;
+    using redisDbPersistentData::iterate;
+    using redisDbPersistentData::setExpire;
+    using redisDbPersistentData::getExpire;
+    using redisDbPersistentData::trackChanges;
+    using redisDbPersistentData::processChanges;
+    using redisDbPersistentData::setexpireUnsafe;
+    using redisDbPersistentData::setexpire;
+    using redisDbPersistentData::createSnapshot;
+    using redisDbPersistentData::endSnapshot;
 
 public:
     expireset::setiter expireitr;
@@ -2545,7 +2590,7 @@ int writeCommandsDeniedByDiskError(void);
 
 /* RDB persistence */
 #include "rdb.h"
-int rdbSaveRio(rio *rdb, const redisDbPersistentData **rgpdb, int *error, int flags, rdbSaveInfo *rsi);
+int rdbSaveRio(rio *rdb, const redisDbPersistentDataSnapshot **rgpdb, int *error, int flags, rdbSaveInfo *rsi);
 void killRDBChild(void);
 
 /* AOF persistence */

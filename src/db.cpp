@@ -649,7 +649,7 @@ bool redisDbPersistentData::iterate(std::function<bool(const char*, robj*)> fn)
 
     if (fResult && m_pdbSnapshot != nullptr)
     {
-        fResult = m_pdbSnapshot->iterate([&](const char *key){
+        fResult = m_pdbSnapshot->iterate_threadsafe([&](const char *key, robj_roptr){
             // Before passing off to the user we need to make sure it's not already in the
             //  the current set, and not deleted
             dictEntry *deCurrent = dictFind(m_pdict, key);
@@ -671,10 +671,10 @@ bool redisDbPersistentData::iterate(std::function<bool(const char*, robj*)> fn)
 
 bool redisDbPersistentData::iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn) const
 {
-    dictIterator *di = dictGetIterator(m_pdict);
     dictEntry *de = nullptr;
     bool fResult = true;
 
+    dictIterator *di = dictGetIterator(m_pdict);
     while((de = dictNext(di)) != nullptr)
     {
         if (!fn((const char*)dictGetKey(de), (robj*)dictGetVal(de)))
@@ -705,41 +705,6 @@ bool redisDbPersistentData::iterate_threadsafe(std::function<bool(const char*, r
     return fResult;
 }
 
-bool redisDbPersistentData::iterate(std::function<bool(const char*)> fn) const
-{
-    dictIterator *di = dictGetIterator(m_pdict);
-    dictEntry *de = nullptr;
-    bool fResult = true;
-    while((de = dictNext(di)) != nullptr)
-    {
-        if (!fn((const char*)dictGetKey(de)))
-        {
-            fResult = false;
-            break;
-        }
-    }
-    dictReleaseIterator(di);
-    
-    if (fResult && m_pdbSnapshot != nullptr)
-    {
-        fResult = m_pdbSnapshot->iterate([&](const char *key){
-            // Before passing off to the user we need to make sure it's not already in the
-            //  the current set, and not deleted
-            dictEntry *deCurrent = dictFind(m_pdict, key);
-            if (deCurrent != nullptr)
-                return true;
-            dictEntry *deTombstone = dictFind(m_pdictTombstone, key);
-            if (deTombstone != nullptr)
-                return true;
-
-            // Alright it's a key in the use keyspace
-            return fn(key);
-        });
-    }
-    
-    return fResult;
-}
-
 client *createFakeClient(void);
 void freeFakeClient(client *);
 void keysCommandCore(client *cIn, const redisDbPersistentData *db, sds pattern)
@@ -753,7 +718,7 @@ void keysCommandCore(client *cIn, const redisDbPersistentData *db, sds pattern)
     void *replylen = addReplyDeferredLen(c);
 
     allkeys = (pattern[0] == '*' && pattern[1] == '\0');
-    db->iterate([&](const char *key)->bool {
+    db->iterate_threadsafe([&](const char *key, robj_roptr)->bool {
         robj *keyobj;
 
         if (allkeys || stringmatchlen(pattern,plen,key,sdslen(key),0)) {

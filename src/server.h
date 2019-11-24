@@ -1229,28 +1229,7 @@ public:
         return find(szFromObj(key));
     }
 
-    dict_iter random()
-    {
-        if (size() == 0)
-            return dict_iter(nullptr);
-        if (m_pdbSnapshot != nullptr && m_pdbSnapshot->size() > 0)
-        {
-            dict_iter iter(nullptr);
-            double pctInSnapshot = (double)m_pdbSnapshot->size() / (size() + m_pdbSnapshot->size());
-            double randval = (double)rand()/RAND_MAX;
-            if (randval <= pctInSnapshot)
-            {
-                iter = m_pdbSnapshot->random();
-                ensure(iter.key());
-                dictEntry *de = dictFind(m_pdict, iter.key());
-                return dict_iter(de);
-            }
-        }
-        dictEntry *de = dictGetRandomKey(m_pdict);
-        if (de != nullptr)
-            ensure((const char*)dictGetKey(de), &de);
-        return dict_iter(de);
-    }
+    dict_iter random();
 
     const expireEntry &random_expire()
     {
@@ -1308,6 +1287,14 @@ private:
     void storeDatabase();
     void storeKey(const char *key, size_t cchKey, robj *o);
     void recursiveFreeSnapshots(redisDbPersistentData *psnapshot);
+    
+    // These do not call ENSURE and so may have a NULL object
+    dict_iter random_threadsafe() const;
+    dict_iter find_threadsafe(const char *key) const
+    {
+        dictEntry *de = dictFind(m_pdict, key);
+        return dict_iter(de);
+    }
 
     // Keyspace
     dict *m_pdict = nullptr;                 /* The keyspace for this DB */
@@ -1324,7 +1311,7 @@ private:
     // These two pointers are the same, UNLESS the database has been cleared.
     //      in which case m_pdbSnapshot is NULL and we continue as though we weren'
     //      in a snapshot
-    redisDbPersistentData *m_pdbSnapshot = nullptr;
+    const redisDbPersistentData *m_pdbSnapshot = nullptr;
     std::unique_ptr<redisDbPersistentData> m_spdbSnapshotHOLDER;
     int m_refCount = 0;
 };

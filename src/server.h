@@ -1315,11 +1315,7 @@ public:
     using redisDbPersistentData::end;
 
     dict_iter random_threadsafe() const;
-    dict_iter find_threadsafe(const char *key) const
-    {
-        dictEntry *de = dictFind(m_pdict, key);
-        return dict_iter(de);
-    }
+    dict_iter find_threadsafe(const char *key) const;
 
     // These need to be fixed
     using redisDbPersistentData::size;

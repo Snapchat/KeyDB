@@ -372,7 +372,13 @@ bool redisDbPersistentData::syncDelete(robj *key)
         removeExpire(key, itr);
     if (dictDelete(m_pdict,ptrFromObj(key)) == DICT_OK) {
         if (m_pdbSnapshot != nullptr)
-            dictAdd(m_pdictTombstone, sdsdup(szFromObj(key)), nullptr);
+        {
+            auto itr = m_pdbSnapshot->find_threadsafe(szFromObj(key));
+            if (itr != nullptr)
+            {
+                dictAdd(m_pdictTombstone, sdsdup(szFromObj(key)), nullptr);
+            }
+        }
         if (g_pserver->cluster_enabled) slotToKeyDel(key);
         return 1;
     } else {
@@ -1899,9 +1905,16 @@ void redisDb::initialize(int id)
 
 bool redisDbPersistentData::insert(char *key, robj *o)
 {
+    ensure(key);
     int res = dictAdd(m_pdict, key, o);
     if (res == DICT_OK)
+    {
+        if (m_pdbSnapshot != nullptr && m_pdbSnapshot->find_threadsafe(key) != nullptr)
+        {
+            serverAssert(dictFind(m_pdictTombstone, key) != nullptr);
+        }
         trackkey(key);
+    }
     return (res == DICT_OK);
 }
 
@@ -2036,6 +2049,7 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
                 serverAssert(objNew->mvcc_tstamp == itr.val()->mvcc_tstamp);
             }
             *pde = dictFind(m_pdict, sdsKey);
+            dictAdd(m_pdictTombstone, sdsdup(sdsKey), nullptr);
         }
     }
     else if (*pde != nullptr && dictGetVal(*pde) == nullptr)

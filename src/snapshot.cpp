@@ -120,7 +120,12 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     {
         dictEntry *deSnapshot = dictFind(m_spdbSnapshotHOLDER->m_pdict, dictGetKey(de));
         if (deSnapshot == nullptr)
-            continue;   // sometimes we delete things that were never in the snapshot
+        {
+            // The tombstone is for a grand child, propogate it
+            serverAssert(m_spdbSnapshotHOLDER->m_pdbSnapshot->find_threadsafe((const char*)dictGetKey(de)) != nullptr);
+            dictAdd(m_spdbSnapshotHOLDER->m_pdictTombstone, sdsdup((sds)dictGetKey(de)), nullptr);
+            continue;
+        }
         
         robj *obj = (robj*)dictGetVal(deSnapshot);
         const char *key = (const char*)dictGetKey(deSnapshot);
@@ -157,6 +162,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     
     // Stage 3 swap the databases with the snapshot
     std::swap(m_pdict, m_spdbSnapshotHOLDER->m_pdict);
+    std::swap(m_pdictTombstone, m_spdbSnapshotHOLDER->m_pdictTombstone);
 
     // Stage 4 merge all expires
     // TODO
@@ -183,6 +189,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     serverAssert(m_spdbSnapshotHOLDER != nullptr || m_pdbSnapshot == nullptr);
     serverAssert(m_pdbSnapshot == m_spdbSnapshotHOLDER.get() || m_pdbSnapshot == nullptr);
     serverAssert((m_refCount == 0 && m_pdict->iterators == 0) || (m_refCount != 0 && m_pdict->iterators == 1));
+    serverAssert(m_spdbSnapshotHOLDER != nullptr || dictSize(m_pdictTombstone) == 0);
 }
 
 dict_iter redisDbPersistentDataSnapshot::random_threadsafe() const
@@ -204,14 +211,32 @@ dict_iter redisDbPersistentDataSnapshot::random_threadsafe() const
     return dict_iter(de);
 }
 
+dict_iter redisDbPersistentDataSnapshot::find_threadsafe(const char *key) const
+{
+    dictEntry *de = dictFind(m_pdict, key);
+    if (de == nullptr && m_pdbSnapshot != nullptr)
+    {
+        auto itr = m_pdbSnapshot->find_threadsafe(key);
+        if (itr != nullptr && dictFind(m_pdictTombstone, itr.key()) == nullptr)
+            return itr;
+    }
+    return dict_iter(de);
+}
+
 bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn) const
 {
     dictEntry *de = nullptr;
     bool fResult = true;
 
+    // Take the size so we can ensure we visited every element exactly once
+    //  use volatile to ensure it's not checked too late.  This makes it more
+    //  likely we'll detect races (but it won't gurantee it)
+    volatile size_t celem = size();
+
     dictIterator *di = dictGetIterator(m_pdict);
     while((de = dictNext(di)) != nullptr)
     {
+        --celem;
         if (!fn((const char*)dictGetKey(de), (robj*)dictGetVal(de)))
         {
             fResult = false;
@@ -228,14 +253,17 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
             dictEntry *deCurrent = dictFind(m_pdict, key);
             if (deCurrent != nullptr)
                 return true;
+            
             dictEntry *deTombstone = dictFind(m_pdictTombstone, key);
             if (deTombstone != nullptr)
                 return true;
 
             // Alright it's a key in the use keyspace, lets ensure it and then pass it off
+            --celem;
             return fn(key, o);
         });
     }
 
+    serverAssert(!fResult || celem == 0);
     return fResult;
 }

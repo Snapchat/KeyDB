@@ -289,7 +289,9 @@ extern "C" void fastlock_lock(struct fastlock *lock)
             break;
 
 #if defined(__i386__) || defined(__amd64__)
-        __asm__ ("pause");
+        __asm__ __volatile__ ("pause");
+#elif defined(__arm__)
+        __asm__ __volatile__ ("yield");
 #endif
         if ((++cloops % 1024*1024) == 0)
         {

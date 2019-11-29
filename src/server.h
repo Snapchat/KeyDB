@@ -94,6 +94,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #include "crc64.h"
 #include "IStorage.h"
 #include "AsyncWorkQueue.h"
+#include "gc.h"
 
 extern int g_fTestMode;
 
@@ -1278,6 +1279,8 @@ public:
     const redisDbPersistentDataSnapshot *createSnapshot(uint64_t mvccCheckpoint, bool fOptional);
     void endSnapshot(const redisDbPersistentDataSnapshot *psnapshot);
 
+    void consolidate_snapshot();
+
 private:
     void ensure(const char *key);
     void ensure(const char *key, dictEntry **de);
@@ -1308,7 +1311,15 @@ private:
 class redisDbPersistentDataSnapshot : protected redisDbPersistentData
 {
     friend class redisDbPersistentData;
+protected:
+    bool m_fConsolidated = false;
+    static void gcDisposeSnapshot(redisDbPersistentDataSnapshot *psnapshot);
+    int snapshot_depth() const;
+    void consolidate_children(redisDbPersistentData *pdbPrimary);
+
 public:
+    bool FWillFreeChildDebug() const { return m_spdbSnapshotHOLDER != nullptr; }
+
     bool iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn) const;
     using redisDbPersistentData::createSnapshot;
     using redisDbPersistentData::endSnapshot;
@@ -1390,6 +1401,7 @@ typedef struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::setexpire;
     using redisDbPersistentData::createSnapshot;
     using redisDbPersistentData::endSnapshot;
+    using redisDbPersistentData::consolidate_snapshot;
 
 public:
     expireset::setiter expireitr;
@@ -1790,6 +1802,7 @@ struct redisServerThreadVars {
     struct fastlock lockPendingWrite { "thread pending write" };
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     long unsigned commandsExecuted = 0;
+    uint64_t gcEpoch = 0;
 };
 
 struct redisMaster {
@@ -2187,6 +2200,8 @@ struct redisServer {
     /* System hardware info */
     size_t system_memory_size;  /* Total memory in system as reported by OS */
 
+    GarbageCollector<redisDbPersistentDataSnapshot> garbageCollector;
+
     bool FRdbSaveInProgress() const { return rdbThreadVars.fRdbThreadActive; }
 };
 
@@ -2284,7 +2299,7 @@ typedef struct {
 //extern struct redisServer server;
 extern redisServer *g_pserver;
 extern struct redisServerConst cserver;
-extern __thread struct redisServerThreadVars *serverTL;   // thread local server vars
+extern thread_local struct redisServerThreadVars *serverTL;   // thread local server vars
 extern struct sharedObjectsStruct shared;
 extern dictType objectKeyPointerValueDictType;
 extern dictType objectKeyHeapPointerValueDictType;

@@ -1,7 +1,7 @@
 #pragma once
 #include "fastlock.h"
 #include <vector>
-#include <queue>
+#include <deque>
 #include <mutex>
 #include <thread>
 #include <condition_variable>
@@ -21,7 +21,7 @@ class AsyncWorkQueue
     };
     std::vector<std::thread> m_vecthreads;
     std::vector<struct redisServerThreadVars*> m_vecpthreadVars;
-    std::queue<WorkItem> m_workqueue;
+    std::deque<WorkItem> m_workqueue;
     std::mutex m_mutex;
     std::condition_variable m_cvWakeup;
     std::atomic<bool> m_fQuitting { false };
@@ -31,7 +31,7 @@ public:
     AsyncWorkQueue(int nthreads);
     ~AsyncWorkQueue();
 
-    void AddWorkFunction(std::function<void()> &&fnAsync);
+    void AddWorkFunction(std::function<void()> &&fnAsync, bool fHiPri = false);
     bool removeClientAsyncWrites(struct client *c);
 
     void abandonThreads();

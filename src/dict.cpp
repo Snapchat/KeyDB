@@ -242,8 +242,8 @@ int dictRehashMilliseconds(dict *d, int ms) {
     long long start = timeInMilliseconds();
     int rehashes = 0;
 
-    while(dictRehash(d,100)) {
-        rehashes += 100;
+    while(dictRehash(d,1000)) {
+        rehashes += 1000;
         if (timeInMilliseconds()-start > ms) break;
     }
     return rehashes;

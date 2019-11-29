@@ -13,8 +13,7 @@ AsyncWorkQueue::AsyncWorkQueue(int nthreads)
 
 void AsyncWorkQueue::WorkerThreadMain()
 {
-    static redisServerThreadVars vars;
-    memset(&vars, 0, sizeof(redisServerThreadVars));
+    redisServerThreadVars vars;
     serverTL = &vars;
 
     vars.clients_pending_asyncwrite = listCreate();
@@ -27,20 +26,26 @@ void AsyncWorkQueue::WorkerThreadMain()
     {
         std::unique_lock<std::mutex> lock(m_mutex);
         m_cvWakeup.wait(lock);
+
         while (!m_workqueue.empty())
         {
             WorkItem task = std::move(m_workqueue.front());
-            m_workqueue.pop();
+            m_workqueue.pop_front();
 
             lock.unlock();
+            serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
             task.fnAsync();
+            g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
             lock.lock();
         }
 
         lock.unlock();
+        serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
         aeAcquireLock();
         ProcessPendingAsyncWrites();
         aeReleaseLock();
+        g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
+        serverTL->gcEpoch = 0;
     }
 
     listRelease(vars.clients_pending_asyncwrite);
@@ -91,9 +96,12 @@ AsyncWorkQueue::~AsyncWorkQueue()
     abandonThreads();
 }
 
-void AsyncWorkQueue::AddWorkFunction(std::function<void()> &&fnAsync)
+void AsyncWorkQueue::AddWorkFunction(std::function<void()> &&fnAsync, bool fHiPri)
 {
     std::unique_lock<std::mutex> lock(m_mutex);
-    m_workqueue.emplace(std::move(fnAsync));
+    if (fHiPri)
+        m_workqueue.emplace_front(std::move(fnAsync));
+    else
+        m_workqueue.emplace_back(std::move(fnAsync));
     m_cvWakeup.notify_one();
 }

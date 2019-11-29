@@ -82,7 +82,7 @@ struct redisServer server; /* Server global state */
 }
 redisServer *g_pserver = &GlobalHidden::server;
 struct redisServerConst cserver;
-__thread struct redisServerThreadVars *serverTL = NULL;   // thread local server vars
+thread_local struct redisServerThreadVars *serverTL = NULL;   // thread local server vars
 volatile unsigned long lru_clock; /* Server global current LRU time. */
 
 /* Our command table.
@@ -2089,6 +2089,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             g_pserver->rdb_bgsave_scheduled = 0;
     }
 
+    g_pserver->asyncworkqueue->AddWorkFunction([]{
+        g_pserver->db[0].consolidate_snapshot();
+    }, true /*HiPri*/);
+
     g_pserver->cronloops++;
     return 1000/g_pserver->hz;
 }
@@ -2173,6 +2177,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Handle writes with pending output buffers. */
     aeReleaseLock();
     handleClientsWithPendingWrites(IDX_EVENT_LOOP_MAIN);
+    if (serverTL->gcEpoch != 0)
+        g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);
+    serverTL->gcEpoch = 0;
     aeAcquireLock();
 
     /* Close clients that need to be closed asynchronous */
@@ -2207,6 +2214,10 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
     freeClientsInAsyncFreeQueue(iel);
     aeReleaseLock();
 
+    if (serverTL->gcEpoch != 0)
+        g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);
+    serverTL->gcEpoch = 0;
+
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
      * time. */
@@ -2219,6 +2230,9 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
 void afterSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
     if (moduleCount()) moduleAcquireGIL(TRUE /*fServerThread*/);
+
+    serverAssert(serverTL->gcEpoch == 0);
+    serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
 }
 
 /* =========================== Server initialization ======================== */

@@ -1367,7 +1367,11 @@ void *rdbSaveThread(void *vargs)
 {
     rdbSaveThreadArgs *args = reinterpret_cast<rdbSaveThreadArgs*>(vargs);
     serverAssert(serverTL == nullptr);
-    int retval = rdbSave(args->rgpdb, &args->rsi);
+    redisServerThreadVars vars;
+    serverTL = &vars;
+    vars.gcEpoch = g_pserver->garbageCollector.startEpoch();
+
+    int retval = rdbSave(args->rgpdb, &args->rsi);    
     if (retval == C_OK) {
         size_t private_dirty = zmalloc_get_private_dirty(-1);
 
@@ -1389,6 +1393,7 @@ void *rdbSaveThread(void *vargs)
     if (!g_pserver->rdbThreadVars.fRdbThreadCancel)
         aeReleaseLock();
     zfree(args);
+    g_pserver->garbageCollector.endEpoch(vars.gcEpoch);
     return (retval == C_OK) ? (void*)0 : (void*)1;
 }
 

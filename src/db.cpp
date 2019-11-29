@@ -64,27 +64,31 @@ void updateExpire(redisDb *db, sds key, robj *valOld, robj *valNew)
 }
 
 
+static void lookupKeyUpdateObj(robj *val, int flags)
+{
+    /* Update the access time for the ageing algorithm.
+     * Don't do it if we have a saving child, as this will trigger
+     * a copy on write madness. */
+    if (!g_pserver->FRdbSaveInProgress() &&
+        g_pserver->aof_child_pid == -1 &&
+        !(flags & LOOKUP_NOTOUCH))
+    {
+        if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+            updateLFU(val);
+        } else {
+            val->lru = LRU_CLOCK();
+        }
+    }
+}
+
 /* Low level key lookup API, not actually called directly from commands
  * implementations that should instead rely on lookupKeyRead(),
  * lookupKeyWrite() and lookupKeyReadWithFlags(). */
-static robj *lookupKey(redisDb *db, robj *key, int flags) {
+static robj* lookupKey(redisDb *db, robj *key, int flags) {
     auto itr = db->find(key);
     if (itr) {
         robj *val = itr.val();
-        /* Update the access time for the ageing algorithm.
-         * Don't do it if we have a saving child, as this will trigger
-         * a copy on write madness. */
-        if (!g_pserver->FRdbSaveInProgress() &&
-            g_pserver->aof_child_pid == -1 &&
-            !(flags & LOOKUP_NOTOUCH))
-        {
-            if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-                updateLFU(val);
-            } else {
-                val->lru = LRU_CLOCK();
-            }
-        }
-
+        lookupKeyUpdateObj(val, flags);
         if (flags & LOOKUP_UPDATEMVCC) {
             val->mvcc_tstamp = getMvccTstamp();
             db->trackkey(key);
@@ -93,6 +97,15 @@ static robj *lookupKey(redisDb *db, robj *key, int flags) {
     } else {
         return NULL;
     }
+}
+static robj_roptr lookupKeyConst(redisDb *db, robj *key, int flags) {
+    serverAssert((flags & LOOKUP_UPDATEMVCC) == 0);
+    robj_roptr val = db->find_threadsafe(szFromObj(key));
+    if (val != nullptr) {
+        lookupKeyUpdateObj(val.unsafe_robjcast(), flags);
+        return val;
+    }
+    return nullptr;
 }
 
 /* Lookup a key for read operations, or return NULL if the key is not found
@@ -118,7 +131,7 @@ static robj *lookupKey(redisDb *db, robj *key, int flags) {
  * correctly report a key is expired on slaves even if the master is lagging
  * expiring our key via DELs in the replication link. */
 robj_roptr lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
-    robj *val;
+    robj_roptr val;
     serverAssert(GlobalLocksAcquired());
 
     if (expireIfNeeded(db,key) == 1) {
@@ -153,8 +166,8 @@ robj_roptr lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
             return NULL;
         }
     }
-    val = lookupKey(db,key,flags);
-    if (val == NULL) {
+    val = lookupKeyConst(db,key,flags);
+    if (val == nullptr) {
         g_pserver->stat_keyspace_misses++;
         notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
     }
@@ -2122,9 +2135,9 @@ void redisDbPersistentData::processChanges()
 redisDbPersistentData::~redisDbPersistentData()
 {
     serverAssert(m_spdbSnapshotHOLDER == nullptr);
-    serverAssert(m_pdbSnapshot == nullptr);
+    //serverAssert(m_pdbSnapshot == nullptr);
     serverAssert(m_refCount == 0);
-    serverAssert(m_pdict->iterators == 0);
+    //serverAssert(m_pdict->iterators == 0);
     serverAssert(m_pdictTombstone == nullptr || m_pdictTombstone->iterators == 0);
     dictRelease(m_pdict);
     if (m_pdictTombstone)

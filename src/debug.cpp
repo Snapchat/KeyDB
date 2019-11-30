@@ -265,7 +265,6 @@ void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj
  * as input in order to ensure that a different ordered list will result in
  * a different digest. */
 void computeDatasetDigest(unsigned char *final) {
-    unsigned char digest[20];
     int j;
     uint32_t aux;
 
@@ -282,7 +281,8 @@ void computeDatasetDigest(unsigned char *final) {
         mixDigest(final,&aux,sizeof(aux));
 
         /* Iterate this DB writing every entry */
-        db->iterate([&](const char *key, robj *o)->bool {
+        db->iterate_threadsafe([final, db](const char *key, robj_roptr o)->bool {
+            unsigned char digest[20];
             robj *keyobj;
 
             memset(digest,0,20); /* This key-val digest */

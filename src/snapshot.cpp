@@ -22,7 +22,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
         // If possible reuse an existing snapshot (we want to minimize nesting)
         if (mvccCheckpoint <= m_spdbSnapshotHOLDER->mvccCheckpoint)
         {
-            if (((getMvccTstamp() - m_spdbSnapshotHOLDER->mvccCheckpoint) >> MVCC_MS_SHIFT) < 10*1000)
+            if (((getMvccTstamp() - m_spdbSnapshotHOLDER->mvccCheckpoint) >> MVCC_MS_SHIFT) < 1*1000)
             {
                 m_spdbSnapshotHOLDER->m_refCount++;
                 return m_spdbSnapshotHOLDER.get();
@@ -285,7 +285,7 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
     __atomic_load(&m_pdbSnapshot, &psnapshot, __ATOMIC_ACQUIRE);
     if (fResult && psnapshot != nullptr)
     {
-        fResult = psnapshot->iterate_threadsafe([&](const char *key, robj_roptr o){
+        fResult = psnapshot->iterate_threadsafe([this, &fn, &celem](const char *key, robj_roptr o){
             // Before passing off to the user we need to make sure it's not already in the
             //  the current set, and not deleted
             dictEntry *deCurrent = dictFind(m_pdict, key);

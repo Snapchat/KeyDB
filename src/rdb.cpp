@@ -1339,8 +1339,9 @@ int rdbSaveFile(char *filename, const redisDbPersistentDataSnapshot **rgpdb, rdb
     }
 
     serverLog(LL_NOTICE,"DB saved on disk");
-    if (serverTL != nullptr)
+    if (!g_pserver->rdbThreadVars.fRdbThreadActive)
     {
+        // Do this only in a synchronous save, otherwise our thread controller will update these
         g_pserver->dirty = 0;
         g_pserver->lastsave = time(NULL);
         g_pserver->lastbgsave_status = C_OK;

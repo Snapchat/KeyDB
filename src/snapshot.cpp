@@ -269,7 +269,7 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
     //  likely we'll detect races (but it won't gurantee it)
     volatile size_t celem = size();
 
-    dictIterator *di = dictGetIterator(m_pdict);
+    dictIterator *di = dictGetSafeIterator(m_pdict);
     while((de = dictNext(di)) != nullptr)
     {
         --celem;

@@ -4216,7 +4216,7 @@ void clusterReplyMultiBulkSlots(client *c) {
 
                     /* If slot exists in output map, add to it's list.
                     * else, create a new output map for this slot */
-                    if (start == j-1) {
+                    if (start == (int)j-1) {
                         addReplyLongLong(c, start); /* only one slot; low==high */
                         addReplyLongLong(c, start);
                     } else {

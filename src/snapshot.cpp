@@ -14,8 +14,8 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
         ++levels;
         psnapshot = psnapshot->m_spdbSnapshotHOLDER.get();
     }
-    //if (fOptional && (levels > 8))
-    //    return nullptr;
+    if (fOptional && (levels > 8))
+        return nullptr;
 
     if (m_spdbSnapshotHOLDER != nullptr)
     {
@@ -41,6 +41,8 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     spdb->m_pdict->iterators++;
     dictForceRehash(spdb->m_pdictTombstone);    // prevent rehashing by finishing the rehash now
     spdb->m_spdbSnapshotHOLDER = std::move(m_spdbSnapshotHOLDER);
+    if (m_spstorage != nullptr)
+        spdb->m_spstorage = std::shared_ptr<IStorage>(const_cast<IStorage*>(m_spstorage->clone()));
     spdb->m_pdbSnapshot = m_pdbSnapshot;
     spdb->m_refCount = 1;
     spdb->mvccCheckpoint = getMvccTstamp();
@@ -50,7 +52,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     m_pdict = dictCreate(&dbDictType,this);
     m_pdictTombstone = dictCreate(&dbDictType, this);
     m_setexpire = new (MALLOC_LOCAL) expireset();
-    
+
     serverAssert(spdb->m_pdict->iterators == 1);
 
     m_spdbSnapshotHOLDER = std::move(spdb);
@@ -348,10 +350,12 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
     dictExpand(spdb->m_pdict, m_pdbSnapshot->size());
 
     m_pdbSnapshot->iterate_threadsafe([&](const char *key, robj_roptr o){
-        incrRefCount(o);
+        if (o != nullptr)
+            incrRefCount(o);
         dictAdd(spdb->m_pdict, sdsdup(key), o.unsafe_robjcast());
         return true;
     });
+    spdb->m_spstorage = m_pdbSnapshot->m_spstorage;
 
     spdb->m_pdict->iterators++;
 

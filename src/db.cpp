@@ -1956,8 +1956,8 @@ void redisDbPersistentData::clear(void(callback)(void*))
         m_fAllChanged = true;
     delete m_setexpire;
     m_setexpire = new (MALLOC_LOCAL) expireset();
-    if (m_pstorage != nullptr)
-        m_pstorage->clear();
+    if (m_spstorage != nullptr)
+        m_spstorage->clear();
     m_pdbSnapshot = nullptr;
 }
 
@@ -1968,7 +1968,7 @@ void redisDbPersistentData::clear(void(callback)(void*))
     db1->m_fTrackingChanges = db2->m_fTrackingChanges;
     db1->m_fAllChanged = db2->m_fAllChanged;
     db1->m_setexpire = db2->m_setexpire;
-    db1->m_pstorage = db2->m_pstorage;
+    db1->m_spstorage = std::move(db2->m_spstorage);
     db1->m_pdbSnapshot = db2->m_pdbSnapshot;
     db1->m_spdbSnapshotHOLDER = std::move(db2->m_spdbSnapshotHOLDER);
 
@@ -1976,7 +1976,7 @@ void redisDbPersistentData::clear(void(callback)(void*))
     db2->m_fTrackingChanges = aux.m_fTrackingChanges;
     db2->m_fAllChanged = aux.m_fAllChanged;
     db2->m_setexpire = aux.m_setexpire;
-    db2->m_pstorage = aux.m_pstorage;
+    db2->m_spstorage = std::move(aux.m_spstorage);
     db2->m_pdbSnapshot = aux.m_pdbSnapshot;
     db2->m_spdbSnapshotHOLDER = std::move(aux.m_spdbSnapshotHOLDER);
 
@@ -2067,9 +2067,8 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
     }
     else if (*pde != nullptr && dictGetVal(*pde) == nullptr)
     {
-        serverAssert(m_pstorage != nullptr);
-        sds key = (sds)dictGetKey(*pde);
-        m_pstorage->retrieve(key, sdslen(key), true, [&](const char *, size_t, const void *data, size_t cb){
+        serverAssert(m_spstorage != nullptr);
+        m_spstorage->retrieve(sdsKey, sdslen(sdsKey), true, [&](const char *, size_t, const void *data, size_t cb){
             robj *o = deserializeStoredObject(data, cb);
             serverAssert(o != nullptr);
             dictSetVal(m_pdict, *pde, o);
@@ -2080,7 +2079,7 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
 void redisDbPersistentData::storeKey(const char *szKey, size_t cchKey, robj *o)
 {
     sds temp = serializeStoredObject(o);
-    m_pstorage->insert(szKey, cchKey, temp, sdslen(temp));
+    m_spstorage->insert(szKey, cchKey, temp, sdslen(temp));
     sdsfree(temp);
 }
 
@@ -2101,13 +2100,13 @@ void redisDbPersistentData::processChanges()
     --m_fTrackingChanges;
     serverAssert(m_fTrackingChanges >= 0);
 
-    if (m_pstorage != nullptr)
+    if (m_spstorage != nullptr)
     {
         if (m_fTrackingChanges == 0)
         {
             if (m_fAllChanged)
             {
-                m_pstorage->clear();
+                m_spstorage->clear();
                 storeDatabase();
             }
             else
@@ -2122,7 +2121,7 @@ void redisDbPersistentData::processChanges()
                     }
                     else
                     {
-                        m_pstorage->erase(str.data(), str.size());
+                        m_spstorage->erase(str.data(), str.size());
                     }
                     sdsfree(sdsKey);
                 }
@@ -2171,4 +2170,13 @@ dict_iter redisDbPersistentData::random()
 size_t redisDbPersistentData::size() const 
 { 
     return dictSize(m_pdict) + (m_pdbSnapshot ? (m_pdbSnapshot->size() - dictSize(m_pdictTombstone)) : 0); 
+}
+
+void redisDbPersistentData::removeCachedValue(const char *key)
+{
+    serverAssert(m_spstorage != nullptr);
+    dictEntry *de = dictFind(m_pdict, key);
+    serverAssert(de != nullptr);
+    decrRefCount((robj*)dictGetVal(de));
+    dictSetVal(m_pdict, de, nullptr);
 }

@@ -118,8 +118,8 @@ void redisDbPersistentData::emptyDbAsync() {
     auto *set = m_setexpire;
     m_setexpire = new (MALLOC_LOCAL) expireset();
     m_pdict = dictCreate(&dbDictType,this);
-    if (m_pstorage != nullptr)
-        m_pstorage->clear();
+    if (m_spstorage != nullptr)
+        m_spstorage->clear();
     if (m_fTrackingChanges)
         m_fAllChanged = true;
     atomicIncr(lazyfree_objects,dictSize(oldht1));

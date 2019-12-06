@@ -583,31 +583,42 @@ int freeMemoryIfNeeded(void) {
         if (bestkey) {
             db = g_pserver->db+bestdbid;
 
-            robj *keyobj = createStringObject(bestkey,sdslen(bestkey));
-            propagateExpire(db,keyobj,g_pserver->lazyfree_lazy_eviction);
-            /* We compute the amount of memory freed by db*Delete() alone.
-            * It is possible that actually the memory needed to propagate
-            * the DEL in AOF and replication link is greater than the one
-            * we are freeing removing the key, but we can't account for
-            * that otherwise we would never exit the loop.
-            *
-            * AOF and Output buffer memory will be freed eventually so
-            * we only care about memory used by the key space. */
-            delta = (long long) zmalloc_used_memory();
-            latencyStartMonitor(eviction_latency);
-            if (g_pserver->lazyfree_lazy_eviction)
-                dbAsyncDelete(db,keyobj);
+            if (db->FStorageProvider())
+            {
+                // This key is in the storage so we only need to free the object
+                delta = (long long) zmalloc_used_memory();
+                db->removeCachedValue(bestkey);
+                delta -= (long long) zmalloc_used_memory();
+                mem_freed += delta;
+            }
             else
-                dbSyncDelete(db,keyobj);
-            latencyEndMonitor(eviction_latency);
-            latencyAddSampleIfNeeded("eviction-del",eviction_latency);
-            latencyRemoveNestedEvent(latency,eviction_latency);
-            delta -= (long long) zmalloc_used_memory();
-            mem_freed += delta;
-            g_pserver->stat_evictedkeys++;
-            notifyKeyspaceEvent(NOTIFY_EVICTED, "evicted",
-                keyobj, db->id);
-            decrRefCount(keyobj);
+            {
+                robj *keyobj = createStringObject(bestkey,sdslen(bestkey));
+                propagateExpire(db,keyobj,g_pserver->lazyfree_lazy_eviction);
+                /* We compute the amount of memory freed by db*Delete() alone.
+                * It is possible that actually the memory needed to propagate
+                * the DEL in AOF and replication link is greater than the one
+                * we are freeing removing the key, but we can't account for
+                * that otherwise we would never exit the loop.
+                *
+                * AOF and Output buffer memory will be freed eventually so
+                * we only care about memory used by the key space. */
+                delta = (long long) zmalloc_used_memory();
+                latencyStartMonitor(eviction_latency);
+                if (g_pserver->lazyfree_lazy_eviction)
+                    dbAsyncDelete(db,keyobj);
+                else
+                    dbSyncDelete(db,keyobj);
+                latencyEndMonitor(eviction_latency);
+                latencyAddSampleIfNeeded("eviction-del",eviction_latency);
+                latencyRemoveNestedEvent(latency,eviction_latency);
+                delta -= (long long) zmalloc_used_memory();
+                mem_freed += delta;
+                g_pserver->stat_evictedkeys++;
+                notifyKeyspaceEvent(NOTIFY_EVICTED, "evicted",
+                    keyobj, db->id);
+                decrRefCount(keyobj);
+            }
             keys_freed++;
 
             /* When the memory to free starts to be big enough, we may

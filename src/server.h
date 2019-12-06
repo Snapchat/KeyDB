@@ -1281,6 +1281,9 @@ public:
 
     void consolidate_snapshot();
 
+    bool FStorageProvider() { return m_spstorage != nullptr; }
+    void removeCachedValue(const char *key);
+
 private:
     void ensure(const char *key);
     void ensure(const char *key, dictEntry **de);
@@ -1294,7 +1297,7 @@ private:
     int m_fTrackingChanges = 0;     // Note: Stack based
     bool m_fAllChanged = false;
     std::set<std::string> m_setchanged;
-    IStorage *m_pstorage = nullptr;
+    std::shared_ptr<IStorage> m_spstorage = nullptr;
     uint64_t mvccCheckpoint = 0;
 
     // Expire

@@ -103,7 +103,7 @@ endif
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
 FINAL_CXXFLAGS=$(CXX_STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(CXXFLAGS) $(REDIS_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
-FINAL_LIBS=-lm
+FINAL_LIBS=-lm -lz
 DEBUG=-g -ggdb
 
 ifeq ($(uname_S),SunOS)
@@ -258,8 +258,8 @@ endif
 	@touch $@
 
 # keydb-server
-$(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ) librocksdb.so
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a librocksdb.so -Wl,-rpath . $(FINAL_LIBS)
+$(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ) 
+	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/rocksdb/librocksdb.a $(FINAL_LIBS)
 
 # keydb-sentinel
 $(REDIS_SENTINEL_NAME): $(REDIS_SERVER_NAME)
@@ -296,12 +296,8 @@ dict-benchmark: dict.cpp zmalloc.cpp sds.c siphash.c
 %.o: %.asm .make-prerequisites
 	$(KEYDB_AS) $< -o $@
 
-librocksdb.so: .make-prerequisites
-	$(QUIET_CP)cp --preserve=mode ../deps/rocksdb/librocksdb.so* ./
-
 clean:
 	rm -rf $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) *.o *.gcda *.gcno *.gcov redis.info lcov-html Makefile.dep dict-benchmark
-	rm -rf librocksdb.so*
 
 .PHONY: clean
 

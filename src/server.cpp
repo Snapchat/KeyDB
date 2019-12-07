@@ -5057,6 +5057,27 @@ void OnTerminate()
         The easiest way to achieve that is to acutally segfault, so we assert
         here.
     */
+    auto exception = std::current_exception();
+    if (exception != nullptr)
+    {
+        try
+        {
+            std::rethrow_exception(exception);
+        }
+        catch (const char *szErr)
+        {
+            serverLog(LL_WARNING, "Crashing on uncaught exception: %s", szErr);
+        }
+        catch (std::string str)
+        {
+            serverLog(LL_WARNING, "Crashing on uncaught exception: %s", str.c_str());
+        }
+        catch (...)
+        {
+            // NOP
+        }
+    }
+
     serverAssert(false);
 }
 

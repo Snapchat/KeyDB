@@ -1187,6 +1187,7 @@ public:
     robj *val() { return de ? (robj*)dictGetVal(de) : nullptr; }
     robj *operator->() { return de ? (robj*)dictGetVal(de) : nullptr; }
     operator robj*() const { return de ? (robj*)dictGetVal(de) : nullptr; }
+
 };
 
 class redisDbPersistentDataSnapshot;
@@ -1265,6 +1266,8 @@ public:
     expireEntry *getExpire(robj_roptr key);
     const expireEntry *getExpire(robj_roptr key) const;
     void initialize();
+
+    void setStorageProvider(IStorage *pstorage);
 
     void trackChanges() { m_fTrackingChanges++; }
     void processChanges();
@@ -1405,6 +1408,16 @@ typedef struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::createSnapshot;
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::consolidate_snapshot;
+
+    dict_iter find_threadsafe(const char *key) const
+    {
+        dict_iter itr = redisDbPersistentDataSnapshot::find_threadsafe(key);
+        if (itr.key() != nullptr && itr.val() == nullptr)
+        {
+            return const_cast<redisDb*>(this)->redisDbPersistentData::find(key);
+        }
+        return itr;
+    }
 
 public:
     expireset::setiter expireitr;

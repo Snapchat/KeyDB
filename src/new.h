@@ -1,5 +1,6 @@
 #pragma once
 #include <cstddef>  // std::size_t
+#include "storage.h"
 
 void *operator new(size_t size, enum MALLOC_CLASS mclass);
 

@@ -10,7 +10,7 @@ public:
 
     virtual void insert(const char *key, size_t cchKey, void *data, size_t cb) = 0;
     virtual void erase(const char *key, size_t cchKey) = 0;
-    virtual void retrieve(const char *key, size_t cchKey, bool fDelete, callback fn) const = 0;
+    virtual void retrieve(const char *key, size_t cchKey, callback fn) const = 0;
     virtual size_t clear() = 0;
     virtual void enumerate(callback fn) const = 0;
 

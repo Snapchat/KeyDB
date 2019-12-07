@@ -1903,6 +1903,17 @@ void redisDbPersistentData::initialize()
     m_fTrackingChanges = 0;
 }
 
+void redisDbPersistentData::setStorageProvider(IStorage *pstorage)
+{
+    serverAssert(m_spstorage == nullptr);
+    m_spstorage = std::unique_ptr<IStorage>(pstorage);
+    m_spstorage->enumerate([&](const char *key, size_t cchkey, const void *, size_t){
+        sds sdsKey = sdsnewlen(key, cchkey);
+        dictAdd(m_pdict,  sdsKey,  nullptr);
+    });
+}
+
+IStorage *create_rocksdb_storage(const char *dbfile);
 void redisDb::initialize(int id)
 {
     redisDbPersistentData::initialize();
@@ -1914,6 +1925,8 @@ void redisDb::initialize(int id)
     this->avg_ttl = 0;
     this->last_expire_set = 0;
     this->defrag_later = listCreate();
+    if (id == 0)
+        this->setStorageProvider(create_rocksdb_storage("/tmp/rocks.db"));
 }
 
 bool redisDbPersistentData::insert(char *key, robj *o)
@@ -2068,7 +2081,7 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
     else if (*pde != nullptr && dictGetVal(*pde) == nullptr)
     {
         serverAssert(m_spstorage != nullptr);
-        m_spstorage->retrieve(sdsKey, sdslen(sdsKey), true, [&](const char *, size_t, const void *data, size_t cb){
+        m_spstorage->retrieve(sdsKey, sdslen(sdsKey), [&](const char *, size_t, const void *data, size_t cb){
             robj *o = deserializeStoredObject(data, cb);
             serverAssert(o != nullptr);
             dictSetVal(m_pdict, *pde, o);

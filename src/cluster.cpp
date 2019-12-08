@@ -3936,7 +3936,7 @@ int verifyClusterConfigWithData(void) {
 
     /* Make sure we only have keys in DB0. */
     for (j = 1; j < cserver.dbnum; j++) {
-        if (g_pserver->db[j].size()) return C_ERR;
+        if (g_pserver->db[j]->size()) return C_ERR;
     }
 
     /* Check that all the slots we see populated memory have a corresponding
@@ -4331,7 +4331,7 @@ NULL
         clusterReplyMultiBulkSlots(c);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"flushslots") && c->argc == 2) {
         /* CLUSTER FLUSHSLOTS */
-        if (g_pserver->db[0].size() != 0) {
+        if (g_pserver->db[0]->size() != 0) {
             addReplyError(c,"DB must be empty to perform CLUSTER FLUSHSLOTS.");
             return;
         }
@@ -4666,7 +4666,7 @@ NULL
          * slots nor keys to accept to replicate some other node.
          * Slaves can switch to another master without issues. */
         if (nodeIsMaster(myself) &&
-            (myself->numslots != 0 || g_pserver->db[0].size() != 0)) {
+            (myself->numslots != 0 || g_pserver->db[0]->size() != 0)) {
             addReplyError(c,
                 "To set a master the node must be empty and "
                 "without assigned slots.");
@@ -5650,7 +5650,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
 
             /* Migarting / Improrting slot? Count keys we don't have. */
             if ((migrating_slot || importing_slot) &&
-                lookupKeyRead(&g_pserver->db[0],thiskey) == nullptr)
+                lookupKeyRead(g_pserver->db[0],thiskey) == nullptr)
             {
                 missing_keys++;
             }

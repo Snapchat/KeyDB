@@ -1306,7 +1306,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
 
     for (j = 0; j < cserver.dbnum; j++) {
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
-        redisDb *db = g_pserver->db+j;
+        redisDb *db = g_pserver->db[j];
         if (db->size() == 0) continue;
 
         /* SELECT the new DB */
@@ -1415,7 +1415,7 @@ int rewriteAppendOnlyFile(char *filename) {
         std::vector<const redisDbPersistentDataSnapshot*> vecpdb;
         for (int idb = 0; idb < cserver.dbnum; ++idb)
         {
-            vecpdb.push_back(&g_pserver->db[idb]);
+            vecpdb.push_back(g_pserver->db[idb]);
         }
         if (rdbSaveRio(&aof,vecpdb.data(),&error,RDB_SAVE_AOF_PREAMBLE,NULL) == C_ERR) {
             errno = error;

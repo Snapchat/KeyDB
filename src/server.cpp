@@ -1456,7 +1456,7 @@ int htNeedsResize(dict *dict) {
 /* If the percentage of used slots in the HT reaches HASHTABLE_MIN_FILL
  * we resize the hash table to save memory */
 void tryResizeHashTables(int dbid) {
-    g_pserver->db[dbid].tryResize();
+    g_pserver->db[dbid]->tryResize();
 }
 
 /* Our hash table implementation performs rehashing incrementally while
@@ -1753,7 +1753,7 @@ void databasesCron(void) {
         /* Rehash */
         if (g_pserver->activerehashing) {
             for (j = 0; j < dbs_per_call; j++) {
-                int work_done = g_pserver->db[rehash_db].incrementallyRehash();
+                int work_done = g_pserver->db[rehash_db]->incrementallyRehash();
                 if (work_done) {
                     /* If the function did some work, stop here, we'll do
                      * more at the next cron loop. */
@@ -1915,9 +1915,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         for (j = 0; j < cserver.dbnum; j++) {
             long long size, used, vkeys;
 
-            size = g_pserver->db[j].slots();
-            used = g_pserver->db[j].size();
-            vkeys = g_pserver->db[j].expireSize();
+            size = g_pserver->db[j]->slots();
+            used = g_pserver->db[j]->size();
+            vkeys = g_pserver->db[j]->expireSize();
             if (used || vkeys) {
                 serverLog(LL_VERBOSE,"DB %d: %lld keys (%lld volatile) in %lld slots HT.",j,used,vkeys,size);
                 /* dictPrintStats(g_pserver->dict); */
@@ -2090,7 +2090,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     g_pserver->asyncworkqueue->AddWorkFunction([]{
-        g_pserver->db[0].consolidate_snapshot();
+        g_pserver->db[0]->consolidate_snapshot();
     }, true /*HiPri*/);
 
     g_pserver->cronloops++;
@@ -2177,7 +2177,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     static thread_local bool fFirstRun = true;
     if (!fFirstRun) {
         for (int idb = 0; idb < cserver.dbnum; ++idb)
-            g_pserver->db[idb].processChanges();
+            g_pserver->db[idb]->processChanges();
     }
     else {
         fFirstRun = false;
@@ -2220,7 +2220,7 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
     static thread_local bool fFirstRun = true;
     if (!fFirstRun) {
         for (int idb = 0; idb < cserver.dbnum; ++idb)
-            g_pserver->db[idb].processChanges();
+            g_pserver->db[idb]->processChanges();
     }
     else {
         fFirstRun = false;
@@ -2257,7 +2257,7 @@ void afterSleep(struct aeEventLoop *eventLoop) {
     serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
     aeAcquireLock();
     for (int idb = 0; idb < cserver.dbnum; ++idb)
-        g_pserver->db[idb].trackChanges();
+        g_pserver->db[idb]->trackChanges();
     aeReleaseLock();
 }
 
@@ -2598,6 +2598,10 @@ void initServerConfig(void) {
     /* Multithreading */
     cserver.cthreads = CONFIG_DEFAULT_THREADS;
     cserver.fThreadAffinity = CONFIG_DEFAULT_THREAD_AFFINITY;
+
+    // This will get dereferenced before the second stage init where we have the true db count
+    //  so make sure its zero and initialized
+    g_pserver->db = (redisDb**)zcalloc(sizeof(redisDb*)*cserver.dbnum, MALLOC_LOCAL);
 }
 
 extern char **environ;
@@ -3002,12 +3006,13 @@ void initServer(void) {
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
 
-    g_pserver->db = (redisDb*)zmalloc(sizeof(redisDb)*cserver.dbnum, MALLOC_LOCAL);
+    zfree(g_pserver->db);   // initServerConfig created a dummy array, free that now
+    g_pserver->db = (redisDb**)zmalloc(sizeof(redisDb*)*cserver.dbnum, MALLOC_LOCAL);
 
     /* Create the Redis databases, and initialize other internal state. */
     for (int j = 0; j < cserver.dbnum; j++) {
-        new (&g_pserver->db[j]) redisDb;
-        g_pserver->db[j].initialize(j);
+        g_pserver->db[j] = new (MALLOC_LOCAL) redisDb();
+        g_pserver->db[j]->initialize(j);
     }
 
     /* Fixup Master Client Database */
@@ -3872,6 +3877,12 @@ int prepareForShutdown(int flags) {
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
 
+    /* free our databases */
+    for (int idb = 0; idb < cserver.dbnum; ++idb) {
+        delete g_pserver->db[idb];
+        g_pserver->db[idb] = nullptr;
+    }
+
     serverLog(LL_WARNING,"%s is now ready to exit, bye bye...",
         g_pserver->sentinel_mode ? "Sentinel" : "KeyDB");
     return C_OK;
@@ -4653,19 +4664,19 @@ sds genRedisInfoString(const char *section) {
         for (j = 0; j < cserver.dbnum; j++) {
             long long keys, vkeys;
 
-            keys = g_pserver->db[j].size();
-            vkeys = g_pserver->db[j].expireSize();
+            keys = g_pserver->db[j]->size();
+            vkeys = g_pserver->db[j]->expireSize();
 
             // Adjust TTL by the current time
-            g_pserver->db[j].avg_ttl -= (g_pserver->mstime - g_pserver->db[j].last_expire_set);
-            if (g_pserver->db[j].avg_ttl < 0)
-                g_pserver->db[j].avg_ttl = 0;
-            g_pserver->db[j].last_expire_set = g_pserver->mstime;
+            g_pserver->db[j]->avg_ttl -= (g_pserver->mstime - g_pserver->db[j]->last_expire_set);
+            if (g_pserver->db[j]->avg_ttl < 0)
+                g_pserver->db[j]->avg_ttl = 0;
+            g_pserver->db[j]->last_expire_set = g_pserver->mstime;
             
             if (keys || vkeys) {
                 info = sdscatprintf(info,
                     "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n",
-                    j, keys, vkeys, static_cast<long long>(g_pserver->db[j].avg_ttl));
+                    j, keys, vkeys, static_cast<long long>(g_pserver->db[j]->avg_ttl));
             }
         }
     }

@@ -155,6 +155,55 @@ public:
     }
 };
 
+class unique_sds_ptr
+{
+    sds m_str;
+
+public:
+    unique_sds_ptr()
+        : m_str(nullptr)
+        {}
+    explicit unique_sds_ptr(sds str)
+        : m_str(str)
+        {}
+    
+    ~unique_sds_ptr()
+    {
+        if (m_str)
+            sdsfree(m_str);
+    }
+
+    unique_sds_ptr(unique_sds_ptr &&other)
+    {
+        m_str = other.m_str;
+        other.m_str = nullptr;
+    }
+
+    bool operator==(const unique_sds_ptr &other) const
+    {
+        return m_str == other.m_str;
+    }
+
+    bool operator!=(const unique_sds_ptr &other) const
+    {
+        return m_str != other.m_str;
+    }
+
+    sds operator->() const
+    {
+        return m_str;
+    }
+
+    bool operator!() const
+    {
+        return !m_str;
+    }
+
+    bool operator<(const unique_sds_ptr &other) const { return m_str < other.m_str; }
+
+    sds get() const { return m_str; }
+};
+
 void decrRefCount(robj_roptr o);
 void incrRefCount(robj_roptr o);
 class robj_sharedptr
@@ -1215,7 +1264,7 @@ public:
     void trackkey(const char *key)
     {
         if (m_fTrackingChanges && !m_fAllChanged)
-            m_setchanged.insert(std::string(key, sdslen(key)));
+            m_vecchanged.push_back(unique_sds_ptr(sdsdup(key)));
     }
 
     dict_iter find(const char *key) 
@@ -1299,7 +1348,7 @@ private:
     dict *m_pdictTombstone = nullptr;        /* Track deletes when we have a snapshot */
     int m_fTrackingChanges = 0;     // Note: Stack based
     bool m_fAllChanged = false;
-    std::set<std::string> m_setchanged;
+    std::vector<unique_sds_ptr> m_vecchanged;
     std::shared_ptr<IStorage> m_spstorage = nullptr;
     uint64_t mvccCheckpoint = 0;
 

@@ -1269,7 +1269,7 @@ public:
 
     void setStorageProvider(IStorage *pstorage);
 
-    void trackChanges() { m_fTrackingChanges++; }
+    void trackChanges();
     void processChanges();
 
     // This should only be used if you look at the key, we do not fixup

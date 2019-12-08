@@ -2110,12 +2110,14 @@ void redisDbPersistentData::storeDatabase()
 
 void redisDbPersistentData::processChanges()
 {
+    serverAssert(GlobalLocksAcquired());
+
     --m_fTrackingChanges;
     serverAssert(m_fTrackingChanges >= 0);
 
     if (m_spstorage != nullptr)
     {
-        if (m_fTrackingChanges == 0)
+        if (m_fTrackingChanges >= 0)
         {
             if (m_fAllChanged)
             {
@@ -2139,9 +2141,9 @@ void redisDbPersistentData::processChanges()
                     sdsfree(sdsKey);
                 }
             }
+            m_setchanged.clear();
         }
     }
-    m_setchanged.clear();
 }
 
 redisDbPersistentData::~redisDbPersistentData()
@@ -2192,4 +2194,9 @@ void redisDbPersistentData::removeCachedValue(const char *key)
     serverAssert(de != nullptr);
     decrRefCount((robj*)dictGetVal(de));
     dictSetVal(m_pdict, de, nullptr);
+}
+
+void redisDbPersistentData::trackChanges()
+{
+    m_fTrackingChanges++;
 }

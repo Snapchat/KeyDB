@@ -2174,8 +2174,17 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Write the AOF buffer on disk */
     flushAppendOnlyFile(0);
 
-    /* Handle writes with pending output buffers. */
+    static thread_local bool fFirstRun = true;
+    if (!fFirstRun) {
+        for (int idb = 0; idb < cserver.dbnum; ++idb)
+            g_pserver->db[idb].processChanges();
+    }
+    else {
+        fFirstRun = false;
+    }
     aeReleaseLock();
+
+    /* Handle writes with pending output buffers. */
     handleClientsWithPendingWrites(IDX_EVENT_LOOP_MAIN);
     if (serverTL->gcEpoch != 0)
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);
@@ -2204,6 +2213,19 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
     /* Check if there are clients unblocked by modules that implement
      * blocking commands. */
     moduleHandleBlockedClients(ielFromEventLoop(eventLoop));
+
+    /* Write the AOF buffer on disk */
+    flushAppendOnlyFile(0);
+
+    static thread_local bool fFirstRun = true;
+    if (!fFirstRun) {
+        for (int idb = 0; idb < cserver.dbnum; ++idb)
+            g_pserver->db[idb].processChanges();
+    }
+    else {
+        fFirstRun = false;
+    }
+
     aeReleaseLock();
 
     /* Handle writes with pending output buffers. */
@@ -2233,6 +2255,10 @@ void afterSleep(struct aeEventLoop *eventLoop) {
 
     serverAssert(serverTL->gcEpoch == 0);
     serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
+    aeAcquireLock();
+    for (int idb = 0; idb < cserver.dbnum; ++idb)
+        g_pserver->db[idb].trackChanges();
+    aeReleaseLock();
 }
 
 /* =========================== Server initialization ======================== */
@@ -3750,11 +3776,7 @@ int processCommand(client *c, int callFlags) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
-        for (int idb = 0; idb < cserver.dbnum; ++idb)
-            g_pserver->db[idb].trackChanges();
         call(c,callFlags);
-        for (int idb = 0; idb < cserver.dbnum; ++idb)
-            g_pserver->db[idb].processChanges();
         c->woff = g_pserver->master_repl_offset;
         if (listLength(g_pserver->ready_keys))
             handleClientsBlockedOnKeys();

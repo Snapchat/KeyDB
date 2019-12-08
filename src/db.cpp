@@ -2126,22 +2126,20 @@ void redisDbPersistentData::processChanges()
             }
             else
             {
-                for (auto &str : m_setchanged)
+                for (auto &key : m_vecchanged)
                 {
-                    sds sdsKey = sdsnewlen(str.data(), str.size());
-                    robj *o = find(sdsKey);
+                    robj *o = find(key.get());
                     if (o != nullptr)
                     {
-                        storeKey(str.data(), str.size(), o);
+                        storeKey(key.get(), sdslen(key.get()), o);
                     }
                     else
                     {
-                        m_spstorage->erase(str.data(), str.size());
+                        m_spstorage->erase(key.get(), sdslen(key.get()));
                     }
-                    sdsfree(sdsKey);
                 }
             }
-            m_setchanged.clear();
+            m_vecchanged.clear();
         }
     }
 }

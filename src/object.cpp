@@ -1081,7 +1081,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
     mem_total+=mem;
 
     for (j = 0; j < cserver.dbnum; j++) {
-        redisDb *db = g_pserver->db+j;
+        redisDb *db = g_pserver->db[j];
         long long keyscount = db->size();
         if (keyscount==0) continue;
 

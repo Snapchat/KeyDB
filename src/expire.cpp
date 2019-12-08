@@ -283,7 +283,7 @@ void activeExpireCycle(int type) {
     long total_expired = 0;
 
     for (j = 0; j < dbs_per_call && timelimit_exit == 0; j++) {
-        redisDb *db = g_pserver->db+(current_db % cserver.dbnum);
+        redisDb *db = g_pserver->db[(current_db % cserver.dbnum)];
 
         /* Increment the DB now so we are sure if we run out of time
          * in the current DB we'll restart from the next. This allows to
@@ -402,7 +402,7 @@ void expireSlaveKeys(void) {
         int dbid = 0;
         while(dbids && dbid < cserver.dbnum) {
             if ((dbids & 1) != 0) {
-                redisDb *db = g_pserver->db+dbid;
+                redisDb *db = g_pserver->db[dbid];
 
                 // the expire is hashed based on the key pointer, so we need the point in the main db
                 auto itrDB = db->find(keyname);
@@ -414,7 +414,7 @@ void expireSlaveKeys(void) {
                 if (itrExpire != db->setexpire()->end())
                 {
                     if (itrExpire->when() < start) {
-                        activeExpireCycleExpire(g_pserver->db+dbid,*itrExpire,start);
+                        activeExpireCycleExpire(g_pserver->db[dbid],*itrExpire,start);
                         expired = 1;
                     }
                 }

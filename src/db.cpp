@@ -481,7 +481,7 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
     }
 
     for (int j = startdb; j <= enddb; j++) {
-        removed += g_pserver->db[j].clear(!!async, callback); 
+        removed += g_pserver->db[j]->clear(!!async, callback); 
     }
     if (g_pserver->cluster_enabled) {
         if (async) {
@@ -497,7 +497,7 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
 int selectDb(client *c, int id) {
     if (id < 0 || id >= cserver.dbnum)
         return C_ERR;
-    c->db = &g_pserver->db[id];
+    c->db = g_pserver->db[id];
     return C_OK;
 }
 
@@ -1237,21 +1237,14 @@ int dbSwapDatabases(int id1, int id2) {
     if (id1 < 0 || id1 >= cserver.dbnum ||
         id2 < 0 || id2 >= cserver.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
-    redisDb aux; 
-    memcpy(&aux, &g_pserver->db[id1], sizeof(redisDb));
-    redisDb *db1 = &g_pserver->db[id1], *db2 = &g_pserver->db[id2];
+    std::swap(g_pserver->db[id1], g_pserver->db[id2]);
 
-    /* Swap hash tables. Note that we don't swap blocking_keys,
+    /* Note that we don't swap blocking_keys,
      * ready_keys and watched_keys, since we want clients to
-     * remain in the same DB they were. */
-    redisDbPersistentData::swap(db1, db2);
-    db1->avg_ttl = db2->avg_ttl;
-    db1->last_expire_set = db2->last_expire_set;
-    db1->expireitr = db2->expireitr;
-
-    db2->avg_ttl = aux.avg_ttl;
-    db2->last_expire_set = aux.last_expire_set;
-    db2->expireitr = aux.expireitr;
+     * remain in the same DB they were. so put them back */
+    std::swap(g_pserver->db[id1]->blocking_keys, g_pserver->db[id2]->blocking_keys);
+    std::swap(g_pserver->db[id2]->ready_keys, g_pserver->db[id2]->ready_keys);
+    std::swap(g_pserver->db[id2]->watched_keys, g_pserver->db[id2]->watched_keys);
 
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
@@ -1262,8 +1255,8 @@ int dbSwapDatabases(int id1, int id2) {
      * in dbAdd() when a list is created. So here we need to rescan
      * the list of clients blocked on lists and signal lists as ready
      * if needed. */
-    scanDatabaseForReadyLists(db1);
-    scanDatabaseForReadyLists(db2);
+    scanDatabaseForReadyLists(g_pserver->db[id1]);
+    scanDatabaseForReadyLists(g_pserver->db[id2]);
     return C_OK;
 }
 
@@ -1881,7 +1874,7 @@ unsigned int delKeysInSlot(unsigned int hashslot) {
         raxNext(&iter);
 
         robj *key = createStringObject((char*)iter.key+2,iter.key_len-2);
-        dbDelete(&g_pserver->db[0],key);
+        dbDelete(g_pserver->db[0],key);
         decrRefCount(key);
         j++;
     }
@@ -1925,8 +1918,8 @@ void redisDb::initialize(int id)
     this->avg_ttl = 0;
     this->last_expire_set = 0;
     this->defrag_later = listCreate();
-    if (id == 0)
-        this->setStorageProvider(create_rocksdb_storage("/tmp/rocks.db"));
+    //if (id == 0)
+    //    this->setStorageProvider(create_rocksdb_storage("/tmp/rocks.db"));
 }
 
 bool redisDbPersistentData::insert(char *key, robj *o)

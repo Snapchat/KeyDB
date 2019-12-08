@@ -1281,7 +1281,7 @@ int rdbSave(const redisDbPersistentDataSnapshot **rgpdb, rdbSaveInfo *rsi)
     {
         for (int idb = 0; idb < cserver.dbnum; ++idb)
         {
-            vecdb.push_back(&g_pserver->db[idb]);
+            vecdb.push_back(g_pserver->db[idb]);
         }
         rgpdb = vecdb.data();
     }
@@ -1390,7 +1390,7 @@ void *rdbSaveThread(void *vargs)
     if (!g_pserver->rdbThreadVars.fRdbThreadCancel)
         aeAcquireLock();
     for (int idb = 0; idb < cserver.dbnum; ++idb)
-        g_pserver->db[idb].endSnapshot(args->rgpdb[idb]);
+        g_pserver->db[idb]->endSnapshot(args->rgpdb[idb]);
     if (!g_pserver->rdbThreadVars.fRdbThreadCancel)
         aeReleaseLock();
     zfree(args);
@@ -1409,13 +1409,13 @@ int launchRdbSaveThread(pthread_t &child, rdbSaveInfo *rsi)
     args->rsi.master_repl_offset = g_pserver->master_repl_offset;
         
     for (int idb = 0; idb < cserver.dbnum; ++idb)
-        args->rgpdb[idb] = g_pserver->db[idb].createSnapshot(getMvccTstamp(), false /* fOptional */);
+        args->rgpdb[idb] = g_pserver->db[idb]->createSnapshot(getMvccTstamp(), false /* fOptional */);
 
     g_pserver->rdbThreadVars.tmpfileNum++;
     g_pserver->rdbThreadVars.fRdbThreadCancel = false;
     if (pthread_create(&child, NULL, rdbSaveThread, args)) {
         for (int idb = 0; idb < cserver.dbnum; ++idb)
-            g_pserver->db[idb].endSnapshot(args->rgpdb[idb]);
+            g_pserver->db[idb]->endSnapshot(args->rgpdb[idb]);
         zfree(args);
         return C_ERR;
     }
@@ -1981,9 +1981,9 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
 /* Load an RDB file from the rio stream 'rdb'. On success C_OK is returned,
  * otherwise C_ERR is returned and 'errno' is set accordingly. */
 int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
-    uint64_t dbid;
+    uint64_t dbid = 0;
     int type, rdbver;
-    redisDb *db = g_pserver->db+0;
+    redisDb *db = g_pserver->db[dbid];
     char buf[1024];
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
@@ -2055,7 +2055,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
                     "databases. Exiting\n", cserver.dbnum);
                 exit(1);
             }
-            db = g_pserver->db+dbid;
+            db = g_pserver->db[dbid];
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_RESIZEDB) {
             /* RESIZEDB: Hint about the size of the keys in the currently
@@ -2193,7 +2193,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
             if (fStaleMvccKey && !fExpiredKey && rsi->mi != nullptr && rsi->mi->staleKeyMap != nullptr && lookupKeyRead(db, key) == nullptr) {
                 // We have a key that we've already deleted and is not back in our database.
                 //  We'll need to inform the sending master of the delete if it is also a replica of us
-                rsi->mi->staleKeyMap->operator[](db - g_pserver->db).push_back(key);
+                rsi->mi->staleKeyMap->operator[](dbid).push_back(key);
             }
             decrRefCount(key);
             key = nullptr;
@@ -2533,7 +2533,7 @@ void *rdbSaveToSlavesSocketsThread(void *vargs)
     if (!g_pserver->rdbThreadVars.fRdbThreadCancel)
         aeAcquireLock();
     for (int idb = 0; idb < cserver.dbnum; ++idb)
-        g_pserver->db[idb].endSnapshot(args->rgpdb[idb]);
+        g_pserver->db[idb]->endSnapshot(args->rgpdb[idb]);
     if (!g_pserver->rdbThreadVars.fRdbThreadCancel)
         aeReleaseLock();
     zfree(args->clientids);
@@ -2598,7 +2598,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     start = ustime();
 
     for (int idb = 0; idb < cserver.dbnum; ++idb)
-        args->rgpdb[idb] = g_pserver->db[idb].createSnapshot(getMvccTstamp(), false /*fOptional*/);
+        args->rgpdb[idb] = g_pserver->db[idb]->createSnapshot(getMvccTstamp(), false /*fOptional*/);
 
     g_pserver->rdbThreadVars.tmpfileNum++;
     g_pserver->rdbThreadVars.fRdbThreadCancel = false;
@@ -2625,7 +2625,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
         close(pipefds[1]);
         closeChildInfoPipe();
         for (int idb = 0; idb < cserver.dbnum; ++idb)
-            g_pserver->db[idb].endSnapshot(args->rgpdb[idb]);
+            g_pserver->db[idb]->endSnapshot(args->rgpdb[idb]);
         zfree(args->clientids);
         zfree(args->fds);
         zfree(args);

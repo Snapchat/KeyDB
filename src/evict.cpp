@@ -502,7 +502,7 @@ int freeMemoryIfNeeded(void) {
                  * so to start populate the eviction pool sampling keys from
                  * every DB. */
                 for (i = 0; i < cserver.dbnum; i++) {
-                    db = g_pserver->db+i;
+                    db = g_pserver->db[i];
                     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS)
                     {
                         if ((keys = db->size()) != 0) {
@@ -526,7 +526,7 @@ int freeMemoryIfNeeded(void) {
                     bestdbid = pool[k].dbid;
                     sds key = nullptr;
 
-                    auto itr = g_pserver->db[pool[k].dbid].find(pool[k].key);
+                    auto itr = g_pserver->db[pool[k].dbid]->find(pool[k].key);
                     if (itr != nullptr && (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS || itr.val()->FExpires()))
                         key = itr.key();
 
@@ -557,7 +557,7 @@ int freeMemoryIfNeeded(void) {
              * incrementally visit all DBs. */
             for (i = 0; i < cserver.dbnum; i++) {
                 j = (++next_db) % cserver.dbnum;
-                db = g_pserver->db+j;
+                db = g_pserver->db[j];
                 if (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM)
                 {
                     if (db->size() != 0) {
@@ -581,7 +581,7 @@ int freeMemoryIfNeeded(void) {
 
         /* Finally remove the selected key. */
         if (bestkey) {
-            db = g_pserver->db+bestdbid;
+            db = g_pserver->db[bestdbid];
 
             if (db->FStorageProvider())
             {

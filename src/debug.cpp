@@ -271,7 +271,7 @@ void computeDatasetDigest(unsigned char *final) {
     memset(final,0,20); /* Start with a clean result */
 
     for (j = 0; j < cserver.dbnum; j++) {
-        redisDb *db = g_pserver->db+j;
+        redisDb *db = g_pserver->db[j];
 
         if (db->size() == 0) continue;
 
@@ -632,11 +632,11 @@ NULL
         }
 
         stats = sdscatprintf(stats,"[Dictionary HT]\n");
-        g_pserver->db[dbid].getStats(buf,sizeof(buf));
+        g_pserver->db[dbid]->getStats(buf,sizeof(buf));
         stats = sdscat(stats,buf);
 
         stats = sdscatprintf(stats,"[Expires set]\n");
-        g_pserver->db[dbid].getExpireStats(buf, sizeof(buf));
+        g_pserver->db[dbid]->getExpireStats(buf, sizeof(buf));
         stats = sdscat(stats, buf);
 
         addReplyBulkSds(c,stats);

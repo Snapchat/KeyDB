@@ -1263,7 +1263,7 @@ public:
 
     void trackkey(const char *key)
     {
-        if (m_fTrackingChanges && !m_fAllChanged)
+        if (m_fTrackingChanges && !m_fAllChanged && m_spstorage)
             m_vecchanged.push_back(unique_sds_ptr(sdsdup(key)));
     }
 
@@ -1933,7 +1933,7 @@ struct redisServerConst {
     int active_defrag_cycle_max;       /* maximal effort for defrag in CPU percentage */
     unsigned long active_defrag_max_scan_fields; /* maximum number of fields of set/hash/zset/list to process from within the main dict scan */
     size_t client_max_querybuf_len; /* Limit for client query buffer length */
-    int dbnum;                      /* Total number of configured DBs */
+    int dbnum = 0;                  /* Total number of configured DBs */
     int supervised;                 /* 1 if supervised, 0 otherwise. */
     int supervised_mode;            /* See SUPERVISED_* */
     int daemonize;                  /* True if running as a daemon */
@@ -1952,7 +1952,7 @@ struct redisServer {
                                    the actual 'hz' field value if dynamic-hz
                                    is enabled. */
     std::atomic<int> hz;                     /* serverCron() calls frequency in hertz */
-    redisDb *db;
+    redisDb **db = nullptr;
     dict *commands;             /* Command table */
     dict *orig_commands;        /* Command table before command renaming. */
 

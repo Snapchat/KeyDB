@@ -1102,7 +1102,7 @@ void activeDefragCycle(void) {
                 start_stat = g_pserver->stat_active_defrag_hits;
             }
 
-            db = &g_pserver->db[current_db];
+            db = g_pserver->db[current_db];
             cursor = 0;
         }
 

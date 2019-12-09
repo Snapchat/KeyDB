@@ -6,6 +6,7 @@
 class RocksDBStorageProvider : public IStorage
 {
     std::shared_ptr<rocksdb::DB> m_spdb;
+    std::unique_ptr<rocksdb::WriteBatch> m_spbatch;
     const rocksdb::Snapshot *m_psnapshot = nullptr;
     rocksdb::ReadOptions m_readOptionsTemplate;
 
@@ -21,12 +22,16 @@ public:
 
     virtual const IStorage *clone() const override;
 
+    virtual void beginWriteBatch() override;
+    virtual void endWriteBatch() override;
+
     size_t count() const;
 
 protected:
     RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spdb);
 
     const rocksdb::ReadOptions &ReadOptions() const { return m_readOptionsTemplate; }
+    rocksdb::WriteOptions WriteOptions() const;
 };
 
 IStorage *create_rocksdb_storage(const char *dbfile)
@@ -57,16 +62,24 @@ RocksDBStorageProvider::RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spd
 
 void RocksDBStorageProvider::insert(const char *key, size_t cchKey, void *data, size_t cb)
 {
-    auto status = m_spdb->Put(rocksdb::WriteOptions(), rocksdb::Slice(key, cchKey), rocksdb::Slice((const char*)data, cb));
+    rocksdb::Status status;
+    if (m_spbatch != nullptr)
+        status = m_spbatch->Put(rocksdb::Slice(key, cchKey), rocksdb::Slice((const char*)data, cb));
+    else
+        status = m_spdb->Put(WriteOptions(), rocksdb::Slice(key, cchKey), rocksdb::Slice((const char*)data, cb));
     if (!status.ok())
-        throw status;
+        throw status.ToString();
 }
 
 void RocksDBStorageProvider::erase(const char *key, size_t cchKey)
 {
-    auto status = m_spdb->Delete(rocksdb::WriteOptions(), rocksdb::Slice(key, cchKey));
+    rocksdb::Status status;
+    if (m_spbatch != nullptr)
+        status = m_spbatch->Delete(rocksdb::Slice(key, cchKey));
+    else
+        status = m_spdb->Delete(WriteOptions(), rocksdb::Slice(key, cchKey));
     if (!status.ok())
-        throw status;
+        throw status.ToString();
 }
 
 void RocksDBStorageProvider::retrieve(const char *key, size_t cchKey, callback fn) const
@@ -74,7 +87,7 @@ void RocksDBStorageProvider::retrieve(const char *key, size_t cchKey, callback f
     std::string value;
     auto status = m_spdb->Get(ReadOptions(), rocksdb::Slice(key, cchKey), &value);
     if (!status.ok())
-        throw status;
+        throw status.ToString();
     fn(key, cchKey, value.data(), value.size());
 }
 
@@ -83,7 +96,7 @@ size_t RocksDBStorageProvider::clear()
     size_t celem = count();
     auto status = m_spdb->DropColumnFamily(m_spdb->DefaultColumnFamily());
     if (!status.ok())
-        throw status;
+        throw status.ToString();
     return celem;
 }
 
@@ -119,4 +132,22 @@ RocksDBStorageProvider::~RocksDBStorageProvider()
         if (m_psnapshot != nullptr)
             m_spdb->ReleaseSnapshot(m_psnapshot);
     }
+}
+
+rocksdb::WriteOptions RocksDBStorageProvider::WriteOptions() const
+{
+    auto opt = rocksdb::WriteOptions();
+    opt.disableWAL = true;
+    return opt;
+}
+
+void RocksDBStorageProvider::beginWriteBatch()
+{
+    m_spbatch = std::make_unique<rocksdb::WriteBatch>();
+}
+
+void RocksDBStorageProvider::endWriteBatch()
+{
+    m_spdb->Write(WriteOptions(), m_spbatch.get());
+    m_spbatch = nullptr;
 }

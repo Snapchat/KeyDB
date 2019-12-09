@@ -1918,8 +1918,8 @@ void redisDb::initialize(int id)
     this->avg_ttl = 0;
     this->last_expire_set = 0;
     this->defrag_later = listCreate();
-    //if (id == 0)
-    //    this->setStorageProvider(create_rocksdb_storage("/tmp/rocks.db"));
+    if (id == 0)
+        this->setStorageProvider(create_rocksdb_storage("/tmp/rocks.db"));
 }
 
 bool redisDbPersistentData::insert(char *key, robj *o)
@@ -1965,29 +1965,6 @@ void redisDbPersistentData::clear(void(callback)(void*))
     if (m_spstorage != nullptr)
         m_spstorage->clear();
     m_pdbSnapshot = nullptr;
-}
-
-/* static */ void redisDbPersistentData::swap(redisDbPersistentData *db1, redisDbPersistentData *db2)
-{
-    redisDbPersistentData aux = std::move(*db1);
-    db1->m_pdict = db2->m_pdict;
-    db1->m_fTrackingChanges = db2->m_fTrackingChanges;
-    db1->m_fAllChanged = db2->m_fAllChanged;
-    db1->m_setexpire = db2->m_setexpire;
-    db1->m_spstorage = std::move(db2->m_spstorage);
-    db1->m_pdbSnapshot = db2->m_pdbSnapshot;
-    db1->m_spdbSnapshotHOLDER = std::move(db2->m_spdbSnapshotHOLDER);
-
-    db2->m_pdict = aux.m_pdict;
-    db2->m_fTrackingChanges = aux.m_fTrackingChanges;
-    db2->m_fAllChanged = aux.m_fAllChanged;
-    db2->m_setexpire = aux.m_setexpire;
-    db2->m_spstorage = std::move(aux.m_spstorage);
-    db2->m_pdbSnapshot = aux.m_pdbSnapshot;
-    db2->m_spdbSnapshotHOLDER = std::move(aux.m_spdbSnapshotHOLDER);
-
-    db1->m_pdict->privdata = static_cast<redisDbPersistentData*>(db1);
-    db2->m_pdict->privdata = static_cast<redisDbPersistentData*>(db2);
 }
 
 void redisDbPersistentData::setExpire(robj *key, robj *subkey, long long when)
@@ -2101,15 +2078,18 @@ void redisDbPersistentData::storeDatabase()
     dictReleaseIterator(di);
 }
 
-void redisDbPersistentData::processChanges()
+redisDbPersistentData::changelist redisDbPersistentData::processChanges()
 {
     serverAssert(GlobalLocksAcquired());
 
     --m_fTrackingChanges;
     serverAssert(m_fTrackingChanges >= 0);
+    changelist vecRet;
 
+    fastlock_lock(&m_lockStorage);
     if (m_spstorage != nullptr)
     {
+        m_spstorage->beginWriteBatch();
         if (m_fTrackingChanges >= 0)
         {
             if (m_fAllChanged)
@@ -2119,12 +2099,13 @@ void redisDbPersistentData::processChanges()
             }
             else
             {
-                for (auto &key : m_vecchanged)
+                for (unique_sds_ptr &key : m_vecchanged)
                 {
                     robj *o = find(key.get());
                     if (o != nullptr)
                     {
-                        storeKey(key.get(), sdslen(key.get()), o);
+                        sds temp = serializeStoredObject(o);
+                        vecRet.emplace_back(std::move(key), unique_sds_ptr(temp));
                     }
                     else
                     {
@@ -2135,6 +2116,19 @@ void redisDbPersistentData::processChanges()
             m_vecchanged.clear();
         }
     }
+    
+    return vecRet;
+}
+
+void redisDbPersistentData::commitChanges(const changelist &vec)
+{
+    for (auto &pair : vec)
+    {
+        m_spstorage->insert(pair.first.get(), sdslen(pair.first.get()), pair.second.get(), sdslen(pair.second.get()));
+    }
+    if (m_spstorage != nullptr)
+        m_spstorage->endWriteBatch();
+    fastlock_unlock(&m_lockStorage);
 }
 
 redisDbPersistentData::~redisDbPersistentData()
@@ -2181,6 +2175,13 @@ size_t redisDbPersistentData::size() const
 void redisDbPersistentData::removeCachedValue(const char *key)
 {
     serverAssert(m_spstorage != nullptr);
+    // First ensure its not a pending key
+    for (auto &spkey : m_vecchanged)
+    {
+        if (sdscmp(spkey.get(), (sds)key) == 0)
+            return; // NOP
+    }
+
     dictEntry *de = dictFind(m_pdict, key);
     serverAssert(de != nullptr);
     decrRefCount((robj*)dictGetVal(de));

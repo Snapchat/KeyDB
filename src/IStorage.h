@@ -14,6 +14,9 @@ public:
     virtual size_t clear() = 0;
     virtual void enumerate(callback fn) const = 0;
 
+    virtual void beginWriteBatch() {} // NOP
+    virtual void endWriteBatch() {} // NOP
+
     /* This is permitted to be a shallow clone */
     virtual const IStorage *clone() const = 0;
 };

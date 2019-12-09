@@ -1250,8 +1250,6 @@ public:
     redisDbPersistentData() = default;
     redisDbPersistentData(redisDbPersistentData &&) = default;
 
-    static void swap(redisDbPersistentData *db1, redisDbPersistentData *db2);
-
     size_t slots() const { return dictSlots(m_pdict); }
     size_t size() const;
     void expand(uint64_t slots) { dictExpand(m_pdict, slots); }
@@ -1319,7 +1317,14 @@ public:
     void setStorageProvider(IStorage *pstorage);
 
     void trackChanges();
-    void processChanges();
+
+    // Process and commit changes for secondary storage.  Note that process and commit are seperated
+    //  to allow you to release the global lock before commiting.  To prevent deadlocks you *must*
+    //  either release the global lock or keep the same global lock between the two functions as
+    //  a second look is kept to ensure writes to secondary storage are ordered
+    typedef std::vector<std::pair<unique_sds_ptr, unique_sds_ptr>> changelist;
+    changelist processChanges();
+    void commitChanges(const changelist &vec);
 
     // This should only be used if you look at the key, we do not fixup
     //  objects stored elsewhere
@@ -1361,6 +1366,7 @@ private:
     const redisDbPersistentDataSnapshot *m_pdbSnapshot = nullptr;
     std::unique_ptr<redisDbPersistentDataSnapshot> m_spdbSnapshotHOLDER;
     int m_refCount = 0;
+    fastlock m_lockStorage { "storage" };
 };
 
 class redisDbPersistentDataSnapshot : protected redisDbPersistentData
@@ -1452,6 +1458,7 @@ typedef struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::getExpire;
     using redisDbPersistentData::trackChanges;
     using redisDbPersistentData::processChanges;
+    using redisDbPersistentData::commitChanges;
     using redisDbPersistentData::setexpireUnsafe;
     using redisDbPersistentData::setexpire;
     using redisDbPersistentData::createSnapshot;

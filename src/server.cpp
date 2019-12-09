@@ -2128,7 +2128,7 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
  * main loop of the event driven library, that is, before to sleep
  * for ready file descriptors. */
 void beforeSleep(struct aeEventLoop *eventLoop) {
-    UNUSED(eventLoop);
+    int iel = ielFromEventLoop(eventLoop);
 
     /* Call the Redis Cluster before sleep function. Note that this function
      * may change the state of Redis Cluster (from ok to fail or vice versa),
@@ -2166,33 +2166,42 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     moduleHandleBlockedClients(ielFromEventLoop(eventLoop));
 
     /* Try to process pending commands for clients that were just unblocked. */
-    if (listLength(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].unblocked_clients))
+    if (listLength(g_pserver->rgthreadvar[iel].unblocked_clients))
     {
-        processUnblockedClients(IDX_EVENT_LOOP_MAIN);
+        processUnblockedClients(iel);
     }
 
     /* Write the AOF buffer on disk */
     flushAppendOnlyFile(0);
 
     static thread_local bool fFirstRun = true;
+    // note: we also copy the DB pointer in case a DB swap is done while the lock is released
+    std::vector<std::pair<redisDb*, redisDbPersistentData::changelist>> vecchanges;
     if (!fFirstRun) {
         for (int idb = 0; idb < cserver.dbnum; ++idb)
-            g_pserver->db[idb]->processChanges();
+        {
+            auto vec = g_pserver->db[idb]->processChanges();
+            vecchanges.emplace_back(g_pserver->db[idb], std::move(vec));
+        }
     }
     else {
         fFirstRun = false;
     }
+    
     aeReleaseLock();
 
+    for (auto &pair : vecchanges)
+        pair.first->commitChanges(pair.second);
+
     /* Handle writes with pending output buffers. */
-    handleClientsWithPendingWrites(IDX_EVENT_LOOP_MAIN);
+    handleClientsWithPendingWrites(iel);
     if (serverTL->gcEpoch != 0)
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);
     serverTL->gcEpoch = 0;
     aeAcquireLock();
 
     /* Close clients that need to be closed asynchronous */
-    freeClientsInAsyncFreeQueue(IDX_EVENT_LOOP_MAIN);
+    freeClientsInAsyncFreeQueue(iel);
 
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
@@ -5121,9 +5130,8 @@ void *workerThreadMain(void *parg)
     serverTL = g_pserver->rgthreadvar+iel;  // set the TLS threadsafe global
 
     moduleAcquireGIL(true); // Normally afterSleep acquires this, but that won't be called on the first run
-    int isMainThread = (iel == IDX_EVENT_LOOP_MAIN);
     aeEventLoop *el = g_pserver->rgthreadvar[iel].el;
-    aeSetBeforeSleepProc(el, isMainThread ? beforeSleep : beforeSleepLite, isMainThread ? 0 : AE_SLEEP_THREADSAFE);
+    aeSetBeforeSleepProc(el, beforeSleep, 0);
     aeSetAfterSleepProc(el, afterSleep, AE_SLEEP_THREADSAFE);
     aeMain(el);
     aeDeleteEventLoop(el);

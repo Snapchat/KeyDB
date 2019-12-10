@@ -10,6 +10,7 @@ public:
     ~RocksDBStorageFactory();
 
     virtual IStorage *create(int db) override;
+    virtual const char *name() const override;
 };
 
 IStorageFactory *CreateRocksDBStorageFactory(const char *path, int dbnum)
@@ -60,4 +61,9 @@ IStorage *RocksDBStorageFactory::create(int db)
     ++db;   // skip default col family
     std::shared_ptr<rocksdb::ColumnFamilyHandle> spcolfamily(m_vecspcols[db].release());
     return new RocksDBStorageProvider(m_spdb, spcolfamily, nullptr);
+}
+
+const char *RocksDBStorageFactory::name() const
+{
+    return "flash";
 }

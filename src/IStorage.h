@@ -1,6 +1,13 @@
 #pragma once
 #include <functional>
 
+class IStorageFactory
+{
+public:
+    virtual ~IStorageFactory() {}
+    virtual class IStorage *create(int db) = 0;
+};
+
 class IStorage
 {
 public:
@@ -16,6 +23,8 @@ public:
 
     virtual void beginWriteBatch() {} // NOP
     virtual void endWriteBatch() {} // NOP
+
+    virtual void flush();
 
     /* This is permitted to be a shallow clone */
     virtual const IStorage *clone() const = 0;

@@ -61,6 +61,7 @@
 #include <uuid/uuid.h>
 #include <mutex>
 #include "aelocker.h"
+#include "storage/rocksdbfactory.h"
 
 int g_fTestMode = false;
 
@@ -2187,7 +2188,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     else {
         fFirstRun = false;
     }
-    
+
     aeReleaseLock();
 
     for (auto &pair : vecchanges)
@@ -3014,6 +3015,9 @@ void initServer(void) {
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
+
+    // Create The Storage Factory (if necessary)
+    g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory("/tmp/rocks.db", cserver.dbnum);
 
     zfree(g_pserver->db);   // initServerConfig created a dummy array, free that now
     g_pserver->db = (redisDb**)zmalloc(sizeof(redisDb*)*cserver.dbnum, MALLOC_LOCAL);
@@ -3891,6 +3895,7 @@ int prepareForShutdown(int flags) {
         delete g_pserver->db[idb];
         g_pserver->db[idb] = nullptr;
     }
+    delete g_pserver->m_pstorageFactory;
 
     serverLog(LL_WARNING,"%s is now ready to exit, bye bye...",
         g_pserver->sentinel_mode ? "Sentinel" : "KeyDB");

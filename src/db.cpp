@@ -649,20 +649,27 @@ void randomkeyCommand(client *c) {
     decrRefCount(key);
 }
 
+static bool FEvictedDE(dictEntry *de)
+{
+    return (de != nullptr) && dictGetVal(de) == nullptr;
+}
 
 bool redisDbPersistentData::iterate(std::function<bool(const char*, robj*)> fn)
 {
     dictIterator *di = dictGetSafeIterator(m_pdict);
     dictEntry *de = nullptr;
     bool fResult = true;
-    while((de = dictNext(di)) != nullptr)
+    while(fResult && ((de = dictNext(di)) != nullptr))
     {
+        bool fEvicted = FEvictedDE(de);
+
         ensure((const char*)dictGetKey(de), &de);
         if (!fn((const char*)dictGetKey(de), (robj*)dictGetVal(de)))
-        {
             fResult = false;
-            break;
-        }
+
+        // re-evict the key so we don't OOM
+        if (fEvicted)
+            removeCachedValue((const char*)dictGetKey(de));
     }
     dictReleaseIterator(di);
 
@@ -679,10 +686,14 @@ bool redisDbPersistentData::iterate(std::function<bool(const char*, robj*)> fn)
                 return true;
 
             // Alright it's a key in the use keyspace, lets ensure it and then pass it off
+            bool fEvicted = FEvictedDE(de);
             ensure(key);
             deCurrent = dictFind(m_pdict, key);
-            return fn(key, (robj*)dictGetVal(deCurrent));
-        });
+            bool fResult =  fn(key, (robj*)dictGetVal(deCurrent));
+            if (fEvicted)
+                removeCachedValue(key);
+            return fResult;
+        }, true /*fKeyOnly*/);
     }
     
     return fResult;
@@ -713,7 +724,7 @@ void keysCommandCore(client *cIn, const redisDbPersistentDataSnapshot *db, sds p
             decrRefCount(keyobj);
         }
         return !(cIn->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_ASAP);
-    });
+    }, true /*fKeyOnly*/);
     
     setDeferredArrayLen(c,replylen,numkeys);
 
@@ -1906,7 +1917,6 @@ void redisDbPersistentData::setStorageProvider(IStorage *pstorage)
     });
 }
 
-IStorage *create_rocksdb_storage(const char *dbfile);
 void redisDb::initialize(int id)
 {
     redisDbPersistentData::initialize();
@@ -1918,8 +1928,8 @@ void redisDb::initialize(int id)
     this->avg_ttl = 0;
     this->last_expire_set = 0;
     this->defrag_later = listCreate();
-    if (id == 0)
-        this->setStorageProvider(create_rocksdb_storage("/tmp/rocks.db"));
+    if (g_pserver->m_pstorageFactory != nullptr)
+        this->setStorageProvider(g_pserver->m_pstorageFactory->create(id));
 }
 
 bool redisDbPersistentData::insert(char *key, robj *o)

@@ -1381,7 +1381,7 @@ protected:
 public:
     bool FWillFreeChildDebug() const { return m_spdbSnapshotHOLDER != nullptr; }
 
-    bool iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn) const;
+    bool iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly = false) const;
     using redisDbPersistentData::createSnapshot;
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::end;
@@ -2273,6 +2273,8 @@ struct redisServer {
     size_t system_memory_size;  /* Total memory in system as reported by OS */
 
     GarbageCollector<redisDbPersistentDataSnapshot> garbageCollector;
+
+    IStorageFactory *m_pstorageFactory = nullptr;
 
     bool FRdbSaveInProgress() const { return rdbThreadVars.fRdbThreadActive; }
 };

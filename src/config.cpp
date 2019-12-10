@@ -29,10 +29,13 @@
  */
 
 #include "server.h"
+#include "storage/rocksdbfactory.h"
 #include "cluster.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/sysinfo.h>
+
 
 const char *KEYDB_SET_VERSION = KEYDB_REAL_VERSION;
 
@@ -210,6 +213,38 @@ void queueLoadModule(sds path, sds *argv, int argc) {
         loadmod->argv[i] = createRawStringObject(argv[i],sdslen(argv[i]));
     }
     listAddNodeTail(g_pserver->loadmodule_queue,loadmod);
+}
+
+static bool initializeStorageProvider(sds *argv, int argc, const char **err)
+{
+    bool fResult = false;
+    if (!strcasecmp(argv[0], "flash") && argc == 2)
+    {
+        // Create The Storage Factory (if necessary)
+        g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(argv[1], cserver.dbnum);
+        fResult = true;
+    }
+
+    if (fResult)
+    {
+        // We need to set max memory to a sane default so keys are actually evicted properly
+        if (g_pserver->maxmemory == 0)
+        {
+            struct sysinfo sys;
+            if (sysinfo(&sys) == 0)
+            {
+                // By default it's half the memory.  This gives sufficient room for background saving
+                g_pserver->maxmemory = sys.totalram / 2;
+                if (g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
+                    g_pserver->maxmemory_policy = MAXMEMORY_ALLKEYS_LRU;
+            }
+        }
+    }
+    else
+    {
+        *err = "Unknown storage provider";
+    }
+    return fResult;
 }
 
 void loadServerConfigFromString(char *config) {
@@ -802,6 +837,9 @@ void loadServerConfigFromString(char *config) {
             g_fTestMode = yesnotoi(argv[1]);
         } else if (!strcasecmp(argv[0],"rdbfuzz-mode")) {
             // NOP, handled in main
+        } else if (!strcasecmp(argv[0],"storage-provider") && argc >= 2) {
+            if (!initializeStorageProvider(argv+1, argc-1, &err))
+                goto loaderr;
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }

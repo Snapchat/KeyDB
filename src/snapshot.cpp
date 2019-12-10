@@ -261,7 +261,7 @@ dict_iter redisDbPersistentDataSnapshot::find_threadsafe(const char *key) const
     return dict_iter(de);
 }
 
-bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn) const
+bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly) const
 {
     dictEntry *de = nullptr;
     bool fResult = true;
@@ -272,14 +272,22 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
     volatile size_t celem = size();
 
     dictIterator *di = dictGetSafeIterator(m_pdict);
-    while((de = dictNext(di)) != nullptr)
+    while(fResult && ((de = dictNext(di)) != nullptr))
     {
         --celem;
-        if (!fn((const char*)dictGetKey(de), (robj*)dictGetVal(de)))
+        robj *o = (robj*)dictGetVal(de);
+        if (o == nullptr && !fKeyOnly)
         {
-            fResult = false;
-            break;
+            m_spstorage->retrieve((sds)dictGetKey(de), sdslen((sds)dictGetKey(de)), [&](const char *, size_t, const void *data, size_t cb){
+                o = deserializeStoredObject(data, cb);
+            });
         }
+
+        if (!fn((const char*)dictGetKey(de), o))
+            fResult = false;
+
+        if (o != nullptr && dictGetVal(de) == nullptr)
+            decrRefCount(o);
     }
     dictReleaseIterator(di);
 
@@ -301,7 +309,7 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
             // Alright it's a key in the use keyspace, lets ensure it and then pass it off
             --celem;
             return fn(key, o);
-        });
+        }, fKeyOnly);
     }
 
     serverAssert(!fResult || celem == 0);
@@ -354,7 +362,7 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
             incrRefCount(o);
         dictAdd(spdb->m_pdict, sdsdup(key), o.unsafe_robjcast());
         return true;
-    });
+    }, true /*fKeyOnly*/);
     spdb->m_spstorage = m_pdbSnapshot->m_spstorage;
 
     spdb->m_pdict->iterators++;

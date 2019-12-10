@@ -1331,7 +1331,7 @@ public:
     dict *dictUnsafeKeyOnly() { return m_pdict; }   
 
     expireset *setexpireUnsafe() { return m_setexpire; }
-    const expireset *setexpire() { return m_setexpire; }
+    const expireset *setexpire() const { return m_setexpire; }
 
     const redisDbPersistentDataSnapshot *createSnapshot(uint64_t mvccCheckpoint, bool fOptional);
     void endSnapshot(const redisDbPersistentDataSnapshot *psnapshot);
@@ -1339,7 +1339,7 @@ public:
     void consolidate_snapshot();
 
     bool FStorageProvider() { return m_spstorage != nullptr; }
-    void removeCachedValue(const char *key);
+    bool removeCachedValue(const char *key);
 
 private:
     void ensure(const char *key);
@@ -1410,7 +1410,7 @@ typedef struct redisDb : public redisDbPersistentDataSnapshot
     friend int removeExpire(redisDb *db, robj *key);
     friend void setExpire(struct client *c, redisDb *db, robj *key, robj *subkey, long long when);
     friend void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e);
-    friend void evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct evictionPoolEntry *pool);
+    friend int evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct evictionPoolEntry *pool);
     friend void activeDefragCycle(void);
     friend int freeMemoryIfNeeded(void);
     friend void activeExpireCycle(int);
@@ -2620,7 +2620,7 @@ int equalStringObjects(robj *a, robj *b);
 unsigned long long estimateObjectIdleTime(robj_roptr o);
 void trimStringObjectIfNeeded(robj *o);
 
-robj *deserializeStoredObject(const void *data, size_t cb);
+robj *deserializeStoredObject(const redisDbPersistentData *db, const char *key, const void *data, size_t cb);
 sds serializeStoredObject(robj_roptr o);
 
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)

@@ -1509,7 +1509,7 @@ NULL
 
 void redisObject::SetFExpires(bool fExpire)
 {
-    serverAssert(this->refcount != OBJ_SHARED_REFCOUNT);
+    serverAssert(this->refcount != OBJ_SHARED_REFCOUNT || fExpire == FExpires());
     if (fExpire)
         this->refcount.fetch_or(1U << 31, std::memory_order_relaxed);
     else
@@ -1558,6 +1558,7 @@ robj *deserializeStoredStringObject(const char *data, size_t cb)
     case OBJ_ENCODING_EMBSTR:
         newObject = (robj*)zmalloc(cb, MALLOC_LOCAL);
         memcpy(newObject, data, cb);
+        newObject->SetFExpires(false);
         newObject->setrefcount(1);
         return newObject;
 
@@ -1566,6 +1567,7 @@ robj *deserializeStoredStringObject(const char *data, size_t cb)
         memcpy(newObject, data, sizeof(robj));
         newObject->m_ptr = sdsnewlen(SDS_NOINIT,cb-sizeof(robj));
         memcpy(newObject->m_ptr, data+sizeof(robj), cb-sizeof(robj));
+        newObject->SetFExpires(false);
         newObject->setrefcount(1);
         return newObject;
     }
@@ -1573,7 +1575,7 @@ robj *deserializeStoredStringObject(const char *data, size_t cb)
     return nullptr;
 }
 
-robj *deserializeStoredObject(const void *data, size_t cb)
+robj *deserializeStoredObjectCore(const void *data, size_t cb)
 {
     switch (((char*)data)[0])
     {
@@ -1608,6 +1610,13 @@ robj *deserializeStoredObject(const void *data, size_t cb)
             return obj;
     }
     serverPanic("Unknown object type loading from storage");
+}
+
+robj *deserializeStoredObject(const redisDbPersistentData *db, const char *key, const void *data, size_t cb)
+{
+    robj *o = deserializeStoredObjectCore(data, cb);
+    o->SetFExpires(db->setexpire()->exists(key));
+    return o;
 }
 
 sds serializeStoredObject(robj_roptr o)

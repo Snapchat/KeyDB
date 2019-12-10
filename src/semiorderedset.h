@@ -93,6 +93,12 @@ public:
         return end();
     }
 
+    bool exists(const T_KEY &key) const
+    {
+        auto itr = const_cast<semiorderedset<T,T_KEY,MEMMOVE_SAFE>*>(this)->find(key);
+        return itr != this->end();
+    }
+
     setiter end() const
     {
         setiter itr(const_cast<semiorderedset<T,T_KEY,MEMMOVE_SAFE>*>(this));

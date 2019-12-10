@@ -2041,28 +2041,37 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
             auto itr = m_pdbSnapshot->find_threadsafe(sdsKey);
             if (itr == m_pdbSnapshot->end())
                 return; // not found
-            if (itr.val()->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
+
+            if (itr.val() != nullptr)
             {
-                dictAdd(m_pdict, sdsdup(sdsKey), itr.val());
+                if (itr.val()->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
+                {
+                    dictAdd(m_pdict, sdsdup(sdsKey), itr.val());
+                }
+                else
+                {
+                    sds strT = serializeStoredObject(itr.val());
+                    robj *objNew = deserializeStoredObject(this, sdsKey, strT, sdslen(strT));
+                    sdsfree(strT);
+                    dictAdd(m_pdict, sdsdup(sdsKey), objNew);
+                    serverAssert(objNew->getrefcount(std::memory_order_relaxed) == 1);
+                    serverAssert(objNew->mvcc_tstamp == itr.val()->mvcc_tstamp);
+                }
             }
             else
             {
-                sds strT = serializeStoredObject(itr.val());
-                robj *objNew = deserializeStoredObject(strT, sdslen(strT));
-                sdsfree(strT);
-                dictAdd(m_pdict, sdsdup(sdsKey), objNew);
-                serverAssert(objNew->getrefcount(std::memory_order_relaxed) == 1);
-                serverAssert(objNew->mvcc_tstamp == itr.val()->mvcc_tstamp);
+                dictAdd(m_pdict, sdsdup(sdsKey), nullptr);
             }
             *pde = dictFind(m_pdict, sdsKey);
             dictAdd(m_pdictTombstone, sdsdup(sdsKey), nullptr);
         }
     }
-    else if (*pde != nullptr && dictGetVal(*pde) == nullptr)
+    
+    if (*pde != nullptr && dictGetVal(*pde) == nullptr)
     {
         serverAssert(m_spstorage != nullptr);
         m_spstorage->retrieve(sdsKey, sdslen(sdsKey), [&](const char *, size_t, const void *data, size_t cb){
-            robj *o = deserializeStoredObject(data, cb);
+            robj *o = deserializeStoredObject(this, (const char*)dictGetKey(*pde), data, cb);
             serverAssert(o != nullptr);
             dictSetVal(m_pdict, *pde, o);
         });
@@ -2106,6 +2115,7 @@ redisDbPersistentData::changelist redisDbPersistentData::processChanges()
             {
                 m_spstorage->clear();
                 storeDatabase();
+                m_fAllChanged = false;
             }
             else
             {
@@ -2182,20 +2192,25 @@ size_t redisDbPersistentData::size() const
     return dictSize(m_pdict) + (m_pdbSnapshot ? (m_pdbSnapshot->size() - dictSize(m_pdictTombstone)) : 0); 
 }
 
-void redisDbPersistentData::removeCachedValue(const char *key)
+bool redisDbPersistentData::removeCachedValue(const char *key)
 {
     serverAssert(m_spstorage != nullptr);
     // First ensure its not a pending key
     for (auto &spkey : m_vecchanged)
     {
         if (sdscmp(spkey.get(), (sds)key) == 0)
-            return; // NOP
+            return false; // NOP
     }
 
     dictEntry *de = dictFind(m_pdict, key);
     serverAssert(de != nullptr);
-    decrRefCount((robj*)dictGetVal(de));
-    dictSetVal(m_pdict, de, nullptr);
+    if (dictGetVal(de) != nullptr)
+    {
+        decrRefCount((robj*)dictGetVal(de));
+        dictSetVal(m_pdict, de, nullptr);
+        return true;
+    }
+    return false;
 }
 
 void redisDbPersistentData::trackChanges()

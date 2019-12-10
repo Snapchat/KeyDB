@@ -6,6 +6,7 @@ class IStorageFactory
 public:
     virtual ~IStorageFactory() {}
     virtual class IStorage *create(int db) = 0;
+    virtual const char *name() const = 0;
 };
 
 class IStorage

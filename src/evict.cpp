@@ -242,33 +242,46 @@ struct visitFunctor
     int dbid;
     dict *dbdict;
     struct evictionPoolEntry *pool;
-    int count;
+    int count = 0;
+    int tries = 0;
 
     bool operator()(const expireEntry &e)
     {
         dictEntry *de = dictFind(dbdict, e.key());
-        processEvictionCandidate(dbid, (sds)dictGetKey(de), (robj*)dictGetVal(de), &e, pool);
-        ++count;
-        return count < g_pserver->maxmemory_samples;
+        if (dictGetVal(de) != nullptr)
+        {
+            processEvictionCandidate(dbid, (sds)dictGetKey(de), (robj*)dictGetVal(de), &e, pool);
+            ++count;
+        }
+        ++tries;
+        return tries < g_pserver->maxmemory_samples;
     }
 };
-void evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct evictionPoolEntry *pool)
+int evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct evictionPoolEntry *pool)
 {
     if (setexpire != nullptr)
     {
         visitFunctor visitor { dbid, db->dictUnsafeKeyOnly(), pool, 0 };
         setexpire->random_visit(visitor);
+        return visitor.count;
     }
     else
     {
+        int returnCount = 0;
         dictEntry **samples = (dictEntry**)alloca(g_pserver->maxmemory_samples * sizeof(dictEntry*));
         int count = dictGetSomeKeys(db->dictUnsafeKeyOnly(),samples,g_pserver->maxmemory_samples);
         for (int j = 0; j < count; j++) {
             robj *o = (robj*)dictGetVal(samples[j]);
-            serverAssert(o != nullptr); // BUG!!! We have to get the info we need here without permanently rehydrating the obj
-            processEvictionCandidate(dbid, (sds)dictGetKey(samples[j]), o, nullptr, pool);
+            // If the object is in second tier storage we don't need to evict it (since it alrady is)
+            if (o != nullptr)
+            {
+                processEvictionCandidate(dbid, (sds)dictGetKey(samples[j]), o, nullptr, pool);
+                ++returnCount;
+            }
         }
+        return returnCount;
     }
+    return 0;
 }
 
 /* ----------------------------------------------------------------------------
@@ -468,6 +481,7 @@ int freeMemoryIfNeeded(void) {
     size_t mem_reported, mem_tofree, mem_freed;
     mstime_t latency, eviction_latency;
     long long delta;
+    int numtries = 0;
     int slaves = listLength(g_pserver->slaves);
 
     /* When clients are paused the dataset should be static not just from the
@@ -506,16 +520,14 @@ int freeMemoryIfNeeded(void) {
                     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS)
                     {
                         if ((keys = db->size()) != 0) {
-                            evictionPoolPopulate(i, db, nullptr, pool);
-                            total_keys += keys;
+                            total_keys += evictionPoolPopulate(i, db, nullptr, pool);
                         }
                     }
                     else
                     {
                         keys = db->expireSize();
                         if (keys != 0)
-                            evictionPoolPopulate(i, db, db->setexpireUnsafe(), pool);
-                        total_keys += keys;
+                            total_keys += evictionPoolPopulate(i, db, db->setexpireUnsafe(), pool);
                     }
                 }
                 if (!total_keys) break; /* No keys to evict. */
@@ -561,9 +573,16 @@ int freeMemoryIfNeeded(void) {
                 if (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM)
                 {
                     if (db->size() != 0) {
-                        auto itr = db->random();
-                        bestkey = itr.key();
-                        bestdbid = j;
+                        for (int i = 0; i < 16; ++i)
+                        {
+                            auto itr = db->random_threadsafe();
+                            if (itr.val() != nullptr)
+                            {
+                                bestkey = itr.key();
+                                bestdbid = j;
+                                break;
+                            }
+                        }
                         break;
                     }
                 }
@@ -587,7 +606,8 @@ int freeMemoryIfNeeded(void) {
             {
                 // This key is in the storage so we only need to free the object
                 delta = (long long) zmalloc_used_memory();
-                db->removeCachedValue(bestkey);
+                if (!db->removeCachedValue(bestkey))
+                    keys_freed--;   // didn't actuall free this one (we inc below)
                 delta -= (long long) zmalloc_used_memory();
                 mem_freed += delta;
             }
@@ -619,7 +639,9 @@ int freeMemoryIfNeeded(void) {
                     keyobj, db->id);
                 decrRefCount(keyobj);
             }
-            keys_freed++;
+
+            if (delta != 0) // delta can be zero if a snapshot has a ref
+                keys_freed++;
 
             /* When the memory to free starts to be big enough, we may
             * start spending so much time here that is impossible to
@@ -641,8 +663,16 @@ int freeMemoryIfNeeded(void) {
                 }
             }
         }
+        ++numtries;
 
-        if (!keys_freed) {
+        if (keys_freed <= 0) {
+            if (g_pserver->m_pstorageFactory != nullptr)
+            {
+                // If we have external storage failure to evict doesn't mean there are no
+                //  keys to free
+                if (bestkey != nullptr && numtries < 16)
+                    continue;
+            }
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("eviction-cycle",latency);
             goto cant_free; /* nothing to free... */

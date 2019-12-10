@@ -186,14 +186,16 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
         dictEntry *deExisting = dictFind(m_spdbSnapshotHOLDER->m_pdict, (const char*)dictGetKey(de));
         if (deExisting != nullptr)
         {
-            decrRefCount((robj*)dictGetVal(deExisting));
+            if (dictGetVal(deExisting) != nullptr)
+                decrRefCount((robj*)dictGetVal(deExisting));
             dictSetVal(m_spdbSnapshotHOLDER->m_pdict, deExisting, dictGetVal(de));
         }
         else
         {
             dictAdd(m_spdbSnapshotHOLDER->m_pdict, sdsdup((sds)dictGetKey(de)), dictGetVal(de));
         }
-        incrRefCount((robj*)dictGetVal(de));
+        if (dictGetVal(de) != nullptr)
+            incrRefCount((robj*)dictGetVal(de));
     }
     dictReleaseIterator(di);
     
@@ -279,7 +281,7 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
         if (o == nullptr && !fKeyOnly)
         {
             m_spstorage->retrieve((sds)dictGetKey(de), sdslen((sds)dictGetKey(de)), [&](const char *, size_t, const void *data, size_t cb){
-                o = deserializeStoredObject(data, cb);
+                o = deserializeStoredObject(this, (const char*)dictGetKey(de), data, cb);
             });
         }
 

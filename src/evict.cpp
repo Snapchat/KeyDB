@@ -481,7 +481,6 @@ int freeMemoryIfNeeded(void) {
     size_t mem_reported, mem_tofree, mem_freed;
     mstime_t latency, eviction_latency;
     long long delta;
-    int numtries = 0;
     int slaves = listLength(g_pserver->slaves);
 
     /* When clients are paused the dataset should be static not just from the
@@ -492,6 +491,14 @@ int freeMemoryIfNeeded(void) {
         return C_OK;
 
     mem_freed = 0;
+
+    size_t maxKeys = 0;
+    size_t totalKeysFreed = 0;
+    for (int i = 0; i < cserver.dbnum; ++i)
+        maxKeys += g_pserver->db[i]->size();
+
+    // A random search is n log n, so if we run longer than this we know we're not going to terminate
+    maxKeys = static_cast<size_t>(maxKeys * (log2(maxKeys)));
 
     if (g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
         goto cant_free; /* We need to free memory, but policy forbids. */
@@ -573,16 +580,9 @@ int freeMemoryIfNeeded(void) {
                 if (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM)
                 {
                     if (db->size() != 0) {
-                        for (int i = 0; i < 16; ++i)
-                        {
-                            auto itr = db->random_threadsafe();
-                            if (itr.val() != nullptr)
-                            {
-                                bestkey = itr.key();
-                                bestdbid = j;
-                                break;
-                            }
-                        }
+                        auto itr = db->random_threadsafe();
+                        bestkey = itr.key();
+                        bestdbid = j;
                         break;
                     }
                 }
@@ -606,8 +606,7 @@ int freeMemoryIfNeeded(void) {
             {
                 // This key is in the storage so we only need to free the object
                 delta = (long long) zmalloc_used_memory();
-                if (!db->removeCachedValue(bestkey))
-                    keys_freed--;   // didn't actuall free this one (we inc below)
+                db->removeCachedValue(bestkey);
                 delta -= (long long) zmalloc_used_memory();
                 mem_freed += delta;
             }
@@ -640,8 +639,8 @@ int freeMemoryIfNeeded(void) {
                 decrRefCount(keyobj);
             }
 
-            if (delta != 0) // delta can be zero if a snapshot has a ref
-                keys_freed++;
+            keys_freed++;
+            totalKeysFreed++;
 
             /* When the memory to free starts to be big enough, we may
             * start spending so much time here that is impossible to
@@ -663,16 +662,18 @@ int freeMemoryIfNeeded(void) {
                 }
             }
         }
-        ++numtries;
+
+        // When using FLASH we're not actually evicting and we leave around the key
+        //  its possible we tried to evict the whole database and failed to free enough memory
+        //  quit if this happens
+        if (totalKeysFreed >= maxKeys)
+        {
+            latencyEndMonitor(latency);
+            latencyAddSampleIfNeeded("eviction-cycle",latency);
+            goto cant_free;
+        }
 
         if (keys_freed <= 0) {
-            if (g_pserver->m_pstorageFactory != nullptr)
-            {
-                // If we have external storage failure to evict doesn't mean there are no
-                //  keys to free
-                if (bestkey != nullptr && numtries < 16)
-                    continue;
-            }
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("eviction-cycle",latency);
             goto cant_free; /* nothing to free... */

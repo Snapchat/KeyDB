@@ -14,7 +14,7 @@ class IStorage
 public:
     typedef std::function<void(const char *, size_t, const void *, size_t)> callback;
 
-    virtual ~IStorage() {}
+    virtual ~IStorage();
 
     virtual void insert(const char *key, size_t cchKey, void *data, size_t cb) = 0;
     virtual void erase(const char *key, size_t cchKey) = 0;
@@ -25,7 +25,7 @@ public:
     virtual void beginWriteBatch() {} // NOP
     virtual void endWriteBatch() {} // NOP
 
-    virtual void flush();
+    virtual void flush() = 0;
 
     /* This is permitted to be a shallow clone */
     virtual const IStorage *clone() const = 0;

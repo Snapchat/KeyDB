@@ -1,5 +1,8 @@
 #include "server.h"
 
+
+IStorage::~IStorage() {}
+
 #ifdef USE_MEMKIND
 
 #include <stdlib.h>
@@ -11,6 +14,7 @@
 #include <inttypes.h>
 #include <fcntl.h>
 #include "storage.h"
+#include "IStorage.h"
 
 struct memkind *mkdisk = NULL;
 static const char *PMEM_DIR = NULL;

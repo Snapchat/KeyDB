@@ -132,8 +132,8 @@ public:
     {
         setiter itr(itrStart);
 
-        if (itrStart.set == this)   // really if this case isn't true its probably a bug
-            itr = itrStart;         // but why crash the program when we can easily fix this?
+        if (itrStart.set != this)   // really if this case isn't true its probably a bug
+            itr.set = this;         // but why crash the program when we can easily fix this?
         
         fPauseRehash = true;
         if (itr.idxPrimary >= m_data.size())

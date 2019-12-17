@@ -335,15 +335,17 @@ int sdsTest(int argc, char *argv[]);
 
 class sdsview
 {
-    const char *m_str;
+protected:
+    sds m_str = nullptr;
 
+    sdsview() = default;    // Not allowed to create a sdsview directly with a nullptr
 public:
     sdsview(sds str)
-        : m_str((const char*) str)
+        : m_str(str)
     {}
 
     sdsview(const char *str)
-        : m_str(str)
+        : m_str((sds)str)
     {}
 
     bool operator<(const sdsview &other) const
@@ -372,6 +374,60 @@ public:
     }
 
     explicit operator const char*() const { return m_str; }
+};
+
+class sdsstring : public sdsview
+{
+public:
+    sdsstring() = default;
+    explicit sdsstring(sds str)
+        : sdsview(str)
+    {}
+
+    sdsstring(const sdsstring &other)
+        : sdsview(sdsdup(other.m_str))
+    {}
+
+    sdsstring(sdsstring &&other)
+        : sdsview(other.m_str)
+    {
+        other.m_str = nullptr;
+    }
+
+    ~sdsstring()
+    {
+        sdsfree(m_str);
+    }
+};
+
+class sdsimmutablestring : public sdsstring
+{
+public:
+    sdsimmutablestring() = default;
+    explicit sdsimmutablestring(sds str)
+        : sdsstring(str)
+    {}
+
+    explicit sdsimmutablestring(const char *str)
+        : sdsstring((sds)str)
+    {}
+
+    sdsimmutablestring(const sdsimmutablestring &other)
+        : sdsstring(sdsdupshared(other.m_str))
+    {}
+
+    sdsimmutablestring(sdsimmutablestring &&other)
+        : sdsstring(other.m_str)
+    {
+        other.m_str = nullptr;
+    }
+
+    auto &operator=(const sdsimmutablestring &other)
+    {
+        sdsfree(m_str);
+        m_str = sdsdupshared(other.m_str);
+        return *this;
+    }
 };
 
 #endif

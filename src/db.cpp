@@ -2076,6 +2076,12 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
             dictSetVal(m_pdict, *pde, o);
         });
     }
+
+    if (*pde != nullptr && dictGetVal(*pde) != nullptr)
+    {
+        robj *o = (robj*)dictGetVal(*pde);
+        serverAssert(o->FExpires() == (m_setexpire->find(sdsKey) != m_setexpire->end()));
+    }
 }
 
 void redisDbPersistentData::storeKey(const char *szKey, size_t cchKey, robj *o)

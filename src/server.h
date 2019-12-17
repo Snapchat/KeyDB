@@ -96,6 +96,8 @@ typedef long long mstime_t; /* millisecond time type. */
 #include "AsyncWorkQueue.h"
 #include "gc.h"
 
+#define FImplies(x, y) (!(x) || (y))
+
 extern int g_fTestMode;
 
 struct redisObject;

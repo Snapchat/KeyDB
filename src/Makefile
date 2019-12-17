@@ -247,7 +247,7 @@ persist-settings: distclean
 	echo REDIS_CXXFLAGS=$(REDIS_CXXFLAGS) >> .make-settings
 	echo REDIS_LDFLAGS=$(REDIS_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
-	echo PREV_FINAL_CXXLAGS=$(FINAL_CXXFLAGS) >> .make-settings
+	echo PREV_FINAL_CXXFLAGS=$(FINAL_CXXFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
 	-(cd modules && $(MAKE))
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))

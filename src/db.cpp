@@ -1319,7 +1319,6 @@ int redisDbPersistentData::removeExpire(robj *key, dict_iter itr) {
     trackkey(key);
     auto itrExpire = m_setexpire->find(itr.key());
     serverAssert(itrExpire != m_setexpire->end());
-    serverAssert(itrExpire->key() == itr.key());
     m_setexpire->erase(itrExpire);
     val->SetFExpires(false);
     return 1;
@@ -1415,12 +1414,12 @@ void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
 
 /* Return the expire time of the specified key, or null if no expire
  * is associated with this key (i.e. the key is non volatile) */
-expireEntry *redisDbPersistentData::getExpire(robj_roptr key) {
+expireEntry *redisDbPersistentDataSnapshot::getExpire(robj_roptr key) {
     /* No expire? return ASAP */
     if (expireSize() == 0)
         return nullptr;
 
-    auto itr = find(szFromObj(key));
+    auto itr = find_threadsafe(szFromObj(key));
     if (itr == nullptr)
         return nullptr;
     if (!itr.val()->FExpires())
@@ -1430,9 +1429,9 @@ expireEntry *redisDbPersistentData::getExpire(robj_roptr key) {
     return itrExpire.operator->();
 }
 
-const expireEntry *redisDbPersistentData::getExpire(robj_roptr key) const
+const expireEntry *redisDbPersistentDataSnapshot::getExpire(robj_roptr key) const
 {
-    return const_cast<redisDbPersistentData*>(this)->getExpire(key);
+    return const_cast<redisDbPersistentDataSnapshot*>(this)->getExpire(key);
 }
 
 /* Propagate expires into slaves and the AOF file.

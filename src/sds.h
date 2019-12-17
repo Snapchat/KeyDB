@@ -265,7 +265,7 @@ sds sdstrim(sds s, const char *cset);
 void sdsrange(sds s, ssize_t start, ssize_t end);
 void sdsupdatelen(sds s);
 void sdsclear(sds s);
-int sdscmp(const sds s1, const sds s2);
+int sdscmp(const char *s1, const char *s2);
 sds *sdssplitlen(const char *s, ssize_t len, const char *sep, int seplen, int *count);
 void sdsfreesplitres(sds *tokens, int count);
 void sdstolower(sds s);
@@ -298,6 +298,48 @@ int sdsTest(int argc, char *argv[]);
 
 #ifdef __cplusplus
 }
+
+class sdsview
+{
+    const char *m_str;
+
+public:
+    sdsview(sds str)
+        : m_str((const char*) str)
+    {}
+
+    sdsview(const char *str)
+        : m_str(str)
+    {}
+
+    bool operator<(const sdsview &other) const
+    {
+        return sdscmp(m_str, other.m_str) < 0;
+    }
+
+    bool operator==(const sdsview &other) const
+    {
+        return sdscmp(m_str, other.m_str) == 0;
+    }
+
+    bool operator==(const char *other) const
+    {
+        return sdscmp(m_str, other) == 0;
+    }
+
+    char operator[](size_t idx) const
+    {
+        return m_str[idx];
+    }
+
+    size_t size() const
+    {
+        return sdslen(m_str);
+    }
+
+    explicit operator const char*() const { return m_str; }
+};
+
 #endif
 
 #endif

@@ -32,8 +32,3 @@ void operator delete(void *p, std::size_t) noexcept
 }
 
 #endif
-
-extern "C" size_t malloc_usable_size(void *pv)
-{
-    return zmalloc_size(pv);
-}

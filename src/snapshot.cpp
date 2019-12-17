@@ -47,11 +47,10 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     spdb->m_refCount = 1;
     spdb->mvccCheckpoint = getMvccTstamp();
     if (m_setexpire != nullptr)
-        spdb->m_setexpire = m_setexpire;
+        spdb->m_setexpire =  new (MALLOC_LOCAL) expireset(*m_setexpire);
 
     m_pdict = dictCreate(&dbDictType,this);
     m_pdictTombstone = dictCreate(&dbDictType, this);
-    m_setexpire = new (MALLOC_LOCAL) expireset();
 
     serverAssert(spdb->m_pdict->iterators == 1);
 
@@ -197,20 +196,11 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
         }
         if (dictGetVal(de) != nullptr)
             incrRefCount((robj*)dictGetVal(de));
-
-        if (o->FExpires() || o == nullptr)
-        {
-            auto itr = m_setexpire->find((const char*)dictGetKey(de));
-            serverAssert(o == nullptr || itr != m_setexpire->end());
-            if (itr != m_setexpire->end())
-                m_spdbSnapshotHOLDER->m_setexpire->insert(*itr);
-        }
     }
     dictReleaseIterator(di);
     
     // Stage 3 swap the databases with the snapshot
     std::swap(m_pdict, m_spdbSnapshotHOLDER->m_pdict);
-    std::swap(m_setexpire, m_spdbSnapshotHOLDER->m_setexpire);
     if (m_spdbSnapshotHOLDER->m_pdbSnapshot != nullptr)
         std::swap(m_pdictTombstone, m_spdbSnapshotHOLDER->m_pdictTombstone);
     

@@ -208,7 +208,7 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
 
 bool dbAddCore(redisDb *db, robj *key, robj *val) {
     serverAssert(!val->FExpires());
-    sds copy = sdsdup(szFromObj(key));
+    sds copy = sdsdupshared(szFromObj(key));
     bool fInserted = db->insert(copy, val);
     if (g_pserver->fActiveReplica)
         val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
@@ -1414,12 +1414,12 @@ void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
 
 /* Return the expire time of the specified key, or null if no expire
  * is associated with this key (i.e. the key is non volatile) */
-expireEntry *redisDbPersistentDataSnapshot::getExpire(robj_roptr key) {
+expireEntry *redisDbPersistentDataSnapshot::getExpire(const char *key) {
     /* No expire? return ASAP */
     if (expireSize() == 0)
         return nullptr;
 
-    auto itr = find_threadsafe(szFromObj(key));
+    auto itr = find_threadsafe(key);
     if (itr == nullptr)
         return nullptr;
     if (!itr.val()->FExpires())
@@ -1429,7 +1429,7 @@ expireEntry *redisDbPersistentDataSnapshot::getExpire(robj_roptr key) {
     return itrExpire.operator->();
 }
 
-const expireEntry *redisDbPersistentDataSnapshot::getExpire(robj_roptr key) const
+const expireEntry *redisDbPersistentDataSnapshot::getExpire(const char *key) const
 {
     return const_cast<redisDbPersistentDataSnapshot*>(this)->getExpire(key);
 }
@@ -2041,28 +2041,29 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
             if (itr == m_pdbSnapshot->end())
                 return; // not found
 
+            sds keyNew = sdsdupshared(itr.key());   // note: we use the iterator's key because the sdsKey may not be a shared string
             if (itr.val() != nullptr)
             {
                 if (itr.val()->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
                 {
-                    dictAdd(m_pdict, sdsdup(sdsKey), itr.val());
+                    dictAdd(m_pdict, keyNew, itr.val());
                 }
                 else
                 {
                     sds strT = serializeStoredObject(itr.val());
                     robj *objNew = deserializeStoredObject(this, sdsKey, strT, sdslen(strT));
                     sdsfree(strT);
-                    dictAdd(m_pdict, sdsdup(sdsKey), objNew);
+                    dictAdd(m_pdict, keyNew, objNew);
                     serverAssert(objNew->getrefcount(std::memory_order_relaxed) == 1);
                     serverAssert(objNew->mvcc_tstamp == itr.val()->mvcc_tstamp);
                 }
             }
             else
             {
-                dictAdd(m_pdict, sdsdup(sdsKey), nullptr);
+                dictAdd(m_pdict, keyNew, nullptr);
             }
             *pde = dictFind(m_pdict, sdsKey);
-            dictAdd(m_pdictTombstone, sdsdup(sdsKey), nullptr);
+            dictAdd(m_pdictTombstone, sdsdupshared(itr.key()), nullptr);
         }
     }
     

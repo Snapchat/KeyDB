@@ -183,30 +183,36 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     di = dictGetIterator(m_pdict);
     while ((de = dictNext(di)) != NULL)
     {
+        robj *o = (robj*)dictGetVal(de);
         dictEntry *deExisting = dictFind(m_spdbSnapshotHOLDER->m_pdict, (const char*)dictGetKey(de));
         if (deExisting != nullptr)
         {
             if (dictGetVal(deExisting) != nullptr)
                 decrRefCount((robj*)dictGetVal(deExisting));
-            dictSetVal(m_spdbSnapshotHOLDER->m_pdict, deExisting, dictGetVal(de));
+            dictSetVal(m_spdbSnapshotHOLDER->m_pdict, deExisting, o);
         }
         else
         {
-            dictAdd(m_spdbSnapshotHOLDER->m_pdict, sdsdup((sds)dictGetKey(de)), dictGetVal(de));
+            dictAdd(m_spdbSnapshotHOLDER->m_pdict, sdsdup((sds)dictGetKey(de)), o);
         }
         if (dictGetVal(de) != nullptr)
             incrRefCount((robj*)dictGetVal(de));
+
+        if (o->FExpires() || o == nullptr)
+        {
+            auto itr = m_setexpire->find((const char*)dictGetKey(de));
+            serverAssert(o == nullptr || itr != m_setexpire->end());
+            if (itr != m_setexpire->end())
+                m_spdbSnapshotHOLDER->m_setexpire->insert(*itr);
+        }
     }
     dictReleaseIterator(di);
     
     // Stage 3 swap the databases with the snapshot
     std::swap(m_pdict, m_spdbSnapshotHOLDER->m_pdict);
+    std::swap(m_setexpire, m_spdbSnapshotHOLDER->m_setexpire);
     if (m_spdbSnapshotHOLDER->m_pdbSnapshot != nullptr)
         std::swap(m_pdictTombstone, m_spdbSnapshotHOLDER->m_pdictTombstone);
-
-    // Stage 4 merge all expires
-    // TODO
-    std::swap(m_setexpire, m_spdbSnapshotHOLDER->m_setexpire);
     
     // Finally free the snapshot
     if (m_pdbSnapshot != nullptr && m_spdbSnapshotHOLDER->m_pdbSnapshot != nullptr)

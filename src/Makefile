@@ -74,9 +74,11 @@ endif
 # To get ARM stack traces if Redis crashes we need a special C flag.
 ifneq (,$(filter aarch64 armv,$(uname_M)))
         CFLAGS+=-funwind-tables
+	CXXFLAGS+=-funwind-tables
 else
 ifneq (,$(findstring armv,$(uname_M)))
         CFLAGS+=-funwind-tables
+	CXXFLAGS+=-funwind-tables
 endif
 endif
 
@@ -110,13 +112,15 @@ ifeq ($(uname_S),SunOS)
 	# SunOS
         ifneq ($(@@),32bit)
 		CFLAGS+= -m64
+		CXXFLAGS+= -m64
 		LDFLAGS+= -m64
 	endif
 	DEBUG=-g
 	DEBUG_FLAGS=-g
-	export CFLAGS LDFLAGS DEBUG DEBUG_FLAGS
+	export CFLAGS CXXFLAGS LDFLAGS DEBUG DEBUG_FLAGS
 	INSTALL=cp -pf
 	FINAL_CFLAGS+= -D__EXTENSIONS__ -D_XPG6
+	FINAL_CXXFLAGS+= -D__EXTENSIONS__ -D_XPG6
 	FINAL_LIBS+= -ldl -lnsl -lsocket -lresolv -lpthread -lrt
 else
 ifeq ($(uname_S),Darwin)
@@ -133,6 +137,7 @@ ifeq ($(uname_S),OpenBSD)
 	FINAL_LIBS+= -lpthread
 	ifeq ($(USE_BACKTRACE),yes)
 	    FINAL_CFLAGS+= -DUSE_BACKTRACE -I/usr/local/include
+	    FINAL_CXXFLAGS+= -DUSE_BACKTRACE -I/usr/local/include
 	    FINAL_LDFLAGS+= -L/usr/local/lib
 	    FINAL_LIBS+= -lexecinfo
     	endif
@@ -150,6 +155,7 @@ else
 	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+=-ldl -pthread -lrt -luuid
 	FINAL_CFLAGS += -DMOTD
+	FINAL_CXXFLAGS += -DMOTD
 endif
 endif
 endif
@@ -235,10 +241,13 @@ persist-settings: distclean
 	echo OPT=$(OPT) >> .make-settings
 	echo MALLOC=$(MALLOC) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings
+	echo CXXFLAGS=$(CXXFLAGS) >> .make-settings
 	echo LDFLAGS=$(LDFLAGS) >> .make-settings
 	echo REDIS_CFLAGS=$(REDIS_CFLAGS) >> .make-settings
+	echo REDIS_CXXFLAGS=$(REDIS_CXXFLAGS) >> .make-settings
 	echo REDIS_LDFLAGS=$(REDIS_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
+	echo PREV_FINAL_CXXLAGS=$(FINAL_CXXFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
 	-(cd modules && $(MAKE))
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
@@ -248,6 +257,8 @@ persist-settings: distclean
 # Prerequisites target
 # Clean everything, persist settings and build dependencies if anything changed
 ifneq ($(strip $(PREV_FINAL_CFLAGS)), $(strip $(FINAL_CFLAGS)))
+.make-prerequisites: persist-settings
+else ifneq ($(strip $(PREV_FINAL_CXXFLAGS)), $(strip $(FINAL_CXXFLAGS)))
 .make-prerequisites: persist-settings
 else ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
 .make-prerequisites: persist-settings
@@ -334,7 +345,7 @@ bench: $(REDIS_BENCHMARK_NAME)
 	@echo ""
 	@echo "WARNING: if it fails under Linux you probably need to install libc6-dev-i386"
 	@echo ""
-	$(MAKE) CFLAGS="-m32" LDFLAGS="-m32"
+	$(MAKE) CXXFLAGS="-m32" CFLAGS="-m32" LDFLAGS="-m32"
 
 gcov:
 	$(MAKE) REDIS_CFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" REDIS_LDFLAGS="-fprofile-arcs -ftest-coverage"

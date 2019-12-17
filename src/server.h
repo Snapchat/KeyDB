@@ -1057,10 +1057,7 @@ public:
 
     expireEntry(const expireEntry &e)
     {
-        u.m_key = e.u.m_key;
-        m_when = e.m_when;
-        if (e.FFat())
-            u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(*e.u.m_pfatentry);
+        *this = e;
     }
 
     expireEntry(expireEntry &&e)
@@ -1074,6 +1071,15 @@ public:
     {
         if (FFat())
             delete u.m_pfatentry;
+    }
+
+    expireEntry &operator=(const expireEntry &e)
+    {
+        u.m_key = e.u.m_key;
+        m_when = e.m_when;
+        if (e.FFat())
+            u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(*e.u.m_pfatentry);
+        return *this;
     }
 
     void setKeyUnsafe(sds key)

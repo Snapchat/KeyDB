@@ -941,11 +941,11 @@ public:
     };
 
 private:
-    sds m_keyPrimary;
+    sdsimmutablestring m_keyPrimary;
     std::vector<subexpireEntry> m_vecexpireEntries;  // Note a NULL for the sds portion means the expire is for the primary key
 
 public:
-    expireEntryFat(sds keyPrimary)
+    expireEntryFat(const sdsimmutablestring &keyPrimary)
         : m_keyPrimary(keyPrimary)
         {}
         
@@ -953,7 +953,7 @@ public:
     expireEntryFat(expireEntryFat &&e) = default;
 
     long long when() const noexcept { return m_vecexpireEntries.front().when; }
-    const char *key() const noexcept { return m_keyPrimary; }
+    const char *key() const noexcept { return static_cast<const char*>(m_keyPrimary); }
 
     bool operator<(long long when) const noexcept { return this->when() <  when; }
 
@@ -990,9 +990,9 @@ public:
 };
 
 class expireEntry {
-    union
+    struct
     {
-        sds m_key;
+        sdsimmutablestring m_key;
         expireEntryFat *m_pfatentry;
     } u;
     long long m_when;   // LLONG_MIN means this is a fat entry and we should use the pointer
@@ -1037,12 +1037,12 @@ public:
         if (subkey != nullptr)
         {
             m_when = LLONG_MIN;
-            u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(key);
+            u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(sdsimmutablestring(sdsdupshared(key)));
             u.m_pfatentry->expireSubKey(subkey, when);
         }
         else
         {
-            u.m_key = key;
+            u.m_key = sdsimmutablestring(sdsdupshared(key));
             m_when = when;
         }
     }
@@ -1063,9 +1063,8 @@ public:
 
     expireEntry(expireEntry &&e)
     {
-        u.m_key = e.u.m_key;
+        u.m_key = std::move(e.u.m_key);
         m_when = e.m_when;
-        e.u.m_key = (char*)key();  // we do this so it can still be found in the set
         e.m_when = 0;
     }
 
@@ -1078,9 +1077,9 @@ public:
     void setKeyUnsafe(sds key)
     {
         if (FFat())
-            u.m_pfatentry->m_keyPrimary = key;
+            u.m_pfatentry->m_keyPrimary = sdsimmutablestring(sdsdupshared(key));
         else
-            u.m_key = key;
+            u.m_key = sdsimmutablestring(sdsdupshared(key));
     }
 
     inline bool FFat() const noexcept { return m_when == LLONG_MIN; }
@@ -1106,7 +1105,7 @@ public:
     { 
         if (FFat())
             return u.m_pfatentry->key();
-        return u.m_key;
+        return static_cast<const char*>(u.m_key);
     }
     long long when() const noexcept
     { 
@@ -1128,7 +1127,7 @@ public:
             {
                 // we have to upgrade to a fat entry
                 long long whenT = m_when;
-                sds keyPrimary = u.m_key;
+                sdsimmutablestring keyPrimary = u.m_key;
                 m_when = LLONG_MIN;
                 u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(keyPrimary);
                 u.m_pfatentry->expireSubKey(nullptr, whenT);
@@ -1387,8 +1386,10 @@ public:
     dict_iter random_threadsafe() const;
     dict_iter find_threadsafe(const char *key) const;
 
-    expireEntry *getExpire(robj_roptr key);
-    const expireEntry *getExpire(robj_roptr key) const;
+    expireEntry *getExpire(robj_roptr key) { return getExpire(szFromObj(key)); }
+    expireEntry *getExpire(const char *key);
+    const expireEntry *getExpire(const char *key) const;
+    const expireEntry *getExpire(robj_roptr key) const { return getExpire(szFromObj(key)); }
 
     // These need to be fixed
     using redisDbPersistentData::size;
@@ -3273,9 +3274,9 @@ inline int ielFromEventLoop(const aeEventLoop *eventLoop)
 
 inline int FCorrectThread(client *c)
 {
-    return (serverTL != NULL && (g_pserver->rgthreadvar[c->iel].el == serverTL->el))
+    return (c->fd == -1)
         || (c->iel == IDX_EVENT_LOOP_MAIN && moduleGILAcquiredByModule())
-        || (c->fd == -1);
+        || (serverTL != NULL && (g_pserver->rgthreadvar[c->iel].el == serverTL->el));
 }
 #define AssertCorrectThread(c) serverAssert(FCorrectThread(c))
 

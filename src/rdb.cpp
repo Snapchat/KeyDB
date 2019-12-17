@@ -1121,6 +1121,7 @@ int saveKey(rio *rdb, const redisDbPersistentDataSnapshot *db, int flags, size_t
 
     initStaticStringObject(key,(char*)keystr);
     const expireEntry *pexpire = db->getExpire(&key);
+    serverAssert(!o->FExpires() || pexpire != nullptr);
 
     if (rdbSaveKeyValuePair(rdb,&key,o,pexpire) == -1)
         return 0;
@@ -1182,8 +1183,11 @@ int rdbSaveRio(rio *rdb, const redisDbPersistentDataSnapshot **rgpdb, int *error
         /* Iterate this DB writing every entry */
         size_t ckeysExpired = 0;
         bool fSavedAll = db->iterate_threadsafe([&](const char *keystr, robj_roptr o)->bool {
-            if (o->FExpires())
+            if (o->FExpires()) {
                 ++ckeysExpired;
+            } else {
+                serverAssert(db->getExpire(keystr) == nullptr);
+            }
             
             if (!saveKey(rdb, db, flags, &processed, keystr, o))
                 return false;

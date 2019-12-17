@@ -1438,7 +1438,6 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
     
     g_pserver->stat_fork_time = ustime()-start;
     g_pserver->stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / g_pserver->stat_fork_time / (1024*1024*1024); /* GB per second. */
-    latencyAddSampleIfNeeded("fork",g_pserver->stat_fork_time/1000);
     if (launchRdbSaveThread(child, rsi) != C_OK) {
         closeChildInfoPipe();
         g_pserver->lastbgsave_status = C_ERR;
@@ -1446,6 +1445,7 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
             strerror(errno));
         return C_ERR;
     }
+    latencyAddSampleIfNeeded("fork",g_pserver->stat_fork_time/1000);
     serverLog(LL_NOTICE,"Background saving started");
     g_pserver->rdb_save_time_start = time(NULL);
     g_pserver->rdbThreadVars.fRdbThreadActive = true;

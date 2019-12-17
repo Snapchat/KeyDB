@@ -69,7 +69,7 @@ public:
     inline T* end() { return m_data + m_celem; }
     inline const T* end() const { return m_data + m_celem; }
 
-    T* insert(T* where, T &val)
+    T* insert(T* where, const T &val)
     {
         assert(where >= m_data);
         size_t idx = where - m_data;

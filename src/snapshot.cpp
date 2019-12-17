@@ -160,7 +160,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
         {
             // The tombstone is for a grand child, propogate it
             serverAssert(m_spdbSnapshotHOLDER->m_pdbSnapshot->find_threadsafe((const char*)dictGetKey(de)) != nullptr);
-            dictAdd(m_spdbSnapshotHOLDER->m_pdictTombstone, sdsdup((sds)dictGetKey(de)), nullptr);
+            dictAdd(m_spdbSnapshotHOLDER->m_pdictTombstone, sdsdupshared((sds)dictGetKey(de)), nullptr);
             continue;
         }
         
@@ -193,7 +193,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
         }
         else
         {
-            dictAdd(m_spdbSnapshotHOLDER->m_pdict, sdsdup((sds)dictGetKey(de)), o);
+            dictAdd(m_spdbSnapshotHOLDER->m_pdict, sdsdupshared((sds)dictGetKey(de)), o);
         }
         if (dictGetVal(de) != nullptr)
             incrRefCount((robj*)dictGetVal(de));
@@ -368,7 +368,7 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
     m_pdbSnapshot->iterate_threadsafe([&](const char *key, robj_roptr o){
         if (o != nullptr)
             incrRefCount(o);
-        dictAdd(spdb->m_pdict, sdsdup(key), o.unsafe_robjcast());
+        dictAdd(spdb->m_pdict, sdsdupshared(key), o.unsafe_robjcast());
         return true;
     }, true /*fKeyOnly*/);
     spdb->m_spstorage = m_pdbSnapshot->m_spstorage;

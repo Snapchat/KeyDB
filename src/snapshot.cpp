@@ -47,7 +47,10 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     spdb->m_refCount = 1;
     spdb->mvccCheckpoint = getMvccTstamp();
     if (m_setexpire != nullptr)
+    {
         spdb->m_setexpire =  new (MALLOC_LOCAL) expireset(*m_setexpire);
+        spdb->m_setexpire->pause_rehash();  // needs to be const
+    }
 
     m_pdict = dictCreate(&dbDictType,this);
     m_pdictTombstone = dictCreate(&dbDictType, this);
@@ -163,16 +166,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
             continue;
         }
         
-        robj *obj = (robj*)dictGetVal(deSnapshot);
         const char *key = (const char*)dictGetKey(deSnapshot);
-        if (obj == nullptr || obj->FExpires())
-        {
-            auto itrExpire = m_spdbSnapshotHOLDER->m_setexpire->find(key);
-            if (itrExpire != m_spdbSnapshotHOLDER->m_setexpire->end())
-            {
-                m_spdbSnapshotHOLDER->m_setexpire->erase(itrExpire);  // Note: normally we would have to set obj::fexpire false but we're deleting it anyways...
-            }
-        }
         dictDelete(m_spdbSnapshotHOLDER->m_pdict, key);
     }
     dictReleaseIterator(di);
@@ -289,7 +283,7 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
     }
     dictReleaseIterator(di);
 
-    redisDbPersistentDataSnapshot *psnapshot;
+    const redisDbPersistentDataSnapshot *psnapshot;
     __atomic_load(&m_pdbSnapshot, &psnapshot, __ATOMIC_ACQUIRE);
     if (fResult && psnapshot != nullptr)
     {
@@ -405,7 +399,7 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
     std::atomic_thread_fence(std::memory_order_seq_cst);
     m_spdbSnapshotHOLDER.release(); // GC has responsibility for it now
     m_spdbSnapshotHOLDER = std::move(spdb);
-    auto ptrT = m_spdbSnapshotHOLDER.get();
+    const redisDbPersistentDataSnapshot *ptrT = m_spdbSnapshotHOLDER.get();
     __atomic_store(&m_pdbSnapshot, &ptrT, __ATOMIC_SEQ_CST);
     locker.disarm();    // ensure we're not locked for any dtors
 }

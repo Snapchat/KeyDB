@@ -5091,7 +5091,7 @@ void incrementMvccTstamp()
     }
     else
     {
-        atomicSet(g_pserver->mvcc_tstamp, ((uint64_t)g_pserver->mstime) << MVCC_MS_SHIFT);
+        atomicSet(g_pserver->mvcc_tstamp, ((uint64_t)mst) << MVCC_MS_SHIFT);
     }
 }
 

@@ -91,15 +91,27 @@ struct __attribute__ ((__packed__)) sdshdr64 {
 #endif
 };
 
+struct __attribute__ ((__packed__)) sdshdrrefcount {
+    uint64_t len; /* used */
+    uint16_t refcount;
+    unsigned char flags; /* 3 lsb of type, 5 unused bits */
+#ifndef __cplusplus
+    char buf[];
+#endif
+};
+
 #define SDS_TYPE_5  0
 #define SDS_TYPE_8  1
 #define SDS_TYPE_16 2
 #define SDS_TYPE_32 3
 #define SDS_TYPE_64 4
+#define SDS_TYPE_REFCOUNTED 5
 #define SDS_TYPE_MASK 7
 #define SDS_TYPE_BITS 3
 #define SDS_HDR_VAR(T,s) struct sdshdr##T *sh = (struct sdshdr##T *)(((void*)((s)-(sizeof(struct sdshdr##T)))));
+#define SDS_HDR_VAR_REFCOUNTED(s) struct sdshdrrefcount *sh = (struct sdshdrrefcount *)(((void*)((s)-(sizeof(struct sdshdrrefcount)))));
 #define SDS_HDR(T,s) ((struct sdshdr##T *)((s)-(sizeof(struct sdshdr##T))))
+#define SDS_HDR_REFCOUNTED(s) ((struct sdshdrrefcount *)((s)-(sizeof(struct sdshdrrefcount))))
 #define SDS_TYPE_5_LEN(f) ((f)>>SDS_TYPE_BITS)
 
 static inline size_t sdslen(const char *s) {
@@ -121,6 +133,8 @@ static inline size_t sdslen(const char *s) {
                 return SDS_HDR(32,s)->len;
             case SDS_TYPE_64:
                 return SDS_HDR(64,s)->len;
+            case SDS_TYPE_REFCOUNTED:
+                return SDS_HDR_REFCOUNTED(s)->len;
         }
     }
     return 0;
@@ -148,6 +162,9 @@ static inline size_t sdsavail(const char * s) {
             SDS_HDR_VAR(64,s);
             return sh->alloc - sh->len;
         }
+        case SDS_TYPE_REFCOUNTED: {
+            return 0;   // immutable
+        }
     }
     return 0;
 }
@@ -172,6 +189,9 @@ static inline void sdssetlen(sds s, size_t newlen) {
             break;
         case SDS_TYPE_64:
             SDS_HDR(64,s)->len = newlen;
+            break;
+        case SDS_TYPE_REFCOUNTED:
+            SDS_HDR_REFCOUNTED(s)->len = newlen;
             break;
     }
 }
@@ -198,6 +218,9 @@ static inline void sdsinclen(sds s, size_t inc) {
         case SDS_TYPE_64:
             SDS_HDR(64,s)->len += inc;
             break;
+        case SDS_TYPE_REFCOUNTED:
+            SDS_HDR_REFCOUNTED(s)->len += inc;
+            break;
     }
 }
 
@@ -215,6 +238,8 @@ static inline size_t sdsalloc(const sds s) {
             return SDS_HDR(32,s)->alloc;
         case SDS_TYPE_64:
             return SDS_HDR(64,s)->alloc;
+        case SDS_TYPE_REFCOUNTED:
+            return SDS_HDR_REFCOUNTED(s)->len;
     }
     return 0;
 }
@@ -237,13 +262,22 @@ static inline void sdssetalloc(sds s, size_t newlen) {
         case SDS_TYPE_64:
             SDS_HDR(64,s)->alloc = newlen;
             break;
+        case SDS_TYPE_REFCOUNTED:
+            break;
     }
 }
 
-sds sdsnewlen(const void *init, size_t initlen);
+static inline int sdsisshared(const char *s)
+{
+    unsigned char flags = s[-1];
+    return ((flags & SDS_TYPE_MASK) == SDS_TYPE_REFCOUNTED);
+}
+
+sds sdsnewlen(const void *init, ssize_t initlen);
 sds sdsnew(const char *init);
 sds sdsempty(void);
 sds sdsdup(const char *s);
+sds sdsdupshared(const char *s);
 void sdsfree(const char *s);
 sds sdsgrowzero(sds s, size_t len);
 sds sdscatlen(sds s, const void *t, size_t len);

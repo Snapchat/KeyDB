@@ -1088,9 +1088,9 @@ public:
     const expireEntryFat *pfatentry() const { assert(FFat()); return u.m_pfatentry; }
 
 
-    bool operator==(const char *key) const noexcept
+    bool operator==(const sdsview &key) const noexcept
     { 
-        return this->key() == key; 
+        return key == this->key(); 
     }
 
     bool operator<(const expireEntry &e) const noexcept
@@ -1168,10 +1168,10 @@ public:
         return false;
     }
 
-    explicit operator const char*() const noexcept { return key(); }
+    explicit operator sdsview() const noexcept { return key(); }
     explicit operator long long() const noexcept { return when(); }
 };
-typedef semiorderedset<expireEntry, const char *, true /*expireEntry can be memmoved*/> expireset;
+typedef semiorderedset<expireEntry, sdsview, true /*expireEntry can be memmoved*/> expireset;
 
 /* The a string name for an object's type as listed above
  * Native types are checked against the OBJ_STRING, OBJ_LIST, OBJ_* defines,
@@ -1310,8 +1310,6 @@ public:
     bool iterate(std::function<bool(const char*, robj*)> fn);
     void setExpire(robj *key, robj *subkey, long long when);
     void setExpire(expireEntry &&e);
-    expireEntry *getExpire(robj_roptr key);
-    const expireEntry *getExpire(robj_roptr key) const;
     void initialize();
 
     void setStorageProvider(IStorage *pstorage);
@@ -1389,10 +1387,12 @@ public:
     dict_iter random_threadsafe() const;
     dict_iter find_threadsafe(const char *key) const;
 
+    expireEntry *getExpire(robj_roptr key);
+    const expireEntry *getExpire(robj_roptr key) const;
+
     // These need to be fixed
     using redisDbPersistentData::size;
     using redisDbPersistentData::expireSize;
-    using redisDbPersistentData::getExpire;
 };
 
 /* Redis database representation. There are multiple databases identified
@@ -1455,7 +1455,6 @@ typedef struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::emptyDbAsync;
     using redisDbPersistentData::iterate;
     using redisDbPersistentData::setExpire;
-    using redisDbPersistentData::getExpire;
     using redisDbPersistentData::trackChanges;
     using redisDbPersistentData::processChanges;
     using redisDbPersistentData::commitChanges;

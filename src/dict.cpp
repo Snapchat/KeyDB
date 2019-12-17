@@ -258,7 +258,9 @@ int dictRehashMilliseconds(dict *d, int ms) {
  * dictionary so that the hash table automatically migrates from H1 to H2
  * while it is actively used. */
 static void _dictRehashStep(dict *d) {
-    if (d->iterators == 0) dictRehash(d,1);
+    unsigned long iterators;
+    __atomic_load(&d->iterators, &iterators, __ATOMIC_RELAXED);
+    if (iterators == 0) dictRehash(d,1);
 }
 
 /* Add an element to the target hash table */
@@ -566,7 +568,7 @@ dictEntry *dictNext(dictIterator *iter)
             dictht *ht = &iter->d->ht[iter->table];
             if (iter->index == -1 && iter->table == 0) {
                 if (iter->safe)
-                    iter->d->iterators++;
+                    __atomic_fetch_add(&iter->d->iterators, 1, __ATOMIC_RELAXED);
                 else
                     iter->fingerprint = dictFingerprint(iter->d);
             }
@@ -598,7 +600,7 @@ void dictReleaseIterator(dictIterator *iter)
 {
     if (!(iter->index == -1 && iter->table == 0)) {
         if (iter->safe)
-            iter->d->iterators--;
+            __atomic_fetch_sub(&iter->d->iterators, 1, __ATOMIC_RELAXED);
         else
             assert(iter->fingerprint == dictFingerprint(iter->d));
     }

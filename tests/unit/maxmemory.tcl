@@ -240,4 +240,3 @@ test_slave_buffers {slave buffer are counted correctly} 1000000 10 0 1
 # test that slave buffer don't induce eviction
 # test again with fewer (and bigger) commands without pipeline, but with eviction
 test_slave_buffers "replica buffer don't induce eviction" 100000 100 1 0
-

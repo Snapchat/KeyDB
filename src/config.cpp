@@ -840,6 +840,8 @@ void loadServerConfigFromString(char *config) {
         } else if (!strcasecmp(argv[0],"storage-provider") && argc >= 2) {
             if (!initializeStorageProvider(argv+1, argc-1, &err))
                 goto loaderr;
+        } else if (!strcasecmp(argv[0],"enable-pro") && argc == 2) {
+            cserver.license_key = zstrdup(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -2258,6 +2260,7 @@ int rewriteConfig(char *path) {
     rewriteConfigEnumOption(state,"supervised",cserver.supervised_mode,supervised_mode_enum,SUPERVISED_NONE);
     rewriteConfigYesNoOption(state,"active-replica",g_pserver->fActiveReplica,CONFIG_DEFAULT_ACTIVE_REPLICA);
     rewriteConfigStringOption(state, "version-override",KEYDB_SET_VERSION,KEYDB_REAL_VERSION);
+    rewriteConfigStringOption(state, "enable-pro", cserver.license_key, CONFIG_DEFAULT_LICENSE_KEY);
 
     /* Rewrite Sentinel config if in Sentinel mode. */
     if (g_pserver->sentinel_mode) rewriteConfigSentinelOption(state);

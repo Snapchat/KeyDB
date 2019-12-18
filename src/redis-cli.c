@@ -6594,6 +6594,8 @@ static char *fetchMOTDFromCache()
 static void setMOTDCache(const char *sz)
 {
     FILE *pf = fopen(szMotdCachePath(), "wb");
+    if (pf == NULL)
+        return;
     size_t celem = fwrite(sz, strlen(sz), 1, pf);
     (void)celem;    // best effort
     fclose(pf);

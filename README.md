@@ -9,7 +9,7 @@ What is KeyDB?
 
 KeyDB is a high performance fork of Redis with a focus on multithreading, memory efficiency, and high throughput.  In addition to multithreading, KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/Active-Replication), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3. 
 
-KeyDB maintains full compatibility with the Redis protocol, modules, and scripts.  This includes the atomicity gurantees for scripts and transactions.  Because KeyDB keeps in sync with Redis development KeyDB is a superset of Redis functionality, making KeyDB a drop in replacement for existing Redis deployments.
+KeyDB maintains full compatibility with the Redis protocol, modules, and scripts.  This includes the atomicity guarantees for scripts and transactions.  Because KeyDB keeps in sync with Redis development KeyDB is a superset of Redis functionality, making KeyDB a drop in replacement for existing Redis deployments.
 
 On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency. Active-Replication simplifies hot-spare failover allowing you to easily distribute writes over replicas and use simple TCP based load balancing/failover. KeyDB's higher performance allows you to do more on less hardware which reduces operation costs and complexity.
 

@@ -5183,6 +5183,12 @@ int main(int argc, char **argv) {
         sdsfree(options);
     }
 
+    if (cserver.fUsePro) {
+        execv("keydb-pro-server", argv);
+        perror("Failed launch the pro binary");
+        exit(EXIT_FAILURE);
+    }
+
     serverLog(LL_WARNING, "oO0OoO0OoO0Oo KeyDB is starting oO0OoO0OoO0Oo");
     serverLog(LL_WARNING,
         "KeyDB version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",

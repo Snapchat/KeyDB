@@ -111,8 +111,17 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
             }
             break;
 
-        case OBJ_LIST:
         case OBJ_ZSET:
+            if (zsetDel(val,(sds)pfat->nextExpireEntry().spsubkey.get())) {
+                deleted++;
+                if (zsetLength(val) == 0) {
+                    activeExpireCycleExpireFullKey(db, e.key());
+                    return;
+                }
+            }
+            break;
+
+        case OBJ_LIST:
         default:
             serverAssert(false);
         }
@@ -171,6 +180,7 @@ void expireMemberCore(client *c, robj *key, robj *subkey, long long basetime, lo
         return;
     }
 
+    double dblT;
     switch (val->type)
     {
     case OBJ_SET:
@@ -182,6 +192,13 @@ void expireMemberCore(client *c, robj *key, robj *subkey, long long basetime, lo
 
     case OBJ_HASH:
         if (!hashTypeExists(val, szFromObj(subkey))) {
+            addReply(c,shared.czero);
+            return;
+        }
+        break;
+
+    case OBJ_ZSET:
+        if (zsetScore(val, szFromObj(subkey), &dblT) == C_ERR) {
             addReply(c,shared.czero);
             return;
         }

@@ -61,6 +61,7 @@
 #include <uuid/uuid.h>
 #include <mutex>
 #include "aelocker.h"
+#include "keycheck.h"
 
 int g_fTestMode = false;
 
@@ -1095,6 +1096,8 @@ void serverLog(int level, const char *fmt, ...) {
 
 static void checkTrialTimeout()
 {
+    if (cserver.license_key != nullptr && FValidKey(cserver.license_key, strlen(cserver.license_key)))
+        return;
     time_t curtime = time(NULL);
     int64_t elapsed = (int64_t)curtime - (int64_t)cserver.stat_starttime;
     int64_t remaining = (cserver.trial_timeout * 60L) - elapsed;

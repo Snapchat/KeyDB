@@ -35,6 +35,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/sysinfo.h>
+#include "keycheck.h"
 
 
 const char *KEYDB_SET_VERSION = KEYDB_REAL_VERSION;
@@ -841,6 +842,10 @@ void loadServerConfigFromString(char *config) {
             if (!initializeStorageProvider(argv+1, argc-1, &err))
                 goto loaderr;
         } else if (!strcasecmp(argv[0],"enable-pro") && argc == 2) {
+            if (!FValidKey(argv[1], strlen(argv[1]))) {
+                err = "Invalid license key";
+                goto loaderr;
+            }
             cserver.license_key = zstrdup(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;

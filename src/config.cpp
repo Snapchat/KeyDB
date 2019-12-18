@@ -841,12 +841,15 @@ void loadServerConfigFromString(char *config) {
         } else if (!strcasecmp(argv[0],"storage-provider") && argc >= 2) {
             if (!initializeStorageProvider(argv+1, argc-1, &err))
                 goto loaderr;
-        } else if (!strcasecmp(argv[0],"enable-pro") && argc == 2) {
-            if (!FValidKey(argv[1], strlen(argv[1]))) {
-                err = "Invalid license key";
-                goto loaderr;
+        } else if (!strcasecmp(argv[0],"enable-pro") && (argc == 1 || argc == 2)) {
+            if (argc == 2)
+            {
+                if (!FValidKey(argv[1], strlen(argv[1]))) {
+                    err = "Invalid license key";
+                    goto loaderr;
+                }
+                cserver.license_key = zstrdup(argv[1]);
             }
-            cserver.license_key = zstrdup(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }

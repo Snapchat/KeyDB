@@ -165,7 +165,10 @@ void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
 
     /* Install a file event to send data to the rewrite child if there is
      * not one already. */
-    aeCreateRemoteFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, g_pserver->aof_pipe_write_data_to_child, AE_WRITABLE, aofChildWriteDiffData, NULL, FALSE);
+    aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, []{
+        if (g_pserver->aof_pipe_write_data_to_child >= 0)
+            aeCreateFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, g_pserver->aof_pipe_write_data_to_child, AE_WRITABLE, aofChildWriteDiffData, NULL);
+    });
 }
 
 /* Write the buffer (possibly composed of multiple blocks) into the specified
@@ -1567,6 +1570,7 @@ void aofClosePipes(void) {
         aeDeleteFileEventAsync(serverTL->el,fdAofWritePipe,AE_WRITABLE);
         close(fdAofWritePipe);
     });
+    g_pserver->aof_pipe_write_data_to_child = -1;
     
     close(g_pserver->aof_pipe_read_data_from_parent);
     close(g_pserver->aof_pipe_write_ack_to_parent);

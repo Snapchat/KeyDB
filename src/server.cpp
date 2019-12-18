@@ -1093,6 +1093,23 @@ void serverLog(int level, const char *fmt, ...) {
     serverLogRaw(level,msg);
 }
 
+static void checkTrialTimeout()
+{
+    time_t curtime = time(NULL);
+    int64_t elapsed = (int64_t)curtime - (int64_t)cserver.stat_starttime;
+    int64_t remaining = (cserver.trial_timeout * 60L) - elapsed;
+    if (remaining <= 0)
+    {
+        serverLog(LL_WARNING, "Trial timeout exceeded.  KeyDB will now exit.");
+        prepareForShutdown(SHUTDOWN_SAVE);
+        exit(0);
+    }
+    else
+    {
+        serverLog(LL_WARNING, "Trial timeout in %ld:%02ld minutes", remaining/60, remaining % 60);
+    }
+}
+
 /* Log a fixed message without printf-alike capabilities, in a way that is
  * safe to call from a signal handler.
  *
@@ -2069,6 +2086,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Cleanup expired MIGRATE cached sockets. */
     run_with_period(1000) {
         migrateCloseTimedoutSockets();
+    }
+
+    run_with_period(15000) {
+        checkTrialTimeout();
     }
 
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
@@ -4832,6 +4853,12 @@ void redisAsciiArt(void) {
             (long) getpid()
         );
         serverLogRaw(LL_NOTICE|LL_RAW,buf);
+    }
+
+    if (cserver.license_key == nullptr)
+    {
+        serverLog(LL_WARNING, "!!!! KeyDB Pro is being run in trial mode  !!!!");
+        serverLog(LL_WARNING, "!!!! Execution will terminate in %d minutes !!!!", cserver.trial_timeout);
     }
     zfree(buf);
 }

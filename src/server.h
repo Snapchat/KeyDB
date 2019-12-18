@@ -388,6 +388,8 @@ public:
 #define CONFIG_DEFAULT_ACTIVE_REPLICA 0
 #define CONFIG_DEFAULT_ENABLE_MULTIMASTER 0
 
+#define CONFIG_DEFAULT_LICENSE_KEY ""
+
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 64 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
 #define ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC 25 /* CPU max % for keys collection */
@@ -1958,6 +1960,9 @@ struct redisServerConst {
     size_t system_memory_size;  /* Total memory in system as reported by OS */
 
     unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
+
+    sds license_key = nullptr;
+    int trial_timeout = 20;
 };
 
 struct redisServer {

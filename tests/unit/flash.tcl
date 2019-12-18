@@ -1,4 +1,4 @@
-start_server {tags {"flash"} overrides {"storage-provider flash /mnt/tmp"}} {
+start_server {tags {"flash"} overrides {"storage-provider flash ./rocks.db"}} {
 
     foreach policy {
         allkeys-random allkeys-lru allkeys-lfu

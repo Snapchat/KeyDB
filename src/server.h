@@ -1599,6 +1599,7 @@ struct redisServerConst {
     size_t system_memory_size;  /* Total memory in system as reported by OS */
 
     unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
+    bool fUsePro = false;
 };
 
 struct redisServer {

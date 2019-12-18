@@ -802,6 +802,8 @@ void loadServerConfigFromString(char *config) {
             g_fTestMode = yesnotoi(argv[1]);
         } else if (!strcasecmp(argv[0],"rdbfuzz-mode")) {
             // NOP, handled in main
+        } else if (!strcasecmp(argv[0],"enable-pro")) {
+            cserver.fUsePro = true;
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }

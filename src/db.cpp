@@ -1910,10 +1910,6 @@ void redisDbPersistentData::setStorageProvider(IStorage *pstorage)
 {
     serverAssert(m_spstorage == nullptr);
     m_spstorage = std::unique_ptr<IStorage>(pstorage);
-    m_spstorage->enumerate([&](const char *key, size_t cchkey, const void *, size_t){
-        sds sdsKey = sdsnewlen(key, cchkey);
-        dictAdd(m_pdict,  sdsKey,  nullptr);
-    });
 }
 
 void redisDb::initialize(int id)
@@ -2032,6 +2028,9 @@ void redisDbPersistentData::ensure(const char *key)
 void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
 {
     serverAssert(sdsKey != nullptr);
+    serverAssert(FImplies(*pde != nullptr, dictGetVal(*pde) != nullptr));    // early versions set a NULL object, this is no longer valid
+
+    // First see if the key can be obtained from a snapshot
     if (*pde == nullptr && m_pdbSnapshot != nullptr)
     {
         dictEntry *deTombstone = dictFind(m_pdictTombstone, sdsKey);
@@ -2067,14 +2066,16 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
         }
     }
     
-    if (*pde != nullptr && dictGetVal(*pde) == nullptr)
+    // If we haven't found it yet check our storage engine
+    if (*pde == nullptr && m_spstorage != nullptr)
     {
         serverAssert(m_spstorage != nullptr);
         m_spstorage->retrieve(sdsKey, sdslen(sdsKey), [&](const char *, size_t, const void *data, size_t cb){
-            robj *o = deserializeStoredObject(this, (const char*)dictGetKey(*pde), data, cb);
+            robj *o = deserializeStoredObject(this, sdsKey, data, cb);
             serverAssert(o != nullptr);
-            dictSetVal(m_pdict, *pde, o);
+            dictAdd(m_pdict, sdsdupshared(sdsKey), o);
         });
+        *pde = dictFind(m_pdict, sdsKey);
     }
 
     if (*pde != nullptr && dictGetVal(*pde) != nullptr)
@@ -2208,15 +2209,9 @@ bool redisDbPersistentData::removeCachedValue(const char *key)
             return false; // NOP
     }
 
-    dictEntry *de = dictFind(m_pdict, key);
-    serverAssert(de != nullptr);
-    if (dictGetVal(de) != nullptr)
-    {
-        decrRefCount((robj*)dictGetVal(de));
-        dictSetVal(m_pdict, de, nullptr);
-        return true;
-    }
-    return false;
+    // since we write ASAP the database already has a valid copy so safe to delete
+    dictDelete(m_pdict, key);
+    return true;
 }
 
 void redisDbPersistentData::trackChanges()

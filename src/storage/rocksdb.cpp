@@ -35,9 +35,8 @@ void RocksDBStorageProvider::retrieve(const char *key, size_t cchKey, callback f
 {
     std::string value;
     auto status = m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cchKey), &value);
-    if (!status.ok())
-        throw status.ToString();
-    fn(key, cchKey, value.data(), value.size());
+    if (status.ok())
+        fn(key, cchKey, value.data(), value.size());
 }
 
 size_t RocksDBStorageProvider::clear()

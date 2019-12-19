@@ -2487,7 +2487,7 @@ void initServerConfig(void) {
 
     /* Command table -- we initiialize it here as it is part of the
      * initial configuration, since command names may be changed via
-     * redis.conf using the rename-command directive. */
+     * keydb.conf using the rename-command directive. */
     g_pserver->commands = dictCreate(&commandTableDictType,NULL);
     g_pserver->orig_commands = dictCreate(&commandTableDictType,NULL);
     populateCommandTable();
@@ -2523,7 +2523,7 @@ void initServerConfig(void) {
     /* By default we want scripts to be always replicated by effects
      * (single commands executed by the script), and not by sending the
      * script to the replica / AOF. This is the new way starting from
-     * Redis 5. However it is possible to revert it via redis.conf. */
+     * Redis 5. However it is possible to revert it via keydb.conf. */
     g_pserver->lua_always_replicate_commands = 1;
 
     /* Multithreading */
@@ -3139,7 +3139,7 @@ void populateCommandTable(void) {
         c->id = ACLGetCommandID(c->name); /* Assign the ID used for ACL. */
         retval1 = dictAdd(g_pserver->commands, sdsnew(c->name), c);
         /* Populate an additional dictionary that will be unaffected
-         * by rename-command statements in redis.conf. */
+         * by rename-command statements in keydb.conf. */
         retval2 = dictAdd(g_pserver->orig_commands, sdsnew(c->name), c);
         serverAssert(retval1 == DICT_OK && retval2 == DICT_OK);
     }
@@ -3214,7 +3214,7 @@ struct redisCommand *lookupCommandByCString(const char *s) {
 
 /* Lookup the command in the current table, if not found also check in
  * the original table containing the original command names unaffected by
- * redis.conf rename-command statement.
+ * keydb.conf rename-command statement.
  *
  * This is used by functions rewriting the argument vector such as
  * rewriteClientCommandVector() in order to set client->cmd pointer
@@ -4695,7 +4695,7 @@ void version(void) {
 }
 
 void usage(void) {
-    fprintf(stderr,"Usage: ./keydb-server [/path/to/redis.conf] [options]\n");
+    fprintf(stderr,"Usage: ./keydb-server [/path/to/keydb.conf] [options]\n");
     fprintf(stderr,"       ./keydb-server - (read config from stdin)\n");
     fprintf(stderr,"       ./keydb-server -v or --version\n");
     fprintf(stderr,"       ./keydb-server -h or --help\n");
@@ -4705,7 +4705,7 @@ void usage(void) {
     fprintf(stderr,"       ./keydb-server /etc/redis/6379.conf\n");
     fprintf(stderr,"       ./keydb-server --port 7777\n");
     fprintf(stderr,"       ./keydb-server --port 7777 --replicaof 127.0.0.1 8888\n");
-    fprintf(stderr,"       ./keydb-server /etc/myredis.conf --loglevel verbose\n\n");
+    fprintf(stderr,"       ./keydb-server /etc/mykeydb.conf --loglevel verbose\n\n");
     fprintf(stderr,"Sentinel mode:\n");
     fprintf(stderr,"       ./keydb-server /etc/sentinel.conf --sentinel\n");
     exit(1);
@@ -4722,7 +4722,7 @@ void redisAsciiArt(void) {
 
     /* Show the ASCII logo if: log file is stdout AND stdout is a
      * tty AND syslog logging is disabled. Also show logo if the user
-     * forced us to do so via redis.conf. */
+     * forced us to do so via keydb.conf. */
     int show_logo = ((!g_pserver->syslog_enabled &&
                       g_pserver->logfile[0] == '\0' &&
                       isatty(fileno(stdout))) ||

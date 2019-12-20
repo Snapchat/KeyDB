@@ -20,18 +20,17 @@ void RocksDBStorageProvider::insert(const char *key, size_t cchKey, void *data, 
         throw status.ToString();
 }
 
-void RocksDBStorageProvider::erase(const char *key, size_t cchKey)
+bool RocksDBStorageProvider::erase(const char *key, size_t cchKey)
 {
     rocksdb::Status status;
     if (m_spbatch != nullptr)
         status = m_spbatch->Delete(m_spcolfamily.get(), rocksdb::Slice(key, cchKey));
     else
         status = m_spdb->Delete(WriteOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cchKey));
-    if (!status.ok())
-        throw status.ToString();
+    return status.ok();
 }
 
-void RocksDBStorageProvider::retrieve(const char *key, size_t cchKey, callback fn) const
+void RocksDBStorageProvider::retrieve(const char *key, size_t cchKey, callbackSingle fn) const
 {
     std::string value;
     auto status = m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cchKey), &value);
@@ -65,13 +64,16 @@ size_t RocksDBStorageProvider::count() const
     return count;
 }
 
-void RocksDBStorageProvider::enumerate(callback fn) const
+bool RocksDBStorageProvider::enumerate(callback fn) const
 {
     std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spcolfamily.get()));
     for (it->SeekToFirst(); it->Valid(); it->Next()) {
-        fn(it->key().data(), it->key().size(), it->value().data(), it->value().size());
+        bool fContinue = fn(it->key().data(), it->key().size(), it->value().data(), it->value().size());
+        if (!fContinue)
+            break;
     }
     assert(it->status().ok()); // Check for any errors found during the scan
+    return !it->Valid();
 }
 
 const IStorage *RocksDBStorageProvider::clone() const

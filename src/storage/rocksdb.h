@@ -17,10 +17,10 @@ public:
     ~RocksDBStorageProvider();
 
     virtual void insert(const char *key, size_t cchKey, void *data, size_t cb) override;
-    virtual void erase(const char *key, size_t cchKey) override;
-    virtual void retrieve(const char *key, size_t cchKey, callback fn) const override;
+    virtual bool erase(const char *key, size_t cchKey) override;
+    virtual void retrieve(const char *key, size_t cchKey, callbackSingle fn) const override;
     virtual size_t clear() override;
-    virtual void enumerate(callback fn) const override;
+    virtual bool enumerate(callback fn) const override;
 
     virtual const IStorage *clone() const override;
 

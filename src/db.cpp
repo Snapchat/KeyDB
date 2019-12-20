@@ -100,7 +100,7 @@ static robj* lookupKey(redisDb *db, robj *key, int flags) {
 }
 static robj_roptr lookupKeyConst(redisDb *db, robj *key, int flags) {
     serverAssert((flags & LOOKUP_UPDATEMVCC) == 0);
-    robj_roptr val = db->find_threadsafe(szFromObj(key));
+    robj_roptr val = db->find(szFromObj(key));
     if (val != nullptr) {
         lookupKeyUpdateObj(val.unsafe_robjcast(), flags);
         return val;
@@ -315,7 +315,7 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
  *
  * All the new keys in the database should be created via this interface. */
 void setKey(redisDb *db, robj *key, robj *val) {
-    auto itr = db->find(key);
+    auto itr = db->find_cached_threadsafe(szFromObj(key));
     if (itr == NULL) {
         dbAdd(db,key,val);
     } else {
@@ -380,13 +380,18 @@ bool redisDbPersistentData::syncDelete(robj *key)
      * the key, because it is shared with the main dictionary. */
 
     auto itr = find(szFromObj(key));
-    trackkey(szFromObj(key));
     if (itr != nullptr && itr.val()->FExpires())
         removeExpire(key, itr);
-    if (dictDelete(m_pdict,ptrFromObj(key)) == DICT_OK) {
+    
+    bool fDeleted = false;
+    if (m_spstorage != nullptr)
+        fDeleted = m_spstorage->erase(szFromObj(key), sdslen(szFromObj(key)));
+    fDeleted = (dictDelete(m_pdict,ptrFromObj(key)) == DICT_OK) || fDeleted;
+
+    if (fDeleted) {
         if (m_pdbSnapshot != nullptr)
         {
-            auto itr = m_pdbSnapshot->find_threadsafe(szFromObj(key));
+            auto itr = m_pdbSnapshot->find_cached_threadsafe(szFromObj(key));
             if (itr != nullptr)
             {
                 dictAdd(m_pdictTombstone, sdsdup(szFromObj(key)), nullptr);
@@ -649,27 +654,32 @@ void randomkeyCommand(client *c) {
     decrRefCount(key);
 }
 
-static bool FEvictedDE(dictEntry *de)
-{
-    return (de != nullptr) && dictGetVal(de) == nullptr;
-}
-
 bool redisDbPersistentData::iterate(std::function<bool(const char*, robj*)> fn)
 {
+    if (m_spstorage != nullptr)
+    {
+        bool fSawAll = m_spstorage->enumerate([&](const char *key, size_t cchKey, const void *, size_t )->bool{
+            sds sdsKey = sdsnewlen(key, cchKey);
+            dictEntry *de = dictFind(m_pdict, sdsKey);
+            bool fEvict = (de == nullptr);
+            ensure(sdsKey, &de);
+            bool fContinue = fn((const char*)dictGetKey(de), (robj*)dictGetVal(de));
+            if (fEvict)
+                removeCachedValue(sdsKey);
+            sdsfree(sdsKey);
+            return fContinue;
+        });
+        return fSawAll;
+    }
+
     dictIterator *di = dictGetSafeIterator(m_pdict);
     dictEntry *de = nullptr;
     bool fResult = true;
     while(fResult && ((de = dictNext(di)) != nullptr))
     {
-        bool fEvicted = FEvictedDE(de);
-
         ensure((const char*)dictGetKey(de), &de);
         if (!fn((const char*)dictGetKey(de), (robj*)dictGetVal(de)))
             fResult = false;
-
-        // re-evict the key so we don't OOM
-        if (fEvicted)
-            removeCachedValue((const char*)dictGetKey(de));
     }
     dictReleaseIterator(di);
 
@@ -686,13 +696,9 @@ bool redisDbPersistentData::iterate(std::function<bool(const char*, robj*)> fn)
                 return true;
 
             // Alright it's a key in the use keyspace, lets ensure it and then pass it off
-            bool fEvicted = FEvictedDE(de);
             ensure(key);
             deCurrent = dictFind(m_pdict, key);
-            bool fResult =  fn(key, (robj*)dictGetVal(deCurrent));
-            if (fEvicted)
-                removeCachedValue(key);
-            return fResult;
+            return fn(key, (robj*)dictGetVal(deCurrent));
         }, true /*fKeyOnly*/);
     }
     
@@ -1419,13 +1425,9 @@ expireEntry *redisDbPersistentDataSnapshot::getExpire(const char *key) {
     if (expireSize() == 0)
         return nullptr;
 
-    auto itr = find_threadsafe(key);
-    if (itr == nullptr)
+    auto itrExpire = m_setexpire->find(key);
+    if (itrExpire == m_setexpire->end())
         return nullptr;
-    if (!itr.val()->FExpires())
-        return nullptr;
-
-    auto itrExpire = findExpire(itr.key());
     return itrExpire.operator->();
 }
 
@@ -1933,7 +1935,7 @@ bool redisDbPersistentData::insert(char *key, robj *o)
     int res = dictAdd(m_pdict, key, o);
     if (res == DICT_OK)
     {
-        if (m_pdbSnapshot != nullptr && m_pdbSnapshot->find_threadsafe(key) != nullptr)
+        if (m_pdbSnapshot != nullptr && m_pdbSnapshot->find_cached_threadsafe(key) != nullptr)
         {
             serverAssert(dictFind(m_pdictTombstone, key) != nullptr);
         }
@@ -2036,7 +2038,7 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
         dictEntry *deTombstone = dictFind(m_pdictTombstone, sdsKey);
         if (deTombstone == nullptr)
         {
-            auto itr = m_pdbSnapshot->find_threadsafe(sdsKey);
+            auto itr = m_pdbSnapshot->find_cached_threadsafe(sdsKey);
             if (itr == m_pdbSnapshot->end())
                 return; // not found
 
@@ -2128,16 +2130,12 @@ redisDbPersistentData::changelist redisDbPersistentData::processChanges()
             {
                 for (unique_sds_ptr &key : m_vecchanged)
                 {
-                    robj *o = find(key.get());
-                    if (o != nullptr)
-                    {
-                        sds temp = serializeStoredObject(o);
-                        vecRet.emplace_back(std::move(key), unique_sds_ptr(temp));
-                    }
-                    else
-                    {
-                        m_spstorage->erase(key.get(), sdslen(key.get()));
-                    }
+                    dictEntry *de = dictFind(m_pdict, key.get());
+                    if (de == nullptr)
+                        continue;
+                    robj *o = (robj*)dictGetVal(de);
+                    sds temp = serializeStoredObject(o);
+                    vecRet.emplace_back(std::move(key), unique_sds_ptr(temp));
                 }
             }
             m_vecchanged.clear();
@@ -2182,7 +2180,7 @@ dict_iter redisDbPersistentData::random()
         double randval = (double)rand()/RAND_MAX;
         if (randval <= pctInSnapshot)
         {
-            iter = m_pdbSnapshot->random_threadsafe();
+            iter = m_pdbSnapshot->random_cache_threadsafe();    // BUG: RANDOM doesn't consider keys not in RAM
             ensure(iter.key());
             dictEntry *de = dictFind(m_pdict, iter.key());
             return dict_iter(de);
@@ -2196,7 +2194,11 @@ dict_iter redisDbPersistentData::random()
 
 size_t redisDbPersistentData::size() const 
 { 
-    return dictSize(m_pdict) + (m_pdbSnapshot ? (m_pdbSnapshot->size() - dictSize(m_pdictTombstone)) : 0); 
+    if (m_spstorage != nullptr)
+        return m_spstorage->count();
+    
+    return dictSize(m_pdict) 
+        + (m_pdbSnapshot ? (m_pdbSnapshot->size() - dictSize(m_pdictTombstone)) : 0); 
 }
 
 bool redisDbPersistentData::removeCachedValue(const char *key)

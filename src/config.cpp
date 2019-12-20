@@ -229,15 +229,14 @@ static bool initializeStorageProvider(sds *argv, int argc, const char **err)
     if (fResult)
     {
         // We need to set max memory to a sane default so keys are actually evicted properly
-        if (g_pserver->maxmemory == 0)
+        if (g_pserver->maxmemory == 0 && g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
         {
             struct sysinfo sys;
             if (sysinfo(&sys) == 0)
             {
                 // By default it's half the memory.  This gives sufficient room for background saving
                 g_pserver->maxmemory = sys.totalram / 2;
-                if (g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
-                    g_pserver->maxmemory_policy = MAXMEMORY_ALLKEYS_LRU;
+                g_pserver->maxmemory_policy = MAXMEMORY_ALLKEYS_LRU;
             }
         }
     }

@@ -1271,7 +1271,7 @@ public:
     void trackkey(const char *key)
     {
         if (m_fTrackingChanges && !m_fAllChanged && m_spstorage)
-            m_vecchanged.push_back(unique_sds_ptr(sdsdup(key)));
+            m_vecchanged.push_back(unique_sds_ptr(sdsdupshared(key)));
     }
 
     dict_iter find(const char *key) 
@@ -1291,11 +1291,6 @@ public:
     const expireEntry &random_expire()
     {
         return m_setexpire->random_value();
-    }
-
-    auto findExpire(const char *key)
-    {
-        return m_setexpire->find(key);
     }
 
     dict_iter end()  { return dict_iter(nullptr); }
@@ -1393,8 +1388,8 @@ public:
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::end;
 
-    dict_iter random_threadsafe() const;
-    dict_iter find_threadsafe(const char *key) const;
+    dict_iter random_cache_threadsafe() const;
+    dict_iter find_cached_threadsafe(const char *key) const;
 
     expireEntry *getExpire(robj_roptr key) { return getExpire(szFromObj(key)); }
     expireEntry *getExpire(const char *key);
@@ -1449,7 +1444,6 @@ typedef struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::find;
     using redisDbPersistentData::random;
     using redisDbPersistentData::random_expire;
-    using redisDbPersistentData::findExpire;
     using redisDbPersistentData::end;
     using redisDbPersistentData::getStats;
     using redisDbPersistentData::getExpireStats;
@@ -1474,16 +1468,6 @@ typedef struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::createSnapshot;
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::consolidate_snapshot;
-
-    dict_iter find_threadsafe(const char *key) const
-    {
-        dict_iter itr = redisDbPersistentDataSnapshot::find_threadsafe(key);
-        if (itr.key() != nullptr && itr.val() == nullptr)
-        {
-            return const_cast<redisDb*>(this)->redisDbPersistentData::find(key);
-        }
-        return itr;
-    }
 
 public:
     expireset::setiter expireitr;

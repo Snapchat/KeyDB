@@ -248,7 +248,7 @@ struct visitFunctor
     bool operator()(const expireEntry &e)
     {
         dictEntry *de = dictFind(dbdict, e.key());
-        if (dictGetVal(de) != nullptr)
+        if (de != nullptr)
         {
             processEvictionCandidate(dbid, (sds)dictGetKey(de), (robj*)dictGetVal(de), &e, pool);
             ++count;
@@ -580,7 +580,7 @@ int freeMemoryIfNeeded(void) {
                 if (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM)
                 {
                     if (db->size() != 0) {
-                        auto itr = db->random_threadsafe();
+                        auto itr = db->random_cache_threadsafe();
                         bestkey = itr.key();
                         bestdbid = j;
                         break;

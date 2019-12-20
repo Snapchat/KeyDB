@@ -55,6 +55,10 @@ bool redisDbPersistentData::asyncDelete(robj *key) {
     /* If the value is composed of a few allocations, to free in a lazy way
      * is actually just slower... So under a certain limit we just free
      * the object synchronously. */
+
+    if (m_spstorage != nullptr)
+        return syncDelete(key); // async delte never makes sense with a storage provider
+
     dictEntry *de = dictUnlink(m_pdict,ptrFromObj(key));
     if (m_pdbSnapshot != nullptr)
         dictAdd(m_pdictTombstone, sdsdup((sds)dictGetKey(de)), nullptr);

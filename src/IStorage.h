@@ -12,15 +12,17 @@ public:
 class IStorage
 {
 public:
-    typedef std::function<void(const char *, size_t, const void *, size_t)> callback;
+    typedef std::function<bool(const char *, size_t, const void *, size_t)> callback;
+    typedef std::function<void(const char *, size_t, const void *, size_t)> callbackSingle;
 
     virtual ~IStorage();
 
     virtual void insert(const char *key, size_t cchKey, void *data, size_t cb) = 0;
-    virtual void erase(const char *key, size_t cchKey) = 0;
-    virtual void retrieve(const char *key, size_t cchKey, callback fn) const = 0;
+    virtual bool erase(const char *key, size_t cchKey) = 0;
+    virtual void retrieve(const char *key, size_t cchKey, callbackSingle fn) const = 0;
     virtual size_t clear() = 0;
-    virtual void enumerate(callback fn) const = 0;
+    virtual bool enumerate(callback fn) const = 0;
+    virtual size_t count() const = 0;
 
     virtual void beginWriteBatch() {} // NOP
     virtual void endWriteBatch() {} // NOP

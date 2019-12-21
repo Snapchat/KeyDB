@@ -5032,6 +5032,21 @@ void *workerThreadMain(void *parg)
     return NULL;
 }
 
+static void validateConfiguration()
+{
+    if (cserver.cthreads > (int)std::thread::hardware_concurrency()) {
+        serverLog(LL_WARNING, "WARNING: server-threads is greater than this machine's core count.  Truncating to %u threads", std::thread::hardware_concurrency());
+        cserver.cthreads = (int)std::thread::hardware_concurrency();
+        cserver.cthreads = std::max(cserver.cthreads, 1);	// in case of any weird sign overflows
+    }
+
+    if (g_pserver->enable_multimaster && !g_pserver->fActiveReplica) {
+        serverLog(LL_WARNING, "ERROR: Multi Master requires active replication to be enabled.");
+        serverLog(LL_WARNING, "\tKeyDB will now exit.  Please update your configuration file.");
+        exit(EXIT_FAILURE);
+    }
+}
+
 int main(int argc, char **argv) {
     struct timeval tv;
     int j;
@@ -5204,11 +5219,7 @@ int main(int argc, char **argv) {
         serverLog(LL_WARNING, "Configuration loaded");
     }
 
-    if (cserver.cthreads > (int)std::thread::hardware_concurrency()) {
-        serverLog(LL_WARNING, "WARNING: server-threads is greater than this machine's core count.  Truncating to %u threads", std::thread::hardware_concurrency());
-	cserver.cthreads = (int)std::thread::hardware_concurrency();
-	cserver.cthreads = std::max(cserver.cthreads, 1);	// in case of any weird sign overflows
-    }
+    validateConfiguration();
 
     cserver.supervised = redisIsSupervised(cserver.supervised_mode);
     int background = cserver.daemonize && !cserver.supervised;

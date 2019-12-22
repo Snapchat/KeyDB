@@ -492,14 +492,6 @@ int freeMemoryIfNeeded(void) {
 
     mem_freed = 0;
 
-    size_t maxKeys = 0;
-    size_t totalKeysFreed = 0;
-    for (int i = 0; i < cserver.dbnum; ++i)
-        maxKeys += g_pserver->db[i]->size();
-
-    // A random search is n log n, so if we run longer than this we know we're not going to terminate
-    maxKeys = static_cast<size_t>(maxKeys * (log2(maxKeys)));
-
     if (g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
         goto cant_free; /* We need to free memory, but policy forbids. */
 
@@ -640,7 +632,6 @@ int freeMemoryIfNeeded(void) {
             }
 
             keys_freed++;
-            totalKeysFreed++;
 
             /* When the memory to free starts to be big enough, we may
             * start spending so much time here that is impossible to
@@ -661,16 +652,6 @@ int freeMemoryIfNeeded(void) {
                     mem_freed = mem_tofree;
                 }
             }
-        }
-
-        // When using FLASH we're not actually evicting and we leave around the key
-        //  its possible we tried to evict the whole database and failed to free enough memory
-        //  quit if this happens
-        if (totalKeysFreed >= maxKeys)
-        {
-            latencyEndMonitor(latency);
-            latencyAddSampleIfNeeded("eviction-cycle",latency);
-            goto cant_free;
         }
 
         if (keys_freed <= 0) {

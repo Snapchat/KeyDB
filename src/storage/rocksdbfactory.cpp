@@ -60,7 +60,12 @@ IStorage *RocksDBStorageFactory::create(int db)
 {
     ++db;   // skip default col family
     std::shared_ptr<rocksdb::ColumnFamilyHandle> spcolfamily(m_vecspcols[db].release());
-    return new RocksDBStorageProvider(m_spdb, spcolfamily, nullptr);
+    size_t count = 0;
+    std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(rocksdb::ReadOptions(), spcolfamily.get()));
+    for (it->SeekToFirst(); it->Valid(); it->Next()) {
+        ++count;
+    }
+    return new RocksDBStorageProvider(m_spdb, spcolfamily, nullptr, count);
 }
 
 const char *RocksDBStorageFactory::name() const

@@ -11,9 +11,10 @@ class RocksDBStorageProvider : public IStorage
     const rocksdb::Snapshot *m_psnapshot = nullptr;
     std::shared_ptr<rocksdb::ColumnFamilyHandle> m_spcolfamily;
     rocksdb::ReadOptions m_readOptionsTemplate;
+    size_t m_count = 0;
 
 public:
-    RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot);
+    RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count);
     ~RocksDBStorageProvider();
 
     virtual void insert(const char *key, size_t cchKey, void *data, size_t cb) override;
@@ -29,7 +30,7 @@ public:
 
     virtual void flush() override;
 
-    size_t count(bool fStrict) const;
+    size_t count() const;
 
 protected:
 

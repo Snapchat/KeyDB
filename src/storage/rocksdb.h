@@ -29,7 +29,7 @@ public:
 
     virtual void flush() override;
 
-    size_t count() const;
+    size_t count(bool fStrict) const;
 
 protected:
 

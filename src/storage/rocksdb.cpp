@@ -24,9 +24,16 @@ bool RocksDBStorageProvider::erase(const char *key, size_t cchKey)
 {
     rocksdb::Status status;
     if (m_spbatch != nullptr)
+    {
         status = m_spbatch->Delete(m_spcolfamily.get(), rocksdb::Slice(key, cchKey));
+    }
     else
+    {
+        std::string strT;
+        if (!m_spdb->KeyMayExist(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cchKey), &strT))
+            return false;
         status = m_spdb->Delete(WriteOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cchKey));
+    }
     return status.ok();
 }
 
@@ -40,7 +47,7 @@ void RocksDBStorageProvider::retrieve(const char *key, size_t cchKey, callbackSi
 
 size_t RocksDBStorageProvider::clear()
 {
-    size_t celem = count();
+    size_t celem = count(false);
     auto status = m_spdb->DropColumnFamily(m_spcolfamily.get());
     auto strName = m_spcolfamily->GetName();
 
@@ -53,14 +60,26 @@ size_t RocksDBStorageProvider::clear()
     return celem;
 }
 
-size_t RocksDBStorageProvider::count() const
+size_t RocksDBStorageProvider::count(bool fStrict) const
 {
-    std::string strelem;
-    if (!m_spdb->GetProperty(m_spcolfamily.get(), rocksdb::DB::Properties::kEstimateNumKeys, &strelem))
-        throw "Failed to get database size";
-    std::stringstream sstream(strelem);
-    size_t count;
-    sstream >> count;
+    size_t count = 0;
+
+    if (fStrict)
+    {
+        std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spcolfamily.get()));
+        for (it->SeekToFirst(); it->Valid(); it->Next()) {
+            ++count;
+        }
+    }
+    else
+    {
+        std::string strelem;
+        if (!m_spdb->GetProperty(m_spcolfamily.get(), rocksdb::DB::Properties::kEstimateNumKeys, &strelem))
+            throw "Failed to get database size";
+        std::stringstream sstream(strelem);
+        size_t count;
+        sstream >> count;
+    }
     return count;
 }
 

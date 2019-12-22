@@ -2195,7 +2195,7 @@ dict_iter redisDbPersistentData::random()
 size_t redisDbPersistentData::size() const 
 { 
     if (m_spstorage != nullptr)
-        return m_spstorage->count();
+        return m_spstorage->count(false);
     
     return dictSize(m_pdict) 
         + (m_pdbSnapshot ? (m_pdbSnapshot->size() - dictSize(m_pdictTombstone)) : 0); 

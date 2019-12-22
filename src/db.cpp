@@ -315,7 +315,7 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
  *
  * All the new keys in the database should be created via this interface. */
 void setKey(redisDb *db, robj *key, robj *val) {
-    auto itr = db->find_cached_threadsafe(szFromObj(key));
+    auto itr = db->find(szFromObj(key));
     if (itr == NULL) {
         dbAdd(db,key,val);
     } else {

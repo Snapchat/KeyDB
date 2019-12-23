@@ -7,13 +7,19 @@ start_server {tags {"flash"} overrides {"storage-provider flash ./rocks.db"}} {
     }
 
     test { DEL of nonexistant key returns 0 } {
+        r flushall
         assert_equal {0} [r del foobar]
+        assert_equal {0} [r dbsize] "Key count is accurate after non-existant delete"
     }
 
    test { SET of existing but flushed key works } {
+        r flushall
         r set testkey foo
+        assert_equal {1} [r dbsize] "Only one key after first insert"
         r flushall cache
+        assert_equal {1} [r dbsize] "Only one key after flushall cache"
         r set testkey bar
+        assert_equal {1} [r dbsize] "Only one key after overwrite"
         assert_equal {bar} [r get testkey]
     } 
 

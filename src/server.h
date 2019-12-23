@@ -1342,6 +1342,7 @@ public:
 
     bool FStorageProvider() { return m_spstorage != nullptr; }
     bool removeCachedValue(const char *key);
+    void removeAllCachedValues();
 
 private:
     void ensure(const char *key);
@@ -1468,6 +1469,7 @@ typedef struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::createSnapshot;
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::consolidate_snapshot;
+    using redisDbPersistentData::removeAllCachedValues;
 
 public:
     expireset::setiter expireitr;

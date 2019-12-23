@@ -1993,6 +1993,11 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
     robj *subexpireKey = nullptr;
     robj *key = nullptr;
 
+    for (int idb = 0; idb < cserver.dbnum; ++idb)
+    {
+        g_pserver->db[idb]->trackChanges(true);
+    }
+
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = g_pserver->loading_process_events_interval_bytes;
     if (rioRead(rdb,buf,9) == 0) goto eoferr;
@@ -2252,9 +2257,16 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
             }
         }
     }
+
+    for (int idb = 0; idb < cserver.dbnum; ++idb)
+    {
+        auto vec = g_pserver->db[idb]->processChanges();
+        g_pserver->db[idb]->commitChanges(vec);
+    }
     return C_OK;
 
 eoferr: /* unexpected end of file is handled here with a fatal exit */
+    // we don't need to commit changes, because we're about to exit()
     serverLog(LL_WARNING,"Short read or OOM loading DB. Unrecoverable error, aborting now.");
     rdbExitReportCorruptRDB("Unexpected EOF reading RDB file");
     return C_ERR; /* Just to avoid warning */

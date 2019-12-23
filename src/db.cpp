@@ -677,32 +677,32 @@ void randomkeyCommand(client *c) {
 
 bool redisDbPersistentData::iterate(std::function<bool(const char*, robj*)> fn)
 {
-    if (m_spstorage != nullptr)
-    {
-        bool fSawAll = m_spstorage->enumerate([&](const char *key, size_t cchKey, const void *, size_t )->bool{
-            sds sdsKey = sdsnewlen(key, cchKey);
-            dictEntry *de = dictFind(m_pdict, sdsKey);
-            bool fEvict = (de == nullptr);
-            ensure(sdsKey, &de);
-            bool fContinue = fn((const char*)dictGetKey(de), (robj*)dictGetVal(de));
-            if (fEvict)
-                removeCachedValue(sdsKey);
-            sdsfree(sdsKey);
-            return fContinue;
-        });
-        return fSawAll;
-    }
-
     dictIterator *di = dictGetSafeIterator(m_pdict);
     dictEntry *de = nullptr;
     bool fResult = true;
     while(fResult && ((de = dictNext(di)) != nullptr))
     {
-        ensure((const char*)dictGetKey(de), &de);
         if (!fn((const char*)dictGetKey(de), (robj*)dictGetVal(de)))
             fResult = false;
     }
     dictReleaseIterator(di);
+
+    if (m_spstorage != nullptr)
+    {
+        bool fSawAll = fResult && m_spstorage->enumerate([&](const char *key, size_t cchKey, const void *, size_t )->bool{
+            sds sdsKey = sdsnewlen(key, cchKey);
+            bool fContinue = true;
+            if (dictFind(m_pdict, sdsKey) == nullptr)
+            {
+                ensure(sdsKey, &de);
+                fContinue = fn((const char*)dictGetKey(de), (robj*)dictGetVal(de));
+                removeCachedValue(sdsKey);
+            }
+            sdsfree(sdsKey);
+            return fContinue;
+        });
+        return fSawAll;
+    }
 
     if (fResult && m_pdbSnapshot != nullptr)
     {
@@ -1925,7 +1925,7 @@ void redisDbPersistentData::initialize()
     m_pdict = dictCreate(&dbDictType,this);
     m_pdictTombstone = dictCreate(&dbDictType,this);
     m_setexpire = new(MALLOC_LOCAL) expireset();
-    m_fAllChanged = false;
+    m_fAllChanged = 0;
     m_fTrackingChanges = 0;
 }
 
@@ -1987,7 +1987,7 @@ void redisDbPersistentData::clear(void(callback)(void*))
 {
     dictEmpty(m_pdict,callback);
     if (m_fTrackingChanges)
-        m_fAllChanged = true;
+        m_fAllChanged++;
     delete m_setexpire;
     m_setexpire = new (MALLOC_LOCAL) expireset();
     if (m_spstorage != nullptr)
@@ -2145,7 +2145,7 @@ redisDbPersistentData::changelist redisDbPersistentData::processChanges()
             {
                 m_spstorage->clear();
                 storeDatabase();
-                m_fAllChanged = false;
+                m_fAllChanged--;
             }
             else
             {
@@ -2237,9 +2237,11 @@ bool redisDbPersistentData::removeCachedValue(const char *key)
     return true;
 }
 
-void redisDbPersistentData::trackChanges()
+void redisDbPersistentData::trackChanges(bool fBulk)
 {
     m_fTrackingChanges++;
+    if (fBulk)
+        m_fAllChanged++;
 }
 
 void redisDbPersistentData::removeAllCachedValues()
@@ -2249,7 +2251,7 @@ void redisDbPersistentData::removeAllCachedValues()
     {
         auto vec = processChanges();
         commitChanges(vec);
-        trackChanges();
+        trackChanges(false);
     }
 
     dictEmpty(m_pdict, nullptr);

@@ -33,6 +33,7 @@ public:
     size_t count() const;
 
 protected:
+    bool FKeyExists(const char *key, size_t cchKey) const;
 
     const rocksdb::ReadOptions &ReadOptions() const { return m_readOptionsTemplate; }
     rocksdb::WriteOptions WriteOptions() const;

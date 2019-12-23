@@ -12,13 +12,16 @@ RocksDBStorageProvider::RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spd
 void RocksDBStorageProvider::insert(const char *key, size_t cchKey, void *data, size_t cb)
 {
     rocksdb::Status status;
+    bool fOverwrite = FKeyExists(key, cchKey);
     if (m_spbatch != nullptr)
         status = m_spbatch->Put(m_spcolfamily.get(), rocksdb::Slice(key, cchKey), rocksdb::Slice((const char*)data, cb));
     else
         status = m_spdb->Put(WriteOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cchKey), rocksdb::Slice((const char*)data, cb));
     if (!status.ok())
         throw status.ToString();
-    ++m_count;
+
+    if (!fOverwrite)
+        ++m_count;
 }
 
 bool RocksDBStorageProvider::erase(const char *key, size_t cchKey)
@@ -30,13 +33,12 @@ bool RocksDBStorageProvider::erase(const char *key, size_t cchKey)
     }
     else
     {
-        std::string strT;
-        if (!m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cchKey), &strT).ok())
+        if (!FKeyExists(key, cchKey))
             return false;
         status = m_spdb->Delete(WriteOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cchKey));
     }
     if (status.ok())
-        -- m_count;
+        --m_count;
     return status.ok();
 }
 
@@ -123,4 +125,10 @@ void RocksDBStorageProvider::endWriteBatch()
 void RocksDBStorageProvider::flush()
 {
     m_spdb->SyncWAL();
+}
+
+bool RocksDBStorageProvider::FKeyExists(const char *key, size_t cch) const
+{
+    std::string strT;
+    return m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cch), &strT).ok();
 }

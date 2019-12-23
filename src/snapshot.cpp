@@ -256,17 +256,32 @@ dict_iter redisDbPersistentDataSnapshot::find_cached_threadsafe(const char *key)
 
 bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly) const
 {
+    // Take the size so we can ensure we visited every element exactly once
+    //  use volatile to ensure it's not checked too late.  This makes it more
+    //  likely we'll detect races (but it won't gurantee it)
+    volatile size_t celem = size();
+
+    dictEntry *de = nullptr;
+    bool fResult = true;
+
+    dictIterator *di = dictGetSafeIterator(m_pdict);
+    while(fResult && ((de = dictNext(di)) != nullptr))
+    {
+        --celem;
+        robj *o = fKeyOnly ? nullptr : (robj*)dictGetVal(de);
+        if (!fn((const char*)dictGetKey(de), o))
+            fResult = false;
+    }
+    dictReleaseIterator(di);
+
+
     if (m_spstorage != nullptr)
     {
-        bool fSawAll = m_spstorage->enumerate([&](const char *key, size_t cchKey, const void *data, size_t cbData){
+        bool fSawAll = fResult && m_spstorage->enumerate([&](const char *key, size_t cchKey, const void *data, size_t cbData){
             sds sdsKey = sdsnewlen(key, cchKey);
             dictEntry *de = dictFind(m_pdict, sdsKey);
-            bool fContinue = false;
-            if (de != nullptr)
-            {
-                fContinue = fn((const char*)dictGetKey(de), (robj*)dictGetVal(de));
-            }
-            else
+            bool fContinue = true;
+            if (de == nullptr)
             {
                 robj *o = fKeyOnly ? nullptr : deserializeStoredObject(this, sdsKey, data, cbData);
                 fContinue = fn(sdsKey, o);
@@ -279,34 +294,6 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
         });
         return fSawAll;
     }
-
-    dictEntry *de = nullptr;
-    bool fResult = true;
-
-    // Take the size so we can ensure we visited every element exactly once
-    //  use volatile to ensure it's not checked too late.  This makes it more
-    //  likely we'll detect races (but it won't gurantee it)
-    volatile size_t celem = size();
-
-    dictIterator *di = dictGetSafeIterator(m_pdict);
-    while(fResult && ((de = dictNext(di)) != nullptr))
-    {
-        --celem;
-        robj *o = (robj*)dictGetVal(de);
-        if (o == nullptr && !fKeyOnly)
-        {
-            m_spstorage->retrieve((sds)dictGetKey(de), sdslen((sds)dictGetKey(de)), [&](const char *, size_t, const void *data, size_t cb){
-                o = deserializeStoredObject(this, (const char*)dictGetKey(de), data, cb);
-            });
-        }
-
-        if (!fn((const char*)dictGetKey(de), o))
-            fResult = false;
-
-        if (o != nullptr && dictGetVal(de) == nullptr)
-            decrRefCount(o);
-    }
-    dictReleaseIterator(di);
 
     const redisDbPersistentDataSnapshot *psnapshot;
     __atomic_load(&m_pdbSnapshot, &psnapshot, __ATOMIC_ACQUIRE);

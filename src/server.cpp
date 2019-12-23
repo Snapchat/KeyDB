@@ -2290,7 +2290,7 @@ void afterSleep(struct aeEventLoop *eventLoop) {
     serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
     aeAcquireLock();
     for (int idb = 0; idb < cserver.dbnum; ++idb)
-        g_pserver->db[idb]->trackChanges();
+        g_pserver->db[idb]->trackChanges(false);
     aeReleaseLock();
 }
 

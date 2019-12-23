@@ -1318,7 +1318,7 @@ public:
 
     void setStorageProvider(IStorage *pstorage);
 
-    void trackChanges();
+    void trackChanges(bool fBulk);
 
     // Process and commit changes for secondary storage.  Note that process and commit are seperated
     //  to allow you to release the global lock before commiting.  To prevent deadlocks you *must*
@@ -1355,7 +1355,7 @@ private:
     dict *m_pdict = nullptr;                 /* The keyspace for this DB */
     dict *m_pdictTombstone = nullptr;        /* Track deletes when we have a snapshot */
     int m_fTrackingChanges = 0;     // Note: Stack based
-    bool m_fAllChanged = false;
+    int m_fAllChanged = 0;
     std::vector<unique_sds_ptr> m_vecchanged;
     std::shared_ptr<IStorage> m_spstorage = nullptr;
     uint64_t mvccCheckpoint = 0;
@@ -1949,6 +1949,7 @@ struct redisServerConst {
 
     sds license_key = nullptr;
     int trial_timeout = 20;
+    int delete_on_evict = false;   // Only valid when a storage provider is set
 };
 
 struct redisServer {

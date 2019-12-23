@@ -594,7 +594,7 @@ int freeMemoryIfNeeded(void) {
         if (bestkey) {
             db = g_pserver->db[bestdbid];
 
-            if (db->FStorageProvider())
+            if (!cserver.delete_on_evict && db->FStorageProvider())
             {
                 // This key is in the storage so we only need to free the object
                 delta = (long long) zmalloc_used_memory();

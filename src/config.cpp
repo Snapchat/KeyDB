@@ -30,6 +30,7 @@
 
 #include "server.h"
 #include "storage/rocksdbfactory.h"
+#include "storage/teststorageprovider.h"
 #include "cluster.h"
 
 #include <fcntl.h>
@@ -142,6 +143,7 @@ configYesNo configs_yesno[] = {
     {"replica-read-only","slave-read-only",&g_pserver->repl_slave_ro,1,CONFIG_DEFAULT_SLAVE_READ_ONLY},
     {"replica-ignore-maxmemory","slave-ignore-maxmemory",&g_pserver->repl_slave_ignore_maxmemory,1,CONFIG_DEFAULT_SLAVE_IGNORE_MAXMEMORY},
     {"multi-master",NULL,&g_pserver->enable_multimaster,false,CONFIG_DEFAULT_ENABLE_MULTIMASTER},
+    {"delete-on-evict",NULL,&cserver.delete_on_evict,true,false},
     {NULL, NULL, 0, 0}
 };
 
@@ -218,15 +220,19 @@ void queueLoadModule(sds path, sds *argv, int argc) {
 
 static bool initializeStorageProvider(sds *argv, int argc, const char **err)
 {
-    bool fResult = false;
+    bool fTest = false;
     if (!strcasecmp(argv[0], "flash") && argc == 2)
     {
         // Create The Storage Factory (if necessary)
         g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(argv[1], cserver.dbnum);
-        fResult = true;
+    }
+    else if (!strcasecmp(argv[0], "test") && argc == 1)
+    {
+        g_pserver->m_pstorageFactory = new (MALLOC_LOCAL) TestStorageFactory();
+        fTest = true;
     }
 
-    if (fResult)
+    if (g_pserver->m_pstorageFactory != nullptr && !fTest)
     {
         // We need to set max memory to a sane default so keys are actually evicted properly
         if (g_pserver->maxmemory == 0 && g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
@@ -244,7 +250,7 @@ static bool initializeStorageProvider(sds *argv, int argc, const char **err)
     {
         *err = "Unknown storage provider";
     }
-    return fResult;
+    return g_pserver->m_pstorageFactory != nullptr;
 }
 
 void loadServerConfigFromString(char *config) {

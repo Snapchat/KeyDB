@@ -1,4 +1,4 @@
-start_server {tags {"flash"} overrides {"storage-provider flash ./rocks.db"}} {
+start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.db} delete-on-evict no]] {
 
     test { FLASH - GET works after eviction } {
         r set testkey foo

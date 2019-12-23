@@ -556,6 +556,16 @@ int getFlushCommandFlags(client *c, int *flags) {
 void flushdbCommand(client *c) {
     int flags;
 
+    if (c->argc == 2)
+    {
+        if (!strcasecmp(szFromObj(c->argv[1]), "cache"))
+        {
+            c->db->removeAllCachedValues();
+            addReply(c,shared.ok);
+            return;
+        }
+    }
+
     if (getFlushCommandFlags(c,&flags) == C_ERR) return;
     signalFlushedDb(c->db->id);
     g_pserver->dirty += emptyDb(c->db->id,flags,NULL);
@@ -567,6 +577,17 @@ void flushdbCommand(client *c) {
  * Flushes the whole server data set. */
 void flushallCommand(client *c) {
     int flags;
+
+    if (c->argc == 2)
+    {
+        if (!strcasecmp(szFromObj(c->argv[1]), "cache"))
+        {
+            for (int idb = 0; idb < cserver.dbnum; ++idb)
+                g_pserver->db[idb]->removeAllCachedValues();
+            addReply(c,shared.ok);
+            return;
+        }
+    }
 
     if (getFlushCommandFlags(c,&flags) == C_ERR) return;
     signalFlushedDb(-1);
@@ -2219,4 +2240,17 @@ bool redisDbPersistentData::removeCachedValue(const char *key)
 void redisDbPersistentData::trackChanges()
 {
     m_fTrackingChanges++;
+}
+
+void redisDbPersistentData::removeAllCachedValues()
+{
+    // First we have to flush the tracked changes
+    if (m_fTrackingChanges)
+    {
+        auto vec = processChanges();
+        commitChanges(vec);
+        trackChanges();
+    }
+
+    dictEmpty(m_pdict, nullptr);
 }

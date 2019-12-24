@@ -17,7 +17,7 @@ public:
 
     virtual ~IStorage();
 
-    virtual void insert(const char *key, size_t cchKey, void *data, size_t cb) = 0;
+    virtual void insert(const char *key, size_t cchKey, void *data, size_t cb, bool fOverwire) = 0;
     virtual bool erase(const char *key, size_t cchKey) = 0;
     virtual void retrieve(const char *key, size_t cchKey, callbackSingle fn) const = 0;
     virtual size_t clear() = 0;

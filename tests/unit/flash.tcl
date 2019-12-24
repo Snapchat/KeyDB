@@ -48,6 +48,25 @@ start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.
        assert [expr [r ttl testkey] > 0]
     }
 
+    test { CREATE and UPDATE in transaction, key count is accurate } {
+        r flushall
+        r multi
+        r set testkey 2
+        r incr testkey
+        r exec
+        assert_equal {1} [r dbsize]
+        assert_equal {3} [r get testkey]
+    }
+
+    test { EXPIRE key count is accurate } {
+        r flushall
+        r set testkey foo ex 1
+        r flushall cache
+        assert_equal {1} [r dbsize]
+        after 1500
+        assert_equal {0} [r dbsize]
+    }
+
     r flushall
     foreach policy {
         allkeys-random allkeys-lru allkeys-lfu

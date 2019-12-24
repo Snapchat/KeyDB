@@ -1,4 +1,7 @@
 #include "rocksdb.h"
+#include <rocksdb/filter_policy.h>
+#include <rocksdb/table.h>
+#include <rocksdb/utilities/options_util.h>
 
 class RocksDBStorageFactory : public IStorageFactory
 {
@@ -30,16 +33,32 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum)
 
     std::vector<rocksdb::ColumnFamilyDescriptor> veccoldesc;
     veccoldesc.push_back(rocksdb::ColumnFamilyDescriptor(rocksdb::kDefaultColumnFamilyName, rocksdb::ColumnFamilyOptions()));  // ignore default col family
-    
-    for (int idb = 0; idb < dbnum; ++idb)
-    {
-        veccoldesc.push_back(rocksdb::ColumnFamilyDescriptor(std::to_string(idb), rocksdb::ColumnFamilyOptions()));
-    }
 
     rocksdb::Options options;
     options.create_if_missing = true;
     options.create_missing_column_families = true;
     rocksdb::DB *db = nullptr;
+
+    
+    options.max_background_compactions = 4;
+    options.max_background_flushes = 2;
+    options.bytes_per_sync = 1048576;
+    options.compaction_pri = rocksdb::kMinOverlappingRatio;
+    rocksdb::BlockBasedTableOptions table_options;
+    table_options.block_size = 16 * 1024;
+    table_options.cache_index_and_filter_blocks = true;
+    table_options.pin_l0_filter_and_index_blocks_in_cache = true;
+    options.table_factory.reset(NewBlockBasedTableFactory(table_options));
+    table_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, false));
+    options.table_factory.reset(
+        rocksdb::NewBlockBasedTableFactory(table_options));
+
+    for (int idb = 0; idb < dbnum; ++idb)
+    {
+        rocksdb::ColumnFamilyOptions cf_options(options);
+        cf_options.level_compaction_dynamic_level_bytes = true;
+        veccoldesc.push_back(rocksdb::ColumnFamilyDescriptor(std::to_string(idb), cf_options));
+    }
     
     std::vector<rocksdb::ColumnFamilyHandle*> handles;
     status = rocksdb::DB::Open(options, dbfile, veccoldesc, &handles, &db);

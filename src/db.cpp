@@ -315,11 +315,8 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
  *
  * All the new keys in the database should be created via this interface. */
 void setKey(redisDb *db, robj *key, robj *val) {
-    auto itr = db->find(szFromObj(key));
-    if (itr == NULL) {
-        dbAdd(db,key,val);
-    } else {
-        db->dbOverwriteCore(itr,key,val,!!g_pserver->fActiveReplica,true);
+    if (!dbAddCore(db, key, val)) {
+        dbOverwrite(db, key, val);
     }
     incrRefCount(val);
     signalModifiedKey(db,key);
@@ -2149,7 +2146,7 @@ redisDbPersistentData::changelist redisDbPersistentData::processChanges()
             }
             else
             {
-                for (unique_sds_ptr &key : m_vecchanged)
+                for (auto &key : m_setchanged)
                 {
                     dictEntry *de = dictFind(m_pdict, key.get());
                     if (de == nullptr)
@@ -2159,7 +2156,7 @@ redisDbPersistentData::changelist redisDbPersistentData::processChanges()
                     vecRet.emplace_back(std::move(key), unique_sds_ptr(temp));
                 }
             }
-            m_vecchanged.clear();
+            m_setchanged.clear();
         }
     }
     
@@ -2226,9 +2223,9 @@ bool redisDbPersistentData::removeCachedValue(const char *key)
 {
     serverAssert(m_spstorage != nullptr);
     // First ensure its not a pending key
-    for (auto &spkey : m_vecchanged)
+    for (auto &strkey : m_setchanged)
     {
-        if (sdscmp(spkey.get(), (sds)key) == 0)
+        if (sdscmp(strkey.get(), (sds)key) == 0)
             return false; // NOP
     }
 

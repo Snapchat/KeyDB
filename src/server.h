@@ -1263,16 +1263,12 @@ public:
     size_t size() const;
     void expand(uint64_t slots) { dictExpand(m_pdict, slots); }
     
-    void trackkey(robj_roptr o)
+    void trackkey(robj_roptr o, bool fUpdate)
     {
-        trackkey(szFromObj(o));
+        trackkey(szFromObj(o), fUpdate);
     }
 
-    void trackkey(const char *key)
-    {
-        if (m_fTrackingChanges && !m_fAllChanged && m_spstorage)
-            m_setchanged.emplace(sdsdupshared(key));
-    }
+    void trackkey(const char *key, bool fUpdate);
 
     dict_iter find(const char *key) 
     {
@@ -1324,7 +1320,14 @@ public:
     //  to allow you to release the global lock before commiting.  To prevent deadlocks you *must*
     //  either release the global lock or keep the same global lock between the two functions as
     //  a second look is kept to ensure writes to secondary storage are ordered
-    typedef std::vector<std::pair<sdsimmutablestring, unique_sds_ptr>> changelist;
+    struct changedesc
+    {
+        sdsimmutablestring strkey;
+        bool fUpdate;
+
+        changedesc(const char *strkey, bool fUpdate) : strkey(strkey), fUpdate(fUpdate) {}
+    };
+    typedef std::vector<std::pair<changedesc, unique_sds_ptr>> changelist;
     changelist processChanges();
     void commitChanges(const changelist &vec);
 
@@ -1345,10 +1348,18 @@ public:
     void removeAllCachedValues();
 
 private:
+    struct changedescCmp
+    {
+        using is_transparent = void;    // C++14 to allow comparisons with different types
+        bool operator()(const changedesc &a, const changedesc &b) const { return a.strkey < b.strkey; }
+        bool operator()(const changedesc &a, const char *key) const { return a.strkey < sdsview(key); }
+        bool operator()(const char *key, const changedesc &b) const { return sdsview(key) < b.strkey; }
+    };
+
     void ensure(const char *key);
     void ensure(const char *key, dictEntry **de);
     void storeDatabase();
-    void storeKey(const char *key, size_t cchKey, robj *o);
+    void storeKey(const char *key, size_t cchKey, robj *o, bool fOverwrite);
     void recursiveFreeSnapshots(redisDbPersistentDataSnapshot *psnapshot);
 
     // Keyspace
@@ -1356,7 +1367,7 @@ private:
     dict *m_pdictTombstone = nullptr;        /* Track deletes when we have a snapshot */
     int m_fTrackingChanges = 0;     // Note: Stack based
     int m_fAllChanged = 0;
-    std::set<sdsimmutablestring> m_setchanged;
+    std::set<changedesc, changedescCmp> m_setchanged;
     std::shared_ptr<IStorage> m_spstorage = nullptr;
     uint64_t mvccCheckpoint = 0;
 

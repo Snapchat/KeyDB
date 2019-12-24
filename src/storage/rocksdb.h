@@ -17,7 +17,7 @@ public:
     RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count);
     ~RocksDBStorageProvider();
 
-    virtual void insert(const char *key, size_t cchKey, void *data, size_t cb) override;
+    virtual void insert(const char *key, size_t cchKey, void *data, size_t cb, bool fOverwrite) override;
     virtual bool erase(const char *key, size_t cchKey) override;
     virtual void retrieve(const char *key, size_t cchKey, callbackSingle fn) const override;
     virtual size_t clear() override;

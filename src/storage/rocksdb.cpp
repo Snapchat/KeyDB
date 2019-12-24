@@ -9,10 +9,9 @@ RocksDBStorageProvider::RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spd
     m_readOptionsTemplate.snapshot = m_psnapshot;
 }
 
-void RocksDBStorageProvider::insert(const char *key, size_t cchKey, void *data, size_t cb)
+void RocksDBStorageProvider::insert(const char *key, size_t cchKey, void *data, size_t cb, bool fOverwrite)
 {
     rocksdb::Status status;
-    bool fOverwrite = FKeyExists(key, cchKey);
     if (m_spbatch != nullptr)
         status = m_spbatch->Put(m_spcolfamily.get(), rocksdb::Slice(key, cchKey), rocksdb::Slice((const char*)data, cb));
     else

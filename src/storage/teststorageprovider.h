@@ -16,7 +16,7 @@ public:
     TestStorageProvider();
     virtual ~TestStorageProvider();
 
-    virtual void insert(const char *key, size_t cchKey, void *data, size_t cb) override;
+    virtual void insert(const char *key, size_t cchKey, void *data, size_t cb, bool fHintOverwrite) override;
     virtual bool erase(const char *key, size_t cchKey) override;
     virtual void retrieve(const char *key, size_t cchKey, callbackSingle fn) const override;
     virtual size_t clear() override;

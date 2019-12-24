@@ -21,6 +21,18 @@ start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.
         r set testkey bar
         assert_equal {1} [r dbsize] "Only one key after overwrite"
         assert_equal {bar} [r get testkey]
+    }
+
+    test { SET of existing but flushed key with EXPIRE works } {
+       r flushall
+       assert_equal {0} [r dbsize]
+       r set testkey foo ex 10000
+       assert_equal {1} [r dbsize] "Only one key after first insert"
+       r flushall cache
+       assert_equal {1} [r dbsize] "Only one key after flushall cache"
+       r set testkey bar ex 10000
+       assert_equal {1} [r dbsize] "Only one key after overwrite"
+       assert_equal {bar} [r get testkey]
     } 
 
     r flushall

@@ -373,6 +373,8 @@ public:
         return sdslen(m_str);
     }
 
+    const char *get() const { return m_str; }
+
     explicit operator const char*() const { return m_str; }
 };
 

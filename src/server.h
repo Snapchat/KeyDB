@@ -1271,7 +1271,7 @@ public:
     void trackkey(const char *key)
     {
         if (m_fTrackingChanges && !m_fAllChanged && m_spstorage)
-            m_vecchanged.push_back(unique_sds_ptr(sdsdupshared(key)));
+            m_setchanged.emplace(sdsdupshared(key));
     }
 
     dict_iter find(const char *key) 
@@ -1324,7 +1324,7 @@ public:
     //  to allow you to release the global lock before commiting.  To prevent deadlocks you *must*
     //  either release the global lock or keep the same global lock between the two functions as
     //  a second look is kept to ensure writes to secondary storage are ordered
-    typedef std::vector<std::pair<unique_sds_ptr, unique_sds_ptr>> changelist;
+    typedef std::vector<std::pair<sdsimmutablestring, unique_sds_ptr>> changelist;
     changelist processChanges();
     void commitChanges(const changelist &vec);
 
@@ -1356,7 +1356,7 @@ private:
     dict *m_pdictTombstone = nullptr;        /* Track deletes when we have a snapshot */
     int m_fTrackingChanges = 0;     // Note: Stack based
     int m_fAllChanged = 0;
-    std::vector<unique_sds_ptr> m_vecchanged;
+    std::set<sdsimmutablestring> m_setchanged;
     std::shared_ptr<IStorage> m_spstorage = nullptr;
     uint64_t mvccCheckpoint = 0;
 

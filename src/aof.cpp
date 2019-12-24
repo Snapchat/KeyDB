@@ -764,6 +764,11 @@ int loadAppendOnlyFile(char *filename) {
         }
     }
 
+    for (int idb = 0; idb < cserver.dbnum; ++idb)
+    {
+        g_pserver->db[idb]->trackChanges(true);
+    }
+
     /* Read the actual AOF file, in REPL format, command by command. */
     while(1) {
         int argc, j;
@@ -864,6 +869,11 @@ int loadAppendOnlyFile(char *filename) {
     }
 
 loaded_ok: /* DB loaded, cleanup and return C_OK to the caller. */
+    for (int idb = 0; idb < cserver.dbnum; ++idb)
+    {
+        auto vec = g_pserver->db[idb]->processChanges();
+        g_pserver->db[idb]->commitChanges(vec);
+    }
     fclose(fp);
     freeFakeClient(fakeClient);
     g_pserver->aof_state = old_aof_state;

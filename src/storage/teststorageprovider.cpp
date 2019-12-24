@@ -1,9 +1,9 @@
 #include "teststorageprovider.h"
-#include <assert.h>
+#include "../server.h"
 
 IStorage *TestStorageFactory::create(int)
 {
-    return new TestStorageProvider();
+    return new (MALLOC_LOCAL) TestStorageProvider();
 }
 
 const char *TestStorageFactory::name() const
@@ -19,9 +19,12 @@ TestStorageProvider::~TestStorageProvider()
 {
 }
 
-void TestStorageProvider::insert(const char *key, size_t cchKey, void *data, size_t cb)
+void TestStorageProvider::insert(const char *key, size_t cchKey, void *data, size_t cb, bool fOverwrite)
 {
-    m_map.insert(std::make_pair(std::string(key, cchKey), std::string((char*)data, cb)));
+    auto strkey = std::string(key, cchKey);
+    bool fActuallyExists = m_map.find(strkey) != m_map.end();
+    serverAssert(fActuallyExists == fOverwrite);
+    m_map.insert(std::make_pair(strkey, std::string((char*)data, cb)));
 }
 
 
@@ -77,5 +80,5 @@ void TestStorageProvider::flush()
 /* This is permitted to be a shallow clone */
 const IStorage *TestStorageProvider::clone() const
 {
-    return new TestStorageProvider(*this);
+    return new (MALLOC_LOCAL) TestStorageProvider(*this);
 }

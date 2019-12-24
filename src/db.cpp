@@ -388,7 +388,11 @@ bool redisDbPersistentData::syncDelete(robj *key)
     if (fDeleted) {
         auto itrChange = m_setchanged.find(szFromObj(key));
         if (itrChange != m_setchanged.end())
+        {
+            if (!itrChange->fUpdate)
+                --m_cnewKeysPending;
             m_setchanged.erase(itrChange);
+        }
         
         if (m_pdbSnapshot != nullptr)
         {
@@ -2093,13 +2097,15 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
     // If we haven't found it yet check our storage engine
     if (*pde == nullptr && m_spstorage != nullptr)
     {
-        serverAssert(m_spstorage != nullptr);
-        m_spstorage->retrieve(sdsKey, sdslen(sdsKey), [&](const char *, size_t, const void *data, size_t cb){
-            robj *o = deserializeStoredObject(this, sdsKey, data, cb);
-            serverAssert(o != nullptr);
-            dictAdd(m_pdict, sdsdupshared(sdsKey), o);
-        });
-        *pde = dictFind(m_pdict, sdsKey);
+        if (dictSize(m_pdict) != size())    // if all keys are cached then no point in looking up the database
+        {
+            m_spstorage->retrieve(sdsKey, sdslen(sdsKey), [&](const char *, size_t, const void *data, size_t cb){
+                robj *o = deserializeStoredObject(this, sdsKey, data, cb);
+                serverAssert(o != nullptr);
+                dictAdd(m_pdict, sdsdupshared(sdsKey), o);
+            });
+            *pde = dictFind(m_pdict, sdsKey);
+        }
     }
 
     if (*pde != nullptr && dictGetVal(*pde) != nullptr)
@@ -2161,6 +2167,7 @@ redisDbPersistentData::changelist redisDbPersistentData::processChanges()
                 }
             }
             m_setchanged.clear();
+            m_cnewKeysPending = 0;
         }
     }
     
@@ -2217,7 +2224,7 @@ dict_iter redisDbPersistentData::random()
 size_t redisDbPersistentData::size() const 
 { 
     if (m_spstorage != nullptr)
-        return m_spstorage->count();
+        return m_spstorage->count() + m_cnewKeysPending;
     
     return dictSize(m_pdict) 
         + (m_pdbSnapshot ? (m_pdbSnapshot->size() - dictSize(m_pdictTombstone)) : 0); 
@@ -2227,11 +2234,9 @@ bool redisDbPersistentData::removeCachedValue(const char *key)
 {
     serverAssert(m_spstorage != nullptr);
     // First ensure its not a pending key
-    for (auto &change : m_setchanged)
-    {
-        if (sdscmp(change.strkey.get(), (sds)key) == 0)
-            return false; // NOP
-    }
+    auto itr = m_setchanged.find(key);
+    if (itr != m_setchanged.end())
+        return false; // can't evict
 
     // since we write ASAP the database already has a valid copy so safe to delete
     dictDelete(m_pdict, key);
@@ -2262,7 +2267,10 @@ void redisDbPersistentData::trackkey(const char *key, bool fUpdate)
 {
     if (m_fTrackingChanges && !m_fAllChanged && m_spstorage) {
         auto itr = m_setchanged.find(key);
-        if (itr == m_setchanged.end())
+        if (itr == m_setchanged.end()) {
             m_setchanged.emplace(sdsdupshared(key), fUpdate);
+            if (!fUpdate)
+                ++m_cnewKeysPending;
+        }
     }
 }

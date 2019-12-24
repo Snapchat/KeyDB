@@ -33,7 +33,20 @@ start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.
        r set testkey bar ex 10000
        assert_equal {1} [r dbsize] "Only one key after overwrite"
        assert_equal {bar} [r get testkey]
-    } 
+       assert [expr [r ttl testkey] > 0]
+    }
+
+    test { EXPIRE of existing but flushed key } {
+       r flushall
+       assert_equal {0} [r dbsize]
+       r set testkey foo
+       assert_equal {1} [r dbsize]
+       r flushall cache
+       r expire testkey 10000
+       assert_equal {1} [r dbsize]
+       assert_equal {foo} [r get testkey]
+       assert [expr [r ttl testkey] > 0]
+    }
 
     r flushall
     foreach policy {

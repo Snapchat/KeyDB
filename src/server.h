@@ -1368,6 +1368,7 @@ private:
     int m_fTrackingChanges = 0;     // Note: Stack based
     int m_fAllChanged = 0;
     std::set<changedesc, changedescCmp> m_setchanged;
+    size_t m_cnewKeysPending = 0;
     std::shared_ptr<IStorage> m_spstorage = nullptr;
     uint64_t mvccCheckpoint = 0;
 

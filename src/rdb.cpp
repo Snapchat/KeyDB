@@ -1987,7 +1987,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
     redisDb *db = g_pserver->db[dbid];
     char buf[1024];
     /* Key-specific attributes, set by opcodes before the key type. */
-    long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
+    long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now;
     long long lru_clock = 0;
     uint64_t mvcc_tstamp = OBJ_MVCC_INVALID;
     robj *subexpireKey = nullptr;

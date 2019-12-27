@@ -1,6 +1,7 @@
 .*.swp
 core
 *.o
+*.d
 *.log
 dump.rdb
 redis-benchmark

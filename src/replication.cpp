@@ -3055,7 +3055,7 @@ void replicationCron(void) {
         if (mi->masterhost && mi->repl_state == REPL_STATE_TRANSFER &&
             (time(NULL)-mi->repl_transfer_lastio) > g_pserver->repl_timeout)
         {
-            serverLog(LL_WARNING,"Timeout receiving bulk data from MASTER... If the problem persists try to set the 'repl-timeout' parameter in redis.conf to a larger value.");
+            serverLog(LL_WARNING,"Timeout receiving bulk data from MASTER... If the problem persists try to set the 'repl-timeout' parameter in keydb.conf to a larger value.");
             cancelReplicationHandshake(mi);
         }
 

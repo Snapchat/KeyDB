@@ -295,14 +295,18 @@ $(REDIS_BENCHMARK_NAME): $(REDIS_BENCHMARK_OBJ)
 dict-benchmark: dict.cpp zmalloc.cpp sds.c siphash.c
 	$(REDIS_CC) $(FINAL_CFLAGS) $^ -D DICT_BENCHMARK_MAIN -o $@ $(FINAL_LIBS)
 
+
+DEP = $(REDIS_SERVER_OBJ:%.o=%.d) $(REDIS_CLI_OBJ:%.o=%.d) $(REDIS_BENCHMARK_OBJ:%.o=%.d)
+-include $(DEP)
+
 # Because the jemalloc.h header is generated as a part of the jemalloc build,
 # building it should complete before building any other object. Instead of
 # depending on a single artifact, build all dependencies first.
 %.o: %.c .make-prerequisites
-	$(REDIS_CC) -c $<
+	$(REDIS_CC) -MMD -o $@ -c $<
 
 %.o: %.cpp .make-prerequisites
-	$(REDIS_CXX) -o $@ -c $<
+	$(REDIS_CXX) -MMD -o $@ -c $<
 
 %.o: %.asm .make-prerequisites
 	$(KEYDB_AS) $< -o $@
@@ -310,6 +314,7 @@ dict-benchmark: dict.cpp zmalloc.cpp sds.c siphash.c
 clean:
 	rm -rf $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) *.o *.gcda *.gcno *.gcov redis.info lcov-html Makefile.dep dict-benchmark
 	rm -rf storage/*.o
+	rm -f $(DEP)
 
 .PHONY: clean
 

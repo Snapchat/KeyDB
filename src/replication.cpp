@@ -3060,7 +3060,7 @@ void replicationCron(void) {
         }
 
         /* Timed out master when we are an already connected replica? */
-        if (mi->masterhost && mi->repl_state == REPL_STATE_CONNECTED &&
+        if (mi->masterhost && mi->master && mi->repl_state == REPL_STATE_CONNECTED &&
             (time(NULL)-mi->master->lastinteraction) > g_pserver->repl_timeout)
         {
             serverLog(LL_WARNING,"MASTER timeout: no data nor PING received...");

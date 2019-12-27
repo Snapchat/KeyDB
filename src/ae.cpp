@@ -84,7 +84,7 @@ fastlock g_lock("AE (global)");
 #endif
 thread_local aeEventLoop *g_eventLoopThisThread = NULL;
 
-#define AE_ASSERT(x) if (!(x)) do { fprintf(stderr, "AE_ASSERT FAILURE %s: %d\n", __FILE__, __LINE__); *((volatile int*)0) = 1; } while(0)
+#define AE_ASSERT(x) if (!(x)) do { fprintf(stderr, "AE_ASSERT FAILURE %s: %d\n", __FILE__, __LINE__); *((volatile int*)1) = 1; } while(0)
 
 /* Include the best multiplexing layer supported by this system.
  * The following should be ordered by performances, descending. */
@@ -237,11 +237,11 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
     cmd.clientData = clientData;
     cmd.pctl = nullptr;
     if (fSynchronous)
+    {
         cmd.pctl = new (MALLOC_LOCAL) aeCommandControl();
-
-    std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::defer_lock);
-    if (fSynchronous)
         cmd.pctl->mutexcv.lock();
+    }
+
     auto size = safe_write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
     if (size != sizeof(cmd))
     {
@@ -252,6 +252,7 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
     
     if (fSynchronous)
     {
+        std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::defer_lock);
         cmd.pctl->cv.wait(ulock);
         ret = cmd.pctl->rval;
         delete cmd.pctl;
@@ -289,15 +290,17 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
     cmd.pfn = new (MALLOC_LOCAL) std::function<void()>(fn);
     cmd.pctl = nullptr;
     if (fSynchronous)
+    {
         cmd.pctl = new (MALLOC_LOCAL) aeCommandControl();
-    std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::defer_lock);
-    if (fSynchronous)
         cmd.pctl->mutexcv.lock();
+    }
+
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
     AE_ASSERT(size == sizeof(cmd));
     int ret = AE_OK;
     if (fSynchronous)
     {
+        std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::defer_lock);
         cmd.pctl->cv.wait(ulock);
         ret = cmd.pctl->rval;
         delete cmd.pctl;

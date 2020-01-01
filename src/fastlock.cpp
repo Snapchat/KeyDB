@@ -293,7 +293,7 @@ extern "C" void fastlock_lock(struct fastlock *lock)
 #elif defined(__arm__)
         __asm__ __volatile__ ("yield");
 #endif
-        if ((++cloops % 0x10000) == 0)
+        if ((++cloops % 0x100000) == 0)
         {
             fastlock_sleep(lock, tid, ticketT.u, mask);
         }

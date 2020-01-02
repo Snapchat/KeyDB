@@ -48,7 +48,7 @@ extern "C" int je_get_defrag_hint(void* ptr, int *bin_util, int *run_util);
 /* forward declarations*/
 void defragDictBucketCallback(void *privdata, dictEntry **bucketref);
 dictEntry* replaceSateliteDictKeyPtrAndOrDefragDictEntry(dict *d, sds oldkey, sds newkey, uint64_t hash, long *defragged);
-void replaceSateliteOSetKeyPtr(expireset &set, sds oldkey, sds newkey);
+bool replaceSateliteOSetKeyPtr(expireset &set, sds oldkey, sds newkey);
 
 /* Defrag helper for generic allocations.
  *
@@ -407,7 +407,7 @@ dictEntry* replaceSateliteDictKeyPtrAndOrDefragDictEntry(dict *d, sds oldkey, sd
     return NULL;
 }
 
-void replaceSateliteOSetKeyPtr(expireset &set, sds oldkey, sds newkey) {
+bool replaceSateliteOSetKeyPtr(expireset &set, sds oldkey, sds newkey) {
     auto itr = set.find(oldkey);
     if (itr != set.end())
     {
@@ -415,7 +415,10 @@ void replaceSateliteOSetKeyPtr(expireset &set, sds oldkey, sds newkey) {
         eNew.setKeyUnsafe(newkey);
         set.erase(itr);
         set.insert(eNew);
+        serverAssert(set.find(newkey) != set.end());
+        return true;
     }
+    return false;
 }
 
 long activeDefragQuickListNodes(quicklist *ql) {
@@ -777,16 +780,22 @@ long defragKey(redisDb *db, dictEntry *de) {
     long defragged = 0;
     sds newsds;
 
+    ob = (robj*)dictGetVal(de);
+
     /* Try to defrag the key name. */
     newsds = activeDefragSds(keysds);
     if (newsds)
+    {
         defragged++, de->key = newsds;
-    if (!db->setexpire->empty()) {
-        replaceSateliteOSetKeyPtr(*db->setexpire, keysds, newsds);
+        if (!db->setexpire->empty()) {
+            bool fReplaced = replaceSateliteOSetKeyPtr(*db->setexpire, keysds, newsds);
+            serverAssert(fReplaced == ob->FExpires());
+        } else {
+            serverAssert(!ob->FExpires());
+        }
     }
 
     /* Try to defrag robj and / or string value. */
-    ob = (robj*)dictGetVal(de);
     if ((newob = activeDefragStringOb(ob, &defragged))) {
         de->v.val = newob;
         ob = newob;
@@ -839,6 +848,7 @@ long defragKey(redisDb *db, dictEntry *de) {
     } else {
         serverPanic("Unknown object type");
     }
+
     return defragged;
 }
 

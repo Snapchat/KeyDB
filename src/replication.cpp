@@ -2298,7 +2298,8 @@ int connectWithMaster(redisMaster *mi) {
     fd = anetTcpNonBlockBestEffortBindConnect(NULL,
         mi->masterhost,mi->masterport,NET_FIRST_BIND_ADDR);
     if (fd == -1) {
-        serverLog(LL_WARNING,"Unable to connect to MASTER: %s",
+        int sev = g_pserver->enable_multimaster ? LL_NOTICE : LL_WARNING;   // with multimaster its not unheard of to intentiallionall have downed masters
+        serverLog(sev,"Unable to connect to MASTER: %s",
             strerror(errno));
         return C_ERR;
     }

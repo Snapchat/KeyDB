@@ -67,6 +67,38 @@ start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.
         assert_equal {0} [r dbsize]
     }
 
+    test { SUBKEY EXPIRE persists after cache flush } {
+        r flushall
+        r sadd testkey foo bar baz
+        r expiremember testkey foo 10000
+        r flushall cache
+        assert [expr [r ttl testkey foo] > 0]
+    }
+
+    test { LIST pop works after flushing cache } {
+        r flushall
+        r lpush testkey foo
+        r flushall cache
+        assert_equal {foo} [r lpop testkey]
+    }
+
+    test { DIGEST string the same after flushing cache } {
+        r flushall
+        r set testkey foo
+        r set testkey1 foo ex 10000
+        set expectedDigest [r debug digest]
+        r flushall cache
+        assert_equal $expectedDigest [r debug digest]
+    }
+
+    test { DIGEST list the same after flushing cache } {
+        r flushall
+        r lpush testkey foo bar
+        set expectedDigest [r debug digest]
+        r flushall cache
+        assert_equal $expectedDigest [r debug digest]
+    }
+
     r flushall
     foreach policy {
         allkeys-random allkeys-lru allkeys-lfu

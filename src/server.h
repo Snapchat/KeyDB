@@ -1163,6 +1163,13 @@ public:
             pfatentry()->m_vecexpireEntries.begin() + itr.m_idx);
     }
 
+    size_t size() const
+    {
+        if (FFat())
+            return u.m_pfatentry->size();
+        return 1;
+    }
+
     bool FGetPrimaryExpire(long long *pwhen) const
     {
         *pwhen = -1;
@@ -2633,7 +2640,8 @@ unsigned long long estimateObjectIdleTime(robj_roptr o);
 void trimStringObjectIfNeeded(robj *o);
 
 robj *deserializeStoredObject(const redisDbPersistentData *db, const char *key, const void *data, size_t cb);
-sds serializeStoredObject(robj_roptr o);
+std::unique_ptr<expireEntry> deserializeExpire(sds key, const char *str, size_t cch, size_t *poffset);
+sds serializeStoredObject(robj_roptr o, sds sdsPrefix = nullptr);
 
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
 

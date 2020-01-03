@@ -234,6 +234,9 @@ void sdsclear(sds s) {
  * Note: this does not change the *length* of the sds string as returned
  * by sdslen(), but only the free buffer space we have. */
 sds sdsMakeRoomFor(sds s, size_t addlen) {
+    if (s == NULL)
+        return sdsnewlen(NULL, addlen);
+    
     void *sh, *newsh;
     size_t avail = sdsavail(s);
     size_t len, newlen;

@@ -45,7 +45,7 @@ fastlock_lock:
 	cmp dx, ax              # is our ticket up?
 	je .LLocked             # leave the loop
 	pause
-	add ecx, 0x10000        # Have we been waiting a long time? (oflow if we have)
+	add ecx, 0x1000         # Have we been waiting a long time? (oflow if we have)
 	                        #	1000h is set so we overflow on the 1024*1024'th iteration (like the C code)
 	jnc .LLoop              # If so, give up our timeslice to someone who's doing real work
 	# Like the compiler, you're probably thinking: "Hey! I should take these pushs out of the loop"

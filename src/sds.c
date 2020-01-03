@@ -178,6 +178,8 @@ sds sdsdup(const char *s) {
 }
 
 sds sdsdupshared(const char *s) {
+    if (s == NULL)
+        return NULL;
     unsigned char flags = s[-1];
     if ((flags & SDS_TYPE_MASK) != SDS_TYPE_REFCOUNTED)
         return sdsnewlen(s, -sdslen(s));

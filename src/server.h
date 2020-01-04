@@ -554,17 +554,19 @@ public:
 #define REPL_STATE_RECEIVE_AUTH 5 /* Wait for AUTH reply */
 #define REPL_STATE_SEND_UUID 6 /* send our UUID */
 #define REPL_STATE_RECEIVE_UUID 7 /* they should ack with their UUID */
-#define REPL_STATE_SEND_PORT 8 /* Send REPLCONF listening-port */
-#define REPL_STATE_RECEIVE_PORT 9 /* Wait for REPLCONF reply */
-#define REPL_STATE_SEND_IP 10 /* Send REPLCONF ip-address */
-#define REPL_STATE_RECEIVE_IP 11 /* Wait for REPLCONF reply */
-#define REPL_STATE_SEND_CAPA 12 /* Send REPLCONF capa */
-#define REPL_STATE_RECEIVE_CAPA 13 /* Wait for REPLCONF reply */
-#define REPL_STATE_SEND_PSYNC 14 /* Send PSYNC */
-#define REPL_STATE_RECEIVE_PSYNC 15 /* Wait for PSYNC reply */
+#define REPL_STATE_SEND_KEY 8
+#define REPL_STATE_KEY_ACK 9
+#define REPL_STATE_SEND_PORT 10 /* Send REPLCONF listening-port */
+#define REPL_STATE_RECEIVE_PORT 11 /* Wait for REPLCONF reply */
+#define REPL_STATE_SEND_IP 12 /* Send REPLCONF ip-address */
+#define REPL_STATE_RECEIVE_IP 13 /* Wait for REPLCONF reply */
+#define REPL_STATE_SEND_CAPA 14 /* Send REPLCONF capa */
+#define REPL_STATE_RECEIVE_CAPA 15 /* Wait for REPLCONF reply */
+#define REPL_STATE_SEND_PSYNC 16 /* Send PSYNC */
+#define REPL_STATE_RECEIVE_PSYNC 17 /* Wait for PSYNC reply */
 /* --- End of handshake states --- */
-#define REPL_STATE_TRANSFER 16 /* Receiving .rdb from master */
-#define REPL_STATE_CONNECTED 17 /* Connected to master */
+#define REPL_STATE_TRANSFER 18 /* Receiving .rdb from master */
+#define REPL_STATE_CONNECTED 19 /* Connected to master */
 
 /* State of slaves from the POV of the master. Used in client->replstate.
  * In SEND_BULK and ONLINE state the replica receives new updates

@@ -985,6 +985,19 @@ LError:
     return;
 }
 
+void processReplconfLicense(client *c, robj *arg)
+{
+    if (cserver.license_key != nullptr)
+    {
+        if (strcmp(cserver.license_key, szFromObj(arg)) == 0) {
+            addReplyError(c, "Each replica must have a unique license key");
+            c->flags |= CLIENT_CLOSE_AFTER_REPLY;
+            return;
+        }
+    }
+    addReply(c, shared.ok);
+}
+
 /* REPLCONF <option> <value> <option> <value> ...
  * This command is used by a replica in order to configure the replication
  * process before starting it with the SYNC command.
@@ -1067,6 +1080,9 @@ void replconfCommand(client *c) {
             /* REPLCONF uuid is used to set and send the UUID of each host */
             processReplconfUuid(c, c->argv[j+1]);
             return; // the process function replies to the client for both error and success
+        } else if (!strcasecmp(szFromObj(c->argv[j]),"license")) {
+            processReplconfLicense(c, c->argv[j+1]);
+            return;
         } else {
             addReplyErrorFormat(c,"Unrecognized REPLCONF option: %s",
                 (char*)ptrFromObj(c->argv[j]));
@@ -2072,6 +2088,36 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
             }
         }
         sdsfree(err);
+        mi->repl_state = REPL_STATE_SEND_KEY;
+        // fallthrough
+    }
+
+    /* Send LICENSE Key */
+    if (mi->repl_state == REPL_STATE_SEND_KEY)
+    {
+        if (cserver.license_key == nullptr)
+        {
+            mi->repl_state = REPL_STATE_SEND_PORT;
+        }
+        else
+        {
+            err = sendSynchronousCommand(mi, SYNC_CMD_WRITE,fd,"REPLCONF","license",cserver.license_key,NULL);
+            if (err) goto write_error;
+            mi->repl_state = REPL_STATE_KEY_ACK;
+            return;
+        }
+    }
+
+    /* LICENSE Key Ack */
+    if (mi->repl_state == REPL_STATE_KEY_ACK)
+    {
+        err = sendSynchronousCommand(mi, SYNC_CMD_READ,fd,NULL);
+        if (err[0] == '-') {
+            serverLog(LL_WARNING, "Recieved error from client: %s", err);
+            sdsfree(err);
+            goto error;
+        }
+        sdsfree(err);
         mi->repl_state = REPL_STATE_SEND_PORT;
         // fallthrough
     }
@@ -2297,7 +2343,8 @@ int connectWithMaster(redisMaster *mi) {
     fd = anetTcpNonBlockBestEffortBindConnect(NULL,
         mi->masterhost,mi->masterport,NET_FIRST_BIND_ADDR);
     if (fd == -1) {
-        serverLog(LL_WARNING,"Unable to connect to MASTER: %s",
+        int sev = g_pserver->enable_multimaster ? LL_NOTICE : LL_WARNING;   // with multimaster its not unheard of to intentiallionall have downed masters
+        serverLog(sev,"Unable to connect to MASTER: %s",
             strerror(errno));
         return C_ERR;
     }

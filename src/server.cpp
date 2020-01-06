@@ -5199,7 +5199,10 @@ int main(int argc, char **argv) {
     }
 
     if (cserver.fUsePro) {
-        execv("keydb-pro-server", argv);
+        const char *keydb_pro_dir = getenv("KEYDB_PRO_DIRECTORY");
+        sds path = sdsnew(keydb_pro_dir);
+        path = sdscat(path, "keydb-pro-server");
+        execv(path, argv);
         perror("Failed launch the pro binary");
         exit(EXIT_FAILURE);
     }

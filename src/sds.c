@@ -53,11 +53,18 @@ static inline int sdsHdrSize(char type) {
             return sizeof(struct sdshdr32);
         case SDS_TYPE_64:
             return sizeof(struct sdshdr64);
+        case SDS_TYPE_REFCOUNTED:
+            return sizeof(struct sdshdrrefcount);
     }
     return 0;
 }
 
-static inline char sdsReqType(size_t string_size) {
+static inline char sdsReqType(ssize_t string_size) {
+    if (string_size < 0){
+        string_size = -string_size;
+        if (string_size < 1<<16)
+            return SDS_TYPE_REFCOUNTED;
+    }
     if (string_size < 1<<5)
         return SDS_TYPE_5;
     if (string_size < 1<<8)
@@ -86,10 +93,12 @@ static inline char sdsReqType(size_t string_size) {
  * You can print the string with printf() as there is an implicit \0 at the
  * end of the string. However the string is binary safe and can contain
  * \0 characters in the middle, as the length is stored in the sds header. */
-sds sdsnewlen(const void *init, size_t initlen) {
+sds sdsnewlen(const void *init, ssize_t initlen) {
     void *sh;
     sds s;
     char type = sdsReqType(initlen);
+    if (initlen < 0)
+        initlen = -initlen;
     /* Empty strings are usually created in order to append. Use type 8
      * since type 5 is not good at this. */
     if (type == SDS_TYPE_5 && initlen == 0) type = SDS_TYPE_8;
@@ -137,6 +146,13 @@ sds sdsnewlen(const void *init, size_t initlen) {
             *fp = type;
             break;
         }
+        case SDS_TYPE_REFCOUNTED: {
+            SDS_HDR_VAR_REFCOUNTED(s);
+            sh->len = initlen;
+            sh->refcount = 1;
+            *fp = type;
+            break;
+        }
     }
     if (initlen && init)
         memcpy(s, init, initlen);
@@ -161,9 +177,25 @@ sds sdsdup(const char *s) {
     return sdsnewlen(s, sdslen(s));
 }
 
+sds sdsdupshared(const char *s) {
+    unsigned char flags = s[-1];
+    if ((flags & SDS_TYPE_MASK) != SDS_TYPE_REFCOUNTED)
+        return sdsnewlen(s, -sdslen(s));
+    SDS_HDR_VAR_REFCOUNTED(s);
+    __atomic_fetch_add(&sh->refcount, 1, __ATOMIC_RELAXED);
+    return (sds)s;
+}
+
 /* Free an sds string. No operation is performed if 's' is NULL. */
 void sdsfree(const char *s) {
     if (s == NULL) return;
+    unsigned char flags = s[-1];
+    if ((flags & SDS_TYPE_MASK) == SDS_TYPE_REFCOUNTED)
+    {
+        SDS_HDR_VAR_REFCOUNTED(s);
+        if (__atomic_fetch_sub(&sh->refcount, 1, __ATOMIC_RELAXED) > 1)
+            return;
+    }
     s_free((char*)s-sdsHdrSize(s[-1]));
 }
 
@@ -365,6 +397,11 @@ void sdsIncrLen(sds s, ssize_t incr) {
         case SDS_TYPE_64: {
             SDS_HDR_VAR(64,s);
             assert((incr >= 0 && sh->alloc-sh->len >= (uint64_t)incr) || (incr < 0 && sh->len >= (uint64_t)(-incr)));
+            len = (sh->len += incr);
+            break;
+        }
+        case SDS_TYPE_REFCOUNTED: {
+            SDS_HDR_VAR_REFCOUNTED(s);
             len = (sh->len += incr);
             break;
         }
@@ -787,7 +824,7 @@ void sdstoupper(sds s) {
  * If two strings share exactly the same prefix, but one of the two has
  * additional characters, the longer string is considered to be greater than
  * the smaller one. */
-int sdscmp(const sds s1, const sds s2) {
+int sdscmp(const char *s1, const char *s2) {
     size_t l1, l2, minlen;
     int cmp;
 

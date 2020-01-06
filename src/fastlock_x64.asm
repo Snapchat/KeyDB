@@ -140,6 +140,7 @@ fastlock_unlock:
 	mov ecx, [rdi+64]            # get current active (this one)
 	inc ecx                      # bump it to the next thread
 	mov [rdi+64], cx             # give up our ticket (note: lock is not required here because the spinlock itself guards this variable)
+	mfence                       # sync other threads
 	# At this point the lock is removed, however we must wake up any pending futexs
 	mov r9d, 1                   # eax is the bitmask for 2 threads
 	rol r9d, cl                  # place the mask in the right spot for the next 2 threads

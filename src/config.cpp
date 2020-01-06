@@ -802,6 +802,8 @@ void loadServerConfigFromString(char *config) {
             g_fTestMode = yesnotoi(argv[1]);
         } else if (!strcasecmp(argv[0],"rdbfuzz-mode")) {
             // NOP, handled in main
+        } else if (!strcasecmp(argv[0],"enable-pro")) {
+            cserver.fUsePro = true;
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -1727,7 +1729,7 @@ void rewriteConfigRewriteLine(struct rewriteConfigState *state, const char *opti
 }
 
 /* Write the long long 'bytes' value as a string in a way that is parsable
- * inside redis.conf. If possible uses the GB, MB, KB notation. */
+ * inside keydb.conf. If possible uses the GB, MB, KB notation. */
 int rewriteConfigFormatMemory(char *buf, size_t len, long long bytes) {
     int gb = 1024*1024*1024;
     int mb = 1024*1024;
@@ -1890,7 +1892,7 @@ void rewriteConfigDirOption(struct rewriteConfigState *state) {
 void rewriteConfigSlaveofOption(struct rewriteConfigState *state, const char *option) {
     /* If this is a master, we want all the slaveof config options
     * in the file to be removed. Note that if this is a cluster instance
-    * we don't want a slaveof directive inside redis.conf. */
+    * we don't want a slaveof directive inside keydb.conf. */
     if (g_pserver->cluster_enabled || listLength(g_pserver->masters) == 0) {
         rewriteConfigMarkAsProcessed(state,option);
         return;

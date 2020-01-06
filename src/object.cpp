@@ -1619,20 +1619,30 @@ robj *deserializeStoredObject(const redisDbPersistentData *db, const char *key, 
     return o;
 }
 
-sds serializeStoredObject(robj_roptr o)
+sds serializeStoredObject(robj_roptr o, sds sdsPrefix)
 {
     switch (o->type)
     {
         case OBJ_STRING:
         {
-            sds sdsT = sdsnewlen(nullptr, 1);
-            sdsT[0] = RDB_TYPE_STRING;
+            sds sdsT = nullptr;
+            if (sdsPrefix)
+                sdsT = sdsgrowzero(sdsPrefix, sdslen(sdsPrefix)+1);
+            else
+                sdsT = sdsnewlen(nullptr, 1);
+            sdsT[sdslen(sdsT)-1] = RDB_TYPE_STRING;
             return serializeStoredStringObject(sdsT, o);
         }
             
         default:
             rio rdb;
             createDumpPayload(&rdb,o,nullptr);
+            if (sdsPrefix)
+            {
+                sds rval = sdscatsds(sdsPrefix, (sds)rdb.io.buffer.ptr);
+                sdsfree((sds)rdb.io.buffer.ptr);
+                return rval;
+            }
             return (sds)rdb.io.buffer.ptr;
     }
     serverPanic("Attempting to store unknown object type");

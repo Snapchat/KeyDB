@@ -283,7 +283,13 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
             bool fContinue = true;
             if (de == nullptr)
             {
-                robj *o = fKeyOnly ? nullptr : deserializeStoredObject(this, sdsKey, data, cbData);
+                robj *o = nullptr;
+                if (!fKeyOnly)
+                {
+                    size_t offset = 0;
+                    deserializeExpire(sdsKey, (const char*)data, cbData, &offset);
+                    o = deserializeStoredObject(this, sdsKey, reinterpret_cast<const char*>(data)+offset, cbData-offset);
+                }
                 fContinue = fn(sdsKey, o);
                 if (o != nullptr)
                     decrRefCount(o);

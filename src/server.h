@@ -264,7 +264,7 @@ public:
 #define CONFIG_DEFAULT_REPL_BACKLOG_TIME_LIMIT (60*60)  /* 1 hour */
 #define CONFIG_REPL_BACKLOG_MIN_SIZE (1024*16)          /* 16k */
 #define CONFIG_BGSAVE_RETRY_DELAY 5 /* Wait a few secs before trying again. */
-#define CONFIG_DEFAULT_PID_FILE "/var/run/redis.pid"
+#define CONFIG_DEFAULT_PID_FILE "/var/run/keydb.pid"
 #define CONFIG_DEFAULT_SYSLOG_IDENT "redis"
 #define CONFIG_DEFAULT_CLUSTER_CONFIG_FILE "nodes.conf"
 #define CONFIG_DEFAULT_CLUSTER_ANNOUNCE_IP NULL         /* Auto detect. */
@@ -1578,7 +1578,7 @@ struct redisServerConst {
     /* Configuration */
     char *default_masteruser;               /* AUTH with this user and masterauth with master */
     char *default_masterauth;               /* AUTH with this password with master */
-    int verbosity;                  /* Loglevel in redis.conf */
+    int verbosity;                  /* Loglevel in keydb.conf */
     int maxidletime;                /* Client timeout in seconds */
     int tcpkeepalive;               /* Set SO_KEEPALIVE if non-zero. */
     int active_defrag_enabled;
@@ -1599,6 +1599,7 @@ struct redisServerConst {
     size_t system_memory_size;  /* Total memory in system as reported by OS */
 
     unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
+    bool fUsePro = false;
 };
 
 struct redisServer {
@@ -1829,7 +1830,7 @@ struct redisServer {
     int sort_alpha;
     int sort_bypattern;
     int sort_store;
-    /* Zip structure config, see redis.conf for more information  */
+    /* Zip structure config, see keydb.conf for more information  */
     size_t hash_max_ziplist_entries;
     size_t hash_max_ziplist_value;
     size_t set_max_intset_entries;

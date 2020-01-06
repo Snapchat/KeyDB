@@ -54,6 +54,8 @@ ifneq ($(SANITIZE),)
 	USEASM=false
 endif
 
+
+
 # Do we use our assembly spinlock? X64 only
 ifeq ($(uname_S),Linux)
 ifeq ($(uname_M),x86_64)
@@ -82,6 +84,12 @@ ifneq (,$(findstring armv,$(uname_M)))
 endif
 endif
 
+ifneq (,$(filter aarch64 armv,$(uname_M)))
+	LICENSE_LIB_DIR=../deps/license/arm64/
+else
+	LICENSE_LIB_DIR=../deps/licese/x64/
+endif
+
 # Backwards compatibility for selecting an allocator
 ifeq ($(USE_TCMALLOC),yes)
 	MALLOC=tcmalloc
@@ -105,7 +113,7 @@ endif
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
 FINAL_CXXFLAGS=$(CXX_STD) $(WARN) $(OPT) $(DEBUG) $(CXXFLAGS) $(REDIS_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
-FINAL_LIBS=-lm -lz -latomic -L../deps/license/ -lkey -lcrypto
+FINAL_LIBS=-lm -lz -latomic -L$(LICENSE_LIB_DIR) -lkey -lcrypto
 DEBUG=-g -ggdb
 
 ifeq ($(uname_S),SunOS)

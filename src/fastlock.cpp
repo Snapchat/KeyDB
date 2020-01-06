@@ -279,7 +279,7 @@ extern "C" void fastlock_lock(struct fastlock *lock)
     int tid = gettid();
     unsigned myticket = __atomic_fetch_add(&lock->m_ticket.m_avail, 1, __ATOMIC_RELEASE);
     unsigned mask = (1U << (myticket % 32));
-    int cloops = 0;
+    unsigned cloops = 0;
     ticket ticketT;
 
     for (;;)
@@ -289,9 +289,11 @@ extern "C" void fastlock_lock(struct fastlock *lock)
             break;
 
 #if defined(__i386__) || defined(__amd64__)
-        __asm__ ("pause");
+        __asm__ __volatile__ ("pause");
+#elif defined(__arm__)
+        __asm__ __volatile__ ("yield");
 #endif
-        if ((++cloops % 1024*1024) == 0)
+        if ((++cloops % 0x100000) == 0)
         {
             fastlock_sleep(lock, tid, ticketT.u, mask);
         }

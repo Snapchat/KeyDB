@@ -4043,7 +4043,7 @@ int moduleGILAcquiredByModule(void) {
  * used to send anything to the client, and has the db number where the event
  * occurred as its selected db number.
  *
- * Notice that it is not necessary to enable notifications in redis.conf for
+ * Notice that it is not necessary to enable notifications in keydb.conf for
  * module notifications to work.
  *
  * Warning: the notification callbacks are performed in a synchronous manner,

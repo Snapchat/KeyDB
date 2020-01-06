@@ -1123,7 +1123,7 @@ int ACLLoadConfiguredUsers(void) {
 
 /* This function loads the ACL from the specified filename: every line
  * is validated and should be either empty or in the format used to specify
- * users in the redis.conf configuration or in the ACL file, that is:
+ * users in the keydb.conf configuration or in the ACL file, that is:
  *
  *  user <username> ... rules ...
  *
@@ -1347,17 +1347,17 @@ cleanup:
 
 /* This function is called once the server is already running, modules are
  * loaded, and we are ready to start, in order to load the ACLs either from
- * the pending list of users defined in redis.conf, or from the ACL file.
+ * the pending list of users defined in keydb.conf, or from the ACL file.
  * The function will just exit with an error if the user is trying to mix
  * both the loading methods. */
 void ACLLoadUsersAtStartup(void) {
     if (g_pserver->acl_filename[0] != '\0' && listLength(UsersToLoad) != 0) {
         serverLog(LL_WARNING,
-            "Configuring Redis with users defined in redis.conf and at "
+            "Configuring KeyDB with users defined in keydb.conf and at "
             "the same setting an ACL file path is invalid. This setup "
             "is very likely to lead to configuration errors and security "
             "holes, please define either an ACL file or declare users "
-            "directly in your redis.conf, but not both.");
+            "directly in your keydb.conf, but not both.");
         exit(1);
     }
 

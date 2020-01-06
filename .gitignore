@@ -1,6 +1,7 @@
 .*.swp
 core
 *.o
+*.d
 *.log
 dump.rdb
 redis-benchmark
@@ -27,7 +28,7 @@ release.h
 src/transfer.sh
 src/configs
 redis.ds
-src/redis.conf
+src/keydb.conf
 src/nodes.conf
 deps/lua/src/lua
 deps/lua/src/luac

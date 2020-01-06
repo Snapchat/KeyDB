@@ -219,4 +219,37 @@ start_server {tags {"expire"}} {
         set ttl [r ttl foo]
         assert {$ttl <= 98 && $ttl > 90}
     }
+
+    test { EXPIREMEMBER works (set) } {
+        r flushall
+        r sadd testkey foo bar baz
+        r expiremember testkey foo 1
+        after 1500
+        assert_equal {2} [r scard testkey]
+    }
+
+    test { EXPIREMEMBER works (hash) } {
+        r flushall
+        r hset testkey foo bar
+        r expiremember testkey foo 1
+        after 1500
+        r exists testkey
+    } {0}
+
+    test { EXPIREMEMBER works (zset) } {
+        r flushall
+        r zadd testkey 1 foo
+        r zadd testkey 2 bar
+        assert_equal {2} [r zcard testkey]
+        r expiremember testkey foo 1
+        after 1500
+        assert_equal {1} [r zcard testkey]
+    }
+
+    test { TTL for subkey expires works } {
+        r flushall
+        r sadd testkey foo bar baz
+        r expiremember testkey foo 10000
+        assert [expr [r ttl testkey foo] > 0]
+    }
 }

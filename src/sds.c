@@ -178,6 +178,8 @@ sds sdsdup(const char *s) {
 }
 
 sds sdsdupshared(const char *s) {
+    if (s == NULL)
+        return NULL;
     unsigned char flags = s[-1];
     if ((flags & SDS_TYPE_MASK) != SDS_TYPE_REFCOUNTED)
         return sdsnewlen(s, -sdslen(s));
@@ -234,6 +236,9 @@ void sdsclear(sds s) {
  * Note: this does not change the *length* of the sds string as returned
  * by sdslen(), but only the free buffer space we have. */
 sds sdsMakeRoomFor(sds s, size_t addlen) {
+    if (s == NULL)
+        return sdsnewlen(NULL, addlen);
+    
     void *sh, *newsh;
     size_t avail = sdsavail(s);
     size_t len, newlen;

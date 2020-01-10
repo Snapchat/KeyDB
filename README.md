@@ -13,7 +13,7 @@ KeyDB maintains full compatibility with the Redis protocol, modules, and scripts
 
 On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency. Active-Replication simplifies hot-spare failover allowing you to easily distribute writes over replicas and use simple TCP based load balancing/failover. KeyDB's higher performance allows you to do more on less hardware which reduces operation costs and complexity.
 
-<img src=https://keydb.dev/assets/img/blog/5x_opspersecVSdatasize.PNG/>
+<img src="https://keydb.dev/assets/img/blog/5x_opspersecVSdatasize.PNG"/>
 
 See the full benchmark results and setup information here: https://docs.keydb.dev/blog/2019/10/07/blog-post/
 

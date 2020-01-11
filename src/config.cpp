@@ -804,6 +804,7 @@ void loadServerConfigFromString(char *config) {
             // NOP, handled in main
         } else if (!strcasecmp(argv[0],"enable-pro")) {
             cserver.fUsePro = true;
+            break;
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }

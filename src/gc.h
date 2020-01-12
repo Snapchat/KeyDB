@@ -63,13 +63,10 @@ public:
                 }
             }
 
-            if (!(vecclean.empty() || fMinElement))
-                printf("############################## ERROR CASE ############################\n");
+            assert(vecclean.empty() || fMinElement);
         }
 
         lock.unlock();  // don't hold it for the potentially long delete of vecclean
-        if (vecclean.size())
-            printf("!!!!!!!!!!!!!!!!    Deleted %lu snapshots    !!!!!!!!!!!!!!!!!!!!!\n", vecclean.size());
     }
 
     void enqueue(uint64_t epoch, std::unique_ptr<T> &&sp)

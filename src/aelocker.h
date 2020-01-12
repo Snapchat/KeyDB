@@ -11,9 +11,11 @@ public:
 
     void arm(client *c) // if a client is passed, then the client is already locked
     {
+        if (m_fArmed)
+            return;
+        
         if (c != nullptr)
         {
-            serverAssert(!m_fArmed);
             serverAssert(c->lock.fOwnLock());
 
             if (!aeTryAcquireLock(true /*fWeak*/))    // avoid locking the client if we can

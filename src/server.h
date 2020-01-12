@@ -1356,6 +1356,9 @@ public:
     bool removeCachedValue(const char *key);
     void removeAllCachedValues();
 
+protected:
+    uint64_t m_mvccCheckpoint = 0;
+
 private:
     struct changedescCmp
     {
@@ -1379,7 +1382,6 @@ private:
     std::set<changedesc, changedescCmp> m_setchanged;
     size_t m_cnewKeysPending = 0;
     std::shared_ptr<IStorage> m_spstorage = nullptr;
-    uint64_t mvccCheckpoint = 0;
 
     // Expire
     expireset *m_setexpire = nullptr;
@@ -1417,6 +1419,10 @@ public:
     expireEntry *getExpire(const char *key);
     const expireEntry *getExpire(const char *key) const;
     const expireEntry *getExpire(robj_roptr key) const { return getExpire(szFromObj(key)); }
+
+    uint64_t mvccCheckpoint() const { return m_mvccCheckpoint; }
+
+    bool FStale() const;
 
     // These need to be fixed
     using redisDbPersistentData::size;
@@ -1892,6 +1898,7 @@ struct redisServerThreadVars {
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     long unsigned commandsExecuted = 0;
     uint64_t gcEpoch = 0;
+    const redisDbPersistentDataSnapshot **rgdbSnapshot = nullptr;
 };
 
 struct redisMaster {

@@ -2703,6 +2703,61 @@ int restartServer(int flags, mstime_t delay) {
     return C_ERR; /* Never reached. */
 }
 
+bool getCommandAsync(client *c)
+{
+    if (c->argc != 2)
+        return false;
+    
+    if (g_pserver->m_pstorageFactory)
+        return false;   // BUG! But we don't have time to fix right now, fails tests
+
+    int idb;
+    for (idb = 0; idb < cserver.dbnum; ++idb)
+    {
+        if (c->db == g_pserver->db[idb])
+            break;
+    }
+    if (idb >= cserver.dbnum)
+        return false;
+    
+    if (serverTL->rgdbSnapshot[idb] == nullptr || serverTL->rgdbSnapshot[idb]->mvccCheckpoint() < c->mvccCheckpoint || serverTL->rgdbSnapshot[idb]->FStale()) {
+        AeLocker locker;
+        locker.arm(c);
+        if (serverTL->rgdbSnapshot[idb] != nullptr)
+        {
+            g_pserver->db[idb]->endSnapshot(serverTL->rgdbSnapshot[idb]);
+            serverTL->rgdbSnapshot[idb] = nullptr;
+        }
+
+        serverTL->rgdbSnapshot[idb] = c->db->createSnapshot(c->mvccCheckpoint, true);
+    }
+        
+    if (serverTL->rgdbSnapshot[idb] == nullptr)
+        return false;
+
+    auto itr = serverTL->rgdbSnapshot[idb]->find_cached_threadsafe(szFromObj(c->argv[1]));
+    if (itr == serverTL->rgdbSnapshot[idb]->end())
+    {
+        if (g_pserver->m_pstorageFactory)
+            return false;   // no cached result doesn't mean the value doesn't exist
+        addReply(c, shared.null[c->resp]);
+        return true;
+    }
+    
+    // Are we expired?
+    const expireEntry *expire = serverTL->rgdbSnapshot[idb]->getExpire(c->argv[1]);
+    long long when;
+    if (expire && expire->FGetPrimaryExpire(&when) && when > 0) {
+        if (g_pserver->mstime >= when) {
+            addReply(c, shared.null[c->resp]);
+            return true;
+        }
+    }
+
+    addReplyBulk(c,itr.val());
+    return true;
+}
+
 /* This function will try to raise the max number of open files accordingly to
  * the configured max number of clients. It also reserves a number of file
  * descriptors (CONFIG_MIN_RESERVED_FDS) for extra operations of
@@ -3047,6 +3102,13 @@ void initServer(void) {
         g_pserver->db[j] = new (MALLOC_LOCAL) redisDb();
         g_pserver->db[j]->initialize(j);
     }
+
+    for (int i = 0; i < MAX_EVENT_LOOPS; ++i)
+    {
+        g_pserver->rgthreadvar[i].rgdbSnapshot = (const redisDbPersistentDataSnapshot**)zcalloc(sizeof(redisDbPersistentDataSnapshot*)*cserver.dbnum, MALLOC_LOCAL);
+        serverAssert(g_pserver->rgthreadvar[i].rgdbSnapshot != nullptr);
+    }
+    serverAssert(g_pserver->rgthreadvar[0].rgdbSnapshot != nullptr);
 
     /* Fixup Master Client Database */
     listIter li;
@@ -3820,6 +3882,11 @@ int processCommand(client *c, int callFlags) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
+        if (listLength(g_pserver->monitors) == 0 && c->cmd->proc == getCommand)
+        {
+            if (getCommandAsync(c))
+                return C_OK;
+        }
         locker.arm(c);
         call(c,callFlags);
         c->woff = g_pserver->master_repl_offset;
@@ -3917,11 +3984,19 @@ int prepareForShutdown(int flags) {
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
 
+    for (int ithread = 0; ithread < MAX_EVENT_LOOPS; ++ithread) {
+        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+            if (g_pserver->rgthreadvar[ithread].rgdbSnapshot[idb] != nullptr)
+                g_pserver->db[idb]->endSnapshot(g_pserver->rgthreadvar[ithread].rgdbSnapshot[idb]);
+        }
+    }
+
     /* free our databases */
     for (int idb = 0; idb < cserver.dbnum; ++idb) {
         delete g_pserver->db[idb];
         g_pserver->db[idb] = nullptr;
     }
+
     delete g_pserver->m_pstorageFactory;
 
     serverLog(LL_WARNING,"%s is now ready to exit, bye bye...",

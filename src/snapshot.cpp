@@ -6,7 +6,6 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     serverAssert(GlobalLocksAcquired());
     serverAssert(m_refCount == 0);  // do not call this on a snapshot
 
-    // First see if we have too many levels and can bail out of this to reduce load
     int levels = 1;
     redisDbPersistentDataSnapshot *psnapshot = m_spdbSnapshotHOLDER.get();
     while (psnapshot != nullptr)
@@ -14,23 +13,25 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
         ++levels;
         psnapshot = psnapshot->m_spdbSnapshotHOLDER.get();
     }
-    if (fOptional && (levels > 8))
-        return nullptr;
 
     if (m_spdbSnapshotHOLDER != nullptr)
     {
         // If possible reuse an existing snapshot (we want to minimize nesting)
-        if (mvccCheckpoint <= m_spdbSnapshotHOLDER->mvccCheckpoint)
+        if (mvccCheckpoint <= m_spdbSnapshotHOLDER->m_mvccCheckpoint)
         {
-            if (((getMvccTstamp() - m_spdbSnapshotHOLDER->mvccCheckpoint) >> MVCC_MS_SHIFT) < 1*1000)
+            if (!m_spdbSnapshotHOLDER->FStale())
             {
                 m_spdbSnapshotHOLDER->m_refCount++;
                 return m_spdbSnapshotHOLDER.get();
             }
-            serverLog(LL_WARNING, "Existing snapshot too old, creating a new one");
+            serverLog(LL_VERBOSE, "Existing snapshot too old, creating a new one");
         }
-        serverLog(levels > 5 ? LL_NOTICE : LL_VERBOSE, "Nested snapshot created: %d levels", levels);
     }
+
+    // See if we have too many levels and can bail out of this to reduce load
+    if (fOptional && (levels >= 4))
+        return nullptr;
+
     auto spdb = std::unique_ptr<redisDbPersistentDataSnapshot>(new (MALLOC_LOCAL) redisDbPersistentDataSnapshot());
     
     spdb->m_fAllChanged = false;
@@ -45,7 +46,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
         spdb->m_spstorage = std::shared_ptr<IStorage>(const_cast<IStorage*>(m_spstorage->clone()));
     spdb->m_pdbSnapshot = m_pdbSnapshot;
     spdb->m_refCount = 1;
-    spdb->mvccCheckpoint = getMvccTstamp();
+    spdb->m_mvccCheckpoint = getMvccTstamp();
     if (m_setexpire != nullptr)
     {
         spdb->m_setexpire =  new (MALLOC_LOCAL) expireset(*m_setexpire);
@@ -107,7 +108,7 @@ void redisDbPersistentData::recursiveFreeSnapshots(redisDbPersistentDataSnapshot
         psnapshot->m_spdbSnapshotHOLDER.release();
         //psnapshot->m_pdbSnapshot = nullptr;
         g_pserver->garbageCollector.enqueue(serverTL->gcEpoch, std::unique_ptr<redisDbPersistentDataSnapshot>(psnapshot));
-        serverLog(LL_WARNING, "Garbage collected snapshot");
+        serverLog(LL_VERBOSE, "Garbage collected snapshot");
     }
 }
 
@@ -268,7 +269,7 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
     while(fResult && ((de = dictNext(di)) != nullptr))
     {
         --celem;
-        robj *o = fKeyOnly ? nullptr : (robj*)dictGetVal(de);
+        robj *o = (robj*)dictGetVal(de);
         if (!fn((const char*)dictGetKey(de), o))
             fResult = false;
     }
@@ -368,8 +369,10 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
     dictExpand(spdb->m_pdict, m_pdbSnapshot->size());
 
     m_pdbSnapshot->iterate_threadsafe([&](const char *key, robj_roptr o){
-        if (o != nullptr)
+        if (o != nullptr) {
             dictAdd(spdb->m_pdict, sdsdupshared(key), o.unsafe_robjcast());
+            incrRefCount(o);
+        }
         return true;
     }, true /*fKeyOnly*/);
     spdb->m_spstorage = m_pdbSnapshot->m_spstorage;
@@ -397,7 +400,7 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
         return; // we were unlinked and this was a waste of time
     }
 
-    serverLog(LL_WARNING, "cleaned %d snapshots", snapshot_depth()-1);
+    serverLog(LL_VERBOSE, "cleaned %d snapshots", snapshot_depth()-1);
     spdb->m_refCount = depth;
     spdb->m_fConsolidated = true;
     // Drop our refs from this snapshot and its children
@@ -419,4 +422,11 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
     const redisDbPersistentDataSnapshot *ptrT = m_spdbSnapshotHOLDER.get();
     __atomic_store(&m_pdbSnapshot, &ptrT, __ATOMIC_SEQ_CST);
     locker.disarm();    // ensure we're not locked for any dtors
+}
+
+bool redisDbPersistentDataSnapshot::FStale() const
+{
+    // 0.5 seconds considered stale;
+    static const uint64_t msStale = 500;
+    return ((getMvccTstamp() - m_mvccCheckpoint) >> MVCC_MS_SHIFT) >= msStale;
 }

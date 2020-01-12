@@ -87,7 +87,7 @@ endif
 ifneq (,$(filter aarch64 armv,$(uname_M)))
 	LICENSE_LIB_DIR=../deps/license/arm64/
 else
-	LICENSE_LIB_DIR=../deps/licese/x64/
+	LICENSE_LIB_DIR=../deps/license/x64/
 endif
 
 # Backwards compatibility for selecting an allocator

@@ -3585,9 +3585,6 @@ int processCommand(client *c, int callFlags) {
     }
 
     incrementMvccTstamp();
-    
-    if (!locker.isArmed())
-        locker.arm(c);
 
     /* Handle the maxmemory directive.
      *
@@ -3596,6 +3593,7 @@ int processCommand(client *c, int callFlags) {
      * condition, to avoid mixing the propagation of scripts with the
      * propagation of DELs due to eviction. */
     if (g_pserver->maxmemory && !g_pserver->lua_timedout) {
+        locker.arm(c);
         int out_of_memory = freeMemoryIfNeededAndSafe() == C_ERR;
         /* freeMemoryIfNeeded may flush replica output buffers. This may result
          * into a replica, that may be the active client, to be freed. */
@@ -3615,44 +3613,48 @@ int processCommand(client *c, int callFlags) {
 
     /* Don't accept write commands if there are problems persisting on disk
      * and if this is a master instance. */
-    int deny_write_type = writeCommandsDeniedByDiskError();
-    if (deny_write_type != DISK_ERROR_TYPE_NONE &&
-        listLength(g_pserver->masters) == 0 &&
-        (c->cmd->flags & CMD_WRITE ||
-         c->cmd->proc == pingCommand))
+    if (c->cmd->flags & CMD_WRITE || c->cmd->proc == pingCommand)
     {
-        flagTransaction(c);
-        if (deny_write_type == DISK_ERROR_TYPE_RDB)
-            addReply(c, shared.bgsaveerr);
-        else
-            addReplySds(c,
-                sdscatprintf(sdsempty(),
-                "-MISCONF Errors writing to the AOF file: %s\r\n",
-                strerror(g_pserver->aof_last_write_errno)));
-        return C_OK;
-    }
+        locker.arm(c);
+        int deny_write_type = writeCommandsDeniedByDiskError();
+        if (deny_write_type != DISK_ERROR_TYPE_NONE &&
+            listLength(g_pserver->masters) == 0 &&
+            (c->cmd->flags & CMD_WRITE ||
+            c->cmd->proc == pingCommand))
+        {
+            flagTransaction(c);
+            if (deny_write_type == DISK_ERROR_TYPE_RDB)
+                addReply(c, shared.bgsaveerr);
+            else
+                addReplySds(c,
+                    sdscatprintf(sdsempty(),
+                    "-MISCONF Errors writing to the AOF file: %s\r\n",
+                    strerror(g_pserver->aof_last_write_errno)));
+            return C_OK;
+        }    
 
-    /* Don't accept write commands if there are not enough good slaves and
-     * user configured the min-slaves-to-write option. */
-    if (listLength(g_pserver->masters) == 0 &&
-        g_pserver->repl_min_slaves_to_write &&
-        g_pserver->repl_min_slaves_max_lag &&
-        c->cmd->flags & CMD_WRITE &&
-        g_pserver->repl_good_slaves_count < g_pserver->repl_min_slaves_to_write)
-    {
-        flagTransaction(c);
-        addReply(c, shared.noreplicaserr);
-        return C_OK;
-    }
+        /* Don't accept write commands if there are not enough good slaves and
+        * user configured the min-slaves-to-write option. */
+        if (listLength(g_pserver->masters) == 0 &&
+            g_pserver->repl_min_slaves_to_write &&
+            g_pserver->repl_min_slaves_max_lag &&
+            c->cmd->flags & CMD_WRITE &&
+            g_pserver->repl_good_slaves_count < g_pserver->repl_min_slaves_to_write)
+        {
+            flagTransaction(c);
+            addReply(c, shared.noreplicaserr);
+            return C_OK;
+        }
 
-    /* Don't accept write commands if this is a read only replica. But
-     * accept write commands if this is our master. */
-    if (listLength(g_pserver->masters) && g_pserver->repl_slave_ro &&
-        !(c->flags & CLIENT_MASTER) &&
-        c->cmd->flags & CMD_WRITE)
-    {
-        addReply(c, shared.roslaveerr);
-        return C_OK;
+        /* Don't accept write commands if this is a read only replica. But
+        * accept write commands if this is our master. */
+        if (listLength(g_pserver->masters) && g_pserver->repl_slave_ro &&
+            !(c->flags & CLIENT_MASTER) &&
+            c->cmd->flags & CMD_WRITE)
+        {
+            addReply(c, shared.roslaveerr);
+            return C_OK;
+        }
     }
 
     /* Only allow a subset of commands in the context of Pub/Sub if the
@@ -3667,16 +3669,20 @@ int processCommand(client *c, int callFlags) {
         return C_OK;
     }
 
-    /* Only allow commands with flag "t", such as INFO, SLAVEOF and so on,
-     * when replica-serve-stale-data is no and we are a replica with a broken
-     * link with master. */
-    if (FBrokenLinkToMaster() &&
-        g_pserver->repl_serve_stale_data == 0 &&
-        !(c->cmd->flags & CMD_STALE))
+    if (listLength(g_pserver->masters))
     {
-        flagTransaction(c);
-        addReply(c, shared.masterdownerr);
-        return C_OK;
+        locker.arm(c);
+        /* Only allow commands with flag "t", such as INFO, SLAVEOF and so on,
+        * when replica-serve-stale-data is no and we are a replica with a broken
+        * link with master. */
+        if (FBrokenLinkToMaster() &&
+            g_pserver->repl_serve_stale_data == 0 &&
+            !(c->cmd->flags & CMD_STALE))
+        {
+            flagTransaction(c);
+            addReply(c, shared.masterdownerr);
+            return C_OK;
+        }
     }
 
     /* Loading DB? Return an error if the command has not the
@@ -3711,6 +3717,7 @@ int processCommand(client *c, int callFlags) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
+        locker.arm(c);
         call(c,callFlags);
         c->woff = g_pserver->master_repl_offset;
         if (listLength(g_pserver->ready_keys))

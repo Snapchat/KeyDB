@@ -29,6 +29,7 @@
  */
 
 #include "server.h"
+#include "cron.h"
 #include <math.h>
 #include <ctype.h>
 
@@ -369,6 +370,7 @@ void decrRefCount(robj_roptr o) {
         case OBJ_HASH: freeHashObject(o); break;
         case OBJ_MODULE: freeModuleObject(o); break;
         case OBJ_STREAM: freeStreamObject(o); break;
+        case OBJ_CRON: freeCronObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
         zfree(o.unsafe_robjcast());

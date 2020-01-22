@@ -35,6 +35,7 @@
 #include "latency.h"
 #include "atomicvar.h"
 #include "storage.h"
+#include "cron.h"
 #include <thread>
 #include <time.h>
 #include <signal.h>
@@ -1023,7 +1024,11 @@ struct redisCommand redisCommandTable[] = {
 
     {"rreplay",replicaReplayCommand,-3,
      "read-only fast noprop",
-     0,NULL,0,0,0,0,0,0}
+     0,NULL,0,0,0,0,0,0},
+
+    {"cron",cronCommand,-5,
+     "write use-memory",
+     0,NULL,1,1,1,0,0,0},
 };
 
 /*============================ Utility functions ============================ */

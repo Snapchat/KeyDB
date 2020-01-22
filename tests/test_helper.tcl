@@ -36,6 +36,7 @@ set ::all_tests {
     unit/aofrw
     unit/acl
     unit/rreplay
+    unit/cron
     integration/block-repl
     integration/replication
     integration/replication-2

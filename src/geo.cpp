@@ -465,8 +465,8 @@ void georadiusGeneric(client *c, int flags) {
     int storedist = 0; /* 0 for STORE, 1 for STOREDIST. */
 
     /* Look up the requested zset */
-    robj_roptr zobj;
-    if ((zobj = lookupKeyReadOrReply(c, key, shared.null[c->resp])) == nullptr ||
+    robj_roptr zobj = nullptr;
+    if ((zobj = lookupKeyReadOrReply(c, key, shared.emptyarray)) == nullptr ||
         checkType(c, zobj, OBJ_ZSET)) {
         return;
     }
@@ -566,7 +566,7 @@ void georadiusGeneric(client *c, int flags) {
 
     /* If no matching results, the user gets an empty reply. */
     if (ga->used == 0 && storekey == NULL) {
-        addReplyNull(c);
+        addReply(c,shared.emptyarray);
         geoArrayFree(ga);
         return;
     }
@@ -737,7 +737,15 @@ void geohashCommand(client *c) {
             char buf[12];
             int i;
             for (i = 0; i < 11; i++) {
-                int idx = (hash.bits >> (52-((i+1)*5))) & 0x1f;
+                int idx;
+                if (i == 10) {
+                    /* We have just 52 bits, but the API used to output
+                     * an 11 bytes geohash. For compatibility we assume
+                     * zero. */
+                    idx = 0;
+                } else {
+                    idx = (hash.bits >> (52-((i+1)*5))) & 0x1f;
+                }
                 buf[i] = geoalphabet[idx];
             }
             buf[11] = '\0';

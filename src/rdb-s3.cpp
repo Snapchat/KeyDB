@@ -58,22 +58,22 @@ int rdbSaveS3(char *s3bucket, rdbSaveInfo *rsi)
 }
 
 
-int rdbLoadS3Core(int fd, rdbSaveInfo *rsi) 
+int rdbLoadS3Core(int fd, rdbSaveInfo *rsi, int rdbflags) 
 {
     FILE *fp;
     rio rdb;
     int retval;
 
     if ((fp = fdopen(fd, "rb")) == NULL) return C_ERR;
-    startLoading(fp);
+    startLoading(0, rdbflags);
     rioInitWithFile(&rdb,fp);
-    retval = rdbLoadRio(&rdb,rsi,0);
+    retval = rdbLoadRio(&rdb,rdbflags,rsi);
     fclose(fp);
-    stopLoading();
+    stopLoading(retval == C_OK);
     return retval;
 }
 
-int rdbLoadS3(char *s3bucket, rdbSaveInfo *rsi)
+int rdbLoadS3(char *s3bucket, rdbSaveInfo *rsi, int rdbflags)
 {
     int status = EXIT_FAILURE;
     int fd[2];
@@ -100,7 +100,7 @@ int rdbLoadS3(char *s3bucket, rdbSaveInfo *rsi)
     else
     {
         close(fd[1]);
-        if (rdbLoadS3Core(fd[0], rsi) != C_OK)
+        if (rdbLoadS3Core(fd[0], rsi, rdbflags) != C_OK)
         {
             close(fd[0]);
             return C_ERR;

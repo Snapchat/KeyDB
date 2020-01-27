@@ -75,6 +75,12 @@ robj *makeObjectShared(robj *o) {
     return o;
 }
 
+robj *makeObjectShared(const char *rgch, size_t cch)
+{
+    robj *o = createObject(OBJ_STRING,sdsnewlen(rgch, cch));
+    return makeObjectShared(o);
+}
+
 /* Create a string object with encoding OBJ_ENCODING_RAW, that is a plain
  * string object where ptrFromObj(o) points to a proper sds string. */
 robj *createRawStringObject(const char *ptr, size_t len) {
@@ -185,7 +191,7 @@ robj *createStringObjectFromLongLongForValue(long long value) {
  * The 'humanfriendly' option is used for INCRBYFLOAT and HINCRBYFLOAT. */
 robj *createStringObjectFromLongDouble(long double value, int humanfriendly) {
     char buf[MAX_LONG_DOUBLE_CHARS];
-    int len = ld2string(buf,sizeof(buf),value,humanfriendly);
+    int len = ld2string(buf,sizeof(buf),value,humanfriendly? LD_STR_HUMAN: LD_STR_AUTO);
     return createStringObject(buf,len);
 }
 
@@ -477,10 +483,15 @@ robj *tryObjectEncoding(robj *o) {
             incrRefCount(shared.integers[value]);
             return shared.integers[value];
         } else {
-            if (o->encoding == OBJ_ENCODING_RAW) sdsfree(szFromObj(o));
-            o->encoding = OBJ_ENCODING_INT;
-            o->m_ptr = (void*) value;
-            return o;
+            if (o->encoding == OBJ_ENCODING_RAW) {
+                sdsfree(szFromObj(o));
+                o->encoding = OBJ_ENCODING_INT;
+                o->m_ptr = (void*) value;
+                return o;
+            } else if (o->encoding == OBJ_ENCODING_EMBSTR) {
+                decrRefCount(o);
+                return createStringObjectFromLongLongForValue(value);
+            }
         }
     }
 
@@ -615,21 +626,13 @@ size_t stringObjectLen(robj_roptr o) {
 
 int getDoubleFromObject(const robj *o, double *target) {
     double value;
-    char *eptr;
 
     if (o == NULL) {
         value = 0;
     } else {
         serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
         if (sdsEncodedObject(o)) {
-            errno = 0;
-            value = strtod(szFromObj(o), &eptr);
-            if (sdslen(szFromObj(o)) == 0 ||
-                isspace(((const char*)szFromObj(o))[0]) ||
-                (size_t)(eptr-(char*)szFromObj(o)) != sdslen(szFromObj(o)) ||
-                (errno == ERANGE &&
-                    (value == HUGE_VAL || value == -HUGE_VAL || value == 0)) ||
-                std::isnan(value))
+            if (!string2d(szFromObj(o), sdslen(szFromObj(o)), &value))
                 return C_ERR;
         } else if (o->encoding == OBJ_ENCODING_INT) {
             value = (long)ptrFromObj(o);
@@ -876,7 +879,9 @@ size_t objectComputeSize(robj *o, size_t sample_size) {
             d = ((zset*)ptrFromObj(o))->pdict;
             zskiplist *zsl = ((zset*)ptrFromObj(o))->zsl;
             zskiplistNode *znode = zsl->header->level(0)->forward;
-            asize = sizeof(*o)+sizeof(zset)+(sizeof(struct dictEntry*)*dictSlots(d));
+            asize = sizeof(*o)+sizeof(zset)+sizeof(zskiplist)+sizeof(dict)+
+                    (sizeof(struct dictEntry*)*dictSlots(d))+
+                    zmalloc_size(zsl->header);
             while(znode != NULL && samples < sample_size) {
                 elesize += sdsAllocSize(znode->ele);
                 elesize += sizeof(struct dictEntry) + zmalloc_size(znode);
@@ -1247,19 +1252,20 @@ sds getMemoryDoctorReport(void) {
  * The lru_idle and lru_clock args are only relevant if policy
  * is MAXMEMORY_FLAG_LRU.
  * Either or both of them may be <0, in that case, nothing is set. */
-void objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
-                       long long lru_clock) {
+int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
+                       long long lru_clock, int lru_multiplier) {
     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         if (lfu_freq >= 0) {
             serverAssert(lfu_freq <= 255);
             val->lru = (LFUGetTimeInMinutes()<<8) | lfu_freq;
+            return 1;
         }
     } else if (lru_idle >= 0) {
         /* Provided LRU idle time is in seconds. Scale
          * according to the LRU clock resolution this Redis
          * instance was compiled with (normally 1000 ms, so the
          * below statement will expand to lru_idle*1000/1000. */
-        lru_idle = lru_idle*1000/LRU_CLOCK_RESOLUTION;
+        lru_idle = lru_idle*lru_multiplier/LRU_CLOCK_RESOLUTION;
         long lru_abs = lru_clock - lru_idle; /* Absolute access time. */
         /* If the LRU field underflows (since LRU it is a wrapping
          * clock), the best we can do is to provide a large enough LRU
@@ -1269,7 +1275,9 @@ void objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
         if (lru_abs < 0)
             lru_abs = (lru_clock+(LRU_CLOCK_MAX/2)) % LRU_CLOCK_MAX;
         val->lru = lru_abs;
+        return 1;
     }
+    return 0;
 }
 
 /* ======================= The OBJECT and MEMORY commands =================== */
@@ -1482,30 +1490,20 @@ NULL
 #if defined(USE_JEMALLOC)
         sds info = sdsempty();
         je_malloc_stats_print(inputCatSds, &info, NULL);
-        addReplyBulkSds(c, info);
+        addReplyVerbatim(c,info,sdslen(info),"txt");
+        sdsfree(info);
 #else
         addReplyBulkCString(c,"Stats not supported for the current allocator");
 #endif
     } else if (!strcasecmp(szFromObj(c->argv[1]),"doctor") && c->argc == 2) {
         sds report = getMemoryDoctorReport();
-        addReplyBulkSds(c,report);
+        addReplyVerbatim(c,report,sdslen(report),"txt");
+        sdsfree(report);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"purge") && c->argc == 2) {
-#if defined(USE_JEMALLOC)
-        char tmp[32];
-        unsigned narenas = 0;
-        size_t sz = sizeof(unsigned);
-        if (!je_mallctl("arenas.narenas", &narenas, &sz, NULL, 0)) {
-            sprintf(tmp, "arena.%d.purge", narenas);
-            if (!je_mallctl(tmp, NULL, 0, NULL, 0)) {
-                addReply(c, shared.ok);
-                return;
-            }
-        }
-        addReplyError(c, "Error purging dirty pages");
-#else
-        addReply(c, shared.ok);
-        /* Nothing to do for other allocators. */
-#endif
+        if (jemalloc_purge() == 0)
+            addReply(c, shared.ok);
+        else
+            addReplyError(c, "Error purging dirty pages");
     } else {
         addReplyErrorFormat(c, "Unknown subcommand or wrong number of arguments for '%s'. Try MEMORY HELP", (char*)ptrFromObj(c->argv[1]));
     }

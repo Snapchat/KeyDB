@@ -312,10 +312,9 @@ void genericSetKey(redisDb *db, robj *key, robj *val, int keepttl) {
     if (de == NULL) {
         dbAdd(db,key,val);
     } else {
-        dbOverwriteCore(db,de,key,val,!!g_pserver->fActiveReplica,true);
+        dbOverwriteCore(db,de,key,val,!!g_pserver->fActiveReplica,!keepttl);
     }
     incrRefCount(val);
-    if (!keepttl) removeExpire(db,key);
     signalModifiedKey(db,key);
 }
 

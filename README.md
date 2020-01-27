@@ -251,8 +251,49 @@ $ docker run -it --rm -v /path-to-dump-binaries:/keydb_bin eqalpha/keydb-build-b
 ```
 Please note that you will need libcurl4-openssl-dev in order to run keydb. With flash version you may need libnuma-dev and libtool installed in order to run the binaries. Keep this in mind especially when running in a container. For a copy of all our Dockerfiles, please see them on [docs]( https://docs.keydb.dev/docs/dockerfiles/).
 
+<<<<<<< HEAD
 Code contributions
 -----------------
+=======
+One of the most important functions inside this file is `replicationFeedSlaves()` that writes commands to the clients representing replica instances connected
+to our master, so that the replicas can get the writes performed by the clients:
+this way their data set will remain synchronized with the one in the master.
+
+This file also implements both the `SYNC` and `PSYNC` commands that are
+used in order to perform the first synchronization between masters and
+replicas, or to continue the replication after a disconnection.
+
+Other C files
+---
+
+* `t_hash.c`, `t_list.c`, `t_set.c`, `t_string.c`, `t_zset.c` and `t_stream.c` contains the implementation of the Redis data types. They implement both an API to access a given data type, and the client commands implementations for these data types.
+* `ae.c` implements the Redis event loop, it's a self contained library which is simple to read and understand.
+* `sds.c` is the Redis string library, check http://github.com/antirez/sds for more information.
+* `anet.c` is a library to use POSIX networking in a simpler way compared to the raw interface exposed by the kernel.
+* `dict.c` is an implementation of a non-blocking hash table which rehashes incrementally.
+* `scripting.c` implements Lua scripting. It is completely self contained from the rest of the Redis implementation and is simple enough to understand if you are familar with the Lua API.
+* `cluster.c` implements the Redis Cluster. Probably a good read only after being very familiar with the rest of the Redis code base. If you want to read `cluster.c` make sure to read the [Redis Cluster specification][3].
+
+[3]: http://redis.io/topics/cluster-spec
+
+Anatomy of a Redis command
+---
+
+All the Redis commands are defined in the following way:
+
+    void foobarCommand(client *c) {
+        printf("%s",c->argv[1]->ptr); /* Do something with the argument. */
+        addReply(c,shared.ok); /* Reply something to the client. */
+    }
+
+The command is then referenced inside `server.c` in the command table:
+
+    {"foobar",foobarCommand,2,"rtF",0,NULL,0,0,0,0,0},
+
+In the above example `2` is the number of arguments the command takes,
+while `"rtF"` are the command flags, as documented in the command table
+top comment inside `server.c`.
+>>>>>>> redis/6.0
 
 Note: by contributing code to the KeyDB project in any form, including sending
 a pull request via Github, a code fragment or patch via private email or

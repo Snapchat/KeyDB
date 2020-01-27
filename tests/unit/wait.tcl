@@ -33,14 +33,9 @@ start_server {} {
     }
 
     test {WAIT should not acknowledge 1 additional copy if slave is blocked} {
-<<<<<<< HEAD
-        exec src/keydb-cli -h $slave_host -p $slave_port debug sleep 5 > /dev/null 2> /dev/null &
-        after 1000 ;# Give keydb-cli the time to execute the command.
-=======
         set cmd [rediscli $slave_port "-h $slave_host debug sleep 5"]
         exec {*}$cmd > /dev/null 2> /dev/null &
-        after 1000 ;# Give redis-cli the time to execute the command.
->>>>>>> redis/6.0
+        after 1000 ;# Give keydb-cli the time to execute the command.
         $master set foo 0
         $master incr foo
         $master incr foo

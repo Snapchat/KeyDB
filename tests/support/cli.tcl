@@ -12,7 +12,7 @@ proc rediscli_tls_config {testsdir} {
 }
 
 proc rediscli {port {opts {}}} {
-    set cmd [list src/redis-cli -p $port]
+    set cmd [list src/keydb-cli -p $port]
     lappend cmd {*}[rediscli_tls_config "tests"]
     lappend cmd {*}$opts
     return $cmd

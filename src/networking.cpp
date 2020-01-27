@@ -2196,6 +2196,7 @@ void processInputBufferAndReplicate(client *c) {
 
 void readQueryFromClient(connection *conn) {
     client *c = (client*)connGetPrivateData(conn);
+    serverAssert(conn == c->conn);
     int nread, readlen;
     size_t qblen;
 
@@ -2385,7 +2386,8 @@ sds catClientInfoString(sds s, client *client) {
         (unsigned long long) listLength(client->reply),
         (unsigned long long) getClientOutputBufferMemoryUsage(client),
         events,
-        client->lastcmd ? client->lastcmd->name : "NULL");
+        client->lastcmd ? client->lastcmd->name : "NULL",
+        client->puser ? client->puser->name : "(superuser)");
 }
 
 sds getAllClientsInfoString(int type) {

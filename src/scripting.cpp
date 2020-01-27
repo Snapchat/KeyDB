@@ -197,7 +197,7 @@ char *redisProtocolToLuaType_Aggregate(lua_State *lua, char *reply, int atype) {
     int j = 0;
 
     string2ll(reply+1,p-reply-1,&mbulklen);
-    if (g_pserver->lua_client->resp == 2 || atype == '*') {
+    if (serverTL->lua_client->resp == 2 || atype == '*') {
         p += 2;
         if (mbulklen == -1) {
             lua_pushboolean(lua,0);

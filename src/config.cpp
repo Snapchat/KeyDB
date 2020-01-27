@@ -248,11 +248,18 @@ const char *evictPolicyToString(void) {
  * Config file parsing
  *----------------------------------------------------------------------------*/
 
+int truefalsetoi(char *s) {
+    if (!strcasecmp(s,"true")) return 1;
+    else if (!strcasecmp(s,"false")) return 0;
+    else return -1;
+}
+
 int yesnotoi(char *s) {
     if (!strcasecmp(s,"yes")) return 1;
     else if (!strcasecmp(s,"no")) return 0;
-    else return -1;
+    else return truefalsetoi(s);
 }
+
 
 void appendServerSaveParams(time_t seconds, int changes) {
     g_pserver->saveparams = (saveparam*)zrealloc(g_pserver->saveparams,sizeof(struct saveparam)*(g_pserver->saveparamslen+1), MALLOC_LOCAL);
@@ -1625,6 +1632,7 @@ static int boolConfigLoad(typeData data, sds *argv, int argc, const char **err) 
         return 0;
     }
     if ((yn = yesnotoi(argv[1])) == -1) {
+        if ((yn = truefalsetoi(argv[1])) == -1)
         *err = "argument must be 'yes' or 'no'";
         return 0;
     }

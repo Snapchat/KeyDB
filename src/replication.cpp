@@ -1563,7 +1563,10 @@ void replicationCreateMasterClient(redisMaster *mi, connection *conn, int dbid) 
     serverAssert(mi->master == nullptr);
     mi->master = createClient(conn, serverTL - g_pserver->rgthreadvar);
     if (conn)
+    {
+        serverAssert(connGetPrivateData(mi->master->conn) == mi->master);
         connSetReadHandler(mi->master->conn, readQueryFromClient);
+    }
     mi->master->flags |= CLIENT_MASTER;
     mi->master->authenticated = 1;
     mi->master->reploff = mi->master_initial_offset;
@@ -1985,6 +1988,7 @@ void readSyncBulkPayload(connection *conn) {
 
     /* Final setup of the connected slave <- master link */
     replicationCreateMasterClient(mi,mi->repl_transfer_s,rsi.repl_stream_db);
+    mi->repl_transfer_s = nullptr;
     mi->repl_state = REPL_STATE_CONNECTED;
     mi->repl_down_since = 0;
 
@@ -3129,7 +3133,7 @@ void replicationResurrectCachedMaster(redisMaster *mi, connection *conn) {
     mi->master = mi->cached_master;
     mi->cached_master = NULL;
     mi->master->conn = conn;
-    connSetPrivateData(mi->master->conn, mi);
+    connSetPrivateData(mi->master->conn, mi->master);
     mi->master->flags &= ~(CLIENT_CLOSE_AFTER_REPLY|CLIENT_CLOSE_ASAP);
     mi->master->authenticated = 1;
     mi->master->lastinteraction = g_pserver->unixtime;
@@ -3142,6 +3146,7 @@ void replicationResurrectCachedMaster(redisMaster *mi, connection *conn) {
 
     /* Re-add to the list of clients. */
     linkClient(mi->master);
+    serverAssert(connGetPrivateData(mi->master->conn) == mi->master);
     if (connSetReadHandler(mi->master->conn, readQueryFromClient)) {
         serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the readable handler: %s", strerror(errno));
         freeClientAsync(mi->master); /* Close ASAP. */

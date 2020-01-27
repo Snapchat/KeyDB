@@ -94,6 +94,7 @@ start_server {tags {"introspection"}} {
             slaveof
             bind
             requirepass
+            multi-master
         }
 
         set configs {}

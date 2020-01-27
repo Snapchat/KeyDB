@@ -1,4 +1,4 @@
-start_server {tags {"CRON"}} {
+start_server {tags {"CRON"} overrides {hz 100} } {
     test {cron singleshot past tense} {
         r flushall
         r cron testjob single 0 1 {redis.call("incr", "testkey")} 1 testkey

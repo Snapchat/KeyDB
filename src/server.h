@@ -1887,7 +1887,6 @@ struct redisServer {
                                         is down? */
     /* Scripting */
     lua_State *lua; /* The Lua interpreter. We use just one for all clients */
-    client *lua_client;   /* The "fake client" to query Redis from Lua */
     client *lua_caller = nullptr;   /* The client running EVAL right now, or NULL */
     char* lua_cur_script = nullptr; /* SHA1 of the script currently running, or NULL */
     dict *lua_scripts;         /* A dictionary of SHA1 -> Lua scripts */

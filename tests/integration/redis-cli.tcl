@@ -3,12 +3,8 @@ source tests/support/cli.tcl
 start_server {tags {"cli"}} {
     proc open_cli {} {
         set ::env(TERM) dumb
-<<<<<<< HEAD
-        set fd [open [format "|src/keydb-cli -p %d -n 9" [srv port]] "r+"]
-=======
         set cmdline [rediscli [srv port] "-n 9"]
         set fd [open "|$cmdline" "r+"]
->>>>>>> redis/6.0
         fconfigure $fd -buffering none
         fconfigure $fd -blocking false
         fconfigure $fd -translation binary
@@ -61,13 +57,8 @@ start_server {tags {"cli"}} {
     }
 
     proc _run_cli {opts args} {
-<<<<<<< HEAD
-        set cmd [format "src/keydb-cli -p %d -n 9 $args" [srv port]]
-        foreach {key value} $opts {
-=======
         set cmd [rediscli [srv port] [list -n 9 {*}$args]]
         foreach {key value} $args {
->>>>>>> redis/6.0
             if {$key eq "pipe"} {
                 set cmd "sh -c \"$value | $cmd\""
             }

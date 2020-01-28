@@ -92,6 +92,7 @@ void linkClient(client *c) {
 
 client *createClient(connection *conn, int iel) {
     client *c = (client*)zmalloc(sizeof(client), MALLOC_LOCAL);
+    serverAssert(conn == nullptr || (iel == (serverTL - g_pserver->rgthreadvar)));
 
     c->iel = iel;
     /* passing NULL as conn it is possible to create a non connected client.
@@ -1080,6 +1081,8 @@ void clientAcceptHandler(connection *conn) {
 static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) {
     client *c;
     UNUSED(ip);
+    AeLocker locker;
+    locker.arm(nullptr);
 
     /* Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation

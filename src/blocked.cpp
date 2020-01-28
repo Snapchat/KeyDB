@@ -92,7 +92,7 @@ int getTimeoutFromObjectOrReply(client *c, robj *object, mstime_t *timeout, int 
     }
 
     if (tval < 0) {
-        addReplyError(c,"timeout is negative");
+        addReplyErrorAsync(c,"timeout is negative");
         return C_ERR;
     }
 
@@ -210,9 +210,9 @@ void replyToBlockedClientTimedOut(client *c) {
     if (c->btype == BLOCKED_LIST ||
         c->btype == BLOCKED_ZSET ||
         c->btype == BLOCKED_STREAM) {
-        addReplyNullArray(c);
+        addReplyNullArrayAsync(c);
     } else if (c->btype == BLOCKED_WAIT) {
-        addReplyLongLong(c,replicationCountAcksByOffset(c->bpop.reploffset));
+        addReplyLongLongAsync(c,replicationCountAcksByOffset(c->bpop.reploffset));
     } else if (c->btype == BLOCKED_MODULE) {
         moduleBlockedClientTimedOut(c);
     } else {
@@ -397,7 +397,7 @@ void serveClientsBlockedOnStreamKey(robj *o, readyList *rl) {
                 /* If the group was not found, send an error
                  * to the consumer. */
                 if (!group) {
-                    addReplyError(receiver,
+                    addReplyErrorAsync(receiver,
                         "-NOGROUP the consumer group this client "
                         "was blocked on no longer exists");
                     unblockClient(receiver);
@@ -427,12 +427,12 @@ void serveClientsBlockedOnStreamKey(robj *o, readyList *rl) {
                  * extracted from it. Wrapped in a single-item
                  * array, since we have just one key. */
                 if (receiver->resp == 2) {
-                    addReplyArrayLen(receiver,1);
-                    addReplyArrayLen(receiver,2);
+                    addReplyArrayLenAsync(receiver,1);
+                    addReplyArrayLenAsync(receiver,2);
                 } else {
-                    addReplyMapLen(receiver,1);
+                    addReplyMapLenAsync(receiver,1);
                 }
-                addReplyBulk(receiver,rl->key);
+                addReplyBulkAsync(receiver,rl->key);
 
                 streamPropInfo pi = {
                     rl->key,

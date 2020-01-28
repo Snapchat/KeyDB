@@ -1106,7 +1106,7 @@ void putSlaveOnline(client *replica) {
     replica->replstate = SLAVE_STATE_ONLINE;
     replica->repl_put_online_on_ack = 0;
     replica->repl_ack_time = g_pserver->unixtime; /* Prevent false timeout. */
-    if (connSetWriteHandler(replica->conn, sendReplyToClient) == C_ERR) {
+    if (connSetWriteHandler(replica->conn, sendReplyToClient, true) == C_ERR) {
         serverLog(LL_WARNING,"Unable to register writable event for replica bulk transfer: %s", strerror(errno));
         freeClient(replica);
         return;
@@ -1565,7 +1565,7 @@ void replicationCreateMasterClient(redisMaster *mi, connection *conn, int dbid) 
     if (conn)
     {
         serverAssert(connGetPrivateData(mi->master->conn) == mi->master);
-        connSetReadHandler(mi->master->conn, readQueryFromClient);
+        connSetReadHandler(mi->master->conn, readQueryFromClient, true);
     }
     mi->master->flags |= CLIENT_MASTER;
     mi->master->authenticated = 1;
@@ -3147,7 +3147,7 @@ void replicationResurrectCachedMaster(redisMaster *mi, connection *conn) {
     /* Re-add to the list of clients. */
     linkClient(mi->master);
     serverAssert(connGetPrivateData(mi->master->conn) == mi->master);
-    if (connSetReadHandler(mi->master->conn, readQueryFromClient)) {
+    if (connSetReadHandler(mi->master->conn, readQueryFromClient, true)) {
         serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the readable handler: %s", strerror(errno));
         freeClientAsync(mi->master); /* Close ASAP. */
     }
@@ -3155,7 +3155,7 @@ void replicationResurrectCachedMaster(redisMaster *mi, connection *conn) {
     /* We may also need to install the write handler as well if there is
      * pending data in the write buffers. */
     if (clientHasPendingReplies(mi->master)) {
-        if (connSetWriteHandler(mi->master->conn, sendReplyToClient)) {
+        if (connSetWriteHandler(mi->master->conn, sendReplyToClient, true)) {
             serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the writable handler: %s", strerror(errno));
             freeClientAsync(mi->master); /* Close ASAP. */
         }

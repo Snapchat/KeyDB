@@ -11,6 +11,11 @@ public:
 
     void arm(client *c) // if a client is passed, then the client is already locked
     {
+        if (m_fArmed)
+            return;
+        
+        serverAssertDebug(!GlobalLocksAcquired());
+
         if (c != nullptr)
         {
             serverAssert(!m_fArmed);

@@ -197,7 +197,7 @@ static int connSocketAccept(connection *conn, ConnectionCallbackFunc accept_hand
  * always called before and not after the read handler in a single event
  * loop.
  */
-static int connSocketSetWriteHandler(connection *conn, ConnectionCallbackFunc func, int barrier) {
+static int connSocketSetWriteHandler(connection *conn, ConnectionCallbackFunc func, int barrier, bool fThreadSafe) {
     if (func == conn->write_handler) return C_OK;
 
     conn->write_handler = func;
@@ -205,10 +205,15 @@ static int connSocketSetWriteHandler(connection *conn, ConnectionCallbackFunc fu
         conn->flags |= CONN_FLAG_WRITE_BARRIER;
     else
         conn->flags &= ~CONN_FLAG_WRITE_BARRIER;
+
+    int flags = AE_WRITABLE;
+    if (fThreadSafe)
+        flags |= AE_WRITE_THREADSAFE;
+
     if (!conn->write_handler)
         aeDeleteFileEvent(serverTL->el,conn->fd,AE_WRITABLE);
     else
-        if (aeCreateFileEvent(serverTL->el,conn->fd,AE_WRITABLE,
+        if (aeCreateFileEvent(serverTL->el,conn->fd,flags,
                     conn->type->ae_handler,conn) == AE_ERR) return C_ERR;
     return C_OK;
 }
@@ -216,15 +221,19 @@ static int connSocketSetWriteHandler(connection *conn, ConnectionCallbackFunc fu
 /* Register a read handler, to be called when the connection is readable.
  * If NULL, the existing handler is removed.
  */
-static int connSocketSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
+static int connSocketSetReadHandler(connection *conn, ConnectionCallbackFunc func, bool fThreadSafe) {
     if (func == conn->read_handler) return C_OK;
+
+    int flags = AE_READABLE;
+    if (fThreadSafe)
+        flags |= AE_READ_THREADSAFE;
 
     conn->read_handler = func;
     if (!conn->read_handler)
         aeDeleteFileEvent(serverTL->el,conn->fd,AE_READABLE);
     else
         if (aeCreateFileEvent(serverTL->el,conn->fd,
-                    AE_READABLE,conn->type->ae_handler,conn) == AE_ERR) return C_ERR;
+                    flags,conn->type->ae_handler,conn) == AE_ERR) return C_ERR;
     return C_OK;
 }
 

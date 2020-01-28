@@ -104,7 +104,7 @@ client *createClient(connection *conn, int iel) {
         connEnableTcpNoDelay(conn);
         if (cserver.tcpkeepalive)
             connKeepAlive(conn,cserver.tcpkeepalive);
-        connSetReadHandler(conn, readQueryFromClient);
+        connSetReadHandler(conn, readQueryFromClient, true);
         connSetPrivateData(conn, c);
     }
 
@@ -814,12 +814,23 @@ void addReplyBool(client *c, int b) {
  * RESP2 had it, so API-wise we have this call, that will emit the correct
  * RESP2 protocol, however for RESP3 the reply will always be just the
  * Null type "_\r\n". */
-void addReplyNullArray(client *c) {
+void addReplyNullArrayCore(client *c, bool fAsync) 
+{
     if (c->resp == 2) {
-        addReplyProto(c,"*-1\r\n",5);
+        addReplyProtoCore(c,"*-1\r\n",5,fAsync);
     } else {
-        addReplyProto(c,"_\r\n",3);
+        addReplyProtoCore(c,"_\r\n",3,fAsync);
     }
+}
+
+void addReplyNullArray(client *c)
+{
+    addReplyNullArrayCore(c, false);
+}
+
+void addReplyNullArrayAsync(client *c)
+{
+    addReplyNullArrayCore(c, true);
 }
 
 /* Create the length prefix of a bulk reply, example: $2234 */
@@ -1688,7 +1699,7 @@ void ProcessPendingAsyncWrites()
                         std::lock_guard<decltype(c->lock)> lock(c->lock);
                         serverAssert(c->casyncOpsPending > 0);
                         c->casyncOpsPending--;
-                        connSetWriteHandler(c->conn, sendReplyToClient);
+                        connSetWriteHandler(c->conn, sendReplyToClient, true);
                     }, false) == AE_ERR
                 )
                 {
@@ -1753,7 +1764,7 @@ int handleClientsWithPendingWrites(int iel) {
         /* If after the synchronous writes above we still have data to
          * output to the client, we need to install the writable handler. */
         if (clientHasPendingReplies(c)) {
-            if (connSetWriteHandlerWithBarrier(c->conn, sendReplyToClient, ae_flags) == C_ERR) 
+            if (connSetWriteHandlerWithBarrier(c->conn, sendReplyToClient, ae_flags, true) == C_ERR) 
                 freeClientAsync(c);
         }
     }
@@ -1817,7 +1828,7 @@ void unprotectClient(client *c) {
     AssertCorrectThread(c);
     if (c->flags & CLIENT_PROTECTED) {
         c->flags &= ~CLIENT_PROTECTED;
-        connSetReadHandler(c->conn,readQueryFromClient);
+        connSetReadHandler(c->conn,readQueryFromClient, true);
         if (clientHasPendingReplies(c)) clientInstallWriteHandler(c);
     }
 }
@@ -3096,6 +3107,7 @@ int processEventsWhileBlocked(int iel) {
         c->lock.unlock();
     }
     aeReleaseLock();
+    serverAssertDebug(!GlobalLocksAcquired());
     while (iterations--) {
         int events = 0;
         events += aeProcessEvents(g_pserver->rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);

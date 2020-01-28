@@ -1203,6 +1203,7 @@ void rdbPipeWriteHandlerConnRemoved(struct connection *conn) {
 void rdbPipeWriteHandler(struct connection *conn) {
     serverAssert(g_pserver->rdb_pipe_bufflen>0);
     client *slave = (client*)connGetPrivateData(conn);
+    AssertCorrectThread(slave);
     int nwritten;
     if ((nwritten = connWrite(conn, g_pserver->rdb_pipe_buff + slave->repldboff,
                               g_pserver->rdb_pipe_bufflen - slave->repldboff)) == -1)
@@ -1211,7 +1212,7 @@ void rdbPipeWriteHandler(struct connection *conn) {
             return; /* equivalent to EAGAIN */
         serverLog(LL_WARNING,"Write error sending DB to replica: %s",
             connGetLastError(conn));
-        freeClient(slave);
+        freeClientAsync(slave);
         return;
     } else {
         slave->repldboff += nwritten;
@@ -1293,11 +1294,13 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                 continue;
 
             client *slave = (client*)connGetPrivateData(conn);
+            // Normally it would be bug to talk a client conn from a different thread, but here we know nobody else will
+            //  be sending anything while in this replication state so it is OK
             if ((nwritten = connWrite(conn, g_pserver->rdb_pipe_buff, g_pserver->rdb_pipe_bufflen)) == -1) {
                 if (connGetState(conn) != CONN_STATE_CONNECTED) {
                     serverLog(LL_WARNING,"Diskless rdb transfer, write error sending DB to replica: %s",
                         connGetLastError(conn));
-                    freeClient(slave);
+                    freeClientAsync(slave);
                     g_pserver->rdb_pipe_conns[i] = NULL;
                     continue;
                 }
@@ -1311,7 +1314,9 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
              * setup write handler (and disable pipe read handler, below) */
             if (nwritten != g_pserver->rdb_pipe_bufflen) {
                 g_pserver->rdb_pipe_numconns_writing++;
-                connSetWriteHandler(conn, rdbPipeWriteHandler);
+                aePostFunction(g_pserver->rgthreadvar[slave->iel].el, [conn] {
+                    connSetWriteHandler(conn, rdbPipeWriteHandler);
+                });
             }
             stillAlive++;
         }

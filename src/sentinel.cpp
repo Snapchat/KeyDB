@@ -32,7 +32,9 @@
 #include "hiredis.h"
 #ifdef USE_OPENSSL
 #include "openssl/ssl.h"
+extern "C" {
 #include "hiredis_ssl.h"
+}
 #endif
 #include "async.h"
 

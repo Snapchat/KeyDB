@@ -129,3 +129,31 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
         }
     }
 }
+
+foreach mdl {no yes} {
+    foreach sdl {disabled swapdb} {
+        start_server {tags {"active-repl"} overrides {active-replica yes}} {
+            set master [srv 0 client]
+            $master config set repl-diskless-sync $mdl
+            set master_host [srv 0 host]
+            set master_port [srv 0 port]
+            r set masterkey foo
+            start_server {overrides {active-replica yes}} {
+                test "Active replication databases are merged, master diskless=$mdl, replica diskless=$sdl" {
+                    r config set repl-diskless-load $sdl
+                    r set slavekey bar
+                    r replicaof $master_host $master_port
+                    
+                    wait_for_condition 50 400 {
+                        [string match *state=online* [$master info]]
+                    } else {
+                        fail "Replica never came online"
+                    }
+                    
+                    assert_equal bar [r get slavekey]
+                    assert_equal foo [r get masterkey]
+                }
+            }
+        }
+    }
+}

@@ -330,19 +330,19 @@ static ssize_t connSocketSyncReadLine(connection *conn, char *ptr, ssize_t size,
 
 
 ConnectionType CT_Socket = {
-    .ae_handler = connSocketEventHandler,
-    .connect = connSocketConnect,
-    .write = connSocketWrite,
-    .read = connSocketRead,
-    .close = connSocketClose,
-    .accept = connSocketAccept,
-    .set_write_handler = connSocketSetWriteHandler,
-    .set_read_handler = connSocketSetReadHandler,
-    .get_last_error = connSocketGetLastError,
-    .blocking_connect = connSocketBlockingConnect,
-    .sync_write = connSocketSyncWrite,
-    .sync_read = connSocketSyncRead,
-    .sync_readline = connSocketSyncReadLine
+    connSocketEventHandler,
+    connSocketConnect,
+    connSocketWrite,
+    connSocketRead,
+    connSocketClose,
+    connSocketAccept,
+    connSocketSetWriteHandler,
+    connSocketSetReadHandler,
+    connSocketGetLastError,
+    connSocketBlockingConnect,
+    connSocketSyncWrite,
+    connSocketSyncRead,
+    connSocketSyncReadLine
 };
 
 

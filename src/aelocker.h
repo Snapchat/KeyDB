@@ -14,6 +14,8 @@ public:
         if (m_fArmed)
             return;
         
+        serverAssertDebug(!GlobalLocksAcquired());
+
         if (c != nullptr)
         {
             serverAssert(c->lock.fOwnLock());

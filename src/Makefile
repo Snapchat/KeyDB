@@ -33,6 +33,7 @@ OPT=$(OPTIMIZATION)
 PREFIX?=/usr/local
 INSTALL_BIN=$(PREFIX)/bin
 INSTALL=install
+PKG_CONFIG?=pkg-config
 
 # Default allocator defaults to Jemalloc if it's not an ARM
 MALLOC=libc
@@ -116,6 +117,15 @@ FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
 FINAL_LIBS=-lm -lz -latomic -L$(LICENSE_LIB_DIR) -lkey -lcrypto
 DEBUG=-g -ggdb
 
+# Linux ARM needs -latomic at linking time
+ifneq (,$(filter aarch64 armv,$(uname_M)))
+        FINAL_LIBS+=-latomic
+else
+ifneq (,$(findstring armv,$(uname_M)))
+        FINAL_LIBS+=-latomic
+endif
+endif
+
 ifeq ($(uname_S),SunOS)
 	# SunOS
         ifneq ($(@@),32bit)
@@ -134,6 +144,8 @@ else
 ifeq ($(uname_S),Darwin)
 	# Darwin
 	FINAL_LIBS+= -ldl
+	OPENSSL_CFLAGS=-I/usr/local/opt/openssl/include
+	OPENSSL_LDFLAGS=-L/usr/local/opt/openssl/lib
 else
 ifeq ($(uname_S),AIX)
         # AIX
@@ -174,6 +186,30 @@ endif
 FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/license/
 FINAL_CXXFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/rocksdb/include/ -I../deps/license
 
+# Determine systemd support and/or build preference (defaulting to auto-detection)
+BUILD_WITH_SYSTEMD=no
+# If 'USE_SYSTEMD' in the environment is neither "no" nor "yes", try to
+# auto-detect libsystemd's presence and link accordingly.
+ifneq ($(USE_SYSTEMD),no)
+	LIBSYSTEMD_PKGCONFIG := $(shell $(PKG_CONFIG) --exists libsystemd && echo $$?)
+# If libsystemd cannot be detected, continue building without support for it
+# (unless a later check tells us otherwise)
+ifeq ($(LIBSYSTEMD_PKGCONFIG),0)
+	BUILD_WITH_SYSTEMD=yes
+endif
+endif
+ifeq ($(USE_SYSTEMD),yes)
+ifneq ($(LIBSYSTEMD_PKGCONFIG),0)
+$(error USE_SYSTEMD is set to "$(USE_SYSTEMD)", but $(PKG_CONFIG) cannot find libsystemd)
+endif
+# Force building with libsystemd
+	BUILD_WITH_SYSTEMD=yes
+endif
+ifeq ($(BUILD_WITH_SYSTEMD),yes)
+	FINAL_LIBS+=$(shell $(PKG_CONFIG) --libs libsystemd)
+	FINAL_CFLAGS+= -DHAVE_LIBSYSTEMD
+endif
+
 ifeq ($(MALLOC),tcmalloc)
 	FINAL_CFLAGS+= -DUSE_TCMALLOC
 	FINAL_CXXFLAGS+= -DUSE_TCMALLOC
@@ -200,6 +236,12 @@ ifeq ($(MALLOC),memkind)
 	FINAL_LIBS := ../deps/memkind/src/.libs/libmemkind.a -lnuma $(FINAL_LIBS)
 endif
 
+ifeq ($(BUILD_TLS),yes)
+    FINAL_CFLAGS+=-DUSE_OPENSSL $(OPENSSL_CFLAGS)
+    FINAL_LDFLAGS+=$(OPENSSL_LDFLAGS)
+    FINAL_LIBS += ../deps/hiredis/libhiredis_ssl.a -lssl -lcrypto
+endif
+
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
 REDIS_CXX=$(QUIET_CC)$(CXX) $(FINAL_CXXFLAGS)
 KEYDB_AS=$(QUIET_CC) as --64 -g
@@ -222,7 +264,7 @@ endif
 
 REDIS_SERVER_NAME=keydb-pro-server
 REDIS_SENTINEL_NAME=keydb-sentinel
-REDIS_SERVER_OBJ=adlist.o quicklist.o ae.o anet.o dict.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o crc16.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o acl.o storage.o rdb-s3.o fastlock.o new.o tracking.o AsyncWorkQueue.o snapshot.o storage/rocksdb.o storage/rocksdbfactory.o storage/teststorageprovider.o keydbutils.o $(ASM_OBJ)
+REDIS_SERVER_OBJ=adlist.o quicklist.o ae.o anet.o dict.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o crc16.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o acl.o storage.o rdb-s3.o fastlock.o new.o tracking.o cron.o connection.o tls.o sha256.o AsyncWorkQueue.o snapshot.o storage/rocksdb.o storage/rocksdbfactory.o storage/teststorageprovider.o keydbutils.o $(ASM_OBJ)
 REDIS_CLI_NAME=keydb-cli
 REDIS_CLI_OBJ=anet.o adlist.o dict.o redis-cli.o redis-cli-cpphelper.o zmalloc.o release.o anet.o ae.o crc64.o siphash.o crc16.o storage-lite.o fastlock.o new.o $(ASM_OBJ)
 REDIS_BENCHMARK_NAME=keydb-benchmark
@@ -302,7 +344,6 @@ $(REDIS_BENCHMARK_NAME): $(REDIS_BENCHMARK_OBJ)
 
 dict-benchmark: dict.cpp zmalloc.cpp sds.c siphash.c
 	$(REDIS_CC) $(FINAL_CFLAGS) $^ -D DICT_BENCHMARK_MAIN -o $@ $(FINAL_LIBS)
-
 
 DEP = $(REDIS_SERVER_OBJ:%.o=%.d) $(REDIS_CLI_OBJ:%.o=%.d) $(REDIS_BENCHMARK_OBJ:%.o=%.d)
 -include $(DEP)

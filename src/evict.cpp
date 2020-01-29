@@ -474,6 +474,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
  * was freed to return back under the limit, the function returns C_ERR. */
 int freeMemoryIfNeeded(void) {
     serverAssert(GlobalLocksAcquired());
+
     /* By default replicas should ignore maxmemory
      * and just be masters exact copies. */
     if (listLength(g_pserver->masters) && g_pserver->repl_slave_ignore_maxmemory) return C_OK;

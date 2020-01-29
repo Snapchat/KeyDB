@@ -31,6 +31,7 @@
  */
 
 #include "server.h"
+#include "cron.h"
 
 void activeExpireCycleExpireFullKey(redisDb *db, const char *key) {
     robj *keyobj = createStringObject(key,sdslen(key));
@@ -119,6 +120,10 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
                 }
             }
             break;
+
+        case OBJ_CRON:
+            executeCronJobExpireHook(e.key(), val);
+            return;
 
         case OBJ_LIST:
         default:

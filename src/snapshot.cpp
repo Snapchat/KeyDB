@@ -112,6 +112,21 @@ void redisDbPersistentData::recursiveFreeSnapshots(redisDbPersistentDataSnapshot
     }
 }
 
+void redisDbPersistentData::restoreSnapshot(const redisDbPersistentDataSnapshot *psnapshot)
+{
+    serverAssert(psnapshot->m_refCount == 1);
+    serverAssert(m_spdbSnapshotHOLDER.get() == psnapshot);
+    
+    m_pdbSnapshot = psnapshot;   // if it was deleted restore it
+    size_t expectedSize = psnapshot->size();
+    dictEmpty(m_pdict, nullptr);
+    dictEmpty(m_pdictTombstone, nullptr);
+    delete m_setexpire;
+    m_setexpire = new (MALLOC_LOCAL) expireset(*psnapshot->m_setexpire);
+    endSnapshot(psnapshot);
+    serverAssert(size() == expectedSize);
+}
+
 void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psnapshot)
 {
     // Note: This function is dependent on GlobalLocksAcquried(), but rdb background saving has a weird case where

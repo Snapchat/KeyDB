@@ -229,6 +229,7 @@ public:
         m_data = decltype(m_data)();
         bits = bits_min;
         m_data.resize(1ULL << bits);
+        celem = 0;
         idxRehash = m_data.size();
     }
     

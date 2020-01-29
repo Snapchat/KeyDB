@@ -1129,6 +1129,8 @@ void putSlaveOnline(client *replica) {
 }
 
 void sendBulkToSlave(connection *conn) {
+    serverAssert(GlobalLocksAcquired());
+    
     client *replica = (client*)connGetPrivateData(conn);
     serverAssert(FCorrectThread(replica));
     char buf[PROTO_IOBUF_LEN];
@@ -1192,9 +1194,11 @@ void rdbPipeWriteHandlerConnRemoved(struct connection *conn) {
     g_pserver->rdb_pipe_numconns_writing--;
     /* if there are no more writes for now for this conn, or write error: */
     if (g_pserver->rdb_pipe_numconns_writing == 0) {
-        if (aeCreateFileEvent(serverTL->el, g_pserver->rdb_pipe_read, AE_READABLE, rdbPipeReadHandler,NULL) == AE_ERR) {
-            serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
-        }
+        aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, []{
+            if (aeCreateFileEvent(serverTL->el, g_pserver->rdb_pipe_read, AE_READABLE, rdbPipeReadHandler,NULL) == AE_ERR) {
+                serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
+            }
+        });
     }
 }
 
@@ -1205,6 +1209,12 @@ void rdbPipeWriteHandler(struct connection *conn) {
     client *slave = (client*)connGetPrivateData(conn);
     AssertCorrectThread(slave);
     int nwritten;
+    
+    if (slave->flags & CLIENT_CLOSE_ASAP) {
+        rdbPipeWriteHandlerConnRemoved(conn);
+        return;
+    }
+    
     if ((nwritten = connWrite(conn, g_pserver->rdb_pipe_buff + slave->repldboff,
                               g_pserver->rdb_pipe_bufflen - slave->repldboff)) == -1)
     {
@@ -1246,6 +1256,9 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
     UNUSED(mask);
     UNUSED(clientData);
     UNUSED(eventLoop);
+
+    serverAssert(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el == eventLoop);
+
     int i;
     if (!g_pserver->rdb_pipe_buff)
         g_pserver->rdb_pipe_buff = (char*)zmalloc(PROTO_IOBUF_LEN);
@@ -1262,7 +1275,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                 if (!conn)
                     continue;
                 client *slave = (client*)connGetPrivateData(conn);
-                freeClient(slave);
+                freeClientAsync(slave);
                 g_pserver->rdb_pipe_conns[i] = NULL;
             }
             killRDBChild();
@@ -1294,6 +1307,10 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                 continue;
 
             client *slave = (client*)connGetPrivateData(conn);
+            serverAssert(slave->conn == conn);
+            if (slave->flags & CLIENT_CLOSE_ASAP)
+                continue;
+            
             // Normally it would be bug to talk a client conn from a different thread, but here we know nobody else will
             //  be sending anything while in this replication state so it is OK
             if ((nwritten = connWrite(conn, g_pserver->rdb_pipe_buff, g_pserver->rdb_pipe_bufflen)) == -1) {
@@ -1314,8 +1331,12 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
              * setup write handler (and disable pipe read handler, below) */
             if (nwritten != g_pserver->rdb_pipe_bufflen) {
                 g_pserver->rdb_pipe_numconns_writing++;
-                aePostFunction(g_pserver->rgthreadvar[slave->iel].el, [conn] {
-                    connSetWriteHandler(conn, rdbPipeWriteHandler);
+                slave->casyncOpsPending++;
+                aePostFunction(g_pserver->rgthreadvar[slave->iel].el, [slave] {
+                    slave->casyncOpsPending--;
+                    if (slave->flags & CLIENT_CLOSE_ASAP)
+                        return;
+                    connSetWriteHandler(slave->conn, rdbPipeWriteHandler);
                 });
             }
             stillAlive++;

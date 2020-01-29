@@ -105,7 +105,7 @@ void tlsInit(void) {
     pending_list = listCreate();
 
     /* Server configuration */
-    server.tls_auth_clients = 1;    /* Secure by default */
+    g_pserver->tls_auth_clients = 1;    /* Secure by default */
 }
 
 /* Attempt to configure/reconfigure TLS. This operation is atomic and will
@@ -114,6 +114,7 @@ void tlsInit(void) {
 int tlsConfigure(redisTLSContextConfig *ctx_config) {
     char errbuf[256];
     SSL_CTX *ctx = NULL;
+    int protocols;
 
     if (!ctx_config->cert_file) {
         serverLog(LL_WARNING, "No tls-cert-file configured!");
@@ -139,7 +140,7 @@ int tlsConfigure(redisTLSContextConfig *ctx_config) {
     SSL_CTX_set_options(ctx, SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS);
 #endif
 
-    int protocols = parseProtocolsConfig(ctx_config->protocols);
+    protocols = parseProtocolsConfig(ctx_config->protocols);
     if (protocols == -1) goto error;
 
     if (!(protocols & REDIS_TLS_PROTO_TLSv1))
@@ -242,7 +243,7 @@ error:
 #define TLSCONN_DEBUG(fmt, ...)
 #endif
 
-ConnectionType CT_TLS;
+extern ConnectionType CT_TLS;
 
 /* Normal socket connections have a simple events/handler correlation.
  *
@@ -260,6 +261,7 @@ ConnectionType CT_TLS;
  */
 
 typedef enum {
+    WANT_INVALID = 0,
     WANT_READ = 1,
     WANT_WRITE
 } WantIOType;
@@ -277,7 +279,7 @@ typedef struct tls_connection {
 } tls_connection;
 
 connection *connCreateTLS(void) {
-    tls_connection *conn = zcalloc(sizeof(tls_connection));
+    tls_connection *conn = (tls_connection*)zcalloc(sizeof(tls_connection), MALLOC_LOCAL);
     conn->c.type = &CT_TLS;
     conn->c.fd = -1;
     conn->ssl = SSL_new(redis_tls_ctx);
@@ -327,7 +329,7 @@ static int handleSSLReturnCode(tls_connection *conn, int ret_value, WantIOType *
                 /* Error! */
                 conn->c.last_errno = 0;
                 if (conn->ssl_error) zfree(conn->ssl_error);
-                conn->ssl_error = zmalloc(512);
+                conn->ssl_error = (char*)zmalloc(512);
                 ERR_error_string_n(ERR_get_error(), conn->ssl_error, 512);
                 break;
         }
@@ -339,17 +341,17 @@ static int handleSSLReturnCode(tls_connection *conn, int ret_value, WantIOType *
 }
 
 void registerSSLEvent(tls_connection *conn, WantIOType want) {
-    int mask = aeGetFileEvents(server.el, conn->c.fd);
+    int mask = aeGetFileEvents(serverTL->el, conn->c.fd);
 
     switch (want) {
         case WANT_READ:
-            if (mask & AE_WRITABLE) aeDeleteFileEvent(server.el, conn->c.fd, AE_WRITABLE);
-            if (!(mask & AE_READABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE,
+            if (mask & AE_WRITABLE) aeDeleteFileEvent(serverTL->el, conn->c.fd, AE_WRITABLE);
+            if (!(mask & AE_READABLE)) aeCreateFileEvent(serverTL->el, conn->c.fd, AE_READABLE,
                         tlsEventHandler, conn);
             break;
         case WANT_WRITE:
-            if (mask & AE_READABLE) aeDeleteFileEvent(server.el, conn->c.fd, AE_READABLE);
-            if (!(mask & AE_WRITABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE,
+            if (mask & AE_READABLE) aeDeleteFileEvent(serverTL->el, conn->c.fd, AE_READABLE);
+            if (!(mask & AE_WRITABLE)) aeCreateFileEvent(serverTL->el, conn->c.fd, AE_WRITABLE,
                         tlsEventHandler, conn);
             break;
         default:
@@ -359,19 +361,19 @@ void registerSSLEvent(tls_connection *conn, WantIOType want) {
 }
 
 void updateSSLEvent(tls_connection *conn) {
-    int mask = aeGetFileEvents(server.el, conn->c.fd);
+    int mask = aeGetFileEvents(serverTL->el, conn->c.fd);
     int need_read = conn->c.read_handler || (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ);
     int need_write = conn->c.write_handler || (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE);
 
     if (need_read && !(mask & AE_READABLE))
-        aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE, tlsEventHandler, conn);
+        aeCreateFileEvent(serverTL->el, conn->c.fd, AE_READABLE, tlsEventHandler, conn);
     if (!need_read && (mask & AE_READABLE))
-        aeDeleteFileEvent(server.el, conn->c.fd, AE_READABLE);
+        aeDeleteFileEvent(serverTL->el, conn->c.fd, AE_READABLE);
 
     if (need_write && !(mask & AE_WRITABLE))
-        aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE, tlsEventHandler, conn);
+        aeCreateFileEvent(serverTL->el, conn->c.fd, AE_WRITABLE, tlsEventHandler, conn);
     if (!need_write && (mask & AE_WRITABLE))
-        aeDeleteFileEvent(server.el, conn->c.fd, AE_WRITABLE);
+        aeDeleteFileEvent(serverTL->el, conn->c.fd, AE_WRITABLE);
 }
 
 static void tlsHandleEvent(tls_connection *conn, int mask) {
@@ -395,7 +397,7 @@ static void tlsHandleEvent(tls_connection *conn, int mask) {
                 }
                 ret = SSL_connect(conn->ssl);
                 if (ret <= 0) {
-                    WantIOType want = 0;
+                    WantIOType want = WANT_INVALID;
                     if (!handleSSLReturnCode(conn, ret, &want)) {
                         registerSSLEvent(conn, want);
 
@@ -419,7 +421,7 @@ static void tlsHandleEvent(tls_connection *conn, int mask) {
         case CONN_STATE_ACCEPTING:
             ret = SSL_accept(conn->ssl);
             if (ret <= 0) {
-                WantIOType want = 0;
+                WantIOType want = WANT_INVALID;
                 if (!handleSSLReturnCode(conn, ret, &want)) {
                     /* Avoid hitting UpdateSSLEvent, which knows nothing
                      * of what SSL_connect() wants and instead looks at our
@@ -503,7 +505,7 @@ static void tlsHandleEvent(tls_connection *conn, int mask) {
 static void tlsEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask) {
     UNUSED(el);
     UNUSED(fd);
-    tls_connection *conn = clientData;
+    tls_connection *conn = (tls_connection*)clientData;
     tlsHandleEvent(conn, mask);
 }
 
@@ -540,7 +542,7 @@ static int connTLSAccept(connection *_conn, ConnectionCallbackFunc accept_handle
     ret = SSL_accept(conn->ssl);
 
     if (ret <= 0) {
-        WantIOType want = 0;
+        WantIOType want = WANT_INVALID;
         if (!handleSSLReturnCode(conn, ret, &want)) {
             registerSSLEvent(conn, want);   /* We'll fire back */
             return C_OK;
@@ -581,7 +583,7 @@ static int connTLSWrite(connection *conn_, const void *data, size_t data_len) {
     ret = SSL_write(conn->ssl, data, data_len);
 
     if (ret <= 0) {
-        WantIOType want = 0;
+        WantIOType want = WANT_INVALID;
         if (!(ssl_err = handleSSLReturnCode(conn, ret, &want))) {
             if (want == WANT_READ) conn->flags |= TLS_CONN_FLAG_WRITE_WANT_READ;
             updateSSLEvent(conn);
@@ -611,7 +613,7 @@ static int connTLSRead(connection *conn_, void *buf, size_t buf_len) {
     ERR_clear_error();
     ret = SSL_read(conn->ssl, buf, buf_len);
     if (ret <= 0) {
-        WantIOType want = 0;
+        WantIOType want = WANT_INVALID;
         if (!(ssl_err = handleSSLReturnCode(conn, ret, &want))) {
             if (want == WANT_WRITE) conn->flags |= TLS_CONN_FLAG_READ_WANT_WRITE;
             updateSSLEvent(conn);
@@ -640,7 +642,7 @@ static const char *connTLSGetLastError(connection *conn_) {
     return NULL;
 }
 
-int connTLSSetWriteHandler(connection *conn, ConnectionCallbackFunc func, int barrier) {
+int connTLSSetWriteHandler(connection *conn, ConnectionCallbackFunc func, int barrier, bool fThreadSafe) {
     conn->write_handler = func;
     if (barrier)
         conn->flags |= CONN_FLAG_WRITE_BARRIER;
@@ -650,7 +652,7 @@ int connTLSSetWriteHandler(connection *conn, ConnectionCallbackFunc func, int ba
     return C_OK;
 }
 
-int connTLSSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
+int connTLSSetReadHandler(connection *conn, ConnectionCallbackFunc func, bool fThreadSafe) {
     conn->read_handler = func;
     updateSSLEvent((tls_connection *) conn);
     return C_OK;
@@ -692,7 +694,7 @@ static int connTLSBlockingConnect(connection *conn_, const char *addr, int port,
     return C_OK;
 }
 
-static ssize_t connTLSSyncWrite(connection *conn_, char *ptr, ssize_t size, long long timeout) {
+static ssize_t connTLSSyncWrite(connection *conn_, const char *ptr, ssize_t size, long long timeout) {
     tls_connection *conn = (tls_connection *) conn_;
 
     setBlockingTimeout(conn, timeout);
@@ -745,19 +747,19 @@ exit:
 }
 
 ConnectionType CT_TLS = {
-    .ae_handler = tlsEventHandler,
-    .accept = connTLSAccept,
-    .connect = connTLSConnect,
-    .blocking_connect = connTLSBlockingConnect,
-    .read = connTLSRead,
-    .write = connTLSWrite,
-    .close = connTLSClose,
-    .set_write_handler = connTLSSetWriteHandler,
-    .set_read_handler = connTLSSetReadHandler,
-    .get_last_error = connTLSGetLastError,
-    .sync_write = connTLSSyncWrite,
-    .sync_read = connTLSSyncRead,
-    .sync_readline = connTLSSyncReadLine,
+    tlsEventHandler,
+    connTLSConnect,
+    connTLSWrite,
+    connTLSRead,
+    connTLSClose,
+    connTLSAccept,
+    connTLSSetWriteHandler,
+    connTLSSetReadHandler,
+    connTLSGetLastError,
+    connTLSBlockingConnect,
+    connTLSSyncWrite,
+    connTLSSyncRead,
+    connTLSSyncReadLine,
 };
 
 int tlsHasPendingData() {
@@ -772,7 +774,7 @@ void tlsProcessPendingData() {
 
     listRewind(pending_list,&li);
     while((ln = listNext(&li))) {
-        tls_connection *conn = listNodeValue(ln);
+        tls_connection *conn = (tls_connection*)listNodeValue(ln);
         tlsHandleEvent(conn, AE_READABLE);
     }
 }

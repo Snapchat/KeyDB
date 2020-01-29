@@ -130,6 +130,7 @@ struct aeCommand
     void *clientData;
     aeCommandControl *pctl;
 };
+static_assert(sizeof(aeCommand) <= PIPE_BUF);
 
 void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
 {
@@ -296,7 +297,10 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
     }
 
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
-    AE_ASSERT(size == sizeof(cmd));
+    AE_ASSERT(!size || size == sizeof(cmd));
+    if (size == 0)
+        return AE_ERR;
+    
     int ret = AE_OK;
     if (fSynchronous)
     {

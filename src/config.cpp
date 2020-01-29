@@ -123,7 +123,7 @@ clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
  * rewrite. */
 typedef struct boolConfigData {
     int *config; /* The pointer to the server config this value is stored in */
-    const int default_value; /* The default value of the config on rewrite */
+    int default_value; /* The default value of the config on rewrite */
     int (*is_valid_fn)(int val, const char **err); /* Optional function to check validity of new value (generic doc above) */
     int (*update_fn)(int val, int prev, const char **err); /* Optional function to apply new value at runtime (generic doc above) */
 } boolConfigData;
@@ -140,7 +140,7 @@ typedef struct stringConfigData {
 typedef struct enumConfigData {
     int *config; /* The pointer to the server config this value is stored in */
     configEnum *enum_value; /* The underlying enum type this data represents */
-    const int default_value; /* The default value of the config on rewrite */
+    int default_value; /* The default value of the config on rewrite */
     int (*is_valid_fn)(int val, const char **err); /* Optional function to check validity of new value (generic doc above) */
     int (*update_fn)(int val, int prev, const char **err); /* Optional function to apply new value at runtime (generic doc above) */
 } enumConfigData;
@@ -162,7 +162,7 @@ typedef struct numericConfigData {
     int is_memory; /* Indicates if this value can be loaded as a memory value */
     long long lower_bound; /* The lower bound of this numeric value */
     long long upper_bound; /* The upper bound of this numeric value */
-    const long long default_value; /* The default value of the config on rewrite */
+    long long default_value; /* The default value of the config on rewrite */
     int (*is_valid_fn)(long long val, const char **err); /* Optional function to check validity of new value (generic doc above) */
     int (*update_fn)(long long val, long long prev, const char **err); /* Optional function to apply new value at runtime (generic doc above) */
     numericType numeric_type; /* An enum indicating the type of this value */
@@ -1664,15 +1664,17 @@ static void boolConfigRewrite(typeData data, const char *name, struct rewriteCon
     rewriteConfigYesNoOption(state, name,*(data.yesno.config), data.yesno.default_value);
 }
 
-#define createBoolConfig(name, alias, modifiable, config_addr, default, is_valid, update) { \
-    embedCommonConfig(name, alias, modifiable) \
-    {boolConfigInit, boolConfigLoad, boolConfigSet, boolConfigGet, boolConfigRewrite}, \
-    { { /* .data.yesno */ \
-        &(config_addr), \
-        (default), \
-        (is_valid), \
-        (update), \
-    } } \
+constexpr standardConfig createBoolConfig(const char *name, const char *alias, int modifiable, int &config_addr, int defaultValue, int (*is_valid)(int val, const char **err), int (*update)(int val, int prev, const char **err))
+{
+    standardConfig conf = {
+        embedCommonConfig(name, alias, modifiable)
+        { boolConfigInit, boolConfigLoad, boolConfigSet, boolConfigGet, boolConfigRewrite }
+    };
+    conf.data.yesno.config = &config_addr;
+    conf.data.yesno.default_value = defaultValue;
+    conf.data.yesno.is_valid_fn = is_valid;
+    conf.data.yesno.update_fn = update;
+    return conf;
 }
 
 /* String Configs */
@@ -1729,16 +1731,19 @@ static void stringConfigRewrite(typeData data, const char *name, struct rewriteC
 #define ALLOW_EMPTY_STRING 0
 #define EMPTY_STRING_IS_NULL 1
 
-#define createStringConfig(name, alias, modifiable, empty_to_null, config_addr, default, is_valid, update) { \
-    embedCommonConfig(name, alias, modifiable) \
-    embedConfigInterface(stringConfigInit, stringConfigLoad, stringConfigSet, stringConfigGet, stringConfigRewrite) \
-    { .string = { \
-        &(config_addr), \
-        (default), \
-        (is_valid), \
-        (update), \
-        (empty_to_null), \
-    } } \
+constexpr standardConfig createStringConfig(const char *name, const char *alias, int modifiable, int empty_to_null, char *&config_addr, const char *defaultValue, int (*is_valid)(char*,const char**), int (*update)(char*,char*,const char**)) {
+    standardConfig conf = {
+        embedCommonConfig(name, alias, modifiable)
+        embedConfigInterface(stringConfigInit, stringConfigLoad, stringConfigSet, stringConfigGet, stringConfigRewrite)
+    };
+    conf.data.string = {
+        &(config_addr),
+        (defaultValue),
+        (is_valid),
+        (update),
+        (empty_to_null),
+    };
+    return conf;
 }
 
 /* Enum configs */
@@ -1800,16 +1805,20 @@ static void configEnumRewrite(typeData data, const char *name, struct rewriteCon
     rewriteConfigEnumOption(state, name,*(data.enumd.config), data.enumd.enum_value, data.enumd.default_value);
 }
 
-#define createEnumConfig(name, alias, modifiable, enum, config_addr, default, is_valid, update) { \
-    embedCommonConfig(name, alias, modifiable) \
-    embedConfigInterface(configEnumInit, configEnumLoad, configEnumSet, configEnumGet, configEnumRewrite) \
-    { .enumd = { \
-        &(config_addr), \
-        (enum), \
-        (default), \
-        (is_valid), \
-        (update), \
-    } } \
+constexpr standardConfig createEnumConfig(const char *name, const char *alias, int modifiable, configEnum *enumVal, int &config_addr, int defaultValue, int (*is_valid)(int,const char**), int (*update)(int,int,const char**)) {
+    standardConfig c = {
+        embedCommonConfig(name, alias, modifiable)
+        embedConfigInterface(configEnumInit, configEnumLoad, configEnumSet, configEnumGet, configEnumRewrite)
+    };
+    c.data.enumd = {
+        &(config_addr),
+        (enumVal),
+        (defaultValue),
+        (is_valid),
+        (update),
+    };
+
+    return c;
 }
 
 /* Gets a 'long long val' and sets it into the union, using a macro to get
@@ -1981,85 +1990,90 @@ static void numericConfigRewrite(typeData data, const char *name, struct rewrite
 #define INTEGER_CONFIG 0
 #define MEMORY_CONFIG 1
 
-#define embedCommonNumericalConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) { \
-    embedCommonConfig(name, alias, modifiable) \
-    embedConfigInterface(numericConfigInit, numericConfigLoad, numericConfigSet, numericConfigGet, numericConfigRewrite) \
-    { .numeric = { \
-        .is_memory = (memory), \
-        .lower_bound = (lower), \
-        .upper_bound = (upper), \
-        .default_value = (default), \
-        .is_valid_fn = (is_valid), \
-        .update_fn = (update), 
-
-#define createIntConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-    embedCommonNumericalConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-        .numeric_type = NUMERIC_TYPE_INT, \
-        .config { .i = &(config_addr) } \
-    } } \
+constexpr standardConfig embedCommonNumericalConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    standardConfig conf = {
+        embedCommonConfig(name, alias, modifiable)
+        embedConfigInterface(numericConfigInit, numericConfigLoad, numericConfigSet, numericConfigGet, numericConfigRewrite)
+    };
+    conf.data.numeric.is_memory = (memory);
+    conf.data.numeric.lower_bound = (lower);
+    conf.data.numeric.upper_bound = (upper);
+    conf.data.numeric.default_value = (defaultValue);
+    conf.data.numeric.is_valid_fn = (is_valid);
+    conf.data.numeric.update_fn = (update);
+    return conf;
 }
 
-#define createUIntConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-    embedCommonNumericalConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-        .numeric_type = NUMERIC_TYPE_UINT, \
-        .config { .ui = &(config_addr) } \
-    } } \
+constexpr standardConfig createIntConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, int &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**))
+{
+    standardConfig conf =  embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+    conf.data.numeric.numeric_type = NUMERIC_TYPE_INT;
+    conf.data.numeric.config.i = &config_addr;
+    return conf;
 }
 
-#define createLongConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-    embedCommonNumericalConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-        .numeric_type = NUMERIC_TYPE_LONG, \
-        .config { .l = &(config_addr) } \
-    } } \
+constexpr standardConfig createUIntConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, unsigned int &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**))
+{
+    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+    conf.data.numeric.numeric_type = NUMERIC_TYPE_UINT;
+    conf.data.numeric.config.ui = &(config_addr);
+    return conf;
 }
 
-#define createULongConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-    embedCommonNumericalConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-        .numeric_type = NUMERIC_TYPE_ULONG, \
-        .config { .ul = &(config_addr) } \
-    } } \
+constexpr standardConfig createLongConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+    conf.data.numeric.numeric_type = NUMERIC_TYPE_LONG;
+    conf.data.numeric.config.l = &(config_addr);
+    return conf;
 }
 
-#define createLongLongConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-    embedCommonNumericalConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-        .numeric_type = NUMERIC_TYPE_LONG_LONG, \
-        .config { .ll = &(config_addr) } \
-    } } \
+constexpr standardConfig createULongConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, unsigned long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+    conf.data.numeric.numeric_type = NUMERIC_TYPE_ULONG;
+    conf.data.numeric.config.ul = &(config_addr);
+    return conf;
 }
 
-#define createULongLongConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-    embedCommonNumericalConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-        .numeric_type = NUMERIC_TYPE_ULONG_LONG, \
-        .config { .ull = &(config_addr) } \
-    } } \
+constexpr standardConfig createLongLongConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, long long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+    conf.data.numeric.numeric_type = NUMERIC_TYPE_LONG_LONG;
+    conf.data.numeric.config.ll = &(config_addr);
+    return conf;
 }
 
-#define createSizeTConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-    embedCommonNumericalConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-        .numeric_type = NUMERIC_TYPE_SIZE_T, \
-        .config { .st = &(config_addr) } \
-    } } \
+constexpr standardConfig createULongLongConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, unsigned long long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+    conf.data.numeric.numeric_type = NUMERIC_TYPE_ULONG_LONG;
+    conf.data.numeric.config.ull = &(config_addr);
+    return conf;
 }
 
-#define createSSizeTConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-    embedCommonNumericalConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-        .numeric_type = NUMERIC_TYPE_SSIZE_T, \
-        .config { .sst = &(config_addr) } \
-    } } \
+constexpr standardConfig createSizeTConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, size_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+    conf.data.numeric.numeric_type = NUMERIC_TYPE_SIZE_T;
+    conf.data.numeric.config.st = &(config_addr);
+    return conf;
 }
 
-#define createTimeTConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-    embedCommonNumericalConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-        .numeric_type = NUMERIC_TYPE_TIME_T, \
-        .config { .tt = &(config_addr) } \
-    } } \
+constexpr standardConfig createSSizeTConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, ssize_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+    conf.data.numeric.numeric_type = NUMERIC_TYPE_SSIZE_T;
+    conf.data.numeric.config.sst = &(config_addr);
+    return conf;
 }
 
-#define createOffTConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-    embedCommonNumericalConfig(name, alias, modifiable, lower, upper, config_addr, default, memory, is_valid, update) \
-        .numeric_type = NUMERIC_TYPE_OFF_T, \
-        .config { .ot = &(config_addr) } \
-    } } \
+constexpr standardConfig createTimeTConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, time_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+    conf.data.numeric.numeric_type = NUMERIC_TYPE_TIME_T;
+    conf.data.numeric.config.tt = &(config_addr);
+    return conf;
+}
+
+constexpr standardConfig createOffTConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, off_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+    conf.data.numeric.numeric_type = NUMERIC_TYPE_OFF_T;
+    conf.data.numeric.config.ot = &(config_addr);
+    return conf;
 }
 
 static int isValidActiveDefrag(int val, const char **err) {

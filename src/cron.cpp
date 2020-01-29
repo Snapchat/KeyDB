@@ -110,12 +110,20 @@ void executeCronJobExpireHook(const char *key, robj *o)
         if (job->startTime < (uint64_t)g_pserver->mstime)
         {
             // If we are more than one interval in the past then fast forward to
-            //  the first interval still in the future
-            auto delta = g_pserver->mstime - job->startTime;
-            auto multiple = (delta / job->interval)+1;
-            job->startTime += job->interval * multiple;
+            //  the first interval still in the future.  If startTime wasn't zero align
+            //  this to the original startTime, if it was zero align to now
+            if (job->startTime == job->interval)
+            {   // startTime was 0
+                job->startTime = g_pserver->mstime + job->interval;
+            }
+            else
+            {
+                auto delta = g_pserver->mstime - job->startTime;
+                auto multiple = (delta / job->interval)+1;
+                job->startTime += job->interval * multiple;
+            }
         }
-        setExpire(cFake, cFake->db, keyobj, keyobj, job->startTime + job->interval);
+        setExpire(cFake, cFake->db, keyobj, keyobj, job->startTime);
     }
 
     notifyKeyspaceEvent(NOTIFY_KEYEVENT, "CRON Executed", keyobj, dbId);

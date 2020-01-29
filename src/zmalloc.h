@@ -86,7 +86,11 @@
 extern "C" {
 #endif
 
+#ifdef __cplusplus
+void *zmalloc(size_t size, enum MALLOC_CLASS mclass = MALLOC_LOCAL);
+#else
 void *zmalloc(size_t size, enum MALLOC_CLASS mclass);
+#endif
 void *zcalloc(size_t size, enum MALLOC_CLASS mclass);
 void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS mclass);
 void zfree(const void *ptr);
@@ -95,6 +99,8 @@ size_t zmalloc_used_memory(void);
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t));
 size_t zmalloc_get_rss(void);
 int zmalloc_get_allocator_info(size_t *allocated, size_t *active, size_t *resident);
+void set_jemalloc_bg_thread(int enable);
+int jemalloc_purge();
 size_t zmalloc_get_private_dirty(long pid);
 size_t zmalloc_get_smap_bytes_by_field(const char *field, long pid);
 size_t zmalloc_get_memory_size(void);

@@ -91,10 +91,13 @@
 #define RDB_TYPE_HASH_ZIPLIST  13
 #define RDB_TYPE_LIST_QUICKLIST 14
 #define RDB_TYPE_STREAM_LISTPACKS 15
+
+/* KeyDB Specific Object Types */
+#define RDB_TYPE_CRON 64
 /* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdbIsObjectType() BELOW */
 
 /* Test if a type is an object type. */
-#define rdbIsObjectType(t) ((t >= 0 && t <= 7) || (t >= 9 && t <= 15))
+#define rdbIsObjectType(t) ((t >= 0 && t <= 7) || (t >= 9 && t <= 15) || (t == RDB_TYPE_CRON))
 
 /* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType). */
 #define RDB_OPCODE_MODULE_AUX 247   /* Module auxiliary data. */
@@ -121,8 +124,10 @@
 #define RDB_LOAD_PLAIN  (1<<1)
 #define RDB_LOAD_SDS    (1<<2)
 
-#define RDB_SAVE_NONE 0
-#define RDB_SAVE_AOF_PREAMBLE (1<<0)
+/* flags on the purpose of rdb save or load */
+#define RDBFLAGS_NONE 0
+#define RDBFLAGS_AOF_PREAMBLE (1<<0)
+#define RDBFLAGS_REPLICATION (1<<1)
 
 int rdbSaveType(rio *rdb, unsigned char type);
 int rdbLoadType(rio *rdb);
@@ -135,20 +140,22 @@ uint64_t rdbLoadLen(rio *rdb, int *isencoded);
 int rdbLoadLenByRef(rio *rdb, int *isencoded, uint64_t *lenptr);
 int rdbSaveObjectType(rio *rdb, robj_roptr o);
 int rdbLoadObjectType(rio *rdb);
-int rdbLoad(rdbSaveInfo *rsi);
-int rdbLoadFile(const char *filename, rdbSaveInfo *rsi);
+int rdbLoad(rdbSaveInfo *rsi, int rdbflags);
+int rdbLoadFile(const char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbSaveBackground(rdbSaveInfo *rsi);
 int rdbSaveToSlavesSockets(rdbSaveInfo *rsi);
-void rdbRemoveTempFile(int childpid);
+void rdbRemoveTempFile(pid_t childpid);
 int rdbSave(const redisDbPersistentDataSnapshot **rgpdb, rdbSaveInfo *rsi);
 int rdbSaveFile(char *filename, const redisDbPersistentDataSnapshot **rgpdb, rdbSaveInfo *rsi);
 int rdbSaveFp(FILE *pf, const redisDbPersistentDataSnapshot **rgpdb, rdbSaveInfo *rsi);
 int rdbSaveS3(char *path, const redisDbPersistentDataSnapshot **rgpdb, rdbSaveInfo *rsi);
-int rdbLoadS3(char *path, rdbSaveInfo *rsi);
+int rdbLoadS3(char *path, rdbSaveInfo *rsi, int rdbflags);
 ssize_t rdbSaveObject(rio *rdb, robj_roptr o, robj_roptr key);
 size_t rdbSavedObjectLen(robj *o);
 robj *rdbLoadObject(int type, rio *rdb, robj *key, uint64_t mvcc_tstamp);
-void backgroundSaveDoneHandler(int exitcode, int bysignal);
+void backgroundSaveDoneHandler(int exitcode, bool fCancelled);
+int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime);
+ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt);
 robj *rdbLoadStringObject(rio *rdb);
 ssize_t rdbSaveStringObject(rio *rdb, robj_roptr obj);
 ssize_t rdbSaveRawString(rio *rdb, const unsigned char *s, size_t len);
@@ -157,7 +164,8 @@ int rdbSaveBinaryDoubleValue(rio *rdb, double val);
 int rdbLoadBinaryDoubleValue(rio *rdb, double *val);
 int rdbSaveBinaryFloatValue(rio *rdb, float val);
 int rdbLoadBinaryFloatValue(rio *rdb, float *val);
-int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof);
+int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
+int rdbSaveRio(rio *rdb, const redisDbPersistentDataSnapshot **rgpdb, int *error, int flags, rdbSaveInfo *rsi);
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
 
 #endif

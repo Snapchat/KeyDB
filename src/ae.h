@@ -124,6 +124,7 @@ typedef struct aeEventLoop {
     int fdCmdWrite;
     int fdCmdRead;
     int cevents;
+    int flags;
 } aeEventLoop;
 
 /* Prototypes */
@@ -157,6 +158,7 @@ void aeSetBeforeSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *beforesleep
 void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *aftersleep, int flags);
 int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
+void aeSetDontWait(aeEventLoop *eventLoop, int noWait);
 
 void aeAcquireLock();
 int aeTryAcquireLock(int fWeak);

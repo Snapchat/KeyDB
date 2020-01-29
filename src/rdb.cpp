@@ -2641,9 +2641,11 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
             g_pserver->rdb_child_pid = childpid;
             g_pserver->rdb_child_type = RDB_CHILD_TYPE_SOCKET;
             close(g_pserver->rdb_pipe_write); /* close write in parent so that it can detect the close on the child. */
-            if (aeCreateFileEvent(serverTL->el, g_pserver->rdb_pipe_read, AE_READABLE, rdbPipeReadHandler,NULL) == AE_ERR) {
-                serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
-            }
+            aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, []{
+                if (aeCreateFileEvent(serverTL->el, g_pserver->rdb_pipe_read, AE_READABLE, rdbPipeReadHandler,NULL) == AE_ERR) {
+                    serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
+                }
+            });
         }
         return (childpid == -1) ? C_ERR : C_OK;
     }

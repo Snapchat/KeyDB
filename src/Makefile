@@ -230,6 +230,7 @@ endif
 
 ifeq ($(BUILD_TLS),yes)
     FINAL_CFLAGS+=-DUSE_OPENSSL $(OPENSSL_CFLAGS)
+	FINAL_CXXFLAGS+=-DUSE_OPENSSL $(OPENSSL_CFLAGS)
     FINAL_LDFLAGS+=$(OPENSSL_LDFLAGS)
     FINAL_LIBS += ../deps/hiredis/libhiredis_ssl.a -lssl -lcrypto
 endif

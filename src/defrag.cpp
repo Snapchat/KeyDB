@@ -373,7 +373,7 @@ long activeDefragSdsListAndDict(list *l, dict *d, int dict_val_type) {
             if ((newele = activeDefragStringOb(ele, &defragged)))
                 de->v.val = newele, defragged++;
         } else if (dict_val_type == DEFRAG_SDS_DICT_VAL_VOID_PTR) {
-            void *newptr, *ptr = ln->value;
+            void *newptr, *ptr = dictGetVal(de);
             if ((newptr = activeDefragAlloc(ptr)))
                 ln->value = newptr, defragged++;
         }
@@ -933,10 +933,12 @@ int defragLaterItem(robj *ob, unsigned long *cursor, long long endtime) {
     return 0;
 }
 
+/* static variables serving defragLaterStep to continue scanning a key from were we stopped last time. */
+static sds defrag_later_current_key = NULL;
+static unsigned long defrag_later_cursor = 0;
+
 /* returns 0 if no more work needs to be been done, and 1 if time is up and more work is needed. */
 int defragLaterStep(redisDb *db, long long endtime) {
-    static sds current_key = NULL;
-    static unsigned long cursor = 0;
     unsigned int iterations = 0;
     unsigned long long prev_defragged = g_pserver->stat_active_defrag_hits;
     unsigned long long prev_scanned = g_pserver->stat_active_defrag_scanned;
@@ -944,16 +946,15 @@ int defragLaterStep(redisDb *db, long long endtime) {
 
     do {
         /* if we're not continuing a scan from the last call or loop, start a new one */
-        if (!cursor) {
+        if (!defrag_later_cursor) {
             listNode *head = listFirst(db->defrag_later);
 
             /* Move on to next key */
-            if (current_key) {
-                serverAssert(current_key == head->value);
-                sdsfree((sds)head->value);
+            if (defrag_later_current_key) {
+                serverAssert(defrag_later_current_key == head->value);
                 listDelNode(db->defrag_later, head);
-                cursor = 0;
-                current_key = NULL;
+                defrag_later_cursor = 0;
+                defrag_later_current_key = NULL;
             }
 
             /* stop if we reached the last one. */
@@ -962,21 +963,21 @@ int defragLaterStep(redisDb *db, long long endtime) {
                 return 0;
 
             /* start a new key */
-            current_key = (sds)head->value;
-            cursor = 0;
+            defrag_later_current_key = (sds)head->value;
+            defrag_later_cursor = 0;
         }
 
         /* each time we enter this function we need to fetch the key from the dict again (if it still exists) */
-        robj *o = db->find(current_key);
+        robj *o = db->find(defrag_later_current_key);
         key_defragged = g_pserver->stat_active_defrag_hits;
         do {
             int quit = 0;
-            if (defragLaterItem(o, &cursor, endtime))
+            if (defragLaterItem(o, &defrag_later_cursor, endtime))
                 quit = 1; /* time is up, we didn't finish all the work */
 
             /* Don't start a new BIG key in this loop, this is because the
              * next key can be a list, and scanLaterList must be done in once cycle */
-            if (!cursor)
+            if (!defrag_later_cursor)
                 quit = 1;
 
             /* Once in 16 scan iterations, 512 pointer reallocations, or 64 fields
@@ -996,7 +997,7 @@ int defragLaterStep(redisDb *db, long long endtime) {
                 prev_defragged = g_pserver->stat_active_defrag_hits;
                 prev_scanned = g_pserver->stat_active_defrag_scanned;
             }
-        } while(cursor);
+        } while(defrag_later_cursor);
         if(key_defragged != g_pserver->stat_active_defrag_hits)
             g_pserver->stat_active_defrag_key_hits++;
         else
@@ -1053,7 +1054,22 @@ void activeDefragCycle(void) {
     mstime_t latency;
     int quit = 0;
 
-    if (g_pserver->aof_child_pid!=-1 || g_pserver->FRdbSaveInProgress())
+    if (!cserver.active_defrag_enabled) {
+        if (g_pserver->active_defrag_running) {
+            /* if active defrag was disabled mid-run, start from fresh next time. */
+            g_pserver->active_defrag_running = 0;
+            if (db)
+                listEmpty(db->defrag_later);
+            defrag_later_current_key = NULL;
+            defrag_later_cursor = 0;
+            current_db = -1;
+            cursor = 0;
+            db = NULL;
+        }
+        return;
+    }
+
+    if (hasActiveChildProcess())
         return; /* Defragging memory while there's a fork will just do damage. */
 
     /* Once a second, check if we the fragmentation justfies starting a scan

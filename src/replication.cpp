@@ -1879,17 +1879,21 @@ void readSyncBulkPayload(connection *conn) {
     /* We need to stop any AOF rewriting child before flusing and parsing
      * the RDB, otherwise we'll create a copy-on-write disaster. */
     if (g_pserver->aof_state != AOF_OFF) stopAppendOnly();
-    signalFlushedDb(-1);
 
-    /* When diskless RDB loading is used by replicas, it may be configured
-     * in order to save the current DB instead of throwing it away,
-     * so that we can restore it in case of failed transfer. */
-    if (use_diskless_load &&
-        g_pserver->repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB)
+    if (!fUpdate)
     {
-        diskless_load_backup = disklessLoadMakeBackups();
+        signalFlushedDb(-1);
+
+        /* When diskless RDB loading is used by replicas, it may be configured
+        * in order to save the current DB instead of throwing it away,
+        * so that we can restore it in case of failed transfer. */
+        if (use_diskless_load &&
+            g_pserver->repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB)
+        {
+            diskless_load_backup = disklessLoadMakeBackups();
+        }
+        emptyDb(-1,empty_db_flags,replicationEmptyDbCallback);
     }
-    emptyDb(-1,empty_db_flags,replicationEmptyDbCallback);
 
     /* Before loading the DB into memory we need to delete the readable
      * handler, otherwise it will get called recursively since
@@ -1916,13 +1920,15 @@ void readSyncBulkPayload(connection *conn) {
                 "from socket");
             cancelReplicationHandshake(mi);
             rioFreeConn(&rdb, NULL);
-            if (g_pserver->repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
-                /* Restore the backed up databases. */
-                disklessLoadRestoreBackups(diskless_load_backup,1);
-            } else {
-                /* Remove the half-loaded data in case we started with
-                 * an empty replica. */
-                emptyDb(-1,empty_db_flags,replicationEmptyDbCallback);
+            if (!fUpdate) {
+                if (g_pserver->repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
+                    /* Restore the backed up databases. */
+                    disklessLoadRestoreBackups(diskless_load_backup,1);
+                } else {
+                    /* Remove the half-loaded data in case we started with
+                    * an empty replica. */
+                    emptyDb(-1,empty_db_flags,replicationEmptyDbCallback);
+                }
             }
 
             /* Note that there's no point in restarting the AOF on SYNC
@@ -1932,12 +1938,14 @@ void readSyncBulkPayload(connection *conn) {
         }
         stopLoading(1);
 
-        /* RDB loading succeeded if we reach this point. */
-        if (g_pserver->repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
-            /* Delete the backup databases we created before starting to load
-             * the new RDB. Now the RDB was loaded with success so the old
-             * data is useless. */
-            disklessLoadRestoreBackups(diskless_load_backup,0);
+        if (!fUpdate) {
+            /* RDB loading succeeded if we reach this point. */
+            if (g_pserver->repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
+                /* Delete the backup databases we created before starting to load
+                * the new RDB. Now the RDB was loaded with success so the old
+                * data is useless. */
+                disklessLoadRestoreBackups(diskless_load_backup,0);
+            }
         }
 
         /* Verify the end mark is correct. */

@@ -109,7 +109,7 @@ static int connSocketConnect(connection *conn, const char *addr, int port, const
     conn->state = CONN_STATE_CONNECTING;
 
     conn->conn_handler = connect_handler;
-    aeCreateFileEvent(serverTL->el, conn->fd, AE_WRITABLE,
+    aeCreateFileEvent(serverTL->el, conn->fd, AE_WRITABLE|AE_WRITE_THREADSAFE,
             conn->type->ae_handler, conn);
 
     return C_OK;
@@ -244,7 +244,7 @@ static const char *connSocketGetLastError(connection *conn) {
     return strerror(conn->last_errno);
 }
 
-static void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask)
+void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask)
 {
     UNUSED(el);
     UNUSED(fd);
@@ -262,7 +262,11 @@ static void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientD
 
         if (!conn->write_handler) aeDeleteFileEvent(serverTL->el,conn->fd,AE_WRITABLE);
 
+        {
+        AeLocker locker;
+        locker.arm(nullptr);
         if (!callHandler(conn, conn->conn_handler)) return;
+        }
         conn->conn_handler = NULL;
     }
 
@@ -438,3 +442,14 @@ const char *connGetInfo(connection *conn, char *buf, size_t buf_len) {
     return buf;
 }
 
+
+int callHandler(connection *conn, ConnectionCallbackFunc handler) {
+    conn->flags |= CONN_FLAG_IN_HANDLER;
+    if (handler) handler(conn);
+    conn->flags &= ~CONN_FLAG_IN_HANDLER;
+    if (conn->flags & CONN_FLAG_CLOSE_SCHEDULED) {
+        connClose(conn);
+        return 0;
+    }
+    return 1;
+}

@@ -77,10 +77,7 @@ static robj *lookupKey(redisDb *db, robj *key, int flags) {
         /* Update the access time for the ageing algorithm.
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
-        if (g_pserver->rdb_child_pid == -1 &&
-            g_pserver->aof_child_pid == -1 &&
-            !(flags & LOOKUP_NOTOUCH))
-        {
+        if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)){
             if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
                 updateLFU(val);
             } else {
@@ -176,11 +173,15 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key) {
  *
  * Returns the linked value object if the key exists or NULL if the key
  * does not exist in the specified DB. */
-robj *lookupKeyWrite(redisDb *db, robj *key) {
-    robj *o = lookupKey(db,key,LOOKUP_UPDATEMVCC);
+robj *lookupKeyWriteWithFlags(redisDb *db, robj *key, int flags) {
+    robj *o = lookupKey(db,key,flags|LOOKUP_UPDATEMVCC);
     if (expireIfNeeded(db,key))
-        o = NULL;
+        o = nullptr;
     return o;
+}
+
+robj *lookupKeyWrite(redisDb *db, robj *key) {
+    return lookupKeyWriteWithFlags(db, key, LOOKUP_NONE);
 }
 
 robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply) {
@@ -302,20 +303,28 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
  *
  * 1) The ref count of the value object is incremented.
  * 2) clients WATCHing for the destination key notified.
- * 3) The expire time of the key is reset (the key is made persistent).
+ * 3) The expire time of the key is reset (the key is made persistent),
+ *    unless 'keepttl' is true.
  *
  * All the new keys in the database should be created via this interface. */
-void setKey(redisDb *db, robj *key, robj *val) {
+void genericSetKey(redisDb *db, robj *key, robj *val, int keepttl) {
     dictEntry *de = dictFind(db->pdict, ptrFromObj(key));
     if (de == NULL) {
         dbAdd(db,key,val);
     } else {
-        dbOverwriteCore(db,de,key,val,!!g_pserver->fActiveReplica,true);
+        dbOverwriteCore(db,de,key,val,!!g_pserver->fActiveReplica,!keepttl);
     }
     incrRefCount(val);
     signalModifiedKey(db,key);
 }
 
+/* Common case for genericSetKey() where the TTL is not retained. */
+void setKey(redisDb *db, robj *key, robj *val) {
+    genericSetKey(db,key,val,0);
+}
+
+/* Return true if the specified key exists in the specified database.
+ * LRU/LFU info is not updated in any way. */
 int dbExists(redisDb *db, robj *key) {
     return dictFind(db->pdict,ptrFromObj(key)) != NULL;
 }
@@ -441,7 +450,7 @@ robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
  * On success the fuction returns the number of keys removed from the
  * database(s). Otherwise -1 is returned in the specific case the
  * DB number is out of range, and errno is set to EINVAL. */
-long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
+long long emptyDbGeneric(redisDb *dbarray, int dbnum, int flags, void(callback)(void*)) {
     int async = (flags & EMPTYDB_ASYNC);
     long long removed = 0;
 
@@ -449,6 +458,17 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
         errno = EINVAL;
         return -1;
     }
+
+    /* Fire the flushdb modules event. */
+    RedisModuleFlushInfoV1 fi = {REDISMODULE_FLUSHINFO_VERSION,!async,dbnum};
+    moduleFireServerEvent(REDISMODULE_EVENT_FLUSHDB,
+                          REDISMODULE_SUBEVENT_FLUSHDB_START,
+                          &fi);
+
+    /* Make sure the WATCHed keys are affected by the FLUSH* commands.
+     * Note that we need to call the function while the keys are still
+     * there. */
+    signalFlushedDb(dbnum);
 
     int startdb, enddb;
     if (dbnum == -1) {
@@ -459,14 +479,12 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
     }
 
     for (int j = startdb; j <= enddb; j++) {
-        removed += dictSize(g_pserver->db[j].pdict);
+        removed += dictSize(dbarray[j].pdict);
         if (async) {
-            emptyDbAsync(&g_pserver->db[j]);
+            emptyDbAsync(&dbarray[j]);
         } else {
-            dictEmpty(g_pserver->db[j].pdict,callback);
-            delete g_pserver->db[j].setexpire;
-            g_pserver->db[j].setexpire = new (MALLOC_LOCAL) expireset();
-            g_pserver->db[j].expireitr = g_pserver->db[j].setexpire->end();
+            dictEmpty(dbarray[j].pdict,callback);
+            dbarray[j].setexpire->clear();
         }
     }
     if (g_pserver->cluster_enabled) {
@@ -477,7 +495,18 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
         }
     }
     if (dbnum == -1) flushSlaveKeysWithExpireList();
+
+    /* Also fire the end event. Note that this event will fire almost
+     * immediately after the start event if the flush is asynchronous. */
+    moduleFireServerEvent(REDISMODULE_EVENT_FLUSHDB,
+                          REDISMODULE_SUBEVENT_FLUSHDB_END,
+                          &fi);
+
     return removed;
+}
+
+long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
+    return emptyDbGeneric(g_pserver->db, dbnum, flags, callback);
 }
 
 int selectDb(client *c, int id) {
@@ -485,6 +514,15 @@ int selectDb(client *c, int id) {
         return C_ERR;
     c->db = &g_pserver->db[id];
     return C_OK;
+}
+
+long long dbTotalServerKeyCount() {
+    long long total = 0;
+    int j;
+    for (j = 0; j < cserver.dbnum; j++) {
+        total += dictSize(g_pserver->db[j].pdict);
+    }
+    return total;
 }
 
 /*-----------------------------------------------------------------------------
@@ -498,11 +536,12 @@ int selectDb(client *c, int id) {
 
 void signalModifiedKey(redisDb *db, robj *key) {
     touchWatchedKey(db,key);
-    if (g_pserver->tracking_clients) trackingInvalidateKey(key);
+    trackingInvalidateKey(key);
 }
 
 void signalFlushedDb(int dbid) {
     touchWatchedKeysOnFlush(dbid);
+    trackingInvalidateKeysOnFlush(dbid);
 }
 
 /*-----------------------------------------------------------------------------
@@ -531,28 +570,9 @@ int getFlushCommandFlags(client *c, int *flags) {
     return C_OK;
 }
 
-/* FLUSHDB [ASYNC]
- *
- * Flushes the currently SELECTed Redis DB. */
-void flushdbCommand(client *c) {
-    int flags;
-
-    if (getFlushCommandFlags(c,&flags) == C_ERR) return;
-    signalFlushedDb(c->db->id);
-    g_pserver->dirty += emptyDb(c->db->id,flags,NULL);
-    addReply(c,shared.ok);
-}
-
-/* FLUSHALL [ASYNC]
- *
- * Flushes the whole server data set. */
-void flushallCommand(client *c) {
-    int flags;
-
-    if (getFlushCommandFlags(c,&flags) == C_ERR) return;
-    signalFlushedDb(-1);
+/* Flushes the whole server data set. */
+void flushAllDataAndResetRDB(int flags) {
     g_pserver->dirty += emptyDb(-1,flags,NULL);
-    addReply(c,shared.ok);
     if (g_pserver->rdb_child_pid != -1) killRDBChild();
     if (g_pserver->saveparamslen > 0) {
         /* Normally rdbSave() will reset dirty, but we don't want this here
@@ -564,6 +584,41 @@ void flushallCommand(client *c) {
         g_pserver->dirty = saved_dirty;
     }
     g_pserver->dirty++;
+#if defined(USE_JEMALLOC)
+    /* jemalloc 5 doesn't release pages back to the OS when there's no traffic.
+     * for large databases, flushdb blocks for long anyway, so a bit more won't
+     * harm and this way the flush and purge will be synchroneus. */
+    if (!(flags & EMPTYDB_ASYNC))
+        jemalloc_purge();
+#endif
+}
+
+/* FLUSHDB [ASYNC]
+ *
+ * Flushes the currently SELECTed Redis DB. */
+void flushdbCommand(client *c) {
+    int flags;
+
+    if (getFlushCommandFlags(c,&flags) == C_ERR) return;
+    g_pserver->dirty += emptyDb(c->db->id,flags,NULL);
+    addReply(c,shared.ok);
+#if defined(USE_JEMALLOC)
+    /* jemalloc 5 doesn't release pages back to the OS when there's no traffic.
+     * for large databases, flushdb blocks for long anyway, so a bit more won't
+     * harm and this way the flush and purge will be synchroneus. */
+    if (!(flags & EMPTYDB_ASYNC))
+        jemalloc_purge();
+#endif
+}
+
+/* FLUSHALL [ASYNC]
+ *
+ * Flushes the whole server data set. */
+void flushallCommand(client *c) {
+    int flags;
+    if (getFlushCommandFlags(c,&flags) == C_ERR) return;
+    flushAllDataAndResetRDB(flags);
+    addReply(c,shared.ok);
 }
 
 /* This command implements DEL and LAZYDEL. */
@@ -644,7 +699,7 @@ void keysCommand(client *c) {
     void *replylen = addReplyDeferredLen(c);
 
     di = dictGetSafeIterator(c->db->pdict);
-    allkeys = (pattern[0] == '*' && pattern[1] == '\0');
+    allkeys = (pattern[0] == '*' && plen == 1);
     while((de = dictNext(di)) != NULL) {
         sds key = (sds)dictGetKey(de);
         robj *keyobj;
@@ -1100,6 +1155,13 @@ void moveCommand(client *c) {
     dbAdd(dst,c->argv[1],o);
     if (spexpire != nullptr) setExpire(c,dst,c->argv[1],std::move(*spexpire));
 
+    signalModifiedKey(src,c->argv[1]);
+    signalModifiedKey(dst,c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_GENERIC,
+                "move_from",c->argv[1],src->id);
+    notifyKeyspaceEvent(NOTIFY_GENERIC,
+                "move_to",c->argv[1],dst->id);
+
     addReply(c,shared.cone);
 }
 
@@ -1129,7 +1191,7 @@ void scanDatabaseForReadyLists(redisDb *db) {
  *
  * Returns C_ERR if at least one of the DB ids are out of range, otherwise
  * C_OK is returned. */
-int dbSwapDatabases(int id1, int id2) {
+int dbSwapDatabases(long id1, long id2) {
     if (id1 < 0 || id1 >= cserver.dbnum ||
         id2 < 0 || id2 >= cserver.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
@@ -1385,6 +1447,7 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
 /* Check if the key is expired. Note, this does not check subexpires */
 int keyIsExpired(redisDb *db, robj *key) {
     expireEntry *pexpire = getExpire(db,key);
+    mstime_t now;
 
     if (pexpire == nullptr) return 0; /* No expire for this key */
 
@@ -1409,8 +1472,26 @@ int keyIsExpired(redisDb *db, robj *key) {
      * only the first time it is accessed and not in the middle of the
      * script execution, making propagation to slaves / AOF consistent.
      * See issue #1525 on Github for more information. */
-    mstime_t now = g_pserver->lua_caller ? g_pserver->lua_time_start : mstime();
+    if (g_pserver->lua_caller) {
+        now = g_pserver->lua_time_start;
+    }
+    /* If we are in the middle of a command execution, we still want to use
+     * a reference time that does not change: in that case we just use the
+     * cached time, that we update before each call in the call() function.
+     * This way we avoid that commands such as RPOPLPUSH or similar, that
+     * may re-open the same key multiple times, can invalidate an already
+     * open object in a next call, if the next call will see the key expired,
+     * while the first did not. */
+    else if (serverTL->fixed_time_expire > 0) {
+        now = g_pserver->mstime;
+    }
+    /* For the other cases, we want to use the most fresh time we have. */
+    else {
+        now = mstime();
+    }
 
+    /* The key expired if the current (virtual or real) time is greater
+     * than the expire time of the key. */
     return now > when;
 }
 

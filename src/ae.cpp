@@ -130,7 +130,9 @@ struct aeCommand
     void *clientData;
     aeCommandControl *pctl;
 };
+#ifdef PIPE_BUF
 static_assert(sizeof(aeCommand) <= PIPE_BUF);
+#endif
 
 void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
 {

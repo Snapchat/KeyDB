@@ -2982,6 +2982,7 @@ inline int FCorrectThread(client *c)
 
 /* TLS stuff */
 void tlsInit(void);
+void tlsInitThread();
 int tlsConfigure(redisTLSContextConfig *ctx_config);
 
 #define redisDebug(fmt, ...) \

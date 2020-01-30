@@ -71,15 +71,6 @@ static inline int exitHandler(connection *conn) {
  * 3. Mark the handler as NOT in use and perform deferred close if was
  * requested by the handler at any time.
  */
-static inline int callHandler(connection *conn, ConnectionCallbackFunc handler) {
-    conn->flags |= CONN_FLAG_IN_HANDLER;
-    if (handler) handler(conn);
-    conn->flags &= ~CONN_FLAG_IN_HANDLER;
-    if (conn->flags & CONN_FLAG_CLOSE_SCHEDULED) {
-        connClose(conn);
-        return 0;
-    }
-    return 1;
-}
+int callHandler(connection *conn, ConnectionCallbackFunc handler);
 
 #endif  /* __REDIS_CONNHELPERS_H */

@@ -2215,6 +2215,7 @@ void readQueryFromClient(connection *conn) {
     size_t qblen;
 
     serverAssert(FCorrectThread(c));
+    serverAssert(!GlobalLocksAcquired());
     
     AeLocker aelock;
     AssertCorrectThread(c);

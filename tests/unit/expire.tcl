@@ -252,4 +252,17 @@ start_server {tags {"expire"}} {
         r expiremember testkey foo 10000
         assert [expr [r ttl testkey foo] > 0]
     }
+
+    test {SET command will remove expire} {
+        r set foo bar EX 100
+        r set foo bar
+        r ttl foo
+    } {-1}
+
+    test {SET - use KEEPTTL option, TTL should not be removed} {
+        r set foo bar EX 100
+        r set foo bar KEEPTTL
+        set ttl [r ttl foo]
+        assert {$ttl <= 100 && $ttl > 90}
+    }
 }

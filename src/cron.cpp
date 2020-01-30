@@ -77,7 +77,7 @@ void executeCronJobExpireHook(const char *key, robj *o)
     serverAssert(o->type == OBJ_CRON);
     cronjob *job = (cronjob*)ptrFromObj(o);
     
-    client *cFake = createClient(-1, IDX_EVENT_LOOP_MAIN);
+    client *cFake = createClient(nullptr, IDX_EVENT_LOOP_MAIN);
     cFake->lock.lock();
     cFake->authenticated = 1;
     cFake->puser = nullptr;

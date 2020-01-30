@@ -67,6 +67,7 @@ void cronCommand(client *c)
 
     robj *o = createObject(OBJ_CRON, spjob.release());
     setKey(c->db, c->argv[ARG_NAME], o);
+    decrRefCount(o);
     // use an expire to trigger execution.  Note: We use a subkey expire here so legacy clients don't delete it.
     setExpire(c, c->db, c->argv[ARG_NAME], c->argv[ARG_NAME], base + interval);
     addReply(c, shared.ok);

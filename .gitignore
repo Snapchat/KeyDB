@@ -1,6 +1,8 @@
 .*.swp
 core
 *.o
+*.xo
+*.so
 *.d
 *.log
 dump.rdb
@@ -37,3 +39,4 @@ deps/lua/src/liblua.a
 .prerequisites
 *.dSYM
 Makefile.dep
+.vscode/*

@@ -460,6 +460,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
  * was freed to return back under the limit, the function returns C_ERR. */
 int freeMemoryIfNeeded(void) {
     serverAssert(GlobalLocksAcquired());
+    int keys_freed = 0;
     /* By default replicas should ignore maxmemory
      * and just be masters exact copies. */
     if (listLength(g_pserver->masters) && g_pserver->repl_slave_ignore_maxmemory) return C_OK;
@@ -483,7 +484,7 @@ int freeMemoryIfNeeded(void) {
 
     latencyStartMonitor(latency);
     while (mem_freed < mem_tofree) {
-        int j, k, i, keys_freed = 0;
+        int j, k, i;
         static unsigned int next_db = 0;
         sds bestkey = NULL;
         int bestdbid;
@@ -627,9 +628,7 @@ int freeMemoryIfNeeded(void) {
                     mem_freed = mem_tofree;
                 }
             }
-        }
-
-        if (!keys_freed) {
+        } else {
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("eviction-cycle",latency);
             goto cant_free; /* nothing to free... */

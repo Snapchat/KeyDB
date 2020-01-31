@@ -293,15 +293,20 @@ void queueLoadModule(sds path, sds *argv, int argc) {
     listAddNodeTail(g_pserver->loadmodule_queue,loadmod);
 }
 
-static bool initializeStorageProvider(sds *argv, int argc, const char **err)
+sds g_sdsProvider = nullptr;
+sds g_sdsArgs = nullptr;
+
+bool initializeStorageProvider(const char **err)
 {
     bool fTest = false;
-    if (!strcasecmp(argv[0], "flash") && argc == 2)
+    if (g_sdsProvider == nullptr)
+        return true;
+    if (!strcasecmp(g_sdsProvider, "flash") && g_sdsArgs != nullptr)
     {
         // Create The Storage Factory (if necessary)
-        g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(argv[1], cserver.dbnum);
+        g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(g_sdsArgs, cserver.dbnum);
     }
-    else if (!strcasecmp(argv[0], "test") && argc == 1)
+    else if (!strcasecmp(g_sdsProvider, "test") && g_sdsArgs == nullptr)
     {
         g_pserver->m_pstorageFactory = new (MALLOC_LOCAL) TestStorageFactory();
         fTest = true;
@@ -578,8 +583,9 @@ void loadServerConfigFromString(char *config) {
         } else if (!strcasecmp(argv[0],"rdbfuzz-mode")) {
             // NOP, handled in main
         } else if (!strcasecmp(argv[0],"storage-provider") && argc >= 2) {
-            if (!initializeStorageProvider(argv+1, argc-1, &err))
-                goto loaderr;
+            g_sdsProvider = sdsdup(argv[1]);
+            if (argc > 2)
+                g_sdsArgs = sdsdup(argv[2]);
         } else if (!strcasecmp(argv[0],"enable-pro") && (argc == 1 || argc == 2)) {
             if (argc == 2)
             {

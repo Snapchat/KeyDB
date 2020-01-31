@@ -2691,7 +2691,6 @@ void syncWithMaster(connection *conn) {
             serverLog(LL_WARNING,"Opening the temp file needed for MASTER <-> REPLICA synchronization: %s",strerror(errno));
             goto error;
         }
-        mi->repl_transfer_tmpfile = zstrdup(tmpfile);
         mi->repl_transfer_fd = dfd;
     }
 
@@ -2711,6 +2710,8 @@ void syncWithMaster(connection *conn) {
     mi->repl_transfer_read = 0;
     mi->repl_transfer_last_fsync_off = 0;
     mi->repl_transfer_lastio = g_pserver->unixtime;
+    if (mi->repl_transfer_tmpfile)
+        zfree(mi->repl_transfer_tmpfile);
     mi->repl_transfer_tmpfile = zstrdup(tmpfile);
     return;
 
@@ -2868,7 +2869,13 @@ void freeMasterInfo(redisMaster *mi)
 {
     zfree(mi->masterauth);
     zfree(mi->masteruser);
+    if (mi->repl_transfer_tmpfile)
+        zfree(mi->repl_transfer_tmpfile);
     delete mi->staleKeyMap;
+    if (mi->cached_master != nullptr)
+        freeClientAsync(mi->cached_master);
+    if (mi->master != nullptr)
+        freeClientAsync(mi->master);
     zfree(mi);
 }
 
@@ -3161,6 +3168,12 @@ void replicationCacheMaster(redisMaster *mi, client *c) {
  * current offset if no data was lost during the failover. So we use our
  * current replication ID and offset in order to synthesize a cached master. */
 void replicationCacheMasterUsingMyself(redisMaster *mi) {
+    if (mi->cached_master != nullptr)
+    {
+        // This can happen on first load of the RDB, the master we created in config load is stale
+        freeClient(mi->cached_master);
+    }
+
     /* The master client we create can be set to any DBID, because
      * the new master will start its replication stream with SELECT. */
     mi->master_initial_offset = g_pserver->master_repl_offset;

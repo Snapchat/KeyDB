@@ -193,19 +193,19 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     while ((de = dictNext(di)) != NULL)
     {
         robj *o = (robj*)dictGetVal(de);
-        dictEntry *deExisting = dictFind(m_spdbSnapshotHOLDER->m_pdict, (const char*)dictGetKey(de));
-        if (deExisting != nullptr)
+        sds newkey = sdsdupshared((sds)dictGetKey(de));
+        if (dictAdd(m_spdbSnapshotHOLDER->m_pdict, newkey, o) != DICT_OK)
         {
+            // Review: We probably shouldn't even be getting into this state because the tombstone processing above should have cleared this out
+            sdsfree(newkey);
+            dictEntry *deExisting = dictFind(m_spdbSnapshotHOLDER->m_pdict, (const char*)dictGetKey(de));
+            serverAssert(deExisting != nullptr);
             if (dictGetVal(deExisting) != nullptr)
                 decrRefCount((robj*)dictGetVal(deExisting));
             dictSetVal(m_spdbSnapshotHOLDER->m_pdict, deExisting, o);
         }
-        else
-        {
-            dictAdd(m_spdbSnapshotHOLDER->m_pdict, sdsdupshared((sds)dictGetKey(de)), o);
-        }
-        if (dictGetVal(de) != nullptr)
-            incrRefCount((robj*)dictGetVal(de));
+
+        dictSetVal(m_pdict, de, nullptr);   // remove the object so free'ing the dict doesn't decRef the object
     }
     dictReleaseIterator(di);
     
@@ -321,13 +321,7 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
     __atomic_load(&m_pdbSnapshot, &psnapshot, __ATOMIC_ACQUIRE);
     if (fResult && psnapshot != nullptr)
     {
-        fResult = psnapshot->iterate_threadsafe([this, &fn, &celem](const char *key, robj_roptr o){
-            // Before passing off to the user we need to make sure it's not already in the
-            //  the current set, and not deleted
-            dictEntry *deCurrent = dictFind(m_pdict, key);
-            if (deCurrent != nullptr)
-                return true;
-            
+        fResult = psnapshot->iterate_threadsafe([this, &fn, &celem](const char *key, robj_roptr o){            
             dictEntry *deTombstone = dictFind(m_pdictTombstone, key);
             if (deTombstone != nullptr)
                 return true;

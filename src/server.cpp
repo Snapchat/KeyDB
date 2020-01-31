@@ -5357,6 +5357,8 @@ static void validateConfiguration()
     }
 }
 
+bool initializeStorageProvider(const char **err);
+
 int main(int argc, char **argv) {
     struct timeval tv;
     int j;
@@ -5529,6 +5531,14 @@ int main(int argc, char **argv) {
     cserver.supervised = redisIsSupervised(cserver.supervised_mode);
     int background = cserver.daemonize && !cserver.supervised;
     if (background) daemonize();
+
+    const char *err;
+    if (!initializeStorageProvider(&err))
+    {
+        serverLog(LL_WARNING, "Failed to initialize storage provider: %s",err);
+        exit(EXIT_FAILURE);
+    }
+
 
     initServer();
     initNetworking(cserver.cthreads > 1 /* fReusePort */);

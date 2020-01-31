@@ -893,4 +893,6 @@ int tlsHasPendingData() {
 void tlsProcessPendingData() {
 }
 
+void tlsInitThread() {}
+
 #endif

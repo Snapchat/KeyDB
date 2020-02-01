@@ -2137,7 +2137,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         migrateCloseTimedoutSockets();
     }
 
-    run_with_period(15000) {
+    run_with_period(30000) {
         checkTrialTimeout();
     }
 

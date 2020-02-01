@@ -1979,7 +1979,7 @@ struct redisServerConst {
     unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
 
     sds license_key = nullptr;
-    int trial_timeout = 20;
+    int trial_timeout = 120;
     int delete_on_evict = false;   // Only valid when a storage provider is set
 };
 

@@ -176,6 +176,44 @@ int dictExpand(dict *d, unsigned long size)
     return DICT_OK;
 }
 
+int dictMerge(dict *dst, dict *src)
+{
+    if (dictSize(src) == 0)
+        return DICT_OK;
+    
+    if (!dictIsRehashing(dst) && !dictIsRehashing(src))
+    {
+        dst->ht[1] = dst->ht[0];
+        dst->ht[0] = src->ht[0];
+        dst->rehashidx = 0;
+        _dictReset(&src->ht[0]);
+        return DICT_OK;
+    }
+
+    auto &htDst = dictIsRehashing(dst) ? dst->ht[1] : dst->ht[0];
+    for (int iht = 0; iht < 2; ++iht)
+    {
+        for (size_t ide = 0; ide < src->ht[iht].size; ++ide)
+        {
+            if (src->ht[iht].used == 0)
+                break;
+            dictEntry *de = src->ht[iht].table[ide];
+            src->ht[iht].table[ide] = nullptr;
+            while (de != nullptr)
+            {
+                dictEntry *deNext = de->next;
+                uint64_t h = dictHashKey(dst, de->key) & htDst.sizemask;
+                de->next = htDst.table[h];
+                htDst.table[h] = de;
+                htDst.used++;
+                de = deNext;
+                src->ht[iht].used--;
+            }
+        }
+    }
+    return DICT_OK;
+}
+
 /* Performs N steps of incremental rehashing. Returns 1 if there are still
  * keys to move from the old to the new hash table, otherwise 0 is returned.
  *

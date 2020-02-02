@@ -1846,10 +1846,11 @@ void checkChildrenDone(void) {
     if (g_pserver->FRdbSaveInProgress())
     {
         void *rval = nullptr;
-        if (pthread_tryjoin_np(g_pserver->rdbThreadVars.rdb_child_thread, &rval))
+        int err;
+        if ((err = pthread_tryjoin_np(g_pserver->rdbThreadVars.rdb_child_thread, &rval)))
         {
-            if (errno != EBUSY && errno != EAGAIN)
-                serverLog(LL_WARNING, "Error joining the background RDB save thread: %s\n", strerror(errno));
+            if (err != EBUSY && errno != EAGAIN)
+                serverLog(LL_WARNING, "Error joining the background RDB save thread: %s\n", strerror(err));
         }
         else
         {

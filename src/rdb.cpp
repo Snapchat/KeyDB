@@ -1464,10 +1464,8 @@ void *rdbSaveThread(void *vargs)
         sendChildCOWInfo(CHILD_INFO_TYPE_RDB, "RDB");
 
     // If we were told to cancel the requesting thread holds the lock for us
-    aeAcquireLock();
     for (int idb = 0; idb < cserver.dbnum; ++idb)
-        g_pserver->db[idb]->endSnapshot(args->rgpdb[idb]);
-    aeReleaseLock();
+        g_pserver->db[idb]->endSnapshotAsync(args->rgpdb[idb]);
     zfree(args);
     g_pserver->garbageCollector.endEpoch(vars.gcEpoch);
 
@@ -2674,10 +2672,8 @@ void *rdbSaveToSlavesSocketsThread(void *vargs)
     close(g_pserver->rdb_pipe_write); /* wake up the reader, tell it we're done. */
 
     // If we were told to cancel the requesting thread is holding the lock for us
-    aeAcquireLock();
     for (int idb = 0; idb < cserver.dbnum; ++idb)
-        g_pserver->db[idb]->endSnapshot(args->rgpdb[idb]);
-    aeReleaseLock();
+        g_pserver->db[idb]->endSnapshotAsync(args->rgpdb[idb]);
     zfree(args);
 
     return (retval == C_OK) ? (void*)0 : (void*)1;

@@ -1224,6 +1224,7 @@ class redisDbPersistentData
 {
     friend void dictDbKeyDestructor(void *privdata, void *key);
     friend class redisDbPersistentDataSnapshot;
+
 public:
     ~redisDbPersistentData();
 
@@ -1311,6 +1312,7 @@ public:
 
     const redisDbPersistentDataSnapshot *createSnapshot(uint64_t mvccCheckpoint, bool fOptional);
     void endSnapshot(const redisDbPersistentDataSnapshot *psnapshot);
+    void endSnapshotAsync(const redisDbPersistentDataSnapshot *psnapshot);
     void restoreSnapshot(const redisDbPersistentDataSnapshot *psnapshot);
 
     void consolidate_snapshot();
@@ -1354,6 +1356,7 @@ private:
     //      in a snapshot
     const redisDbPersistentDataSnapshot *m_pdbSnapshot = nullptr;
     std::unique_ptr<redisDbPersistentDataSnapshot> m_spdbSnapshotHOLDER;
+    const redisDbPersistentDataSnapshot *m_pdbSnapshotASYNC = nullptr;
     int m_refCount = 0;
     fastlock m_lockStorage { "storage" };
 };
@@ -1365,7 +1368,7 @@ protected:
     bool m_fConsolidated = false;
     static void gcDisposeSnapshot(redisDbPersistentDataSnapshot *psnapshot);
     int snapshot_depth() const;
-    void consolidate_children(redisDbPersistentData *pdbPrimary);
+    void consolidate_children(redisDbPersistentData *pdbPrimary, bool fForce);
 
 public:
     bool FWillFreeChildDebug() const { return m_spdbSnapshotHOLDER != nullptr; }
@@ -1373,6 +1376,7 @@ public:
     bool iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly = false) const;
     using redisDbPersistentData::createSnapshot;
     using redisDbPersistentData::endSnapshot;
+    using redisDbPersistentData::endSnapshotAsync;
     using redisDbPersistentData::end;
 
     dict_iter random_cache_threadsafe() const;
@@ -2443,6 +2447,7 @@ extern dictType zsetDictType;
 extern dictType clusterNodesDictType;
 extern dictType clusterNodesBlackListDictType;
 extern dictType dbDictType;
+extern dictType dbDictTypeTombstone;
 extern dictType dbSnapshotDictType;
 extern dictType shaScriptObjectDictType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;

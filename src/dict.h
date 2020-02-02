@@ -190,6 +190,7 @@ unsigned long dictScan(dict *d, unsigned long v, dictScanFunction *fn, dictScanB
 uint64_t dictGetHash(dict *d, const void *key);
 dictEntry **dictFindEntryRefByPtrAndHash(dict *d, const void *oldptr, uint64_t hash);
 void dictForceRehash(dict *d);
+int dictMerge(dict *dst, dict *src);
 
 /* Hash table types */
 extern dictType dictTypeHeapStringCopyKey;

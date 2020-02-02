@@ -54,7 +54,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     }
 
     m_pdict = dictCreate(&dbDictType,this);
-    m_pdictTombstone = dictCreate(&dbDictType, this);
+    m_pdictTombstone = dictCreate(&dbDictTypeTombstone, this);
 
     serverAssert(spdb->m_pdict->iterators == 1);
 
@@ -67,6 +67,13 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     {
         pdbSnapshotNext->m_refCount++;
         pdbSnapshotNext = pdbSnapshotNext->m_spdbSnapshotHOLDER.get();
+    }
+
+    if (m_pdbSnapshotASYNC != nullptr)
+    {
+        // free the async snapshot, it's done its job
+        endSnapshot(m_pdbSnapshotASYNC);    // should be just a dec ref (FAST)
+        m_pdbSnapshotASYNC = nullptr;
     }
 
     return m_pdbSnapshot;
@@ -127,11 +134,55 @@ void redisDbPersistentData::restoreSnapshot(const redisDbPersistentDataSnapshot 
     serverAssert(size() == expectedSize);
 }
 
+// This function is all about minimizing the amount of work done under global lock
+//  when there has been lots of changes since snapshot creation a naive endSnapshot()
+//  will block for a very long time and will cause latency spikes.
+//
+// Note that this function uses a lot more CPU time than a simple endSnapshot(), we
+//  have some internal heuristics to do a synchronous endSnapshot if it makes sense
+void redisDbPersistentData::endSnapshotAsync(const redisDbPersistentDataSnapshot *psnapshot)
+{
+    aeAcquireLock();
+        if (m_pdbSnapshotASYNC && m_pdbSnapshotASYNC->m_mvccCheckpoint <= psnapshot->m_mvccCheckpoint)
+        {
+            // Free a stale async snapshot so consolidate_children can clean it up later
+            endSnapshot(m_pdbSnapshotASYNC);    // FAST: just a ref decrement
+            m_pdbSnapshotASYNC = nullptr;
+        }
+
+        size_t elements = dictSize(m_pdictTombstone);
+        // if neither dict is rehashing then the merge is O(1) so don't count the size
+        if (dictIsRehashing(psnapshot->m_pdict) || dictIsRehashing(m_pdict))
+            elements += dictSize(m_pdict);
+        if (elements < 1000000 || psnapshot != m_spdbSnapshotHOLDER.get())  // heuristic
+        {
+            // For small snapshots it makes more sense just to merge it directly
+            endSnapshot(psnapshot);
+            aeReleaseLock();
+            return;
+        }
+
+        // OK this is a big snapshot so lets do the merge work outside the lock
+        auto psnapshotT = createSnapshot(LLONG_MAX, false);
+        endSnapshot(psnapshot); // this will just dec the ref count since our new snapshot has a ref 
+    aeReleaseLock();
+
+    // do the expensive work of merging snapshots outside the ref
+    reinterpret_cast<redisDbPersistentDataSnapshot*>(this)->consolidate_children(this, true /* fForce */);
+    
+    // Final Cleanup
+    aeAcquireLock();
+        if (m_pdbSnapshotASYNC == nullptr)
+            m_pdbSnapshotASYNC = psnapshotT;
+        else
+            endSnapshot(psnapshotT);    // finally clena up our temp snapshot
+    aeReleaseLock();
+}
+
 void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psnapshot)
 {
-    // Note: This function is dependent on GlobalLocksAcquried(), but rdb background saving has a weird case where
-    //  a seperate thread holds the lock for it.  Yes that's pretty crazy and should be fixed somehow...
-
+    serverAssert(GlobalLocksAcquired());
+    
     if (m_spdbSnapshotHOLDER.get() != psnapshot)
     {
         if (m_spdbSnapshotHOLDER == nullptr)
@@ -215,7 +266,12 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
         m_spdbSnapshotHOLDER->m_pdict->iterators--;
     }
 
-    m_spdbSnapshotHOLDER = std::move(m_spdbSnapshotHOLDER->m_spdbSnapshotHOLDER);
+    auto spsnapshotFree = std::move(m_spdbSnapshotHOLDER);
+    m_spdbSnapshotHOLDER = std::move(spsnapshotFree->m_spdbSnapshotHOLDER);
+    if (serverTL != nullptr)
+        g_pserver->garbageCollector.enqueue(serverTL->gcEpoch, std::move(spsnapshotFree));
+
+    // Sanity Checks
     serverAssert(m_spdbSnapshotHOLDER != nullptr || m_pdbSnapshot == nullptr);
     serverAssert(m_pdbSnapshot == m_spdbSnapshotHOLDER.get() || m_pdbSnapshot == nullptr);
     serverAssert((m_refCount == 0 && m_pdict->iterators == 0) || (m_refCount != 0 && m_pdict->iterators == 1));
@@ -340,14 +396,14 @@ void redisDbPersistentData::consolidate_snapshot()
     }
     psnapshot->m_refCount++;    // ensure it's not free'd
     aeReleaseLock();
-    psnapshot->consolidate_children(this);
+    psnapshot->consolidate_children(this, false /* fForce */);
     aeAcquireLock();
     endSnapshot(psnapshot);
     aeReleaseLock();
 }
 
 // only call this on the "real" database to consolidate the first child
-void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *pdbPrimary)
+void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *pdbPrimary, bool fForce)
 {
     static fastlock s_lock {"consolidate_children"};    // this lock ensures only one thread is consolidating at a time
 
@@ -355,14 +411,15 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
     if (!lock.try_lock())
         return; // this is a best effort function
 
-    if (snapshot_depth() < 4)
+    if (!fForce && snapshot_depth() < 4)
         return;
 
+    serverAssert(snapshot_depth() > 1);
     auto spdb = std::unique_ptr<redisDbPersistentDataSnapshot>(new (MALLOC_LOCAL) redisDbPersistentDataSnapshot());
     spdb->initialize();
     dictExpand(spdb->m_pdict, m_pdbSnapshot->size());
 
-    m_pdbSnapshot->iterate_threadsafe([&](const char *key, robj_roptr o){
+    m_pdbSnapshot->iterate_threadsafe([&](const char *key, robj_roptr o) {
         if (o != nullptr) {
             dictAdd(spdb->m_pdict, sdsdupshared(key), o.unsafe_robjcast());
             incrRefCount(o);

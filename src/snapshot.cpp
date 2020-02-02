@@ -151,6 +151,8 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     m_spdbSnapshotHOLDER->m_refCount--;
     if (m_spdbSnapshotHOLDER->m_refCount > 0)
         return;
+
+    size_t sizeStart = size();
     serverAssert(m_spdbSnapshotHOLDER->m_refCount == 0);
     serverAssert((m_refCount == 0 && m_pdict->iterators == 0) || (m_refCount != 0 && m_pdict->iterators == 1));
 
@@ -189,25 +191,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     dictEmpty(m_pdictTombstone, nullptr);
 
     // Stage 2 Move all new keys to the snapshot DB
-    di = dictGetIterator(m_pdict);
-    while ((de = dictNext(di)) != NULL)
-    {
-        robj *o = (robj*)dictGetVal(de);
-        sds newkey = sdsdupshared((sds)dictGetKey(de));
-        if (dictAdd(m_spdbSnapshotHOLDER->m_pdict, newkey, o) != DICT_OK)
-        {
-            // Review: We probably shouldn't even be getting into this state because the tombstone processing above should have cleared this out
-            sdsfree(newkey);
-            dictEntry *deExisting = dictFind(m_spdbSnapshotHOLDER->m_pdict, (const char*)dictGetKey(de));
-            serverAssert(deExisting != nullptr);
-            if (dictGetVal(deExisting) != nullptr)
-                decrRefCount((robj*)dictGetVal(deExisting));
-            dictSetVal(m_spdbSnapshotHOLDER->m_pdict, deExisting, o);
-        }
-
-        dictSetVal(m_pdict, de, nullptr);   // remove the object so free'ing the dict doesn't decRef the object
-    }
-    dictReleaseIterator(di);
+    dictMerge(m_spdbSnapshotHOLDER->m_pdict, m_pdict);
     
     // Stage 3 swap the databases with the snapshot
     std::swap(m_pdict, m_spdbSnapshotHOLDER->m_pdict);
@@ -236,6 +220,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     serverAssert(m_pdbSnapshot == m_spdbSnapshotHOLDER.get() || m_pdbSnapshot == nullptr);
     serverAssert((m_refCount == 0 && m_pdict->iterators == 0) || (m_refCount != 0 && m_pdict->iterators == 1));
     serverAssert(m_spdbSnapshotHOLDER != nullptr || dictSize(m_pdictTombstone) == 0);
+    serverAssert(sizeStart == size());
 }
 
 dict_iter redisDbPersistentDataSnapshot::random_cache_threadsafe() const

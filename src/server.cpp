@@ -1353,6 +1353,16 @@ dictType dbDictType = {
     dictObjectDestructor   /* val destructor */
 };
 
+/* db->pdict, keys are sds strings, vals uints. */
+dictType dbDictTypeTombstone = {
+    dictSdsHash,                /* hash function */
+    NULL,                       /* key dup */
+    NULL,                       /* val dup */
+    dictSdsKeyCompare,          /* key compare */
+    dictDbKeyDestructor,          /* key destructor */
+    NULL   /* val destructor */
+};
+
 dictType dbSnapshotDictType = {
     dictSdsHash,
     NULL,
@@ -1509,7 +1519,7 @@ int redisDbPersistentData::incrementallyRehash() {
  * for dict.c to resize the hash tables accordingly to the fact we have o not
  * running childs. */
 void updateDictResizePolicy(void) {
-    if (!hasActiveChildProcess())
+    if (!hasActiveChildProcess() || g_pserver->FRdbSaveInProgress())
         dictEnableResize();
     else
         dictDisableResize();
@@ -1764,7 +1774,7 @@ void databasesCron(void) {
     /* Perform hash tables rehashing if needed, but only if there are no
      * other processes saving the DB on disk. Otherwise rehashing is bad
      * as will cause a lot of copy-on-write of memory pages. */
-    if (!hasActiveChildProcess()) {
+    if (!hasActiveChildProcess() || g_pserver->FRdbSaveInProgress()) {
         /* We use global counters so if we stop the computation at a given
          * DB we'll be able to start from the successive in the next
          * cron loop iteration. */
@@ -1849,8 +1859,8 @@ void checkChildrenDone(void) {
         int err;
         if ((err = pthread_tryjoin_np(g_pserver->rdbThreadVars.rdb_child_thread, &rval)))
         {
-            if (err != EBUSY && errno != EAGAIN)
-                serverLog(LL_WARNING, "Error joining the background RDB save thread: %s\n", strerror(err));
+            if (err != EBUSY && err != EAGAIN)
+                serverLog(LL_WARNING, "Error joining the background RDB save thread: %s\n", strerror(errno));
         }
         else
         {

@@ -42,6 +42,7 @@
 #include <stdarg.h>
 #include <limits.h>
 #include <sys/time.h>
+#include <algorithm>
 
 #include "dict.h"
 #include "zmalloc.h"
@@ -181,6 +182,12 @@ int dictMerge(dict *dst, dict *src)
     if (dictSize(src) == 0)
         return DICT_OK;
     
+    if (dictSize(dst) == 0)
+    {
+        std::swap(*dst, *src);
+        return DICT_OK;
+    }
+
     if (!dictIsRehashing(dst) && !dictIsRehashing(src))
     {
         dst->ht[1] = dst->ht[0];
@@ -190,6 +197,7 @@ int dictMerge(dict *dst, dict *src)
         return DICT_OK;
     }
 
+    dictExpand(dst, dictSize(dst)+dictSize(src));    // start dst rehashing if necessary
     auto &htDst = dictIsRehashing(dst) ? dst->ht[1] : dst->ht[0];
     for (int iht = 0; iht < 2; ++iht)
     {

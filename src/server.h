@@ -1369,6 +1369,7 @@ protected:
     static void gcDisposeSnapshot(redisDbPersistentDataSnapshot *psnapshot);
     int snapshot_depth() const;
     void consolidate_children(redisDbPersistentData *pdbPrimary, bool fForce);
+    void freeTombstoneObjects(int depth);
 
 public:
     bool FWillFreeChildDebug() const { return m_spdbSnapshotHOLDER != nullptr; }

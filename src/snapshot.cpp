@@ -1,6 +1,8 @@
 #include "server.h"
 #include "aelocker.h"
 
+static const size_t c_elementsSmallLimit = 500000;
+
 const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint64_t mvccCheckpoint, bool fOptional)
 {
     serverAssert(GlobalLocksAcquired());
@@ -26,6 +28,32 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
             }
             serverLog(LL_VERBOSE, "Existing snapshot too old, creating a new one");
         }
+    }
+
+    if (m_pdbSnapshot != nullptr && m_pdbSnapshot == m_pdbSnapshotASYNC && m_spdbSnapshotHOLDER->m_refCount == 1 && dictSize(m_pdictTombstone) < c_elementsSmallLimit)
+    {
+        serverLog(LL_WARNING, "Reusing old snapshot");
+        // is there an existing snapshot only owned by us?
+        
+        dictIterator *di = dictGetIterator(m_pdictTombstone);
+        dictEntry *de;
+        while ((de = dictNext(di)) != nullptr)
+        {
+            if (dictDelete(m_pdbSnapshot->m_pdict, dictGetKey(de)) != DICT_OK)
+                dictAdd(m_spdbSnapshotHOLDER->m_pdictTombstone, sdsdupshared((sds)dictGetKey(de)), nullptr);
+        }
+        dictReleaseIterator(di);
+
+        dictForceRehash(m_spdbSnapshotHOLDER->m_pdictTombstone);
+        dictMerge(m_pdbSnapshot->m_pdict, m_pdict);
+        dictEmpty(m_pdictTombstone, nullptr);
+        delete m_spdbSnapshotHOLDER->m_setexpire;
+        m_spdbSnapshotHOLDER->m_setexpire =  new (MALLOC_LOCAL) expireset(*m_setexpire);
+
+        m_pdbSnapshotASYNC = nullptr;
+        serverAssert(m_pdbSnapshot->m_pdict->iterators == 1);
+        serverAssert(m_spdbSnapshotHOLDER->m_refCount == 1);
+        return m_pdbSnapshot;
     }
 
     // See if we have too many levels and can bail out of this to reduce load
@@ -154,7 +182,7 @@ void redisDbPersistentData::endSnapshotAsync(const redisDbPersistentDataSnapshot
         // if neither dict is rehashing then the merge is O(1) so don't count the size
         if (dictIsRehashing(psnapshot->m_pdict) || dictIsRehashing(m_pdict))
             elements += dictSize(m_pdict);
-        if (elements < 1000000 || psnapshot != m_spdbSnapshotHOLDER.get())  // heuristic
+        if (elements < c_elementsSmallLimit || psnapshot != m_spdbSnapshotHOLDER.get())  // heuristic
         {
             // For small snapshots it makes more sense just to merge it directly
             endSnapshot(psnapshot);
@@ -165,18 +193,44 @@ void redisDbPersistentData::endSnapshotAsync(const redisDbPersistentDataSnapshot
         // OK this is a big snapshot so lets do the merge work outside the lock
         auto psnapshotT = createSnapshot(LLONG_MAX, false);
         endSnapshot(psnapshot); // this will just dec the ref count since our new snapshot has a ref 
+        psnapshot = nullptr;
     aeReleaseLock();
 
     // do the expensive work of merging snapshots outside the ref
-    reinterpret_cast<redisDbPersistentDataSnapshot*>(this)->consolidate_children(this, true /* fForce */);
+    const_cast<redisDbPersistentDataSnapshot*>(psnapshotT)->freeTombstoneObjects(1);    // depth is one because we just creted it
     
     // Final Cleanup
     aeAcquireLock();
         if (m_pdbSnapshotASYNC == nullptr)
             m_pdbSnapshotASYNC = psnapshotT;
         else
-            endSnapshot(psnapshotT);    // finally clena up our temp snapshot
+            endSnapshot(psnapshotT);    // finally clean up our temp snapshot
     aeReleaseLock();
+}
+
+void redisDbPersistentDataSnapshot::freeTombstoneObjects(int depth)
+{
+    if (m_pdbSnapshot == nullptr)
+        return;
+
+    const_cast<redisDbPersistentDataSnapshot*>(m_pdbSnapshot)->freeTombstoneObjects(depth+1);
+    if (m_pdbSnapshot->m_refCount != depth && (m_pdbSnapshot->m_refCount != (m_refCount+1)))
+        return;
+    
+    dictIterator *di = dictGetIterator(m_pdictTombstone);
+    dictEntry *de;
+    size_t freed = 0;
+    while ((de = dictNext(di)) != nullptr)
+    {
+        dictEntry *deObj = dictFind(m_pdbSnapshot->m_pdict, dictGetKey(de));
+        if (deObj != nullptr && dictGetVal(deObj) != nullptr)
+        {
+            decrRefCount((robj*)dictGetVal(deObj));
+            deObj->v.val = nullptr;
+            ++freed;
+        }
+    }
+    dictReleaseIterator(di);
 }
 
 void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psnapshot)
@@ -302,10 +356,10 @@ dict_iter redisDbPersistentDataSnapshot::random_cache_threadsafe() const
 dict_iter redisDbPersistentDataSnapshot::find_cached_threadsafe(const char *key) const
 {
     dictEntry *de = dictFind(m_pdict, key);
-    if (de == nullptr && m_pdbSnapshot != nullptr)
+    if (de == nullptr && m_pdbSnapshot != nullptr && dictFind(m_pdictTombstone, key) == nullptr)
     {
         auto itr = m_pdbSnapshot->find_cached_threadsafe(key);
-        if (itr != nullptr && dictFind(m_pdictTombstone, itr.key()) == nullptr)
+        if (itr != nullptr)
             return itr;
     }
     return dict_iter(de);
@@ -362,7 +416,7 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
     __atomic_load(&m_pdbSnapshot, &psnapshot, __ATOMIC_ACQUIRE);
     if (fResult && psnapshot != nullptr)
     {
-        fResult = psnapshot->iterate_threadsafe([this, &fn, &celem](const char *key, robj_roptr o){            
+        fResult = psnapshot->iterate_threadsafe([this, &fn, &celem](const char *key, robj_roptr o) {
             dictEntry *deTombstone = dictFind(m_pdictTombstone, key);
             if (deTombstone != nullptr)
                 return true;
@@ -411,10 +465,9 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
     if (!lock.try_lock())
         return; // this is a best effort function
 
-    if (!fForce && snapshot_depth() < 4)
+    if (!fForce && snapshot_depth() < 2)
         return;
 
-    serverAssert(snapshot_depth() > 1);
     auto spdb = std::unique_ptr<redisDbPersistentDataSnapshot>(new (MALLOC_LOCAL) redisDbPersistentDataSnapshot());
     spdb->initialize();
     dictExpand(spdb->m_pdict, m_pdbSnapshot->size());

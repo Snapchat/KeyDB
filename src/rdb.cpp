@@ -1464,10 +1464,19 @@ void *rdbSaveThread(void *vargs)
         sendChildCOWInfo(CHILD_INFO_TYPE_RDB, "RDB");
 
     // If we were told to cancel the requesting thread holds the lock for us
+    ssize_t cbStart = zmalloc_used_memory();
     for (int idb = 0; idb < cserver.dbnum; ++idb)
         g_pserver->db[idb]->endSnapshotAsync(args->rgpdb[idb]);
     zfree(args);
+    ssize_t cbDiff = (cbStart - (ssize_t)zmalloc_used_memory());
     g_pserver->garbageCollector.endEpoch(vars.gcEpoch);
+
+    if (cbDiff > 0)
+    {
+        serverLog(LL_NOTICE,
+                "%s: %zd MB of memory used by copy-on-write",
+                "RDB",cbDiff/(1024*1024));
+    }
 
     return (retval == C_OK) ? (void*)0 : (void*)1;
 }
@@ -2658,6 +2667,11 @@ void *rdbSaveToSlavesSocketsThread(void *vargs)
     int retval;
     rio rdb;
 
+    serverAssert(serverTL == nullptr);
+    redisServerThreadVars vars;
+    serverTL = &vars;
+    vars.gcEpoch = g_pserver->garbageCollector.startEpoch();
+
     rioInitWithFd(&rdb,g_pserver->rdb_pipe_write);
 
     retval = rdbSaveRioWithEOFMark(&rdb,args->rgpdb,NULL,&args->rsi);
@@ -2675,6 +2689,8 @@ void *rdbSaveToSlavesSocketsThread(void *vargs)
     for (int idb = 0; idb < cserver.dbnum; ++idb)
         g_pserver->db[idb]->endSnapshotAsync(args->rgpdb[idb]);
     zfree(args);
+
+    g_pserver->garbageCollector.endEpoch(vars.gcEpoch);
 
     return (retval == C_OK) ? (void*)0 : (void*)1;
 }

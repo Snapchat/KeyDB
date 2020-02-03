@@ -2596,7 +2596,7 @@ void initServerConfig(void) {
 
     // This will get dereferenced before the second stage init where we have the true db count
     //  so make sure its zero and initialized
-    g_pserver->db = (redisDb**)zcalloc(sizeof(redisDb*)*cserver.dbnum, MALLOC_LOCAL);
+    g_pserver->db = (redisDb**)zcalloc(sizeof(redisDb*)*std::max(cserver.dbnum, 1), MALLOC_LOCAL);
 
     initConfigValues();
 }
@@ -3907,7 +3907,7 @@ int processCommand(client *c, int callFlags) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
-        if (listLength(g_pserver->monitors) == 0 && c->cmd->proc == getCommand)
+        if (cserver.cthreads >= 2 && listLength(g_pserver->monitors) == 0 && c->cmd->proc == getCommand)
         {
             if (getCommandAsync(c))
                 return C_OK;
@@ -5126,10 +5126,13 @@ int redisFork() {
 void sendChildCOWInfo(int ptype, const char *pname) {
     size_t private_dirty = zmalloc_get_private_dirty(-1);
 
-    if (private_dirty) {
-        serverLog(LL_NOTICE,
-            "%s: %zu MB of memory used by copy-on-write",
-            pname, private_dirty/(1024*1024));
+    if (ptype != CHILD_INFO_TYPE_RDB)
+    {
+        if (private_dirty) {
+            serverLog(LL_NOTICE,
+                "%s: %zu MB of memory used by copy-on-write",
+                pname, private_dirty/(1024*1024));
+        }
     }
 
     g_pserver->child_info_data.cow_size = private_dirty;

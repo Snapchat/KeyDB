@@ -179,6 +179,7 @@ int dictExpand(dict *d, unsigned long size)
 
 int dictMerge(dict *dst, dict *src)
 {
+    assert(dst != src);
     if (dictSize(src) == 0)
         return DICT_OK;
     
@@ -188,12 +189,15 @@ int dictMerge(dict *dst, dict *src)
         return DICT_OK;
     }
 
+    if (dictSize(src) > dictSize(dst))
+        std::swap(*dst, *src);
+
     if (!dictIsRehashing(dst) && !dictIsRehashing(src))
     {
         dst->ht[1] = dst->ht[0];
         dst->ht[0] = src->ht[0];
-        dst->rehashidx = 0;
         _dictReset(&src->ht[0]);
+        dst->rehashidx = 0;
         return DICT_OK;
     }
 
@@ -210,10 +214,12 @@ int dictMerge(dict *dst, dict *src)
             while (de != nullptr)
             {
                 dictEntry *deNext = de->next;
+                
                 uint64_t h = dictHashKey(dst, de->key) & htDst.sizemask;
                 de->next = htDst.table[h];
                 htDst.table[h] = de;
                 htDst.used++;
+
                 de = deNext;
                 src->ht[iht].used--;
             }

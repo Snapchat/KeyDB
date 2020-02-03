@@ -2301,6 +2301,9 @@ void redisDbPersistentData::commitChanges(const changelist &vec)
 
 redisDbPersistentData::~redisDbPersistentData()
 {
+    if (m_pdbSnapshotASYNC)
+        endSnapshot(m_pdbSnapshotASYNC);
+    
     serverAssert(m_spdbSnapshotHOLDER == nullptr);
     //serverAssert(m_pdbSnapshot == nullptr);
     serverAssert(m_refCount == 0);

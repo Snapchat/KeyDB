@@ -3960,7 +3960,7 @@ int prepareForShutdown(int flags) {
        overwrite the synchronous saving did by SHUTDOWN. */
     if (g_pserver->FRdbSaveInProgress()) {
         serverLog(LL_WARNING,"There is a child saving an .rdb. Killing it!");
-        killRDBChild();
+        killRDBChild(true);
     }
 
     /* Kill module child if there is one. */

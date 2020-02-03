@@ -1663,8 +1663,8 @@ void disklessLoadRestoreBackups(redisDb *backup, int restore, int empty_db_flags
             g_pserver->db[i] = backup[i];
         }
     } else {
-        /* Delete. */
-        emptyDbGeneric(backup,-1,empty_db_flags,replicationEmptyDbCallback);
+        /* Delete (Pass EMPTYDB_BACKUP in order to avoid firing module events) . */
+        emptyDbGeneric(backup,-1,empty_db_flags|EMPTYDB_BACKUP,replicationEmptyDbCallback);
         for (int i=0; i<cserver.dbnum; i++) {
             dictRelease(backup[i].pdict);
             delete backup[i].setexpire;
@@ -1855,7 +1855,6 @@ void readSyncBulkPayload(connection *conn) {
     /* We need to stop any AOF rewriting child before flusing and parsing
      * the RDB, otherwise we'll create a copy-on-write disaster. */
     if (g_pserver->aof_state != AOF_OFF) stopAppendOnly();
-    signalFlushedDb(-1);
 
     /* When diskless RDB loading is used by replicas, it may be configured
      * in order to save the current DB instead of throwing it away,
@@ -1863,10 +1862,15 @@ void readSyncBulkPayload(connection *conn) {
     if (use_diskless_load &&
         g_pserver->repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB)
     {
+        /* Create a backup of server.db[] and initialize to empty
+         * dictionaries */
         diskless_load_backup = disklessLoadMakeBackups();
-    } else {
-        emptyDb(-1,empty_db_flags,replicationEmptyDbCallback);
     }
+    /* We call to emptyDb even in case of REPL_DISKLESS_LOAD_SWAPDB
+     * (Where disklessLoadMakeBackups left server.db empty) because we
+     * want to execute all the auxiliary logic of emptyDb (Namely,
+     * fire module events) */
+    emptyDb(-1,empty_db_flags,replicationEmptyDbCallback);
 
     /* Before loading the DB into memory we need to delete the readable
      * handler, otherwise it will get called recursively since

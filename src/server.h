@@ -2767,7 +2767,7 @@ int writeCommandsDeniedByDiskError(void);
 
 /* RDB persistence */
 #include "rdb.h"
-void killRDBChild(void);
+void killRDBChild(bool fSynchronous = false);
 
 /* AOF persistence */
 void flushAppendOnlyFile(int force);

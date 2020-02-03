@@ -2644,14 +2644,23 @@ void backgroundSaveDoneHandler(int exitcode, bool fCancelled) {
 }
 
 /* Kill the RDB saving child using SIGUSR1 (so that the parent will know
- * the child did not exit for an error, but because we wanted), and performs
+ * the child did not exit for sn error, but because we wanted), and performs
  * the cleanup needed. */
-void killRDBChild(void) {
+void killRDBChild(bool fSynchronous) {
     serverAssert(GlobalLocksAcquired());
     g_pserver->rdbThreadVars.fRdbThreadCancel = true;
     rdbRemoveTempFile(g_pserver->rdbThreadVars.tmpfileNum);
     closeChildInfoPipe();
     updateDictResizePolicy();
+    if (fSynchronous)
+    {
+        aeReleaseLock();
+        serverAssert(!GlobalLocksAcquired());
+        void *result;
+        pthread_join(g_pserver->rdbThreadVars.rdb_child_thread, &result);
+        g_pserver->rdbThreadVars.fRdbThreadCancel = false;
+        aeAcquireLock();
+    }
 }
 
 struct rdbSaveSocketThreadArgs

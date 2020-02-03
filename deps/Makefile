@@ -94,6 +94,6 @@ jemalloc: .make-prerequisites
 
 rocksdb: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
-	cd rocksdb && $(MAKE) static_lib
+	cd rocksdb && PORTABLE=1 FORCE_SSE42=1 $(MAKE) static_lib
 
 .PHONY: rocksdb

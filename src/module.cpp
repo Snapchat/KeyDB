@@ -30,6 +30,7 @@
 #include "server.h"
 #include "cluster.h"
 #include "rdb.h"
+#include "aelocker.h"
 #include <dlfcn.h>
 #include <mutex>
 #include <condition_variable>
@@ -1276,7 +1277,10 @@ client *moduleGetReplyClient(RedisModuleCtx *ctx) {
 int RM_ReplyWithLongLong(RedisModuleCtx *ctx, long long ll) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return REDISMODULE_OK;
-    addReplyLongLong(c,ll);
+    AeLocker locker;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
+    addReplyLongLongAsync(c,ll);
     return REDISMODULE_OK;
 }
 
@@ -1286,9 +1290,12 @@ int RM_ReplyWithLongLong(RedisModuleCtx *ctx, long long ll) {
 int replyWithStatus(RedisModuleCtx *ctx, const char *msg, const char *prefix) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return REDISMODULE_OK;
-    addReplyProto(c,prefix,strlen(prefix));
-    addReplyProto(c,msg,strlen(msg));
-    addReplyProto(c,"\r\n",2);
+    AeLocker locker;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
+    addReplyProtoAsync(c,prefix,strlen(prefix));
+    addReplyProtoAsync(c,msg,strlen(msg));
+    addReplyProtoAsync(c,"\r\n",2);
     return REDISMODULE_OK;
 }
 
@@ -1332,15 +1339,19 @@ int RM_ReplyWithSimpleString(RedisModuleCtx *ctx, const char *msg) {
  * The function always returns REDISMODULE_OK. */
 int RM_ReplyWithArray(RedisModuleCtx *ctx, long len) {
     client *c = moduleGetReplyClient(ctx);
+    AeLocker locker;
+
     if (c == NULL) return REDISMODULE_OK;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
     if (len == REDISMODULE_POSTPONED_ARRAY_LEN) {
         ctx->postponed_arrays = (void**)zrealloc(ctx->postponed_arrays,sizeof(void*)*
                 (ctx->postponed_arrays_count+1), MALLOC_LOCAL);
         ctx->postponed_arrays[ctx->postponed_arrays_count] =
-            addReplyDeferredLen(c);
+            addReplyDeferredLenAsync(c);
         ctx->postponed_arrays_count++;
     } else {
-        addReplyArrayLen(c,len);
+        addReplyArrayLenAsync(c,len);
     }
     return REDISMODULE_OK;
 }
@@ -1352,7 +1363,10 @@ int RM_ReplyWithArray(RedisModuleCtx *ctx, long len) {
 int RM_ReplyWithNullArray(RedisModuleCtx *ctx) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return REDISMODULE_OK;
-    addReplyNullArray(c);
+    AeLocker locker;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
+    addReplyNullArrayAsync(c);
     return REDISMODULE_OK;
 }
 
@@ -1362,7 +1376,10 @@ int RM_ReplyWithNullArray(RedisModuleCtx *ctx) {
 int RM_ReplyWithEmptyArray(RedisModuleCtx *ctx) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return REDISMODULE_OK;
-    addReply(c,shared.emptyarray);
+    AeLocker locker;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
+    addReplyAsync(c,shared.emptyarray);
     return REDISMODULE_OK;
 }
 
@@ -1395,6 +1412,9 @@ int RM_ReplyWithEmptyArray(RedisModuleCtx *ctx) {
 void RM_ReplySetArrayLength(RedisModuleCtx *ctx, long len) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return;
+    AeLocker locker;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
     if (ctx->postponed_arrays_count == 0) {
         serverLog(LL_WARNING,
             "API misuse detected in module %s: "
@@ -1404,7 +1424,7 @@ void RM_ReplySetArrayLength(RedisModuleCtx *ctx, long len) {
             return;
     }
     ctx->postponed_arrays_count--;
-    setDeferredArrayLen(c,
+    setDeferredArrayLenAsync(c,
             ctx->postponed_arrays[ctx->postponed_arrays_count],
             len);
     if (ctx->postponed_arrays_count == 0) {
@@ -1419,7 +1439,10 @@ void RM_ReplySetArrayLength(RedisModuleCtx *ctx, long len) {
 int RM_ReplyWithStringBuffer(RedisModuleCtx *ctx, const char *buf, size_t len) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return REDISMODULE_OK;
-    addReplyBulkCBuffer(c,(char*)buf,len);
+    AeLocker locker;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
+    addReplyBulkCBufferAsync(c,(char*)buf,len);
     return REDISMODULE_OK;
 }
 
@@ -1430,7 +1453,10 @@ int RM_ReplyWithStringBuffer(RedisModuleCtx *ctx, const char *buf, size_t len) {
 int RM_ReplyWithCString(RedisModuleCtx *ctx, const char *buf) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return REDISMODULE_OK;
-    addReplyBulkCString(c,(char*)buf);
+    AeLocker locker;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
+    addReplyBulkCStringAsync(c,(char*)buf);
     return REDISMODULE_OK;
 }
 
@@ -1440,7 +1466,10 @@ int RM_ReplyWithCString(RedisModuleCtx *ctx, const char *buf) {
 int RM_ReplyWithString(RedisModuleCtx *ctx, RedisModuleString *str) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return REDISMODULE_OK;
-    addReplyBulk(c,str);
+    AeLocker locker;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
+    addReplyBulkAsync(c,str);
     return REDISMODULE_OK;
 }
 
@@ -1450,7 +1479,10 @@ int RM_ReplyWithString(RedisModuleCtx *ctx, RedisModuleString *str) {
 int RM_ReplyWithEmptyString(RedisModuleCtx *ctx) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return REDISMODULE_OK;
-    addReply(c,shared.emptybulk);
+    AeLocker locker;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
+    addReplyAsync(c,shared.emptybulk);
     return REDISMODULE_OK;
 }
 
@@ -1461,7 +1493,10 @@ int RM_ReplyWithEmptyString(RedisModuleCtx *ctx) {
 int RM_ReplyWithVerbatimString(RedisModuleCtx *ctx, const char *buf, size_t len) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return REDISMODULE_OK;
-    addReplyVerbatim(c, buf, len, "txt");
+    AeLocker locker;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
+    addReplyVerbatimAsync(c, buf, len, "txt");
     return REDISMODULE_OK;
 }
 
@@ -1471,7 +1506,10 @@ int RM_ReplyWithVerbatimString(RedisModuleCtx *ctx, const char *buf, size_t len)
 int RM_ReplyWithNull(RedisModuleCtx *ctx) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return REDISMODULE_OK;
-    addReplyNull(c);
+    AeLocker locker;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
+    addReplyNullAsync(c);
     return REDISMODULE_OK;
 }
 
@@ -1484,8 +1522,11 @@ int RM_ReplyWithNull(RedisModuleCtx *ctx) {
 int RM_ReplyWithCallReply(RedisModuleCtx *ctx, RedisModuleCallReply *reply) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return REDISMODULE_OK;
+    AeLocker locker;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
     sds proto = sdsnewlen(reply->proto, reply->protolen);
-    addReplySds(c,proto);
+    addReplySdsAsync(c,proto);
     return REDISMODULE_OK;
 }
 
@@ -1498,7 +1539,10 @@ int RM_ReplyWithCallReply(RedisModuleCtx *ctx, RedisModuleCallReply *reply) {
 int RM_ReplyWithDouble(RedisModuleCtx *ctx, double d) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return REDISMODULE_OK;
-    addReplyDouble(c,d);
+    AeLocker locker;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
+    addReplyDoubleAsync(c,d);
     return REDISMODULE_OK;
 }
 
@@ -1513,7 +1557,10 @@ int RM_ReplyWithDouble(RedisModuleCtx *ctx, double d) {
 int RM_ReplyWithLongDouble(RedisModuleCtx *ctx, long double ld) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return REDISMODULE_OK;
-    addReplyHumanLongDouble(c, ld);
+    AeLocker locker;
+    std::unique_lock<fastlock> lock(c->lock);
+    locker.arm(c);
+    addReplyHumanLongDoubleAsync(c, ld);
     return REDISMODULE_OK;
 }
 

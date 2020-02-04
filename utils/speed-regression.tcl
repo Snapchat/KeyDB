@@ -27,8 +27,8 @@ proc run-tests branches {
         }
 
         # Start the Redis server
-        puts "  starting the server... [exec ./keydb-server -v]"
-        set pids [exec echo "port $::port\nloglevel warning\n" | ./keydb-server - > /dev/null 2> /dev/null &]
+        puts "  starting the server... [exec ./keydb-pro-server -v]"
+        set pids [exec echo "port $::port\nloglevel warning\n" | ./keydb-pro-server - > /dev/null 2> /dev/null &]
         puts "  pids: $pids"
         after 1000
         puts "  running the benchmark"

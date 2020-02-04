@@ -65,7 +65,7 @@ test "Slave #5 is reachable and alive" {
 
 test "Slave #5 should not be able to failover" {
     after 10000
-    assert {[RI 5 role] eq {slave}}
+    assert_equal {slave} [RI 5 role]
 }
 
 test "Cluster should be down" {

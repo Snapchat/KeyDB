@@ -2182,27 +2182,14 @@ void clusterWriteHandler(connection *conn) {
     clusterLink *link = (clusterLink*)connGetPrivateData(conn);
     ssize_t nwritten;
 
-    // We're about to release the lock, so the link's sndbuf needs to be owned fully by us
-    //  allocate a new one in case anyone tries to write while we're waiting
-    sds sndbuf = link->sndbuf;
-    link->sndbuf = sdsempty();
-
-    aeReleaseLock();
     nwritten = connWrite(conn, link->sndbuf, sdslen(link->sndbuf));
-    aeAcquireLock();
-
     if (nwritten <= 0) {
         serverLog(LL_DEBUG,"I/O error writing to node link: %s",
             (nwritten == -1) ? connGetLastError(conn) : "short write");
-        sdsfree(sndbuf);
         handleLinkIOError(link);
         return;
     }
-    sdsrange(sndbuf,nwritten,-1);
-    // Restore our send buffer, ensuring any unsent data is first
-    sndbuf = sdscat(sndbuf, link->sndbuf);
-    sdsfree(link->sndbuf);
-    link->sndbuf = sndbuf;
+    sdsrange(link->sndbuf,nwritten,-1);
     if (sdslen(link->sndbuf) == 0)
         connSetWriteHandler(link->conn, NULL);
 }
@@ -2324,7 +2311,11 @@ void clusterReadHandler(connection *conn) {
 void clusterSendMessage(clusterLink *link, unsigned char *msg, size_t msglen) {
     serverAssert(GlobalLocksAcquired());
     if (sdslen(link->sndbuf) == 0 && msglen != 0)
-        connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
+    {
+        aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [link] {
+            connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
+        });
+    }
 
     link->sndbuf = sdscatlen(link->sndbuf, msg, msglen);
 

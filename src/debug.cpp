@@ -736,8 +736,26 @@ NULL
     } else if (!strcasecmp(szFromObj(c->argv[1]),"stringmatch-test") && c->argc == 2) {
         stringmatchlen_fuzz_test();
         addReplyStatus(c,"Apparently Redis did not crash: test passed");
-    } else if (!strcasecmp(szFromObj(c->argv[1]), "force-master") && c->argc == 2) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]), "force-master") && c->argc == 3) {
         c->flags |= CLIENT_MASTER | CLIENT_MASTER_FORCE_REPLY;
+        if (!strcasecmp(szFromObj(c->argv[2]), "yes"))
+        {
+            redisMaster *mi = (redisMaster*)zcalloc(sizeof(redisMaster), MALLOC_LOCAL);
+            mi->master = c;
+            listAddNodeHead(g_pserver->masters, mi);
+        }
+        else if (strcasecmp(szFromObj(c->argv[2]), "flagonly")) // if we didn't set flagonly assume its an unset
+        {
+            serverAssert(c->flags & CLIENT_MASTER);
+            if (listLength(g_pserver->masters))
+            {
+                redisMaster *mi = (redisMaster*)listNodeValue(listFirst(g_pserver->masters));
+                serverAssert(mi->master == c);
+                listDelNode(g_pserver->masters, listFirst(g_pserver->masters));
+                zfree(mi);
+            }
+            c->flags &= ~(CLIENT_MASTER | CLIENT_MASTER_FORCE_REPLY);
+        }
         addReply(c, shared.ok);
 #ifdef USE_JEMALLOC
     } else if(!strcasecmp(szFromObj(c->argv[1]),"mallctl") && c->argc >= 3) {

@@ -177,9 +177,8 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key) {
  * Returns the linked value object if the key exists or NULL if the key
  * does not exist in the specified DB. */
 robj *lookupKeyWrite(redisDb *db, robj *key) {
+    expireIfNeeded(db,key);
     robj *o = lookupKey(db,key,LOOKUP_UPDATEMVCC);
-    if (expireIfNeeded(db,key))
-        o = NULL;
     return o;
 }
 

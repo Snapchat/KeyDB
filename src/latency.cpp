@@ -599,7 +599,7 @@ NULL
         event = (char*)dictGetKey(de);
 
         graph = latencyCommandGenSparkeline(event,ts);
-        addReplyBulkCString(c,graph);
+        addReplyVerbatim(c,graph,sdslen(graph),"txt");
         sdsfree(graph);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"latest") && c->argc == 2) {
         /* LATENCY LATEST */
@@ -608,7 +608,7 @@ NULL
         /* LATENCY DOCTOR */
         sds report = createLatencyReport();
 
-        addReplyBulkCBuffer(c,report,sdslen(report));
+        addReplyVerbatim(c,report,sdslen(report),"txt");
         sdsfree(report);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"reset") && c->argc >= 2) {
         /* LATENCY RESET */

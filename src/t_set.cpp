@@ -423,10 +423,10 @@ void spopWithCountCommand(client *c) {
     if ((set = lookupKeyWriteOrReply(c,c->argv[1],shared.null[c->resp]))
         == NULL || checkType(c,set,OBJ_SET)) return;
 
-    /* If count is zero, serve an empty multibulk ASAP to avoid special
+    /* If count is zero, serve an empty set ASAP to avoid special
      * cases later. */
     if (count == 0) {
-        addReplyNull(c);
+        addReply(c,shared.emptyset[c->resp]);
         return;
     }
 
@@ -637,13 +637,13 @@ void srandmemberWithCountCommand(client *c) {
         uniq = 0;
     }
 
-    if ((set = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp]))
+    if ((set = lookupKeyReadOrReply(c,c->argv[1],shared.emptyset[c->resp]))
         == nullptr || checkType(c,set,OBJ_SET)) return;
     size = setTypeSize(set);
 
     /* If count is zero, serve it ASAP to avoid special cases later. */
     if (count == 0) {
-        addReplyNull(c);
+        addReply(c,shared.emptyset[c->resp]);
         return;
     }
 
@@ -818,10 +818,7 @@ void sinterGenericCommand(client *c, robj **setkeys,
                 }
                 addReply(c,shared.czero);
             } else {
-                if (c->resp >= 3)
-                    addReplyNull(c);
-                else
-                    addReply(c, shared.emptyarray);
+                addReply(c,shared.emptyset[c->resp]);
             }
             return;
         }

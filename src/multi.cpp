@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+bool FInReplicaReplay();
 
 /* ================================ MULTI/EXEC ============================== */
 
@@ -172,12 +173,15 @@ void execCommand(client *c) {
          * This way we'll deliver the MULTI/..../EXEC block as a whole and
          * both the AOF and the replication link will have the same consistency
          * and atomicity guarantees. */
-        if (!must_propagate && !(c->cmd->flags & (CMD_READONLY|CMD_ADMIN))) {
+        if (!must_propagate && !(c->cmd->flags & (CMD_READONLY|CMD_ADMIN)) && !(FInReplicaReplay())) {
             execCommandPropagateMulti(c);
             must_propagate = 1;
         }
 
-        call(c,g_pserver->loading ? CMD_CALL_NONE : CMD_CALL_FULL);
+        int flags = g_pserver->loading ? CMD_CALL_NONE : CMD_CALL_FULL;
+        if (FInReplicaReplay())
+            flags &= ~CMD_CALL_PROPAGATE;
+        call(c,flags);
 
         /* Commands may alter argc/argv, restore mstate. */
         c->mstate.commands[j].argc = c->argc;

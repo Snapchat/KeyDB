@@ -43,6 +43,7 @@
 #include <uuid/uuid.h>
 #include <chrono>
 #include <unordered_map>
+#include <string>
 
 void replicationDiscardCachedMaster(redisMaster *mi);
 void replicationResurrectCachedMaster(redisMaster *mi, int newfd);

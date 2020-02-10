@@ -42,6 +42,7 @@
 #include <algorithm>
 #include <uuid/uuid.h>
 #include <chrono>
+#include <unordered_map>
 
 void replicationDiscardCachedMaster(redisMaster *mi);
 void replicationResurrectCachedMaster(redisMaster *mi, int newfd);
@@ -353,6 +354,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     cchDbNum = std::min<int>(cchDbNum, sizeof(szDbNum)); // snprintf is tricky like that
 
     char szMvcc[128];
+    incrementMvccTstamp();
     uint64_t mvccTstamp = getMvccTstamp();
     int cchMvccNum = snprintf(szMvcc, sizeof(szMvcc), "%lu", mvccTstamp);
     int cchMvcc = snprintf(szMvcc, sizeof(szMvcc), "$%d\r\n%lu\r\n", cchMvccNum, mvccTstamp);
@@ -432,6 +434,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
             clientReplyBlock* reply = (clientReplyBlock*)listNodeValue(lnReply);
             addReplyProtoAsync(replica, reply->buf(), reply->used);
         }
+
         if (!fSendRaw)
         {
             addReplyAsync(replica,shared.crlf);
@@ -2420,6 +2423,8 @@ void freeMasterInfo(redisMaster *mi)
 {
     zfree(mi->masterauth);
     zfree(mi->masteruser);
+    if (mi->clientFake)
+        freeClient(mi->clientFake);
     delete mi->staleKeyMap;
     zfree(mi);
 }
@@ -2477,6 +2482,11 @@ void replicationHandleMasterDisconnection(redisMaster *mi) {
         mi->master = NULL;
         mi->repl_state = REPL_STATE_CONNECT;
         mi->repl_down_since = g_pserver->unixtime;
+        if (mi->clientFake) {
+            freeClient(mi->clientFake);
+            mi->clientFake = nullptr;
+
+        }
         /* We lost connection with our master, don't disconnect slaves yet,
         * maybe we'll be able to PSYNC with our master later. We'll disconnect
         * the slaves only if we'll have to do a full resync with our master. */
@@ -3344,14 +3354,33 @@ public:
         return m_cnesting == 1;
     }
 
+    redisMaster *getMi(client *c)
+    {
+        if (m_mi == nullptr)
+            m_mi = MasterInfoFromClient(c);
+        return m_mi;
+    }
+
+    int nesting() const { return m_cnesting; }
+
 private:
     int m_cnesting = 0;
     bool m_fCancelled = false;
+    redisMaster *m_mi = nullptr;
 };
+
+static thread_local ReplicaNestState *s_pstate = nullptr;
+
+bool FInReplicaReplay()
+{
+    return s_pstate != nullptr && s_pstate->nesting() > 0;
+}
+
+
+static std::unordered_map<std::string, uint64_t> g_mapmvcc;
 
 void replicaReplayCommand(client *c)
 {
-    static thread_local ReplicaNestState *s_pstate = nullptr;
     if (s_pstate == nullptr)
         s_pstate = new (MALLOC_LOCAL) ReplicaNestState;
 
@@ -3375,9 +3404,10 @@ void replicaReplayCommand(client *c)
         return;
     }
 
-    unsigned char uuid[UUID_BINARY_LEN];
+    std::string uuid;
+    uuid.resize(UUID_BINARY_LEN);
     if (c->argv[1]->type != OBJ_STRING || sdslen((sds)ptrFromObj(c->argv[1])) != 36 
-        || uuid_parse((sds)ptrFromObj(c->argv[1]), uuid) != 0)
+        || uuid_parse((sds)ptrFromObj(c->argv[1]), (unsigned char*)uuid.data()) != 0)
     {
         addReplyError(c, "Expected UUID arg1");
         s_pstate->Cancel();
@@ -3413,7 +3443,7 @@ void replicaReplayCommand(client *c)
         }
     }
 
-    if (FSameUuidNoNil(uuid, cserver.uuid))
+    if (FSameUuidNoNil((unsigned char*)uuid.data(), cserver.uuid))
     {
         addReply(c, shared.ok);
         s_pstate->Cancel();
@@ -3423,33 +3453,56 @@ void replicaReplayCommand(client *c)
     if (!s_pstate->FPush())
         return;
 
+    redisMaster *mi = s_pstate->getMi(c);
+    client *cFake = mi->clientFake;
+    if (mi->clientFakeNesting != s_pstate->nesting())
+        cFake = nullptr;
+    serverAssert(mi != nullptr);
+    if (mvcc != 0 && g_mapmvcc[uuid] >= mvcc && (mi->clientFake == nullptr))
+    {
+        s_pstate->Cancel();
+        s_pstate->Pop();
+        return;
+    }
+
     // OK We've recieved a command lets execute
     client *current_clientSave = serverTL->current_client;
-    client *cFake = createClient(-1, c->iel);
+    if (cFake == nullptr)
+        cFake = createClient(-1, c->iel);
     cFake->lock.lock();
     cFake->authenticated = c->authenticated;
     cFake->puser = c->puser;
     cFake->querybuf = sdscatsds(cFake->querybuf,(sds)ptrFromObj(c->argv[2]));
     selectDb(cFake, c->db->id);
     auto ccmdPrev = serverTL->commandsExecuted;
+    cFake->flags |= CLIENT_MASTER | CLIENT_PREVENT_REPL_PROP;
     processInputBuffer(cFake, (CMD_CALL_FULL & (~CMD_CALL_PROPAGATE)));
+    cFake->flags &= ~(CLIENT_MASTER | CLIENT_PREVENT_REPL_PROP);
     bool fExec = ccmdPrev != serverTL->commandsExecuted;
     cFake->lock.unlock();
-    if (fExec)
+    if (fExec || cFake->flags & CLIENT_MULTI)
     {
         addReply(c, shared.ok);
         selectDb(c, cFake->db->id);
-        redisMaster *mi = MasterInfoFromClient(c);
-        if (mi != nullptr)  // this should never be null but I'd prefer not to crash
-        {
-            mi->mvccLastSync = mvcc;
-        }
+        g_mapmvcc[uuid] = mvcc;
     }
     else
     {
+        serverLog(LL_WARNING, "Command didn't execute: %s", cFake->buf);
         addReplyError(c, "command did not execute");
     }
-    freeClient(cFake);
+    serverAssert(sdslen(cFake->querybuf) == 0);
+    if (cFake->flags & CLIENT_MULTI)
+    {
+        mi->clientFake = cFake;
+        mi->clientFakeNesting = s_pstate->nesting();
+    }
+    else
+    {
+        if (mi->clientFake == cFake)
+            mi->clientFake = nullptr;
+        freeClient(cFake);
+    }
     serverTL->current_client = current_clientSave;
 
     // call() will not propogate this for us, so we do so here

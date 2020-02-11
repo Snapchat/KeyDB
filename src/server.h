@@ -1904,6 +1904,7 @@ struct redisServerThreadVars {
     long unsigned commandsExecuted = 0;
     uint64_t gcEpoch = 0;
     const redisDbPersistentDataSnapshot **rgdbSnapshot = nullptr;
+    bool fRetrySetAofEvent = false;
 };
 
 struct redisMaster {
@@ -1913,6 +1914,8 @@ struct redisMaster {
     int masterport;                 /* Port of master */
     client *cached_master;          /* Cached master to be reused for PSYNC. */
     client *master;
+    client *clientFake;
+    int clientFakeNesting;
     /* The following two fields is where we store master PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
      * the server->master client structure. */
@@ -1986,6 +1989,7 @@ struct redisServerConst {
     sds license_key = nullptr;
     int trial_timeout = 120;
     int delete_on_evict = false;   // Only valid when a storage provider is set
+    int thread_min_client_threshold = 50;
 };
 
 struct redisServer {

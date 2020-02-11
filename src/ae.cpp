@@ -273,7 +273,8 @@ int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg)
     cmd.proc = proc;
     cmd.clientData = arg;
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
-    AE_ASSERT(size == sizeof(cmd));
+    if (size != sizeof(cmd))
+        return AE_ERR;
     return AE_OK;
 }
 
@@ -296,6 +297,8 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
     }
 
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
+    if (size != sizeof(cmd))
+        return AE_ERR;
     AE_ASSERT(size == sizeof(cmd));
     int ret = AE_OK;
     if (fSynchronous)

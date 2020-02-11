@@ -167,11 +167,12 @@ void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
      * not one already. */
     if (!g_pserver->aof_rewrite_pending) {
         g_pserver->aof_rewrite_pending = true;
-        aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [] {
+        int res = aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [] {
             g_pserver->aof_rewrite_pending = false;
             if (g_pserver->aof_pipe_write_data_to_child >= 0)
                 aeCreateFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, g_pserver->aof_pipe_write_data_to_child, AE_WRITABLE, aofChildWriteDiffData, NULL);
         });
+        serverAssert(res == AE_OK); // we can't handle an error here
     }
 }
 
@@ -1563,16 +1564,18 @@ error:
 
 void aofClosePipes(void) {
     int fdAofAckPipe = g_pserver->aof_pipe_read_ack_from_child;
-    aePostFunction(g_pserver->el_alf_pip_read_ack_from_child, [fdAofAckPipe]{
+    int res = aePostFunction(g_pserver->el_alf_pip_read_ack_from_child, [fdAofAckPipe]{
         aeDeleteFileEventAsync(serverTL->el,fdAofAckPipe,AE_READABLE);
         close (fdAofAckPipe);
     });
+    serverAssert(res == AE_OK);
 
     int fdAofWritePipe = g_pserver->aof_pipe_write_data_to_child;
-    aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [fdAofWritePipe]{
+    res = aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [fdAofWritePipe]{
         aeDeleteFileEventAsync(serverTL->el,fdAofWritePipe,AE_WRITABLE);
         close(fdAofWritePipe);
     });
+    serverAssert(res == AE_OK);
     g_pserver->aof_pipe_write_data_to_child = -1;
     
     close(g_pserver->aof_pipe_read_data_from_parent);

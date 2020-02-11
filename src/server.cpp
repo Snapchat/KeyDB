@@ -2884,6 +2884,7 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     pvar->el = aeCreateEventLoop(g_pserver->maxclients+CONFIG_FDSET_INCR);
     pvar->current_client = nullptr;
     pvar->clients_paused = 0;
+    pvar->fRetrySetAofEvent = false;
     if (pvar->el == NULL) {
         serverLog(LL_WARNING,
             "Failed creating the event loop. Error message: '%s'",

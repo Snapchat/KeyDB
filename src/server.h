@@ -1526,6 +1526,7 @@ struct redisServerThreadVars {
     struct fastlock lockPendingWrite { "thread pending write" };
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     long unsigned commandsExecuted = 0;
+    bool fRetrySetAofEvent = false;
 };
 
 struct redisMaster {

@@ -1003,7 +1003,7 @@ int clientHasPendingReplies(client *c) {
     return (c->bufpos || listLength(c->reply)) && !(c->flags & CLIENT_CLOSE_ASAP);
 }
 
-int chooseBestThreadForAccept(int ielCur)
+int chooseBestThreadForAccept()
 {
     listIter li;
     listNode *ln;
@@ -1133,7 +1133,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         if (!g_fTestMode)
         {
             {
-            int ielTarget = chooseBestThreadForAccept(ielCur);
+            int ielTarget = chooseBestThreadForAccept();
             if (ielTarget != ielCur)
             {
                 char *szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);

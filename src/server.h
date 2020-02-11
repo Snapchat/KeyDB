@@ -1519,6 +1519,7 @@ struct redisServerThreadVars {
     struct fastlock lockPendingWrite { "thread pending write" };
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     long unsigned commandsExecuted = 0;
+    bool fRetrySetAofEvent = false;
 };
 
 struct redisMaster {
@@ -1528,6 +1529,8 @@ struct redisMaster {
     int masterport;                 /* Port of master */
     client *cached_master;          /* Cached master to be reused for PSYNC. */
     client *master;
+    client *clientFake;
+    int clientFakeNesting;
     /* The following two fields is where we store master PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
      * the server->master client structure. */
@@ -1598,6 +1601,7 @@ struct redisServerConst {
 
     unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
     bool fUsePro = false;
+    int thread_min_client_threshold = 50;
 };
 
 struct redisServer {

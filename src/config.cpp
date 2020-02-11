@@ -540,6 +540,11 @@ void loadServerConfigFromString(char *config) {
         } else if (!strcasecmp(argv[0],"enable-pro")) {
             cserver.fUsePro = true;
             break;
+        } else if (!strcasecmp(argv[0],"min-clients-per-thread") && argc == 2) {
+            cserver.thread_min_client_threshold = atoi(argv[1]);
+            if (cserver.thread_min_client_threshold < 0 || cserver.thread_min_client_threshold > 400) {
+                err = "min-thread-client must be between 0 and 400"; goto loaderr;
+            }
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }

@@ -295,6 +295,15 @@ int clusterLoadConfig(char *filename) {
     if (clusterGetMaxEpoch() > g_pserver->cluster->currentEpoch) {
         g_pserver->cluster->currentEpoch = clusterGetMaxEpoch();
     }
+
+    if (dictSize(g_pserver->cluster->nodes) > 1 && cserver.thread_min_client_threshold < 100)
+    {
+        // Because we expect the individual load of a client to be much less in a cluster (it will spread over multiple server)
+        //  we can increase the grouping of clients on a single thread within reason
+        cserver.thread_min_client_threshold *= dictSize(g_pserver->cluster->nodes);
+        cserver.thread_min_client_threshold = std::min(cserver.thread_min_client_threshold, 200);
+        serverLog(LL_NOTICE, "Expanding min-clients-per-thread to %d due to cluster", cserver.thread_min_client_threshold);
+    }
     return C_OK;
 
 fmterr:
@@ -623,9 +632,10 @@ void freeClusterLink(clusterLink *link) {
         if (link->node)
             link->node->link = NULL;
         link->node = nullptr;
-        aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [link]{
+        int res = aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [link]{
             freeClusterLink(link);
         });
+        serverAssert(res == AE_OK);
         return;
     }
     if (link->fd != -1) {

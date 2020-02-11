@@ -1690,7 +1690,7 @@ void clientsCron(int iel) {
             /* The following functions do different service checks on the client.
             * The protocol is that they return non-zero if the client was
             * terminated. */
-            if (clientsCronHandleTimeout(c,now)) goto LContinue;
+            if (clientsCronHandleTimeout(c,now)) continue;  // Client free'd so don't release the lock
             if (clientsCronResizeQueryBuffer(c)) goto LContinue;
             if (clientsCronTrackExpansiveClients(c)) goto LContinue;
         LContinue:

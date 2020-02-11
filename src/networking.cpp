@@ -1037,6 +1037,33 @@ int clientHasPendingReplies(client *c) {
     return (c->bufpos || listLength(c->reply)) && !(c->flags & CLIENT_CLOSE_ASAP);
 }
 
+int chooseBestThreadForAccept()
+{
+    listIter li;
+    listNode *ln;
+    int rgcclients[MAX_EVENT_LOOPS] = {0};
+
+    listRewind(g_pserver->clients, &li);
+    while ((ln = listNext(&li)) != nullptr)
+    {
+        client *c = (client*)listNodeValue(ln);
+        if (c->iel < 0)
+            continue;
+        
+        rgcclients[c->iel]++;
+    }
+
+    int ielMinLoad = 0;
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
+    {
+        if (rgcclients[iel] < cserver.thread_min_client_threshold)
+            return iel;
+        if (rgcclients[iel] < rgcclients[ielMinLoad])
+            ielMinLoad = iel;
+    }
+    return ielMinLoad;
+}
+
 void clientAcceptHandler(connection *conn) {
     client *c = (client*)connGetPrivateData(conn);
 
@@ -1178,7 +1205,22 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
         if (!g_fTestMode)
         {
-            // We always accept on the same thread
+            {
+            int ielTarget = chooseBestThreadForAccept();
+            if (ielTarget != ielCur)
+            {
+                char *szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
+                memcpy(szT, cip, NET_IP_STR_LEN);
+                int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [cfd, ielTarget, szT]{
+                    acceptCommonHandler(connCreateAcceptedSocket(cfd),0,szT,ielTarget);
+                    zfree(szT);
+                });
+
+                if (res == AE_OK)
+                    continue;
+            }
+            }
+
         LLocalThread:
             aeAcquireLock();
             acceptCommonHandler(connCreateAcceptedSocket(cfd),0,cip,ielCur);
@@ -1195,10 +1237,15 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 goto LLocalThread;
             char *szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
             memcpy(szT, cip, NET_IP_STR_LEN);
-            aePostFunction(g_pserver->rgthreadvar[iel].el, [cfd, iel, szT]{
+            int res = aePostFunction(g_pserver->rgthreadvar[iel].el, [cfd, iel, szT]{
                 acceptCommonHandler(connCreateAcceptedSocket(cfd),0,szT,iel);
                 zfree(szT);
             });
+            if (res != AE_OK)
+            {
+                zfree(szT);
+                goto LLocalThread;
+            }
         }
     }
 }
@@ -1242,7 +1289,24 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         serverLog(LL_VERBOSE,"Accepted connection to %s", g_pserver->unixsocket);
-        acceptCommonHandler(connCreateAcceptedSocket(cfd),CLIENT_UNIX_SOCKET,NULL,iel);
+
+        aeAcquireLock();
+        int ielTarget = rand() % cserver.cthreads;
+        if (ielTarget == iel)
+        {
+        LLocalThread:
+            acceptCommonHandler(connCreateAcceptedSocket(cfd),CLIENT_UNIX_SOCKET,NULL,iel);
+        }
+        else
+        {
+            int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [cfd, ielTarget]{
+                acceptCommonHandler(connCreateAcceptedSocket(cfd),CLIENT_UNIX_SOCKET,NULL,ielTarget);
+            });
+            if (res != AE_OK)
+                goto LLocalThread;
+        }
+        aeReleaseLock();
+        
     }
 }
 
@@ -2624,7 +2688,7 @@ NULL
                 {
                     int iel = client->iel;
                     freeClientAsync(client);
-                    aePostFunction(g_pserver->rgthreadvar[client->iel].el, [iel] {
+                    aePostFunction(g_pserver->rgthreadvar[client->iel].el, [iel] {  // note: failure is OK
                         freeClientsInAsyncFreeQueue(iel);
                     });
                 }

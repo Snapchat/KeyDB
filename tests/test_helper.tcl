@@ -45,6 +45,7 @@ set ::all_tests {
     integration/replication-4
     integration/replication-psync
     integration/replication-active
+    integration/replication-multimaster
     integration/aof
     integration/rdb
     integration/convert-zipmap-hash-on-load

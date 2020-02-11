@@ -124,6 +124,21 @@ void aofChildWriteDiffData(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 }
 
+void installAofRewriteEvent()
+{
+    serverTL->fRetrySetAofEvent = false;
+    if (!g_pserver->aof_rewrite_pending) {
+        g_pserver->aof_rewrite_pending = true;
+        int res = aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [] {
+            g_pserver->aof_rewrite_pending = false;
+            if (g_pserver->aof_pipe_write_data_to_child >= 0)
+                aeCreateFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, g_pserver->aof_pipe_write_data_to_child, AE_WRITABLE, aofChildWriteDiffData, NULL);
+        });
+        if (res != AE_OK)
+            serverTL->fRetrySetAofEvent = true;
+    }
+}
+
 /* Append data to the AOF rewrite buffer, allocating new blocks if needed. */
 void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
     listNode *ln = listLast(g_pserver->aof_rewrite_buf_blocks);
@@ -165,15 +180,7 @@ void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
 
     /* Install a file event to send data to the rewrite child if there is
      * not one already. */
-    if (!g_pserver->aof_rewrite_pending) {
-        g_pserver->aof_rewrite_pending = true;
-        int res = aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [] {
-            g_pserver->aof_rewrite_pending = false;
-            if (g_pserver->aof_pipe_write_data_to_child >= 0)
-                aeCreateFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, g_pserver->aof_pipe_write_data_to_child, AE_WRITABLE, aofChildWriteDiffData, NULL);
-        });
-        serverAssert(res == AE_OK); // we can't handle an error here
-    }
+    installAofRewriteEvent();
 }
 
 /* Write the buffer (possibly composed of multiple blocks) into the specified
@@ -348,6 +355,9 @@ void flushAppendOnlyFile(int force) {
     ssize_t nwritten;
     int sync_in_progress = 0;
     mstime_t latency;
+
+    if (serverTL->fRetrySetAofEvent)
+        installAofRewriteEvent();
 
     if (sdslen(g_pserver->aof_buf) == 0) {
         /* Check if we need to do fsync even the aof buffer is empty,

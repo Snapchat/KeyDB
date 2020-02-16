@@ -19,7 +19,7 @@ keydb-cli
 redis-sentinel
 keydb-sentinel
 redis-server
-keydb-server
+keydb-pro-server
 doc-tools
 release
 misc/*

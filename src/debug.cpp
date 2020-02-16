@@ -1560,7 +1560,7 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 "\n=== KEYDB BUG REPORT END. Make sure to include from START to END. ===\n\n"
 "       Please report the crash by opening an issue on github:\n\n"
 "           https://github.com/JohnSully/KeyDB/issues\n\n"
-"  Suspect RAM error? Use keydb-server --test-memory to verify it.\n\n"
+"  Suspect RAM error? Use keydb-pro-server --test-memory to verify it.\n\n"
 );
 
     /* free(messages); Don't call free() with possibly corrupted memory. */

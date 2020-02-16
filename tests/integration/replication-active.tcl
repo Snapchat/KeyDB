@@ -59,6 +59,24 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
             }
         }
 
+        test {Active replicas propogate transaction} {
+            $master set testkey 0
+            $master multi
+            $master incr testkey
+            $master incr testkey
+            after 5000
+            $master get testkey
+            $master exec
+            assert_equal 2 [$master get testkey]
+            after 500
+            wait_for_condition 50 500 {
+                [string match "2" [$slave get testkey]]
+            } else {
+                fail "Transaction failed to replicate"
+            }
+            $master flushall
+        }
+
         test {Active replicas WAIT} {
             # Test that wait succeeds since replicas should be syncronized
             $master set testkey foo

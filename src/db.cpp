@@ -977,7 +977,7 @@ void shutdownCommand(client *c) {
      * Also when in Sentinel mode clear the SAVE flag and force NOSAVE. */
     if (g_pserver->loading || g_pserver->sentinel_mode)
         flags = (flags & ~SHUTDOWN_SAVE) | SHUTDOWN_NOSAVE;
-    if (prepareForShutdown(flags) == C_OK) exit(0);
+    if (prepareForShutdown(flags) == C_OK) throw ShutdownException();
     addReplyError(c,"Errors trying to SHUTDOWN. Check logs.");
 }
 

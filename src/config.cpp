@@ -405,7 +405,7 @@ void loadServerConfigFromString(char *config) {
         } else if ((!strcasecmp(argv[0],"slaveof") ||
                     !strcasecmp(argv[0],"replicaof")) && argc == 3) {
             slaveof_linenum = linenum;
-            replicationAddMaster(sdsnew(argv[1]), atoi(argv[2]));
+            replicationAddMaster(argv[1], atoi(argv[2]));
         } else if ((!strcasecmp(argv[0],"repl-ping-slave-period") ||
                     !strcasecmp(argv[0],"repl-ping-replica-period")) &&
                     argc == 2)

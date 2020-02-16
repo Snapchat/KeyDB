@@ -276,7 +276,8 @@ int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg)
     cmd.proc = proc;
     cmd.clientData = arg;
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
-    AE_ASSERT(size == sizeof(cmd));
+    if (size != sizeof(cmd))
+        return AE_ERR;
     return AE_OK;
 }
 

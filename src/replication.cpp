@@ -3849,7 +3849,7 @@ private:
     redisMaster *m_mi = nullptr;
 };
 
-static thread_local ReplicaNestState *s_pstate = nullptr;
+static thread_local std::unique_ptr<ReplicaNestState> s_pstate;
 
 bool FInReplicaReplay()
 {
@@ -3862,7 +3862,7 @@ static std::unordered_map<std::string, uint64_t> g_mapmvcc;
 void replicaReplayCommand(client *c)
 {
     if (s_pstate == nullptr)
-        s_pstate = new (MALLOC_LOCAL) ReplicaNestState;
+        s_pstate = std::make_unique<ReplicaNestState>();
 
     // the replay command contains two arguments: 
     //  1: The UUID of the source

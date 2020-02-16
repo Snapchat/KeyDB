@@ -1400,7 +1400,7 @@ public:
 /* Redis database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
-typedef struct redisDb : public redisDbPersistentDataSnapshot 
+struct redisDb : public redisDbPersistentDataSnapshot 
 {
     // Legacy C API, Do not add more
     friend void tryResizeHashTables(int);
@@ -1425,6 +1425,7 @@ typedef struct redisDb : public redisDbPersistentDataSnapshot
         : expireitr(nullptr)
     {}
     void initialize(int id);
+    virtual ~redisDb();
 
     void dbOverwriteCore(redisDb::iter itr, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire);
 
@@ -1477,7 +1478,7 @@ public:
     long long last_expire_set;  /* when the last expire was set */
     double avg_ttl;             /* Average TTL, just for stats */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
-} redisDb;
+};
 
 /* Client MULTI/EXEC state */
 typedef struct multiCmd {
@@ -2532,10 +2533,12 @@ void addReplyNullArray(client *c);
 void addReplyNullArrayAsync(client *c);
 void addReplyBool(client *c, int b);
 void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext);
+void addReplyVerbatimAsync(client *c, const char *s, size_t len, const char *ext);
 void addReplyProto(client *c, const char *s, size_t len);
 void addReplyBulk(client *c, robj_roptr obj);
 void AddReplyFromClient(client *c, client *src);
 void addReplyBulkCString(client *c, const char *s);
+void addReplyBulkCStringAsync(client *c, const char *s);
 void addReplyBulkCBuffer(client *c, const void *p, size_t len);
 void addReplyBulkLongLong(client *c, long long ll);
 void addReply(client *c, robj_roptr obj);
@@ -2545,6 +2548,7 @@ void addReplyError(client *c, const char *err);
 void addReplyStatus(client *c, const char *status);
 void addReplyDouble(client *c, double d);
 void addReplyHumanLongDouble(client *c, long double d);
+void addReplyHumanLongDoubleAsync(client *c, long double d);
 void addReplyLongLong(client *c, long long ll);
 #ifdef __cplusplus
 void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool fAsync);

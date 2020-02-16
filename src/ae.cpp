@@ -403,10 +403,18 @@ extern "C" void aeDeleteEventLoop(aeEventLoop *eventLoop) {
     aeApiFree(eventLoop);
     zfree(eventLoop->events);
     zfree(eventLoop->fired);
-    zfree(eventLoop);
     fastlock_free(&eventLoop->flock);
     close(eventLoop->fdCmdRead);
     close(eventLoop->fdCmdWrite);
+
+    auto *te = eventLoop->timeEventHead;
+    while (te)
+    {
+        auto *teNext = te->next;
+        zfree(te);
+        te = teNext;
+    }
+    zfree(eventLoop);
 }
 
 extern "C" void aeStop(aeEventLoop *eventLoop) {

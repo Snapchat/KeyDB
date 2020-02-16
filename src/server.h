@@ -2922,6 +2922,9 @@ inline int FCorrectThread(client *c)
 }
 #define AssertCorrectThread(c) serverAssert(FCorrectThread(c))
 
+class ShutdownException
+{};
+
 #define redisDebug(fmt, ...) \
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define redisDebugMark() \

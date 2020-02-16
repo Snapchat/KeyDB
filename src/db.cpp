@@ -412,7 +412,9 @@ bool redisDbPersistentData::syncDelete(robj *key)
             auto itr = m_pdbSnapshot->find_cached_threadsafe(szFromObj(key));
             if (itr != nullptr)
             {
-                dictAdd(m_pdictTombstone, sdsdup(szFromObj(key)), nullptr);
+                sds keyTombstone = sdsdup(szFromObj(key));
+                if (dictAdd(m_pdictTombstone, keyTombstone, nullptr) != DICT_OK)
+                    sdsfree(keyTombstone);
             }
         }
         if (g_pserver->cluster_enabled) slotToKeyDel(key);

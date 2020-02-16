@@ -2465,6 +2465,9 @@ std::unique_ptr<expireEntry> deserializeExpire(sds key, const char *str, size_t 
             spexpire = std::make_unique<expireEntry>(key, subkey, when);
         else
             spexpire->update(subkey, when);
+
+        if (subkey)
+            sdsfree(subkey);
     }
 
     *poffset = offset;

@@ -1400,7 +1400,7 @@ public:
 /* Redis database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
-typedef struct redisDb : public redisDbPersistentDataSnapshot 
+struct redisDb : public redisDbPersistentDataSnapshot 
 {
     // Legacy C API, Do not add more
     friend void tryResizeHashTables(int);
@@ -1425,6 +1425,7 @@ typedef struct redisDb : public redisDbPersistentDataSnapshot
         : expireitr(nullptr)
     {}
     void initialize(int id);
+    virtual ~redisDb();
 
     void dbOverwriteCore(redisDb::iter itr, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire);
 
@@ -1477,7 +1478,7 @@ public:
     long long last_expire_set;  /* when the last expire was set */
     double avg_ttl;             /* Average TTL, just for stats */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
-} redisDb;
+};
 
 /* Client MULTI/EXEC state */
 typedef struct multiCmd {

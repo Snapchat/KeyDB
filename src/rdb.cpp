@@ -1545,9 +1545,15 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
                 == NULL) return NULL;
 
             if (rdbtype == RDB_TYPE_ZSET_2) {
-                if (rdbLoadBinaryDoubleValue(rdb,&score) == -1) return NULL;
+                if (rdbLoadBinaryDoubleValue(rdb,&score) == -1) {
+                    sdsfree(sdsele);
+                    return NULL;
+                }
             } else {
-                if (rdbLoadDoubleValue(rdb,&score) == -1) return NULL;
+                if (rdbLoadDoubleValue(rdb,&score) == -1) {
+                    sdsfree(sdsele);
+                    return NULL;
+                }
             }
 
             /* Don't care about integer-encoded strings. */
@@ -2181,6 +2187,8 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
                 decrRefCount(val);
                 val = nullptr;
             }
+            decrRefCount(key);
+            key = nullptr;
         }
 
         /* Reset the state that is key-specified and is populated by

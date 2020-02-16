@@ -1497,6 +1497,14 @@ void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when) 
         rememberSlaveKeyWithExpire(db,key);
 }
 
+redisDb::~redisDb()
+{
+    dictRelease(watched_keys);
+    dictRelease(ready_keys);
+    dictRelease(blocking_keys);
+    listRelease(defrag_later);
+}
+
 void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
 {
     serverAssert(GlobalLocksAcquired());

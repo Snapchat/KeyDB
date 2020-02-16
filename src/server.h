@@ -1226,7 +1226,7 @@ class redisDbPersistentData
     friend class redisDbPersistentDataSnapshot;
 
 public:
-    ~redisDbPersistentData();
+    virtual ~redisDbPersistentData();
 
     redisDbPersistentData() = default;
     redisDbPersistentData(redisDbPersistentData &&) = default;
@@ -1424,6 +1424,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
     redisDb()
         : expireitr(nullptr)
     {}
+
     void initialize(int id);
     virtual ~redisDb();
 

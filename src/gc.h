@@ -30,6 +30,12 @@ public:
         return m_epochNext;
     }
 
+    void shutdown()
+    {
+        std::unique_lock<fastlock> lock(m_lock);
+        m_vecepochs.clear();
+    }
+
     void endEpoch(uint64_t epoch, bool fNoFree = false)
     {
         std::unique_lock<fastlock> lock(m_lock);

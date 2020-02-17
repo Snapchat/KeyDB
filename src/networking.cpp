@@ -3191,6 +3191,7 @@ void unpauseClientsIfNecessary()
  *
  * The function returns the total number of events processed. */
 int processEventsWhileBlocked(int iel) {
+    serverAssert(GlobalLocksAcquired());
     int iterations = 4; /* See the function top-comment. */
     int count = 0;
 
@@ -3202,12 +3203,25 @@ int processEventsWhileBlocked(int iel) {
     }
     aeReleaseLock();
     serverAssertDebug(!GlobalLocksAcquired());
-    while (iterations--) {
-        int events = 0;
-        events += aeProcessEvents(g_pserver->rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
-        events += handleClientsWithPendingWrites(iel);
-        if (!events) break;
-        count += events;
+    try
+    {
+        while (iterations--) {
+            int events = 0;
+            events += aeProcessEvents(g_pserver->rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
+            events += handleClientsWithPendingWrites(iel);
+            if (!events) break;
+            count += events;
+        }
+    }
+    catch (...)
+    {
+        // Caller expects us to be locked so fix and rethrow
+        AeLocker locker;
+        if (c != nullptr)
+            c->lock.lock();
+        locker.arm(c);
+        locker.release();
+        throw;
     }
     AeLocker locker;
     if (c != nullptr)

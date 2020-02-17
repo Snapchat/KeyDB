@@ -1968,7 +1968,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* We received a SIGTERM, shutting down here in a safe way, as it is
      * not ok doing so inside the signal handler. */
     if (g_pserver->shutdown_asap) {
-        if (prepareForShutdown(SHUTDOWN_NOFLAGS) == C_OK) exit(0);
+        if (prepareForShutdown(SHUTDOWN_NOFLAGS) == C_OK) throw ShutdownException();
         serverLog(LL_WARNING,"SIGTERM received but errors trying to shut down the server, check the logs for more information");
         g_pserver->shutdown_asap = 0;
     }
@@ -3876,8 +3876,17 @@ int prepareForShutdown(int flags) {
 
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
+
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
+    {
+        aePostFunction(g_pserver->rgthreadvar[iel].el, [iel]{
+            g_pserver->rgthreadvar[iel].el->stop = 1;
+        });
+    }
+
     serverLog(LL_WARNING,"%s is now ready to exit, bye bye...",
         g_pserver->sentinel_mode ? "Sentinel" : "KeyDB");
+
     return C_OK;
 }
 
@@ -5154,8 +5163,16 @@ void *workerThreadMain(void *parg)
     aeEventLoop *el = g_pserver->rgthreadvar[iel].el;
     aeSetBeforeSleepProc(el, isMainThread ? beforeSleep : beforeSleepLite, isMainThread ? 0 : AE_SLEEP_THREADSAFE);
     aeSetAfterSleepProc(el, afterSleep, AE_SLEEP_THREADSAFE);
-    aeMain(el);
+    try
+    {
+        aeMain(el);
+    }
+    catch (ShutdownException)
+    {
+    }
+    serverAssert(!GlobalLocksAcquired());
     aeDeleteEventLoop(el);
+
     return NULL;
 }
 
@@ -5466,7 +5483,9 @@ int main(int argc, char **argv) {
     /* The main thread sleeps until all the workers are done.
         this is so that all worker threads are orthogonal in their startup/shutdown */
     void *pvRet;
-    pthread_join(rgthread[IDX_EVENT_LOOP_MAIN], &pvRet);
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
+        pthread_join(rgthread[iel], &pvRet);
+
     return 0;
 }
 

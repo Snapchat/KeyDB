@@ -3405,6 +3405,10 @@ void tlsInit(void);
 void tlsInitThread();
 int tlsConfigure(redisTLSContextConfig *ctx_config);
 
+
+class ShutdownException
+{};
+
 #define redisDebug(fmt, ...) \
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define redisDebugMark() \

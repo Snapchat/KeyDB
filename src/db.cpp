@@ -2265,7 +2265,6 @@ redisDbPersistentData::changelist redisDbPersistentData::processChanges()
     serverAssert(m_fTrackingChanges >= 0);
     changelist vecRet;
 
-    fastlock_lock(&m_lockStorage);
     if (m_spstorage != nullptr)
     {
         m_spstorage->beginWriteBatch();
@@ -2305,7 +2304,6 @@ void redisDbPersistentData::commitChanges(const changelist &vec)
     }
     if (m_spstorage != nullptr)
         m_spstorage->endWriteBatch();
-    fastlock_unlock(&m_lockStorage);
 }
 
 redisDbPersistentData::~redisDbPersistentData()

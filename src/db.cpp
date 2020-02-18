@@ -189,9 +189,8 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key) {
  * Returns the linked value object if the key exists or NULL if the key
  * does not exist in the specified DB. */
 robj *lookupKeyWriteWithFlags(redisDb *db, robj *key, int flags) {
+    expireIfNeeded(db,key);
     robj *o = lookupKey(db,key,flags|LOOKUP_UPDATEMVCC);
-    if (expireIfNeeded(db,key))
-        o = nullptr;
     return o;
 }
 
@@ -412,7 +411,9 @@ bool redisDbPersistentData::syncDelete(robj *key)
             auto itr = m_pdbSnapshot->find_cached_threadsafe(szFromObj(key));
             if (itr != nullptr)
             {
-                dictAdd(m_pdictTombstone, sdsdup(szFromObj(key)), nullptr);
+                sds keyTombstone = sdsdup(szFromObj(key));
+                if (dictAdd(m_pdictTombstone, keyTombstone, nullptr) != DICT_OK)
+                    sdsfree(keyTombstone);
             }
         }
         if (g_pserver->cluster_enabled) slotToKeyDel(key);
@@ -1197,7 +1198,7 @@ void shutdownCommand(client *c) {
      * Also when in Sentinel mode clear the SAVE flag and force NOSAVE. */
     if (g_pserver->loading || g_pserver->sentinel_mode)
         flags = (flags & ~SHUTDOWN_SAVE) | SHUTDOWN_NOSAVE;
-    if (prepareForShutdown(flags) == C_OK) exit(0);
+    if (prepareForShutdown(flags) == C_OK) throw ShutdownException();
     addReplyError(c,"Errors trying to SHUTDOWN. Check logs.");
 }
 
@@ -1494,6 +1495,14 @@ void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when) 
     int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
     if (c && writable_slave && !(c->flags & CLIENT_MASTER))
         rememberSlaveKeyWithExpire(db,key);
+}
+
+redisDb::~redisDb()
+{
+    dictRelease(watched_keys);
+    dictRelease(ready_keys);
+    dictRelease(blocking_keys);
+    listRelease(defrag_later);
 }
 
 void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
@@ -2256,7 +2265,6 @@ redisDbPersistentData::changelist redisDbPersistentData::processChanges()
     serverAssert(m_fTrackingChanges >= 0);
     changelist vecRet;
 
-    fastlock_lock(&m_lockStorage);
     if (m_spstorage != nullptr)
     {
         m_spstorage->beginWriteBatch();
@@ -2296,7 +2304,6 @@ void redisDbPersistentData::commitChanges(const changelist &vec)
     }
     if (m_spstorage != nullptr)
         m_spstorage->endWriteBatch();
-    fastlock_unlock(&m_lockStorage);
 }
 
 redisDbPersistentData::~redisDbPersistentData()
@@ -2456,6 +2463,9 @@ std::unique_ptr<expireEntry> deserializeExpire(sds key, const char *str, size_t 
             spexpire = std::make_unique<expireEntry>(key, subkey, when);
         else
             spexpire->update(subkey, when);
+
+        if (subkey)
+            sdsfree(subkey);
     }
 
     *poffset = offset;

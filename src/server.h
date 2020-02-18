@@ -1358,7 +1358,6 @@ private:
     std::unique_ptr<redisDbPersistentDataSnapshot> m_spdbSnapshotHOLDER;
     const redisDbPersistentDataSnapshot *m_pdbSnapshotASYNC = nullptr;
     int m_refCount = 0;
-    fastlock m_lockStorage { "storage" };
 };
 
 class redisDbPersistentDataSnapshot : protected redisDbPersistentData

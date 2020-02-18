@@ -3077,7 +3077,6 @@ int processEventsWhileBlocked(int iel) {
     }
 
     aeReleaseLock();
-    serverAssertDebug(!GlobalLocksAcquired());
     try
     {
         while (iterations--) {

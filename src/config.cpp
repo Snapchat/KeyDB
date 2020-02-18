@@ -327,6 +327,10 @@ bool initializeStorageProvider(const char **err)
                     g_pserver->maxmemory_policy = MAXMEMORY_ALLKEYS_LRU;
                 }
             }
+            else if (g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
+            {
+                g_pserver->maxmemory_policy = MAXMEMORY_ALLKEYS_LRU;
+            }
         }
         else
         {

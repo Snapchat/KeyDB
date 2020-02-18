@@ -276,7 +276,8 @@ int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg)
     cmd.proc = proc;
     cmd.clientData = arg;
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
-    AE_ASSERT(size == sizeof(cmd));
+    if (size != sizeof(cmd))
+        return AE_ERR;
     return AE_OK;
 }
 
@@ -402,10 +403,18 @@ extern "C" void aeDeleteEventLoop(aeEventLoop *eventLoop) {
     aeApiFree(eventLoop);
     zfree(eventLoop->events);
     zfree(eventLoop->fired);
-    zfree(eventLoop);
     fastlock_free(&eventLoop->flock);
     close(eventLoop->fdCmdRead);
     close(eventLoop->fdCmdWrite);
+
+    auto *te = eventLoop->timeEventHead;
+    while (te)
+    {
+        auto *teNext = te->next;
+        zfree(te);
+        te = teNext;
+    }
+    zfree(eventLoop);
 }
 
 extern "C" void aeStop(aeEventLoop *eventLoop) {

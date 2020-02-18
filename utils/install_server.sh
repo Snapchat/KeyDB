@@ -37,7 +37,7 @@
 # 		 REDIS_CONFIG_FILE=/etc/redis/1234.conf \
 # 		 REDIS_LOG_FILE=/var/log/redis_1234.log \
 # 		 REDIS_DATA_DIR=/var/lib/redis/1234 \
-# 		 REDIS_EXECUTABLE=`command -v keydb-server` ./utils/install_server.sh
+# 		 REDIS_EXECUTABLE=`command -v keydb-pro-server` ./utils/install_server.sh
 #
 # This generates a redis config file and an /etc/init.d script, and installs them.
 #
@@ -129,7 +129,7 @@ fi
 if [ ! -x "$REDIS_EXECUTABLE" ] ; then
 	_MANUAL_EXECUTION=true
 	#get the redis executable path
-	_REDIS_EXECUTABLE=`command -v keydb-server`
+	_REDIS_EXECUTABLE=`command -v keydb-pro-server`
 	read -p "Please select the redis executable path [$_REDIS_EXECUTABLE] " REDIS_EXECUTABLE
 	if [ ! -x "$REDIS_EXECUTABLE" ] ; then
 		REDIS_EXECUTABLE=$_REDIS_EXECUTABLE

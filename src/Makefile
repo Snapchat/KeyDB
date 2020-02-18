@@ -319,7 +319,7 @@ else
 endif
 	@touch $@
 
-# keydb-server
+# keydb-pro-server
 $(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ) 
 	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/rocksdb/librocksdb.a $(FINAL_LIBS)
 

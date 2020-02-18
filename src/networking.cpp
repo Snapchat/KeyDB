@@ -663,21 +663,31 @@ void addReplyDoubleAsync(client *c, double d) {
     addReplyDoubleCore(c, d, true);
 }
 
+void addReplyBulkCore(client *c, robj_roptr obj, bool fAsync);
+
 /* Add a long double as a bulk reply, but uses a human readable formatting
  * of the double instead of exposing the crude behavior of doubles to the
  * dear user. */
-void addReplyHumanLongDouble(client *c, long double d) {
+void addReplyHumanLongDoubleCore(client *c, long double d, bool fAsync) {
     if (c->resp == 2) {
         robj *o = createStringObjectFromLongDouble(d,1);
-        addReplyBulk(c,o);
+        addReplyBulkCore(c,o,fAsync);
         decrRefCount(o);
     } else {
         char buf[MAX_LONG_DOUBLE_CHARS];
         int len = ld2string(buf,sizeof(buf),d,LD_STR_HUMAN);
-        addReplyProto(c,",",1);
-        addReplyProto(c,buf,len);
-        addReplyProto(c,"\r\n",2);
+        addReplyProtoCore(c,",",1,fAsync);
+        addReplyProtoCore(c,buf,len,fAsync);
+        addReplyProtoCore(c,"\r\n",2,fAsync);
     }
+}
+
+void addReplyHumanLongDouble(client *c, long double d) {
+    addReplyHumanLongDoubleCore(c, d, false);
+}
+
+void addReplyHumanLongDoubleAsync(client *c, long double d) {
+    addReplyHumanLongDoubleCore(c, d, true);
 }
 
 /* Add a long long as integer reply or bulk len / multi bulk count.
@@ -914,6 +924,10 @@ void addReplyBulkCString(client *c, const char *s) {
     addReplyBulkCStringCore(c, s, false);
 }
 
+void addReplyBulkCStringAsync(client *c, const char *s) {
+    addReplyBulkCStringCore(c, s, true);
+}
+
 /* Add a long long as a bulk reply */
 void addReplyBulkLongLong(client *c, long long ll) {
     char buf[64];
@@ -932,9 +946,9 @@ void addReplyBulkLongLong(client *c, long long ll) {
  * three first characters of the extension are used, and if the
  * provided one is shorter than that, the remaining is filled with
  * spaces. */
-void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext) {
+void addReplyVerbatimCore(client *c, const char *s, size_t len, const char *ext, bool fAsync) {
     if (c->resp == 2) {
-        addReplyBulkCBuffer(c,s,len);
+        addReplyBulkCBufferCore(c,s,len,fAsync);
     } else {
         char buf[32];
         size_t preflen = snprintf(buf,sizeof(buf),"=%zu\r\nxxx:",len+4);
@@ -946,10 +960,18 @@ void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext) {
                 p[i] = *ext++;
             }
         }
-        addReplyProto(c,buf,preflen);
-        addReplyProto(c,s,len);
-        addReplyProto(c,"\r\n",2);
+        addReplyProtoCore(c,buf,preflen,fAsync);
+        addReplyProtoCore(c,s,len,fAsync);
+        addReplyProtoCore(c,"\r\n",2,fAsync);
     }
+}
+
+void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext) {
+    addReplyVerbatimCore(c, s, len, ext, false);
+}
+
+void addReplyVerbatimAsync(client *c, const char *s, size_t len, const char *ext) {
+    addReplyVerbatimCore(c, s, len, ext, true);
 }
 
 /* Add an array of C strings as status replies with a heading.
@@ -1013,6 +1035,27 @@ void copyClientOutputBuffer(client *dst, client *src) {
  * the socket. */
 int clientHasPendingReplies(client *c) {
     return (c->bufpos || listLength(c->reply)) && !(c->flags & CLIENT_CLOSE_ASAP);
+}
+
+static std::atomic<int> rgacceptsInFlight[MAX_EVENT_LOOPS];
+int chooseBestThreadForAccept()
+{
+    int ielMinLoad = 0;
+    int cclientsMin = INT_MAX;
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
+    {
+        int cclientsThread;
+        atomicGet(g_pserver->rgthreadvar[iel].cclients, cclientsThread);
+        cclientsThread += rgacceptsInFlight[iel].load(std::memory_order_relaxed);
+        if (cclientsThread < cserver.thread_min_client_threshold)
+            return iel;
+        if (cclientsThread < cclientsMin)
+        {
+            cclientsMin = cclientsThread;
+            ielMinLoad = iel;
+        }
+    }
+    return ielMinLoad;
 }
 
 void clientAcceptHandler(connection *conn) {
@@ -1156,7 +1199,25 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
         if (!g_fTestMode)
         {
-            // We always accept on the same thread
+            {
+            int ielTarget = chooseBestThreadForAccept();
+            rgacceptsInFlight[ielTarget].fetch_add(1, std::memory_order_relaxed);
+            if (ielTarget != ielCur)
+            {
+                char *szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
+                memcpy(szT, cip, NET_IP_STR_LEN);
+                int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [cfd, ielTarget, szT]{
+                    acceptCommonHandler(connCreateAcceptedSocket(cfd),0,szT,ielTarget);
+                    rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
+                    zfree(szT);
+                });
+
+                if (res == AE_OK)
+                    continue;
+            }
+            rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
+            }
+
         LLocalThread:
             aeAcquireLock();
             acceptCommonHandler(connCreateAcceptedSocket(cfd),0,cip,ielCur);
@@ -1173,10 +1234,15 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 goto LLocalThread;
             char *szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
             memcpy(szT, cip, NET_IP_STR_LEN);
-            aePostFunction(g_pserver->rgthreadvar[iel].el, [cfd, iel, szT]{
+            int res = aePostFunction(g_pserver->rgthreadvar[iel].el, [cfd, iel, szT]{
                 acceptCommonHandler(connCreateAcceptedSocket(cfd),0,szT,iel);
                 zfree(szT);
             });
+            if (res != AE_OK)
+            {
+                zfree(szT);
+                goto LLocalThread;
+            }
         }
     }
 }
@@ -1220,7 +1286,24 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         serverLog(LL_VERBOSE,"Accepted connection to %s", g_pserver->unixsocket);
-        acceptCommonHandler(connCreateAcceptedSocket(cfd),CLIENT_UNIX_SOCKET,NULL,iel);
+
+        aeAcquireLock();
+        int ielTarget = rand() % cserver.cthreads;
+        if (ielTarget == iel)
+        {
+        LLocalThread:
+            acceptCommonHandler(connCreateAcceptedSocket(cfd),CLIENT_UNIX_SOCKET,NULL,iel);
+        }
+        else
+        {
+            int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [cfd, ielTarget]{
+                acceptCommonHandler(connCreateAcceptedSocket(cfd),CLIENT_UNIX_SOCKET,NULL,ielTarget);
+            });
+            if (res != AE_OK)
+                goto LLocalThread;
+        }
+        aeReleaseLock();
+        
     }
 }
 
@@ -2602,7 +2685,7 @@ NULL
                 {
                     int iel = client->iel;
                     freeClientAsync(client);
-                    aePostFunction(g_pserver->rgthreadvar[client->iel].el, [iel] {
+                    aePostFunction(g_pserver->rgthreadvar[client->iel].el, [iel] {  // note: failure is OK
                         freeClientsInAsyncFreeQueue(iel);
                     });
                 }
@@ -3108,6 +3191,7 @@ void unpauseClientsIfNecessary()
  *
  * The function returns the total number of events processed. */
 int processEventsWhileBlocked(int iel) {
+    serverAssert(GlobalLocksAcquired());
     int iterations = 4; /* See the function top-comment. */
     int count = 0;
 
@@ -3117,15 +3201,30 @@ int processEventsWhileBlocked(int iel) {
         serverAssert(c->flags & CLIENT_PROTECTED);
         c->lock.unlock();
     }
+
     aeReleaseLock();
     serverAssertDebug(!GlobalLocksAcquired());
-    while (iterations--) {
-        int events = 0;
-        events += aeProcessEvents(g_pserver->rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
-        events += handleClientsWithPendingWrites(iel);
-        if (!events) break;
-        count += events;
+    try
+    {
+        while (iterations--) {
+            int events = 0;
+            events += aeProcessEvents(g_pserver->rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
+            events += handleClientsWithPendingWrites(iel);
+            if (!events) break;
+            count += events;
+        }
     }
+    catch (...)
+    {
+        // Caller expects us to be locked so fix and rethrow
+        AeLocker locker;
+        if (c != nullptr)
+            c->lock.lock();
+        locker.arm(c);
+        locker.release();
+        throw;
+    }
+    
     AeLocker locker;
     if (c != nullptr)
         c->lock.lock();

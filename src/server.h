@@ -1226,7 +1226,7 @@ class redisDbPersistentData
     friend class redisDbPersistentDataSnapshot;
 
 public:
-    ~redisDbPersistentData();
+    virtual ~redisDbPersistentData();
 
     redisDbPersistentData() = default;
     redisDbPersistentData(redisDbPersistentData &&) = default;
@@ -1358,7 +1358,6 @@ private:
     std::unique_ptr<redisDbPersistentDataSnapshot> m_spdbSnapshotHOLDER;
     const redisDbPersistentDataSnapshot *m_pdbSnapshotASYNC = nullptr;
     int m_refCount = 0;
-    fastlock m_lockStorage { "storage" };
 };
 
 class redisDbPersistentDataSnapshot : protected redisDbPersistentData
@@ -1400,7 +1399,7 @@ public:
 /* Redis database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
-typedef struct redisDb : public redisDbPersistentDataSnapshot 
+struct redisDb : public redisDbPersistentDataSnapshot 
 {
     // Legacy C API, Do not add more
     friend void tryResizeHashTables(int);
@@ -1424,7 +1423,9 @@ typedef struct redisDb : public redisDbPersistentDataSnapshot
     redisDb()
         : expireitr(nullptr)
     {}
+
     void initialize(int id);
+    virtual ~redisDb();
 
     void dbOverwriteCore(redisDb::iter itr, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire);
 
@@ -1477,7 +1478,7 @@ public:
     long long last_expire_set;  /* when the last expire was set */
     double avg_ttl;             /* Average TTL, just for stats */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
-} redisDb;
+};
 
 /* Client MULTI/EXEC state */
 typedef struct multiCmd {
@@ -1904,6 +1905,7 @@ struct redisServerThreadVars {
     long unsigned commandsExecuted = 0;
     uint64_t gcEpoch = 0;
     const redisDbPersistentDataSnapshot **rgdbSnapshot = nullptr;
+    bool fRetrySetAofEvent = false;
 };
 
 struct redisMaster {
@@ -1913,6 +1915,8 @@ struct redisMaster {
     int masterport;                 /* Port of master */
     client *cached_master;          /* Cached master to be reused for PSYNC. */
     client *master;
+    client *clientFake;
+    int clientFakeNesting;
     /* The following two fields is where we store master PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
      * the server->master client structure. */
@@ -1986,6 +1990,7 @@ struct redisServerConst {
     sds license_key = nullptr;
     int trial_timeout = 120;
     int delete_on_evict = false;   // Only valid when a storage provider is set
+    int thread_min_client_threshold = 50;
 };
 
 struct redisServer {
@@ -2528,10 +2533,12 @@ void addReplyNullArray(client *c);
 void addReplyNullArrayAsync(client *c);
 void addReplyBool(client *c, int b);
 void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext);
+void addReplyVerbatimAsync(client *c, const char *s, size_t len, const char *ext);
 void addReplyProto(client *c, const char *s, size_t len);
 void addReplyBulk(client *c, robj_roptr obj);
 void AddReplyFromClient(client *c, client *src);
 void addReplyBulkCString(client *c, const char *s);
+void addReplyBulkCStringAsync(client *c, const char *s);
 void addReplyBulkCBuffer(client *c, const void *p, size_t len);
 void addReplyBulkLongLong(client *c, long long ll);
 void addReply(client *c, robj_roptr obj);
@@ -2541,6 +2548,7 @@ void addReplyError(client *c, const char *err);
 void addReplyStatus(client *c, const char *status);
 void addReplyDouble(client *c, double d);
 void addReplyHumanLongDouble(client *c, long double d);
+void addReplyHumanLongDoubleAsync(client *c, long double d);
 void addReplyLongLong(client *c, long long ll);
 #ifdef __cplusplus
 void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool fAsync);
@@ -3395,6 +3403,10 @@ inline int FCorrectThread(client *c)
 void tlsInit(void);
 void tlsInitThread();
 int tlsConfigure(redisTLSContextConfig *ctx_config);
+
+
+class ShutdownException
+{};
 
 #define redisDebug(fmt, ...) \
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)

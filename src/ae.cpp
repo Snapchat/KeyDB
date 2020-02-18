@@ -131,7 +131,7 @@ struct aeCommand
     aeCommandControl *pctl;
 };
 #ifdef PIPE_BUF
-static_assert(sizeof(aeCommand) <= PIPE_BUF);
+static_assert(sizeof(aeCommand) <= PIPE_BUF, "aeCommand must be small enough to send atomically through a pipe");
 #endif
 
 void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )

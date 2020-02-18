@@ -74,6 +74,10 @@ extern int g_fInCrash;
     #define __has_feature(x) 0
 #endif
 
+#ifdef __linux__
+extern "C" void unlock_futex(struct fastlock *lock, uint16_t ifutex);
+#endif
+
 #if __has_feature(thread_sanitizer)
 
     /* Report that a lock has been created at address "lock". */
@@ -206,6 +210,11 @@ DeadlockDetector g_dlock;
 static_assert(sizeof(pid_t) <= sizeof(fastlock::m_pidOwner), "fastlock::m_pidOwner not large enough");
 uint64_t g_longwaits = 0;
 
+extern "C" void fastlock_panic(struct fastlock *lock)
+{
+    _serverPanic(__FILE__, __LINE__, "fastlock lock/unlock mismatch for: %s", lock->szName);
+}
+
 uint64_t fastlock_getlongwaitcount()
 {
     uint64_t rval;
@@ -337,31 +346,6 @@ extern "C" int fastlock_trylock(struct fastlock *lock, int fWeak)
     return false;
 }
 
-#ifdef __linux__
-#define ROL32(v, shift) ((v << shift) | (v >> (32-shift)))
-void unlock_futex(struct fastlock *lock, uint16_t ifutex)
-{
-    unsigned mask = (1U << (ifutex % 32));
-    unsigned futexT;
-    __atomic_load(&lock->futex, &futexT, __ATOMIC_RELAXED);
-    futexT &= mask;
-    
-    if (futexT == 0)
-        return;
-    
-    for (;;)
-    {
-        __atomic_load(&lock->futex, &futexT, __ATOMIC_ACQUIRE);
-        futexT &= mask;
-        if (!futexT)
-            break;
-
-        if (futex(&lock->m_ticket.u, FUTEX_WAKE_BITSET_PRIVATE, INT_MAX, nullptr, mask) == 1)
-            break;
-    }
-}
-#endif
-
 extern "C" void fastlock_unlock(struct fastlock *lock)
 {
     --lock->m_depth;
@@ -380,6 +364,26 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
 #else
 		UNUSED(activeNew);
 #endif
+    }
+}
+#endif
+
+#ifdef __linux__
+#define ROL32(v, shift) ((v << shift) | (v >> (32-shift)))
+extern "C" void unlock_futex(struct fastlock *lock, uint16_t ifutex)
+{
+    unsigned mask = (1U << (ifutex % 32));
+    unsigned futexT;
+    
+    for (;;)
+    {
+        __atomic_load(&lock->futex, &futexT, __ATOMIC_ACQUIRE);
+        futexT &= mask;
+        if (!futexT)
+            break;
+
+        if (futex(&lock->m_ticket.u, FUTEX_WAKE_BITSET_PRIVATE, INT_MAX, nullptr, mask) == 1)
+            break;
     }
 }
 #endif

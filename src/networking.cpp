@@ -3193,6 +3193,7 @@ int processEventsWhileBlocked(int iel) {
         serverAssert(c->flags & CLIENT_PROTECTED);
         c->lock.unlock();
     }
+
     aeReleaseLock();
     serverAssertDebug(!GlobalLocksAcquired());
     try
@@ -3215,6 +3216,7 @@ int processEventsWhileBlocked(int iel) {
         locker.release();
         throw;
     }
+    
     AeLocker locker;
     if (c != nullptr)
         c->lock.lock();

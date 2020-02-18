@@ -1,6 +1,7 @@
 #include "rocksdb.h"
 #include <string>
 #include <sstream>
+#include <mutex>
 
 RocksDBStorageProvider::RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count)
     : m_spdb(spdb), m_psnapshot(psnapshot), m_spcolfamily(spcolfam), m_count(count)
@@ -12,6 +13,7 @@ RocksDBStorageProvider::RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spd
 void RocksDBStorageProvider::insert(const char *key, size_t cchKey, void *data, size_t cb, bool fOverwrite)
 {
     rocksdb::Status status;
+    std::unique_lock<fastlock> l(m_lock);
     if (m_spbatch != nullptr)
         status = m_spbatch->Put(m_spcolfamily.get(), rocksdb::Slice(key, cchKey), rocksdb::Slice((const char*)data, cb));
     else
@@ -26,6 +28,7 @@ void RocksDBStorageProvider::insert(const char *key, size_t cchKey, void *data, 
 bool RocksDBStorageProvider::erase(const char *key, size_t cchKey)
 {
     rocksdb::Status status;
+    std::unique_lock<fastlock> l(m_lock);
     if (m_spbatch != nullptr)
     {
         status = m_spbatch->Delete(m_spcolfamily.get(), rocksdb::Slice(key, cchKey));
@@ -112,6 +115,7 @@ rocksdb::WriteOptions RocksDBStorageProvider::WriteOptions() const
 
 void RocksDBStorageProvider::beginWriteBatch()
 {
+    m_lock.lock();
     m_spbatch = std::make_unique<rocksdb::WriteBatch>();
 }
 
@@ -119,6 +123,7 @@ void RocksDBStorageProvider::endWriteBatch()
 {
     m_spdb->Write(WriteOptions(), m_spbatch.get());
     m_spbatch = nullptr;
+    m_lock.unlock();
 }
 
 void RocksDBStorageProvider::flush()

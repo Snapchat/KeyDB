@@ -1744,7 +1744,7 @@ void clientsCron(int iel) {
             /* The following functions do different service checks on the client.
             * The protocol is that they return non-zero if the client was
             * terminated. */
-            if (clientsCronHandleTimeout(c,now)) goto LContinue;
+            if (clientsCronHandleTimeout(c,now)) continue;  // Client free'd so don't release the lock
             if (clientsCronResizeQueryBuffer(c)) goto LContinue;
             if (clientsCronTrackExpansiveClients(c)) goto LContinue;
         LContinue:
@@ -1826,7 +1826,7 @@ void updateCachedTime(int update_daylight_info) {
     t /= 1000;
     __atomic_store(&g_pserver->mstime, &t, __ATOMIC_RELAXED);
     t /= 1000;
-    __atomic_store(&g_pserver->unixtime, &t, __ATOMIC_RELAXED);
+    g_pserver->unixtime = t;
 
     /* To get information about daylight saving time, we need to call
      * localtime_r and cache the result. However calling localtime_r in this
@@ -2027,7 +2027,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* We received a SIGTERM, shutting down here in a safe way, as it is
      * not ok doing so inside the signal handler. */
     if (g_pserver->shutdown_asap) {
-        if (prepareForShutdown(SHUTDOWN_NOFLAGS) == C_OK) exit(0);
+        if (prepareForShutdown(SHUTDOWN_NOFLAGS) == C_OK) throw ShutdownException();
         serverLog(LL_WARNING,"SIGTERM received but errors trying to shut down the server, check the logs for more information");
         g_pserver->shutdown_asap = 0;
     }
@@ -3018,6 +3018,7 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     pvar->el = aeCreateEventLoop(g_pserver->maxclients+CONFIG_FDSET_INCR);
     pvar->current_client = nullptr;
     pvar->clients_paused = 0;
+    pvar->fRetrySetAofEvent = false;
     if (pvar->el == NULL) {
         serverLog(LL_WARNING,
             "Failed creating the event loop. Error message: '%s'",
@@ -4026,23 +4027,16 @@ int prepareForShutdown(int flags) {
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
 
-    for (int ithread = 0; ithread < MAX_EVENT_LOOPS; ++ithread) {
-        for (int idb = 0; idb < cserver.dbnum; ++idb) {
-            if (g_pserver->rgthreadvar[ithread].rgdbSnapshot[idb] != nullptr)
-                g_pserver->db[idb]->endSnapshot(g_pserver->rgthreadvar[ithread].rgdbSnapshot[idb]);
-        }
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
+    {
+        aePostFunction(g_pserver->rgthreadvar[iel].el, [iel]{
+            g_pserver->rgthreadvar[iel].el->stop = 1;
+        });
     }
-
-    /* free our databases */
-    for (int idb = 0; idb < cserver.dbnum; ++idb) {
-        delete g_pserver->db[idb];
-        g_pserver->db[idb] = nullptr;
-    }
-
-    delete g_pserver->m_pstorageFactory;
 
     serverLog(LL_WARNING,"%s is now ready to exit, bye bye...",
         g_pserver->sentinel_mode ? "Sentinel" : "KeyDB");
+
     return C_OK;
 }
 
@@ -4969,19 +4963,19 @@ void version(void) {
 }
 
 void usage(void) {
-    fprintf(stderr,"Usage: ./keydb-server [/path/to/keydb.conf] [options]\n");
-    fprintf(stderr,"       ./keydb-server - (read config from stdin)\n");
-    fprintf(stderr,"       ./keydb-server -v or --version\n");
-    fprintf(stderr,"       ./keydb-server -h or --help\n");
-    fprintf(stderr,"       ./keydb-server --test-memory <megabytes>\n\n");
+    fprintf(stderr,"Usage: ./keydb-pro-server [/path/to/keydb.conf] [options]\n");
+    fprintf(stderr,"       ./keydb-pro-server - (read config from stdin)\n");
+    fprintf(stderr,"       ./keydb-pro-server -v or --version\n");
+    fprintf(stderr,"       ./keydb-pro-server -h or --help\n");
+    fprintf(stderr,"       ./keydb-pro-server --test-memory <megabytes>\n\n");
     fprintf(stderr,"Examples:\n");
-    fprintf(stderr,"       ./keydb-server (run the server with default conf)\n");
-    fprintf(stderr,"       ./keydb-server /etc/redis/6379.conf\n");
-    fprintf(stderr,"       ./keydb-server --port 7777\n");
-    fprintf(stderr,"       ./keydb-server --port 7777 --replicaof 127.0.0.1 8888\n");
-    fprintf(stderr,"       ./keydb-server /etc/mykeydb.conf --loglevel verbose\n\n");
+    fprintf(stderr,"       ./keydb-pro-server (run the server with default conf)\n");
+    fprintf(stderr,"       ./keydb-pro-server /etc/redis/6379.conf\n");
+    fprintf(stderr,"       ./keydb-pro-server --port 7777\n");
+    fprintf(stderr,"       ./keydb-pro-server --port 7777 --replicaof 127.0.0.1 8888\n");
+    fprintf(stderr,"       ./keydb-pro-server /etc/mykeydb.conf --loglevel verbose\n\n");
     fprintf(stderr,"Sentinel mode:\n");
-    fprintf(stderr,"       ./keydb-server /etc/sentinel.conf --sentinel\n");
+    fprintf(stderr,"       ./keydb-pro-server /etc/sentinel.conf --sentinel\n");
     exit(1);
 }
 
@@ -5351,8 +5345,23 @@ void *workerThreadMain(void *parg)
     aeEventLoop *el = g_pserver->rgthreadvar[iel].el;
     aeSetBeforeSleepProc(el, beforeSleep, AE_SLEEP_THREADSAFE);
     aeSetAfterSleepProc(el, afterSleep, AE_SLEEP_THREADSAFE);
-    aeMain(el);
+    try
+    {
+        aeMain(el);
+    }
+    catch (ShutdownException)
+    {
+    }
+    serverAssert(!GlobalLocksAcquired());
     aeDeleteEventLoop(el);
+
+    aeAcquireLock();
+    for (int idb = 0; idb < cserver.dbnum; ++idb) {
+        if (g_pserver->rgthreadvar[iel].rgdbSnapshot[idb] != nullptr)
+            g_pserver->db[idb]->endSnapshot(g_pserver->rgthreadvar[iel].rgdbSnapshot[idb]);
+    }
+    aeReleaseLock();
+
     return NULL;
 }
 
@@ -5475,7 +5484,7 @@ int main(int argc, char **argv) {
                 exit(0);
             } else {
                 fprintf(stderr,"Please specify the amount of memory to test in megabytes.\n");
-                fprintf(stderr,"Example: ./keydb-server --test-memory 4096\n\n");
+                fprintf(stderr,"Example: ./keydb-pro-server --test-memory 4096\n\n");
                 exit(1);
             }
         }
@@ -5664,7 +5673,18 @@ int main(int argc, char **argv) {
     /* The main thread sleeps until all the workers are done.
         this is so that all worker threads are orthogonal in their startup/shutdown */
     void *pvRet;
-    pthread_join(rgthread[IDX_EVENT_LOOP_MAIN], &pvRet);
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
+        pthread_join(rgthread[iel], &pvRet);
+
+    /* free our databases */
+    for (int idb = 0; idb < cserver.dbnum; ++idb) {
+        delete g_pserver->db[idb];
+        g_pserver->db[idb] = nullptr;
+    }
+
+    g_pserver->garbageCollector.shutdown();
+    delete g_pserver->m_pstorageFactory;
+
     return 0;
 }
 

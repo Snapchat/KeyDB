@@ -29,9 +29,9 @@ INSTALL_INCLUDE_PATH= $(DESTDIR)$(PREFIX)/$(INCLUDE_PATH)
 INSTALL_LIBRARY_PATH= $(DESTDIR)$(PREFIX)/$(LIBRARY_PATH)
 INSTALL_PKGCONF_PATH= $(INSTALL_LIBRARY_PATH)/$(PKGCONF_PATH)
 
-# keydb-server configuration used for testing
+# keydb-pro-server configuration used for testing
 REDIS_PORT=56379
-REDIS_SERVER=keydb-server
+REDIS_SERVER=keydb-pro-server
 define REDIS_TEST_CONFIG
 	daemonize yes
 	pidfile /tmp/hiredis-test-redis.pid

@@ -109,7 +109,6 @@ RocksDBStorageProvider::~RocksDBStorageProvider()
 rocksdb::WriteOptions RocksDBStorageProvider::WriteOptions() const
 {
     auto opt = rocksdb::WriteOptions();
-    opt.disableWAL = true;
     return opt;
 }
 

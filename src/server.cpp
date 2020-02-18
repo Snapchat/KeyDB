@@ -1826,7 +1826,7 @@ void updateCachedTime(int update_daylight_info) {
     t /= 1000;
     __atomic_store(&g_pserver->mstime, &t, __ATOMIC_RELAXED);
     t /= 1000;
-    __atomic_store(&g_pserver->unixtime, &t, __ATOMIC_RELAXED);
+    g_pserver->unixtime = t;
 
     /* To get information about daylight saving time, we need to call
      * localtime_r and cache the result. However calling localtime_r in this

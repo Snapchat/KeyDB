@@ -298,39 +298,49 @@ sds g_sdsArgs = nullptr;
 
 bool initializeStorageProvider(const char **err)
 {
-    bool fTest = false;
-    if (g_sdsProvider == nullptr)
-        return true;
-    if (!strcasecmp(g_sdsProvider, "flash") && g_sdsArgs != nullptr)
+    try
     {
-        // Create The Storage Factory (if necessary)
-        g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(g_sdsArgs, cserver.dbnum);
-    }
-    else if (!strcasecmp(g_sdsProvider, "test") && g_sdsArgs == nullptr)
-    {
-        g_pserver->m_pstorageFactory = new (MALLOC_LOCAL) TestStorageFactory();
-        fTest = true;
-    }
-
-    if (g_pserver->m_pstorageFactory != nullptr && !fTest)
-    {
-        // We need to set max memory to a sane default so keys are actually evicted properly
-        if (g_pserver->maxmemory == 0 && g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
+        bool fTest = false;
+        if (g_sdsProvider == nullptr)
+            return true;
+        if (!strcasecmp(g_sdsProvider, "flash") && g_sdsArgs != nullptr)
         {
-            struct sysinfo sys;
-            if (sysinfo(&sys) == 0)
+            // Create The Storage Factory (if necessary)
+            g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(g_sdsArgs, cserver.dbnum);
+        }
+        else if (!strcasecmp(g_sdsProvider, "test") && g_sdsArgs == nullptr)
+        {
+            g_pserver->m_pstorageFactory = new (MALLOC_LOCAL) TestStorageFactory();
+            fTest = true;
+        }
+
+        if (g_pserver->m_pstorageFactory != nullptr && !fTest)
+        {
+            // We need to set max memory to a sane default so keys are actually evicted properly
+            if (g_pserver->maxmemory == 0 && g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
             {
-                // By default it's half the memory.  This gives sufficient room for background saving
-                g_pserver->maxmemory = sys.totalram / 2;
-                g_pserver->maxmemory_policy = MAXMEMORY_ALLKEYS_LRU;
+                struct sysinfo sys;
+                if (sysinfo(&sys) == 0)
+                {
+                    // By default it's half the memory.  This gives sufficient room for background saving
+                    g_pserver->maxmemory = sys.totalram / 2;
+                    g_pserver->maxmemory_policy = MAXMEMORY_ALLKEYS_LRU;
+                }
             }
         }
+        else
+        {
+            *err = "Unknown storage provider";
+        }
+        return g_pserver->m_pstorageFactory != nullptr;
     }
-    else
+    catch(std::string str)
     {
-        *err = "Unknown storage provider";
+        serverLog(LL_WARNING, "ERROR: Failed to initialize %s storage provider. Details to follow below.", g_sdsProvider);
+        serverLog(LL_WARNING, "\t%s", str.c_str());
+        serverLog(LL_WARNING, "KeyDB cannot start. Exiting.");
+        exit(EXIT_FAILURE);
     }
-    return g_pserver->m_pstorageFactory != nullptr;
 }
 
 void initConfigValues() {

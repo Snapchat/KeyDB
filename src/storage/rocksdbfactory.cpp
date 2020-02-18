@@ -49,7 +49,6 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum)
     table_options.cache_index_and_filter_blocks = true;
     table_options.pin_l0_filter_and_index_blocks_in_cache = true;
     options.table_factory.reset(NewBlockBasedTableFactory(table_options));
-    table_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, false));
     options.table_factory.reset(
         rocksdb::NewBlockBasedTableFactory(table_options));
 

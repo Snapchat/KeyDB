@@ -4699,7 +4699,7 @@ void daemonize(void) {
 }
 
 void version(void) {
-    printf("Redis server v=%s sha=%s:%d malloc=%s bits=%d build=%llx\n",
+    printf("KeyDB server v=%s sha=%s:%d malloc=%s bits=%d build=%llx\n",
         KEYDB_REAL_VERSION,
         redisGitSHA1(),
         atoi(redisGitDirty()) > 0,

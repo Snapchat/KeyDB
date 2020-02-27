@@ -278,7 +278,7 @@ void replicationFeedSlave(client *replica, int dictid, robj **argv, int argc, bo
         if (g_pserver->repl_backlog && fSendRaw) feedReplicationBacklogWithObject(selectcmd);
 
         /* Send it to slaves */
-        addReply(replica,selectcmd);
+        addReplyAsync(replica,selectcmd);
 
         if (dictid < 0 || dictid >= PROTO_SHARED_SELECT_CMDS)
             decrRefCount(selectcmd);
@@ -290,12 +290,12 @@ void replicationFeedSlave(client *replica, int dictid, robj **argv, int argc, bo
      * or are already in sync with the master. */
 
     /* Add the multi bulk length. */
-    addReplyArrayLen(replica,argc);
+    addReplyArrayLenAsync(replica,argc);
 
     /* Finally any additional argument that was not stored inside the
         * static buffer if any (from j to argc). */
     for (int j = 0; j < argc; j++)
-        addReplyBulk(replica,argv[j]);
+        addReplyBulkAsync(replica,argv[j]);
 }
 
 /* Propagate write commands to slaves, and populate the replication backlog

@@ -33,6 +33,7 @@
 #include "endianconv.h"
 #include "stream.h"
 #include "storage.h"
+#include "cron.h"
 
 #include <math.h>
 #include <sys/types.h>
@@ -523,6 +524,11 @@ void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
     }
 }
 
+sdsstring rdbLoadString(rio *rdb){
+    sds str = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL);
+    return sdsstring(str);
+}
+
 robj *rdbLoadStringObject(rio *rdb) {
     return (robj*)rdbGenericLoadStringObject(rdb,RDB_LOAD_NONE,NULL);
 }
@@ -657,6 +663,8 @@ int rdbSaveObjectType(rio *rdb, robj_roptr o) {
         return rdbSaveType(rdb,RDB_TYPE_STREAM_LISTPACKS);
     case OBJ_MODULE:
         return rdbSaveType(rdb,RDB_TYPE_MODULE_2);
+    case OBJ_CRON:
+        return rdbSaveType(rdb,RDB_TYPE_CRON);
     default:
         serverPanic("Unknown object type");
     }
@@ -986,6 +994,17 @@ ssize_t rdbSaveObject(rio *rdb, robj_roptr o, robj *key) {
             zfree(io.ctx);
         }
         return io.error ? -1 : (ssize_t)io.bytes;
+    } else if (o->type == OBJ_CRON) {
+        cronjob *job = (cronjob*)ptrFromObj(o);
+        rdbSaveRawString(rdb, (const unsigned char*)job->script.get(), job->script.size());
+        rdbSaveMillisecondTime(rdb, job->startTime);
+        rdbSaveMillisecondTime(rdb, job->interval);
+        rdbSaveLen(rdb, job->veckeys.size());
+        for (auto &key : job->veckeys)
+            rdbSaveRawString(rdb, (const unsigned char*)key.get(), key.size());
+        rdbSaveLen(rdb, job->vecargs.size());
+        for (auto &arg : job->vecargs)
+            rdbSaveRawString(rdb, (const unsigned char*)arg.get(), arg.size());
     } else {
         serverPanic("Unknown object type");
     }
@@ -1526,9 +1545,15 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
                 == NULL) return NULL;
 
             if (rdbtype == RDB_TYPE_ZSET_2) {
-                if (rdbLoadBinaryDoubleValue(rdb,&score) == -1) return NULL;
+                if (rdbLoadBinaryDoubleValue(rdb,&score) == -1) {
+                    sdsfree(sdsele);
+                    return NULL;
+                }
             } else {
-                if (rdbLoadDoubleValue(rdb,&score) == -1) return NULL;
+                if (rdbLoadDoubleValue(rdb,&score) == -1) {
+                    sdsfree(sdsele);
+                    return NULL;
+                }
             }
 
             /* Don't care about integer-encoded strings. */
@@ -1848,6 +1873,18 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
             exit(1);
         }
         o = createModuleObject(mt,ptr);
+    } else if (rdbtype == RDB_TYPE_CRON) {
+        std::unique_ptr<cronjob> spjob = std::make_unique<cronjob>();
+        spjob->script = rdbLoadString(rdb);
+        spjob->startTime = rdbLoadMillisecondTime(rdb,RDB_VERSION);
+        spjob->interval = rdbLoadMillisecondTime(rdb,RDB_VERSION);
+        auto ckeys = rdbLoadLen(rdb,NULL);
+        for (uint64_t i = 0; i < ckeys; ++i)
+            spjob->veckeys.push_back(rdbLoadString(rdb));
+        auto cargs = rdbLoadLen(rdb,NULL);
+        for (uint64_t i = 0; i < cargs; ++i)
+            spjob->vecargs.push_back(rdbLoadString(rdb));
+        o = createObject(OBJ_CRON, spjob.release());
     } else {
         rdbExitReportCorruptRDB("Unknown RDB encoding type %d",rdbtype);
     }
@@ -2150,6 +2187,8 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
                 decrRefCount(val);
                 val = nullptr;
             }
+            decrRefCount(key);
+            key = nullptr;
         }
 
         /* Reset the state that is key-specified and is populated by

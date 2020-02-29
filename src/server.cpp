@@ -35,6 +35,7 @@
 #include "latency.h"
 #include "atomicvar.h"
 #include "storage.h"
+#include "cron.h"
 #include <thread>
 #include <time.h>
 #include <signal.h>
@@ -1023,7 +1024,11 @@ struct redisCommand redisCommandTable[] = {
 
     {"rreplay",replicaReplayCommand,-3,
      "read-only fast noprop",
-     0,NULL,0,0,0,0,0,0}
+     0,NULL,0,0,0,0,0,0},
+
+    {"cron",cronCommand,-5,
+     "write use-memory",
+     0,NULL,1,1,1,0,0,0},
 };
 
 /*============================ Utility functions ============================ */
@@ -1685,7 +1690,7 @@ void clientsCron(int iel) {
             /* The following functions do different service checks on the client.
             * The protocol is that they return non-zero if the client was
             * terminated. */
-            if (clientsCronHandleTimeout(c,now)) goto LContinue;
+            if (clientsCronHandleTimeout(c,now)) continue;  // Client free'd so don't release the lock
             if (clientsCronResizeQueryBuffer(c)) goto LContinue;
             if (clientsCronTrackExpansiveClients(c)) goto LContinue;
         LContinue:
@@ -1889,7 +1894,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* We received a SIGTERM, shutting down here in a safe way, as it is
      * not ok doing so inside the signal handler. */
     if (g_pserver->shutdown_asap) {
-        if (prepareForShutdown(SHUTDOWN_NOFLAGS) == C_OK) exit(0);
+        if (prepareForShutdown(SHUTDOWN_NOFLAGS) == C_OK) throw ShutdownException();
         serverLog(LL_WARNING,"SIGTERM received but errors trying to shut down the server, check the logs for more information");
         g_pserver->shutdown_asap = 0;
     }
@@ -2879,6 +2884,7 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     pvar->el = aeCreateEventLoop(g_pserver->maxclients+CONFIG_FDSET_INCR);
     pvar->current_client = nullptr;
     pvar->clients_paused = 0;
+    pvar->fRetrySetAofEvent = false;
     if (pvar->el == NULL) {
         serverLog(LL_WARNING,
             "Failed creating the event loop. Error message: '%s'",
@@ -3806,8 +3812,17 @@ int prepareForShutdown(int flags) {
 
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
+
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
+    {
+        aePostFunction(g_pserver->rgthreadvar[iel].el, [iel]{
+            g_pserver->rgthreadvar[iel].el->stop = 1;
+        });
+    }
+
     serverLog(LL_WARNING,"%s is now ready to exit, bye bye...",
         g_pserver->sentinel_mode ? "Sentinel" : "KeyDB");
+
     return C_OK;
 }
 
@@ -4684,7 +4699,7 @@ void daemonize(void) {
 }
 
 void version(void) {
-    printf("Redis server v=%s sha=%s:%d malloc=%s bits=%d build=%llx\n",
+    printf("KeyDB server v=%s sha=%s:%d malloc=%s bits=%d build=%llx\n",
         KEYDB_REAL_VERSION,
         redisGitSHA1(),
         atoi(redisGitDirty()) > 0,
@@ -5027,8 +5042,16 @@ void *workerThreadMain(void *parg)
     aeEventLoop *el = g_pserver->rgthreadvar[iel].el;
     aeSetBeforeSleepProc(el, isMainThread ? beforeSleep : beforeSleepLite, isMainThread ? 0 : AE_SLEEP_THREADSAFE);
     aeSetAfterSleepProc(el, afterSleep, AE_SLEEP_THREADSAFE);
-    aeMain(el);
+    try
+    {
+        aeMain(el);
+    }
+    catch (ShutdownException)
+    {
+    }
+    serverAssert(!GlobalLocksAcquired());
     aeDeleteEventLoop(el);
+
     return NULL;
 }
 
@@ -5098,10 +5121,6 @@ int main(int argc, char **argv) {
     dictSetHashFunctionSeed((uint8_t*)hashseed);
     g_pserver->sentinel_mode = checkForSentinelMode(argc,argv);
     initServerConfig();
-    for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
-    {
-        initServerThread(g_pserver->rgthreadvar+iel, iel == IDX_EVENT_LOOP_MAIN);
-    }
     serverTL = &g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN];
     aeAcquireLock();    // We own the lock on boot
 
@@ -5228,6 +5247,10 @@ int main(int argc, char **argv) {
     int background = cserver.daemonize && !cserver.supervised;
     if (background) daemonize();
 
+    for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
+    {
+        initServerThread(g_pserver->rgthreadvar+iel, iel == IDX_EVENT_LOOP_MAIN);
+    }
     initServer();
     initNetworking(cserver.cthreads > 1 /* fReusePort */);
 
@@ -5328,7 +5351,9 @@ int main(int argc, char **argv) {
     /* The main thread sleeps until all the workers are done.
         this is so that all worker threads are orthogonal in their startup/shutdown */
     void *pvRet;
-    pthread_join(rgthread[IDX_EVENT_LOOP_MAIN], &pvRet);
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
+        pthread_join(rgthread[iel], &pvRet);
+
     return 0;
 }
 

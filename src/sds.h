@@ -396,6 +396,20 @@ public:
         other.m_str = nullptr;
     }
 
+    sdsstring &operator=(const sdsstring &other)
+    {
+        sdsfree(m_str);
+        m_str = sdsdup(other.m_str);
+        return *this;
+    }
+
+    sdsstring &operator=(sds other)
+    {
+        sdsfree(m_str);
+        m_str = sdsdup(other);
+        return *this;
+    }
+
     ~sdsstring()
     {
         sdsfree(m_str);

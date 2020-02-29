@@ -683,6 +683,8 @@ public:
  * encoding version. */
 #define OBJ_MODULE 5    /* Module object. */
 #define OBJ_STREAM 6    /* Stream object. */
+#define OBJ_CRON 7      /* CRON job */
+
 
 /* Extract encver / signature from a module type ID. */
 #define REDISMODULE_TYPE_ENCVER_BITS 10
@@ -1125,10 +1127,13 @@ typedef struct clientReplyBlock {
 /* Redis database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
-typedef struct redisDb {
+struct redisDb {
     redisDb() 
         : expireitr(nullptr)
     {};
+    
+    ~redisDb();
+
     dict *pdict;                 /* The keyspace for this DB */
     expireset *setexpire;
     expireset::setiter expireitr;
@@ -1140,7 +1145,7 @@ typedef struct redisDb {
     long long last_expire_set;  /* when the last expire was set */
     double avg_ttl;             /* Average TTL, just for stats */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
-} redisDb;
+};
 
 /* Client MULTI/EXEC state */
 typedef struct multiCmd {
@@ -1524,6 +1529,7 @@ struct redisServerThreadVars {
     struct fastlock lockPendingWrite { "thread pending write" };
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     long unsigned commandsExecuted = 0;
+    bool fRetrySetAofEvent = false;
 };
 
 struct redisMaster {
@@ -1533,6 +1539,8 @@ struct redisMaster {
     int masterport;                 /* Port of master */
     client *cached_master;          /* Cached master to be reused for PSYNC. */
     client *master;
+    client *clientFake;
+    int clientFakeNesting;
     /* The following two fields is where we store master PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
      * the server->master client structure. */
@@ -1600,6 +1608,7 @@ struct redisServerConst {
 
     unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
     bool fUsePro = false;
+    int thread_min_client_threshold = 50;
 };
 
 struct redisServer {
@@ -2912,6 +2921,9 @@ inline int FCorrectThread(client *c)
         || (c->fd == -1);
 }
 #define AssertCorrectThread(c) serverAssert(FCorrectThread(c))
+
+class ShutdownException
+{};
 
 #define redisDebug(fmt, ...) \
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)

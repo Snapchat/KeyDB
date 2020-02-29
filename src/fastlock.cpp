@@ -74,6 +74,10 @@ extern int g_fInCrash;
     #define __has_feature(x) 0
 #endif
 
+#ifdef __linux__
+extern "C" void unlock_futex(struct fastlock *lock, uint16_t ifutex);
+#endif
+
 #if __has_feature(thread_sanitizer)
 
     /* Report that a lock has been created at address "lock". */
@@ -206,6 +210,11 @@ DeadlockDetector g_dlock;
 static_assert(sizeof(pid_t) <= sizeof(fastlock::m_pidOwner), "fastlock::m_pidOwner not large enough");
 uint64_t g_longwaits = 0;
 
+extern "C" void fastlock_panic(struct fastlock *lock)
+{
+    _serverPanic(__FILE__, __LINE__, "fastlock lock/unlock mismatch for: %s", lock->szName);
+}
+
 uint64_t fastlock_getlongwaitcount()
 {
     uint64_t rval;
@@ -290,7 +299,7 @@ extern "C" void fastlock_lock(struct fastlock *lock)
 
 #if defined(__i386__) || defined(__amd64__)
         __asm__ __volatile__ ("pause");
-#elif defined(__arm__)
+#elif defined(__aarch64__)
         __asm__ __volatile__ ("yield");
 #endif
         if ((++cloops % 0x100000) == 0)
@@ -326,7 +335,7 @@ extern "C" int fastlock_trylock(struct fastlock *lock, int fWeak)
 
     struct ticket ticket_expect { { { active, active } } };
     struct ticket ticket_setiflocked { { { active, next } } };
-    if (__atomic_compare_exchange(&lock->m_ticket, &ticket_expect, &ticket_setiflocked, fWeak /*weak*/, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+    if (__atomic_compare_exchange(&lock->m_ticket.u, &ticket_expect.u, &ticket_setiflocked.u, fWeak /*weak*/, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
     {
         lock->m_depth = 1;
         tid = gettid();
@@ -336,31 +345,6 @@ extern "C" int fastlock_trylock(struct fastlock *lock, int fWeak)
     }
     return false;
 }
-
-#ifdef __linux__
-#define ROL32(v, shift) ((v << shift) | (v >> (32-shift)))
-void unlock_futex(struct fastlock *lock, uint16_t ifutex)
-{
-    unsigned mask = (1U << (ifutex % 32));
-    unsigned futexT;
-    __atomic_load(&lock->futex, &futexT, __ATOMIC_RELAXED);
-    futexT &= mask;
-    
-    if (futexT == 0)
-        return;
-    
-    for (;;)
-    {
-        __atomic_load(&lock->futex, &futexT, __ATOMIC_ACQUIRE);
-        futexT &= mask;
-        if (!futexT)
-            break;
-
-        if (futex(&lock->m_ticket.u, FUTEX_WAKE_BITSET_PRIVATE, INT_MAX, nullptr, mask) == 1)
-            break;
-    }
-}
-#endif
 
 extern "C" void fastlock_unlock(struct fastlock *lock)
 {
@@ -380,6 +364,26 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
 #else
 		UNUSED(activeNew);
 #endif
+    }
+}
+#endif
+
+#ifdef __linux__
+#define ROL32(v, shift) ((v << shift) | (v >> (32-shift)))
+extern "C" void unlock_futex(struct fastlock *lock, uint16_t ifutex)
+{
+    unsigned mask = (1U << (ifutex % 32));
+    unsigned futexT;
+    
+    for (;;)
+    {
+        __atomic_load(&lock->futex, &futexT, __ATOMIC_ACQUIRE);
+        futexT &= mask;
+        if (!futexT)
+            break;
+
+        if (futex(&lock->m_ticket.u, FUTEX_WAKE_BITSET_PRIVATE, INT_MAX, nullptr, mask) == 1)
+            break;
     }
 }
 #endif

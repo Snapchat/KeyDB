@@ -1003,6 +1003,27 @@ int clientHasPendingReplies(client *c) {
     return (c->bufpos || listLength(c->reply)) && !(c->flags & CLIENT_CLOSE_ASAP);
 }
 
+static std::atomic<int> rgacceptsInFlight[MAX_EVENT_LOOPS];
+int chooseBestThreadForAccept()
+{
+    int ielMinLoad = 0;
+    int cclientsMin = INT_MAX;
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
+    {
+        int cclientsThread;
+        atomicGet(g_pserver->rgthreadvar[iel].cclients, cclientsThread);
+        cclientsThread += rgacceptsInFlight[iel].load(std::memory_order_relaxed);
+        if (cclientsThread < cserver.thread_min_client_threshold)
+            return iel;
+        if (cclientsThread < cclientsMin)
+        {
+            cclientsMin = cclientsThread;
+            ielMinLoad = iel;
+        }
+    }
+    return ielMinLoad;
+}
+
 #define MAX_ACCEPTS_PER_CALL 1000
 static void acceptCommonHandler(int fd, int flags, char *ip, int iel) {
     client *c;
@@ -1105,7 +1126,25 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
         if (!g_fTestMode)
         {
-            // We always accept on the same thread
+            {
+            int ielTarget = chooseBestThreadForAccept();
+            rgacceptsInFlight[ielTarget].fetch_add(1, std::memory_order_relaxed);
+            if (ielTarget != ielCur)
+            {
+                char *szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
+                memcpy(szT, cip, NET_IP_STR_LEN);
+                int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [cfd, ielTarget, szT]{
+                    acceptCommonHandler(cfd,0,szT, ielTarget);
+                    rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
+                    zfree(szT);
+                });
+
+                if (res == AE_OK)
+                    continue;
+            }
+            rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
+            }
+
         LLocalThread:
             aeAcquireLock();
             acceptCommonHandler(cfd,0,cip, ielCur);
@@ -1122,10 +1161,15 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 goto LLocalThread;
             char *szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
             memcpy(szT, cip, NET_IP_STR_LEN);
-            aePostFunction(g_pserver->rgthreadvar[iel].el, [cfd, iel, szT]{
+            int res = aePostFunction(g_pserver->rgthreadvar[iel].el, [cfd, iel, szT]{
                 acceptCommonHandler(cfd,0,szT, iel);
                 zfree(szT);
             });
+            if (res != AE_OK)
+            {
+                zfree(szT);
+                goto LLocalThread;
+            }
         }
     }
 }
@@ -1151,13 +1195,16 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         int ielTarget = rand() % cserver.cthreads;
         if (ielTarget == ielCur)
         {
+        LLocalThread:
             acceptCommonHandler(cfd,CLIENT_UNIX_SOCKET,NULL, ielCur);
         }
         else
         {
-            aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [cfd, ielTarget]{
+            int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [cfd, ielTarget]{
                 acceptCommonHandler(cfd,CLIENT_UNIX_SOCKET,NULL, ielTarget);
             });
+            if (res != AE_OK)
+                goto LLocalThread;
         }
         aeReleaseLock();
         
@@ -2529,7 +2576,7 @@ NULL
                 {
                     int iel = client->iel;
                     freeClientAsync(client);
-                    aePostFunction(g_pserver->rgthreadvar[client->iel].el, [iel] {
+                    aePostFunction(g_pserver->rgthreadvar[client->iel].el, [iel] {  // note: failure is OK
                         freeClientsInAsyncFreeQueue(iel);
                     });
                 }
@@ -3018,6 +3065,7 @@ void unpauseClientsIfNecessary()
  *
  * The function returns the total number of events processed. */
 int processEventsWhileBlocked(int iel) {
+    serverAssert(GlobalLocksAcquired());
     int iterations = 4; /* See the function top-comment. */
     int count = 0;
 
@@ -3027,14 +3075,29 @@ int processEventsWhileBlocked(int iel) {
         serverAssert(c->flags & CLIENT_PROTECTED);
         c->lock.unlock();
     }
+
     aeReleaseLock();
-    while (iterations--) {
-        int events = 0;
-        events += aeProcessEvents(g_pserver->rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
-        events += handleClientsWithPendingWrites(iel);
-        if (!events) break;
-        count += events;
+    try
+    {
+        while (iterations--) {
+            int events = 0;
+            events += aeProcessEvents(g_pserver->rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
+            events += handleClientsWithPendingWrites(iel);
+            if (!events) break;
+            count += events;
+        }
     }
+    catch (...)
+    {
+        // Caller expects us to be locked so fix and rethrow
+        AeLocker locker;
+        if (c != nullptr)
+            c->lock.lock();
+        locker.arm(c);
+        locker.release();
+        throw;
+    }
+    
     AeLocker locker;
     if (c != nullptr)
         c->lock.lock();

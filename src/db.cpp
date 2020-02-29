@@ -177,9 +177,8 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key) {
  * Returns the linked value object if the key exists or NULL if the key
  * does not exist in the specified DB. */
 robj *lookupKeyWrite(redisDb *db, robj *key) {
+    expireIfNeeded(db,key);
     robj *o = lookupKey(db,key,LOOKUP_UPDATEMVCC);
-    if (expireIfNeeded(db,key))
-        o = NULL;
     return o;
 }
 
@@ -978,7 +977,7 @@ void shutdownCommand(client *c) {
      * Also when in Sentinel mode clear the SAVE flag and force NOSAVE. */
     if (g_pserver->loading || g_pserver->sentinel_mode)
         flags = (flags & ~SHUTDOWN_SAVE) | SHUTDOWN_NOSAVE;
-    if (prepareForShutdown(flags) == C_OK) exit(0);
+    if (prepareForShutdown(flags) == C_OK) throw ShutdownException();
     addReplyError(c,"Errors trying to SHUTDOWN. Check logs.");
 }
 
@@ -1304,6 +1303,14 @@ void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when) 
     int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
     if (c && writable_slave && !(c->flags & CLIENT_MASTER))
         rememberSlaveKeyWithExpire(db,key);
+}
+
+redisDb::~redisDb()
+{
+    dictRelease(watched_keys);
+    dictRelease(ready_keys);
+    dictRelease(blocking_keys);
+    listRelease(defrag_later);
 }
 
 void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)

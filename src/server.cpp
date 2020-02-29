@@ -5242,10 +5242,6 @@ int main(int argc, char **argv) {
     dictSetHashFunctionSeed(hashseed);
     g_pserver->sentinel_mode = checkForSentinelMode(argc,argv);
     initServerConfig();
-    for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
-    {
-        initServerThread(g_pserver->rgthreadvar+iel, iel == IDX_EVENT_LOOP_MAIN);
-    }
     serverTL = &g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN];
     aeAcquireLock();    // We own the lock on boot
 
@@ -5373,6 +5369,10 @@ int main(int argc, char **argv) {
     int background = cserver.daemonize && !cserver.supervised;
     if (background) daemonize();
 
+    for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
+    {
+        initServerThread(g_pserver->rgthreadvar+iel, iel == IDX_EVENT_LOOP_MAIN);
+    }
     initServer();
     initNetworking(cserver.cthreads > 1 /* fReusePort */);
 

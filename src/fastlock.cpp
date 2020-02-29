@@ -299,7 +299,7 @@ extern "C" void fastlock_lock(struct fastlock *lock)
 
 #if defined(__i386__) || defined(__amd64__)
         __asm__ __volatile__ ("pause");
-#elif defined(__arm__)
+#elif defined(__aarch64__)
         __asm__ __volatile__ ("yield");
 #endif
         if ((++cloops % 0x100000) == 0)
@@ -335,7 +335,7 @@ extern "C" int fastlock_trylock(struct fastlock *lock, int fWeak)
 
     struct ticket ticket_expect { { { active, active } } };
     struct ticket ticket_setiflocked { { { active, next } } };
-    if (__atomic_compare_exchange(&lock->m_ticket, &ticket_expect, &ticket_setiflocked, fWeak /*weak*/, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+    if (__atomic_compare_exchange(&lock->m_ticket.u, &ticket_expect.u, &ticket_setiflocked.u, fWeak /*weak*/, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
     {
         lock->m_depth = 1;
         tid = gettid();

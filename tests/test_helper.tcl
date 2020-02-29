@@ -36,6 +36,8 @@ set ::all_tests {
     unit/aofrw
     unit/acl
     unit/rreplay
+    unit/cron
+    unit/replication
     integration/block-repl
     integration/replication
     integration/replication-2
@@ -43,6 +45,7 @@ set ::all_tests {
     integration/replication-4
     integration/replication-psync
     integration/replication-active
+    integration/replication-multimaster
     integration/aof
     integration/rdb
     integration/convert-zipmap-hash-on-load

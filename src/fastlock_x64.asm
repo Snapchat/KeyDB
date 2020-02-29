@@ -126,6 +126,7 @@ fastlock_trylock:
 
 .ALIGN 16
 .global fastlock_unlock
+.type   fastlock_unlock,@function
 fastlock_unlock:
 	# RDI points to the struct:
 	#	int32_t m_pidOwner
@@ -133,34 +134,19 @@ fastlock_unlock:
 	# [rdi+64] ...
 	#	uint16_t active
 	#	uint16_t avail
-	push r11
 	sub dword ptr [rdi+4], 1     # decrement m_depth, don't use dec because it partially writes the flag register and we don't know its state
 	jnz .LDone                   # if depth is non-zero this is a recursive unlock, and we still hold it
 	mov dword ptr [rdi], -1      # pidOwner = -1 (we don't own it anymore)
-	mov ecx, [rdi+64]            # get current active (this one)
-	inc ecx                      # bump it to the next thread
-	mov [rdi+64], cx             # give up our ticket (note: lock is not required here because the spinlock itself guards this variable)
+	mov esi, [rdi+64]            # get current active (this one)
+	inc esi                      # bump it to the next thread
+	mov word ptr [rdi+64], si    # give up our ticket (note: lock is not required here because the spinlock itself guards this variable)
 	mfence                       # sync other threads
 	# At this point the lock is removed, however we must wake up any pending futexs
-	mov r9d, 1                   # eax is the bitmask for 2 threads
-	rol r9d, cl                  # place the mask in the right spot for the next 2 threads
-	add rdi, 64                  # rdi now points to the token
+	mov edx, [rdi+64+4]          # load the futex mask
+	bt edx, esi                  # is the next thread waiting on a futex?
+	jc unlock_futex              # unlock the futex if necessary
+	ret                          # if not we're done.
 .ALIGN 16
-.LRetryWake:
-	mov r11d, [rdi+4]            # load the futex mask
-	and r11d, r9d                # are any threads waiting on a futex?
-	jz .LDone                    # if not we're done.
-	# we have to wake the futexs
-                                 # rdi ARG1 futex (already in rdi)
-	mov esi, (10 | 128)          # rsi ARG2 FUTEX_WAKE_BITSET_PRIVATE
-	mov edx, 0x7fffffff          # rdx ARG3 INT_MAX (number of threads to wake)
-	xor r10d, r10d               # r10 ARG4 NULL
-	mov r8, rdi                  # r8 ARG5 dup rdi
-                                 # r9 ARG6 mask (already set above)
-	mov eax, 202                 # sys_futex
-	syscall
-	cmp eax, 1                   # did we wake as many as we expected?
-	jnz .LRetryWake
 .LDone:
-	pop r11
+	js fastlock_panic            # panic if we made m_depth negative
 	ret

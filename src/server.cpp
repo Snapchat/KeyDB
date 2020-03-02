@@ -1103,6 +1103,7 @@ void serverLog(int level, const char *fmt, ...) {
 
 static void checkTrialTimeout()
 {
+#ifndef NO_LICENSE_CHECK
     if (cserver.license_key != nullptr && FValidKey(cserver.license_key, strlen(cserver.license_key)))
         return;
     time_t curtime = time(NULL);
@@ -1118,6 +1119,7 @@ static void checkTrialTimeout()
     {
         serverLog(LL_WARNING, "Trial timeout in %ld:%02ld minutes", remaining/60, remaining % 60);
     }
+#endif
 }
 
 /* Log a fixed message without printf-alike capabilities, in a way that is

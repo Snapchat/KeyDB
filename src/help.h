@@ -1168,7 +1168,13 @@ struct commandHelp {
     "destination numkeys key [key ...] [WEIGHTS weight] [AGGREGATE SUM|MIN|MAX]",
     "Add multiple sorted sets and store the resulting sorted set in a new key",
     4,
-    "2.0.0" }
+    "2.0.0" },
+    { "KEYDB.CRON",
+    "name [single/repeat] [optional: start] delay script numkeys [key N] [arg N]",
+    "Run a specified script after start + delay, optionally repeating every delay interval.  The job may be cancelled by deleting the key associated with the job (name parameter)",
+    10,
+    "6.5.2"
+    }
 };
 
 #endif

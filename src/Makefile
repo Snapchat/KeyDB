@@ -108,6 +108,11 @@ ifeq ($(USE_JEMALLOC),no)
 	MALLOC=libc
 endif
 
+
+ifeq ($(NO_LICENSE_CHECK),yes)
+	CXXFLAGS+=-DNO_LICENSE_CHECK=1
+endif	
+
 # Override default settings if possible
 -include .make-settings
 

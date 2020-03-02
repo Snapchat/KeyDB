@@ -1029,7 +1029,7 @@ struct redisCommand redisCommandTable[] = {
      "read-only fast noprop",
      0,NULL,0,0,0,0,0,0},
 
-    {"cron",cronCommand,-5,
+    {"keydb.cron",cronCommand,-5,
      "write use-memory",
      0,NULL,1,1,1,0,0,0},
 };

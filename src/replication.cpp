@@ -3960,6 +3960,8 @@ void replicaReplayCommand(client *c)
     cFake->flags &= ~(CLIENT_MASTER | CLIENT_PREVENT_REPL_PROP);
     bool fExec = ccmdPrev != serverTL->commandsExecuted;
     cFake->lock.unlock();
+    if (cFake->master_error)
+        addReplyError(c, "Error in rreplay command, please check logs");
     if (fExec || cFake->flags & CLIENT_MULTI)
     {
         addReply(c, shared.ok);

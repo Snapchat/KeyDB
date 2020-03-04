@@ -55,6 +55,7 @@
 #include <algorithm>
 #include <memory>
 #include <map>
+#include <string>
 #ifdef __cplusplus
 extern "C" {
 #include <lua.h>

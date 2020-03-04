@@ -540,11 +540,6 @@ void loadServerConfigFromString(char *config) {
         } else if (!strcasecmp(argv[0],"enable-pro")) {
             cserver.fUsePro = true;
             break;
-        } else if (!strcasecmp(argv[0],"min-clients-per-thread") && argc == 2) {
-            cserver.thread_min_client_threshold = atoi(argv[1]);
-            if (cserver.thread_min_client_threshold < 0 || cserver.thread_min_client_threshold > 400) {
-                err = "min-thread-client must be between 0 and 400"; goto loaderr;
-            }
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -2315,6 +2310,7 @@ standardConfig configs[] = {
     createIntConfig("hz", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->config_hz, CONFIG_DEFAULT_HZ, INTEGER_CONFIG, NULL, updateHZ),
     createIntConfig("min-replicas-to-write", "min-slaves-to-write", MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->repl_min_slaves_to_write, 0, INTEGER_CONFIG, NULL, updateGoodSlaves),
     createIntConfig("min-replicas-max-lag", "min-slaves-max-lag", MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->repl_min_slaves_max_lag, 10, INTEGER_CONFIG, NULL, updateGoodSlaves),
+    createIntConfig("min-clients-per-thread", NULL, MODIFIABLE_CONFIG, 0, 400, cserver.thread_min_client_threshold, 50, INTEGER_CONFIG, NULL, NULL),
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, g_pserver->maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
 

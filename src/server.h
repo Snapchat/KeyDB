@@ -57,6 +57,7 @@
 #include <memory>
 #include <set>
 #include <map>
+#include <string>
 #ifdef __cplusplus
 extern "C" {
 #include <lua.h>
@@ -1686,6 +1687,7 @@ typedef struct client {
 
     int iel; /* the event loop index we're registered with */
     struct fastlock lock;
+    int master_error;
 } client;
 
 struct saveparam {

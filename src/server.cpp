@@ -63,6 +63,7 @@
 #include <mutex>
 #include "aelocker.h"
 #include "keycheck.h"
+#include "motd.h"
 
 int g_fTestMode = false;
 
@@ -5004,14 +5005,18 @@ void redisAsciiArt(void) {
             mode, g_pserver->port ? g_pserver->port : g_pserver->tls_port
         );
     } else {
+        sds motd = fetchMOTD(true);
         snprintf(buf,1024*16,ascii_logo,
             KEYDB_REAL_VERSION,
             redisGitSHA1(),
             strtol(redisGitDirty(),NULL,10) > 0,
             (sizeof(long) == 8) ? "64" : "32",
             mode, g_pserver->port ? g_pserver->port : g_pserver->tls_port,
-            (long) getpid()
+            (long) getpid(),
+            motd ? motd : ""
         );
+        if (motd)
+            sdsfree(motd);
         serverLogRaw(LL_NOTICE|LL_RAW,buf);
     }
 

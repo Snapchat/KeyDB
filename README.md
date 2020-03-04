@@ -4,6 +4,8 @@
 
 ##### Need Help? Check out our extensive [documentation](https://docs.keydb.dev).
 
+##### Have feedback?  Take our quick survey: https://www.surveymonkey.com/r/Y9XNS93
+
 What is KeyDB?
 --------------
 

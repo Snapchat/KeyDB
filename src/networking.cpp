@@ -174,6 +174,7 @@ client *createClient(connection *conn, int iel) {
     c->client_tracking_redirection = 0;
     c->casyncOpsPending = 0;
     c->mvccCheckpoint = 0;
+    c->master_error = 0;
     memset(c->uuid, 0, UUID_BINARY_LEN);
 
     c->auth_callback = NULL;
@@ -432,6 +433,34 @@ void addReplyProtoAsync(client *c, const char *s, size_t len) {
     addReplyProtoCore(c, s, len, true);
 }
 
+std::string escapeString(sds str)
+{
+    std::string newstr;
+    size_t len = sdslen(str);
+    for (size_t ich = 0; ich < len; ++ich)
+    {
+        char ch = str[ich];
+        switch (ch)
+        {
+        case '\n':
+            newstr += "\\n";
+            break;
+
+        case '\t':
+            newstr += "\\t";
+            break;
+
+        case '\r':
+            newstr += "\\r";
+            break;
+        
+        default:
+            newstr += ch;
+        }
+    }
+    return newstr;
+}
+
 /* Low level function called by the addReplyError...() functions.
  * It emits the protocol for a Redis error, in the form:
  *
@@ -464,6 +493,12 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
         serverLog(LL_WARNING,"== CRITICAL == This %s is sending an error "
                              "to its %s: '%s' after processing the command "
                              "'%s'", from, to, s, cmdname);
+
+        if (c->querybuf && sdslen(c->querybuf)) {
+            std::string str = escapeString(c->querybuf);
+            serverLog(LL_WARNING, "\tquerybuf: %s", str.c_str());
+        }
+        c->master_error = 1;
     }
 }
 

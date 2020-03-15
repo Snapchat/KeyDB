@@ -23,7 +23,7 @@ static const char *szMotdCachePath()
         return "";
     const char *homedir = pw->pw_dir;
     sdsMotdCachePath = sdsnew(homedir);
-    sdsMotdCachePath = sdscat(sdsMotdCachePath, "/.keydb-cli-motd");
+    sdsMotdCachePath = sdscat(sdsMotdCachePath, motd_cache_file);
     return sdsMotdCachePath;
 }
 static size_t motd_write_callback(void *ptr, size_t size, size_t nmemb, sds *str)
@@ -100,6 +100,17 @@ extern "C" char *fetchMOTD(int cache)
         {
             sdsfree(str);
             str = NULL;
+        }
+        else
+        {
+            long response_code;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+            if ((response_code / 100) != 2)
+            {
+                // An error code not in the 200s implies an error
+                sdsfree(str);
+                str = NULL;
+            }
         }
 
         /* always cleanup */ 

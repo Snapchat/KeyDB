@@ -97,6 +97,7 @@ int spectrum_palette_size;
 int g_fInCrash = 0;
 
 const char *motd_url = "http://api.keydb.dev/motd/motd_cli.txt";
+const char *motd_cache_file = "/.keydb-cli-motd";
 
 /*------------------------------------------------------------------------------
  * Utility functions

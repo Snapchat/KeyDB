@@ -87,7 +87,7 @@ extern "C" char *fetchMOTD(int cache)
     str = sdsnew("");
     curl = curl_easy_init();
     if(curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, "http://api.keydb.dev/motd/motd.txt");
+        curl_easy_setopt(curl, CURLOPT_URL, motd_url);
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L); // follow redirects
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2); // take no more than two seconds
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, motd_write_callback);

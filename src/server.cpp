@@ -65,6 +65,7 @@
 #include "motd.h"
 
 int g_fTestMode = false;
+const char *motd_url = "http://api.keydb.dev/motd/motd_server.txt";
 
 /* Our shared "common" objects */
 

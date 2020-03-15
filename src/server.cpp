@@ -63,6 +63,7 @@
 #include <mutex>
 #include "aelocker.h"
 #include "keycheck.h"
+#include "motd.h"
 
 int g_fTestMode = false;
 
@@ -1103,6 +1104,7 @@ void serverLog(int level, const char *fmt, ...) {
 
 static void checkTrialTimeout()
 {
+#ifndef NO_LICENSE_CHECK
     if (cserver.license_key != nullptr && FValidKey(cserver.license_key, strlen(cserver.license_key)))
         return;
     time_t curtime = time(NULL);
@@ -1118,6 +1120,7 @@ static void checkTrialTimeout()
     {
         serverLog(LL_WARNING, "Trial timeout in %ld:%02ld minutes", remaining/60, remaining % 60);
     }
+#endif
 }
 
 /* Log a fixed message without printf-alike capabilities, in a way that is
@@ -5002,14 +5005,18 @@ void redisAsciiArt(void) {
             mode, g_pserver->port ? g_pserver->port : g_pserver->tls_port
         );
     } else {
+        sds motd = fetchMOTD(true);
         snprintf(buf,1024*16,ascii_logo,
             KEYDB_REAL_VERSION,
             redisGitSHA1(),
             strtol(redisGitDirty(),NULL,10) > 0,
             (sizeof(long) == 8) ? "64" : "32",
             mode, g_pserver->port ? g_pserver->port : g_pserver->tls_port,
-            (long) getpid()
+            (long) getpid(),
+            motd ? motd : ""
         );
+        if (motd)
+            sdsfree(motd);
         serverLogRaw(LL_NOTICE|LL_RAW,buf);
     }
 

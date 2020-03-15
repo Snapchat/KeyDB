@@ -67,6 +67,7 @@
 
 int g_fTestMode = false;
 const char *motd_url = "http://api.keydb.dev/motd/motd_server_pro.txt";
+const char *motd_cache_file = "/.keydb-pro-server-motd";
 
 /* Our shared "common" objects */
 

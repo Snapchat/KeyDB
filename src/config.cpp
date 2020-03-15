@@ -306,6 +306,7 @@ bool initializeStorageProvider(const char **err)
         if (!strcasecmp(g_sdsProvider, "flash") && g_sdsArgs != nullptr)
         {
             // Create The Storage Factory (if necessary)
+            serverLog(LL_NOTICE, "Initializing FLASH storage provider (this may take a long time)");
             g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(g_sdsArgs, cserver.dbnum);
         }
         else if (!strcasecmp(g_sdsProvider, "test") && g_sdsArgs == nullptr)
@@ -2365,7 +2366,7 @@ standardConfig configs[] = {
     createIntConfig("lfu-decay-time", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->lfu_decay_time, 1, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("replica-priority", "slave-priority", MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->slave_priority, 100, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("repl-diskless-sync-delay", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->repl_diskless_sync_delay, 5, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("maxmemory-samples", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, g_pserver->maxmemory_samples, 5, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("maxmemory-samples", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, g_pserver->maxmemory_samples, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("timeout", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, cserver.maxidletime, 0, INTEGER_CONFIG, NULL, NULL), /* Default client timeout: infinite */
     createIntConfig("replica-announce-port", "slave-announce-port", MODIFIABLE_CONFIG, 0, 65535, g_pserver->slave_announce_port, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("tcp-backlog", NULL, IMMUTABLE_CONFIG, 0, INT_MAX, g_pserver->tcp_backlog, 511, INTEGER_CONFIG, NULL, NULL), /* TCP listen backlog. */

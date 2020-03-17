@@ -306,6 +306,7 @@ bool initializeStorageProvider(const char **err)
         if (!strcasecmp(g_sdsProvider, "flash") && g_sdsArgs != nullptr)
         {
             // Create The Storage Factory (if necessary)
+            serverLog(LL_NOTICE, "Initializing FLASH storage provider (this may take a long time)");
             g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(g_sdsArgs, cserver.dbnum);
         }
         else if (!strcasecmp(g_sdsProvider, "test") && g_sdsArgs == nullptr)
@@ -990,8 +991,15 @@ void configGetCommand(client *c) {
             listIter li;
             listNode *ln;
             listRewind(g_pserver->masters, &li);
+            bool fFirst = true;
             while ((ln = listNext(&li)))
             {
+                if (!fFirst)
+                {
+                    addReplyBulkCString(c,optname);
+                    matches++;
+                }
+                fFirst = false;
                 struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
                 snprintf(buf,sizeof(buf),"%s %d",
                     mi->masterhost, mi->masterport);
@@ -2365,7 +2373,7 @@ standardConfig configs[] = {
     createIntConfig("lfu-decay-time", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->lfu_decay_time, 1, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("replica-priority", "slave-priority", MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->slave_priority, 100, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("repl-diskless-sync-delay", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->repl_diskless_sync_delay, 5, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("maxmemory-samples", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, g_pserver->maxmemory_samples, 5, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("maxmemory-samples", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, g_pserver->maxmemory_samples, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("timeout", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, cserver.maxidletime, 0, INTEGER_CONFIG, NULL, NULL), /* Default client timeout: infinite */
     createIntConfig("replica-announce-port", "slave-announce-port", MODIFIABLE_CONFIG, 0, 65535, g_pserver->slave_announce_port, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("tcp-backlog", NULL, IMMUTABLE_CONFIG, 0, INT_MAX, g_pserver->tcp_backlog, 511, INTEGER_CONFIG, NULL, NULL), /* TCP listen backlog. */
@@ -2381,6 +2389,7 @@ standardConfig configs[] = {
     createIntConfig("hz", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->config_hz, CONFIG_DEFAULT_HZ, INTEGER_CONFIG, NULL, updateHZ),
     createIntConfig("min-replicas-to-write", "min-slaves-to-write", MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->repl_min_slaves_to_write, 0, INTEGER_CONFIG, NULL, updateGoodSlaves),
     createIntConfig("min-replicas-max-lag", "min-slaves-max-lag", MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->repl_min_slaves_max_lag, 10, INTEGER_CONFIG, NULL, updateGoodSlaves),
+    createIntConfig("min-clients-per-thread", NULL, MODIFIABLE_CONFIG, 0, 400, cserver.thread_min_client_threshold, 50, INTEGER_CONFIG, NULL, NULL),
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, g_pserver->maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
 

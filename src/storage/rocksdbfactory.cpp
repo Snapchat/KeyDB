@@ -1,4 +1,5 @@
 #include "rocksdb.h"
+#include "../version.h"
 #include <rocksdb/filter_policy.h>
 #include <rocksdb/table.h>
 #include <rocksdb/utilities/options_util.h>
@@ -14,6 +15,9 @@ public:
 
     virtual IStorage *create(int db) override;
     virtual const char *name() const override;
+
+private:
+    void setVersion(rocksdb::ColumnFamilyHandle*);
 };
 
 IStorageFactory *CreateRocksDBStorageFactory(const char *path, int dbnum)
@@ -64,9 +68,26 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum)
     if (!status.ok())
         throw status.ToString();
 
-    for (auto handle : handles)
-        m_vecspcols.emplace_back(handle);
     m_spdb = std::shared_ptr<rocksdb::DB>(db);
+    for (auto handle : handles)
+    {
+        std::string strVersion;
+        auto status = m_spdb->Get(rocksdb::ReadOptions(), handle, rocksdb::Slice(version_key, sizeof(version_key)), &strVersion);
+        if (!status.ok())
+        {
+            setVersion(handle);
+        }
+        else
+        {
+            SymVer ver = parseVersion(strVersion.c_str());
+            auto cmp = compareVersion(&ver);
+            if (cmp == NewerVersion)
+                throw "Cannot load FLASH database created by newer version of KeyDB";
+            if (cmp == OlderVersion)
+                setVersion(handle);
+        }
+        m_vecspcols.emplace_back(handle);
+    }   
 }
 
 RocksDBStorageFactory::~RocksDBStorageFactory()
@@ -74,14 +95,33 @@ RocksDBStorageFactory::~RocksDBStorageFactory()
     m_spdb->SyncWAL();
 }
 
+void RocksDBStorageFactory::setVersion(rocksdb::ColumnFamilyHandle *handle)
+{
+    auto status = m_spdb->Put(rocksdb::WriteOptions(), handle, rocksdb::Slice(version_key, sizeof(version_key)), rocksdb::Slice(KEYDB_REAL_VERSION, strlen(KEYDB_REAL_VERSION)+1));
+    if (!status.ok())
+        throw status.ToString();
+}
+
 IStorage *RocksDBStorageFactory::create(int db)
 {
     ++db;   // skip default col family
     std::shared_ptr<rocksdb::ColumnFamilyHandle> spcolfamily(m_vecspcols[db].release());
     size_t count = 0;
-    std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(rocksdb::ReadOptions(), spcolfamily.get()));
-    for (it->SeekToFirst(); it->Valid(); it->Next()) {
-        ++count;
+    
+    std::string value;
+    auto status = m_spdb->Get(rocksdb::ReadOptions(), spcolfamily.get(), rocksdb::Slice(count_key, sizeof(count_key)), &value);
+    if (status.ok() && value.size() == sizeof(size_t))
+    {
+        count = *reinterpret_cast<const size_t*>(value.data());
+        m_spdb->Delete(rocksdb::WriteOptions(), spcolfamily.get(), rocksdb::Slice(count_key, sizeof(count_key)));
+    }
+    else
+    {
+        printf("\tDatabase was not shutdown cleanly, recomputing metrics\n");
+        std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(rocksdb::ReadOptions(), spcolfamily.get()));
+        for (it->SeekToFirst(); it->Valid(); it->Next()) {
+            ++count;
+        }
     }
     return new RocksDBStorageProvider(m_spdb, spcolfamily, nullptr, count);
 }

@@ -3,7 +3,7 @@ extern const char *KEYDB_SET_VERSION;   // Unlike real version, this can be over
 
 enum VersionCompareResult
 {
-    EqualVerison,
+    EqualVersion,
     OlderVersion,
     NewerVersion,
 };

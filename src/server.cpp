@@ -1679,6 +1679,11 @@ SymVer parseVersion(const char *version)
 VersionCompareResult compareVersion(SymVer *pver)
 {
     SymVer symVerThis = parseVersion(KEYDB_REAL_VERSION);
+    // Special case, 0.0.0 is equal to any version
+    if ((symVerThis.major == 0 && symVerThis.minor == 0 && symVerThis.build == 0)
+        || (pver->major == 0 && pver->minor == 0 && pver->build == 0))
+        return VersionCompareResult::EqualVersion;
+    
     for (int iver = 0; iver < 3; ++iver)
     {
         long verThis, verOther;
@@ -1693,13 +1698,13 @@ VersionCompareResult compareVersion(SymVer *pver)
         case 2:
             verThis = symVerThis.build; verOther = pver->build;
         }
-
+        
         if (verThis < verOther)
             return VersionCompareResult::NewerVersion;
         if (verThis > verOther)
             return VersionCompareResult::OlderVersion;
     }
-    return VersionCompareResult::EqualVerison;
+    return VersionCompareResult::EqualVersion;
 }
 
 /* This function is used in order to track clients using the biggest amount
@@ -5457,7 +5462,7 @@ int main(int argc, char **argv) {
     SymVer version;
     version = parseVersion(KEYDB_REAL_VERSION);
     serverAssert(version.major >= 0 && version.minor >= 0 && version.build >= 0);
-    serverAssert(compareVersion(&version) == VersionCompareResult::EqualVerison);
+    serverAssert(compareVersion(&version) == VersionCompareResult::EqualVersion);
     }
 
 #ifdef USE_MEMKIND

@@ -99,6 +99,15 @@ const IStorage *RocksDBStorageProvider::clone() const
 
 RocksDBStorageProvider::~RocksDBStorageProvider()
 {
+    if (m_spbatch != nullptr)
+        endWriteBatch();
+    
+    if (m_spdb != nullptr && m_psnapshot == nullptr)
+    {
+        insert(count_key, sizeof(count_key), &m_count, sizeof(m_count), false);
+        flush();
+    }
+
     if (m_spdb != nullptr)
     {
         if (m_psnapshot != nullptr)

@@ -5,6 +5,9 @@
 #include <rocksdb/db.h>
 #include "../fastlock.h"
 
+static const char count_key[] = "\0__keydb__count\1";
+static const char version_key[] = "\0__keydb__version\1";
+
 class RocksDBStorageProvider : public IStorage
 {
     std::shared_ptr<rocksdb::DB> m_spdb;    // Note: This must be first so it is deleted last

@@ -63,8 +63,11 @@
 #include <mutex>
 #include "aelocker.h"
 #include "keycheck.h"
+#include "motd.h"
 
 int g_fTestMode = false;
+const char *motd_url = "http://api.keydb.dev/motd/motd_server_pro.txt";
+const char *motd_cache_file = "/.keydb-pro-server-motd";
 
 /* Our shared "common" objects */
 
@@ -1103,6 +1106,7 @@ void serverLog(int level, const char *fmt, ...) {
 
 static void checkTrialTimeout()
 {
+#ifndef NO_LICENSE_CHECK
     if (cserver.license_key != nullptr && FValidKey(cserver.license_key, strlen(cserver.license_key)))
         return;
     time_t curtime = time(NULL);
@@ -1118,6 +1122,7 @@ static void checkTrialTimeout()
     {
         serverLog(LL_WARNING, "Trial timeout in %ld:%02ld minutes", remaining/60, remaining % 60);
     }
+#endif
 }
 
 /* Log a fixed message without printf-alike capabilities, in a way that is
@@ -1639,6 +1644,62 @@ int clientsCronResizeQueryBuffer(client *c) {
         }
     }
     return 0;
+}
+
+SymVer parseVersion(const char *version)
+{
+    SymVer ver = {-1,-1,-1};
+    long versions[3] = {-1,-1,-1};
+    const char *start = version;
+    const char *end = nullptr;
+
+    for (int iver = 0; iver < 3; ++iver)
+    {
+        end = start;
+        while (*end != '\0' && *end != '.')
+            ++end;
+
+        if (start >= end)
+            return ver;
+
+        if (!string2l(start, end - start, versions + iver))
+            return ver;
+        if (*end != '\0')
+            start = end+1;
+        else
+            break;
+    }
+    ver.major = versions[0];
+    ver.minor = versions[1];
+    ver.build = versions[2];
+    
+    return ver;
+}
+
+VersionCompareResult compareVersion(SymVer *pver)
+{
+    SymVer symVerThis = parseVersion(KEYDB_REAL_VERSION);
+    for (int iver = 0; iver < 3; ++iver)
+    {
+        long verThis, verOther;
+        switch (iver)
+        {
+        case 0:
+            verThis = symVerThis.major; verOther = pver->major;
+            break;
+        case 1:
+            verThis = symVerThis.minor; verOther = pver->minor;
+            break;
+        case 2:
+            verThis = symVerThis.build; verOther = pver->build;
+        }
+
+        if (verThis < verOther)
+            return VersionCompareResult::NewerVersion;
+        if (verThis > verOther)
+            return VersionCompareResult::OlderVersion;
+    }
+    return VersionCompareResult::EqualVerison;
 }
 
 /* This function is used in order to track clients using the biggest amount
@@ -5002,14 +5063,18 @@ void redisAsciiArt(void) {
             mode, g_pserver->port ? g_pserver->port : g_pserver->tls_port
         );
     } else {
+        sds motd = fetchMOTD(true);
         snprintf(buf,1024*16,ascii_logo,
             KEYDB_REAL_VERSION,
             redisGitSHA1(),
             strtol(redisGitDirty(),NULL,10) > 0,
             (sizeof(long) == 8) ? "64" : "32",
             mode, g_pserver->port ? g_pserver->port : g_pserver->tls_port,
-            (long) getpid()
+            (long) getpid(),
+            motd ? motd : ""
         );
+        if (motd)
+            sdsfree(motd);
         serverLogRaw(LL_NOTICE|LL_RAW,buf);
     }
 
@@ -5387,6 +5452,13 @@ int main(int argc, char **argv) {
     int j;
 
     std::set_terminate(OnTerminate);
+
+    {
+    SymVer version;
+    version = parseVersion(KEYDB_REAL_VERSION);
+    serverAssert(version.major >= 0 && version.minor >= 0 && version.build >= 0);
+    serverAssert(compareVersion(&version) == VersionCompareResult::EqualVerison);
+    }
 
 #ifdef USE_MEMKIND
     storage_init(NULL, 0);

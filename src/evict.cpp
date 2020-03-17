@@ -666,6 +666,21 @@ int freeMemoryIfNeeded(void) {
     return C_OK;
 
 cant_free:
+    if (!cserver.delete_on_evict)
+    {
+        for (int idb = 0; idb < cserver.dbnum; ++idb)
+        {
+            redisDb *db = g_pserver->db[idb];
+            if (db->FStorageProvider())
+            {
+                serverLog(LL_WARNING, "Failed to evict keys, falling back to flushing entire cache.  Consider increasing maxmemory-samples.");
+                db->removeAllCachedValues();
+                if (((mem_reported - zmalloc_used_memory()) + mem_freed) >= mem_tofree)
+                    return C_OK;
+            }
+        }
+    }
+
     /* We are here if we are not able to reclaim memory. There is only one
      * last thing we can try: check if the lazyfree thread has jobs in queue
      * and wait... */

@@ -921,8 +921,15 @@ void configGetCommand(client *c) {
             listIter li;
             listNode *ln;
             listRewind(g_pserver->masters, &li);
+            bool fFirst = true;
             while ((ln = listNext(&li)))
             {
+                if (!fFirst)
+                {
+                    addReplyBulkCString(c,optname);
+                    matches++;
+                }
+                fFirst = false;
                 struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
                 snprintf(buf,sizeof(buf),"%s %d",
                     mi->masterhost, mi->masterport);

@@ -1646,6 +1646,62 @@ int clientsCronResizeQueryBuffer(client *c) {
     return 0;
 }
 
+SymVer parseVersion(const char *version)
+{
+    SymVer ver = {-1,-1,-1};
+    long versions[3] = {-1,-1,-1};
+    const char *start = version;
+    const char *end = nullptr;
+
+    for (int iver = 0; iver < 3; ++iver)
+    {
+        end = start;
+        while (*end != '\0' && *end != '.')
+            ++end;
+
+        if (start >= end)
+            return ver;
+
+        if (!string2l(start, end - start, versions + iver))
+            return ver;
+        if (*end != '\0')
+            start = end+1;
+        else
+            break;
+    }
+    ver.major = versions[0];
+    ver.minor = versions[1];
+    ver.build = versions[2];
+    
+    return ver;
+}
+
+VersionCompareResult compareVersion(SymVer *pver)
+{
+    SymVer symVerThis = parseVersion(KEYDB_REAL_VERSION);
+    for (int iver = 0; iver < 3; ++iver)
+    {
+        long verThis, verOther;
+        switch (iver)
+        {
+        case 0:
+            verThis = symVerThis.major; verOther = pver->major;
+            break;
+        case 1:
+            verThis = symVerThis.minor; verOther = pver->minor;
+            break;
+        case 2:
+            verThis = symVerThis.build; verOther = pver->build;
+        }
+
+        if (verThis < verOther)
+            return VersionCompareResult::NewerVersion;
+        if (verThis > verOther)
+            return VersionCompareResult::OlderVersion;
+    }
+    return VersionCompareResult::EqualVerison;
+}
+
 /* This function is used in order to track clients using the biggest amount
  * of memory in the latest few seconds. This way we can provide such information
  * in the INFO output (clients section), without having to do an O(N) scan for
@@ -5396,6 +5452,13 @@ int main(int argc, char **argv) {
     int j;
 
     std::set_terminate(OnTerminate);
+
+    {
+    SymVer version;
+    version = parseVersion(KEYDB_REAL_VERSION);
+    serverAssert(version.major >= 0 && version.minor >= 0 && version.build >= 0);
+    serverAssert(compareVersion(&version) == VersionCompareResult::EqualVerison);
+    }
 
 #ifdef USE_MEMKIND
     storage_init(NULL, 0);

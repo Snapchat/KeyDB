@@ -1630,10 +1630,13 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     if (writeToClient(fd,c,1) == C_ERR)
     {
         AeLocker ae;
-        c->lock.lock();
+        c->lock();
         ae.arm(c);
         if (c->flags & CLIENT_CLOSE_ASAP)
-            freeClient(c);
+        {
+            if (!freeClient(c))
+                c->unlock();
+        }
     }
 }
 

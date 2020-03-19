@@ -1039,6 +1039,7 @@ struct redisCommand redisCommandTable[] = {
 /* We use a private localtime implementation which is fork-safe. The logging
  * function of Redis may be called from other threads. */
 extern "C" void nolocks_localtime(struct tm *tmp, time_t t, time_t tz, int dst);
+extern "C" pid_t gettid();
 
 /* Low level logging. To use only for very big messages, otherwise
  * serverLog() is to prefer. */
@@ -1076,8 +1077,8 @@ void serverLogRaw(int level, const char *msg) {
         } else {
             role_char = (listLength(g_pserver->masters) ? 'S':'M'); /* Slave or Master. */
         }
-        fprintf(fp,"%d:%c %s %c %s\n",
-            (int)getpid(),role_char, buf,c[level],msg);
+        fprintf(fp,"%d:%d:%c %s %c %s\n",
+            (int)getpid(),(int)gettid(),role_char, buf,c[level],msg);
     }
     fflush(fp);
 

@@ -5,8 +5,9 @@
 #include <rocksdb/db.h>
 #include "../fastlock.h"
 
-static const char count_key[] = "\0__keydb__count\1";
-static const char version_key[] = "\0__keydb__version\1";
+#define INTERNAL_KEY_PREFIX "\x00\x04\x03\x00\x05\x02\x04"
+static const char count_key[] = INTERNAL_KEY_PREFIX "__keydb__count\1";
+static const char version_key[] = INTERNAL_KEY_PREFIX "__keydb__version\1";
 
 class RocksDBStorageProvider : public IStorage
 {
@@ -39,6 +40,7 @@ public:
 
 protected:
     bool FKeyExists(const char *key, size_t cchKey) const;
+    bool FInternalKey(const char *key, size_t cchKey) const;
 
     const rocksdb::ReadOptions &ReadOptions() const { return m_readOptionsTemplate; }
     rocksdb::WriteOptions WriteOptions() const;

@@ -40,8 +40,9 @@ public:
 
 protected:
     bool FKeyExists(const char *key, size_t cchKey) const;
-    bool FInternalKey(const char *key, size_t cchKey) const;
 
     const rocksdb::ReadOptions &ReadOptions() const { return m_readOptionsTemplate; }
     rocksdb::WriteOptions WriteOptions() const;
 };
+
+bool FInternalKey(const char *key, size_t cch);

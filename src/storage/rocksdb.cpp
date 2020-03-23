@@ -5,6 +5,16 @@
 
 static const char *keyprefix = INTERNAL_KEY_PREFIX;
 
+bool FInternalKey(const char *key, size_t cch)
+{
+    if (cch > strlen(INTERNAL_KEY_PREFIX))
+    {
+        if (memcmp(key, keyprefix, strlen(INTERNAL_KEY_PREFIX)) == 0)
+            return true;
+    }
+    return false;
+}
+
 RocksDBStorageProvider::RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count)
     : m_spdb(spdb), m_psnapshot(psnapshot), m_spcolfamily(spcolfam), m_count(count)
 {
@@ -73,16 +83,6 @@ size_t RocksDBStorageProvider::clear()
 size_t RocksDBStorageProvider::count() const
 {
     return m_count;
-}
-
-bool RocksDBStorageProvider::FInternalKey(const char *key, size_t cch) const
-{
-    if (cch > strlen(INTERNAL_KEY_PREFIX))
-    {
-        if (memcmp(key, keyprefix, strlen(INTERNAL_KEY_PREFIX)) == 0)
-            return true;
-    }
-    return false;
 }
 
 bool RocksDBStorageProvider::enumerate(callback fn) const

@@ -333,11 +333,11 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     serverAssert(sizeStart == size());
 }
 
-dict_iter redisDbPersistentDataSnapshot::random_cache_threadsafe() const
+dict_iter redisDbPersistentDataSnapshot::random_cache_threadsafe(bool fPrimaryOnly) const
 {
     if (size() == 0)
         return dict_iter(nullptr);
-    if (m_pdbSnapshot != nullptr && m_pdbSnapshot->size() > 0)
+    if (!fPrimaryOnly && m_pdbSnapshot != nullptr && m_pdbSnapshot->size() > 0)
     {
         dict_iter iter(nullptr);
         double pctInSnapshot = (double)m_pdbSnapshot->size() / (size() + m_pdbSnapshot->size());

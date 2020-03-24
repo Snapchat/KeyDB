@@ -2231,6 +2231,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now;
     long long lru_clock = 0;
     uint64_t mvcc_tstamp = OBJ_MVCC_INVALID;
+    size_t ckeysLoaded = 0;
     robj *subexpireKey = nullptr;
     robj *key = nullptr;
 
@@ -2476,11 +2477,29 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             decrRefCount(val);
             val = nullptr;
         } else {
+            /* If we have a storage provider check if we need to evict some keys to stay under our memory limit,
+                do this every 16 keys to limit the perf impact */
+            if (g_pserver->m_pstorageFactory && (ckeysLoaded % 16) == 0)
+            {
+                if (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK)
+                {
+                    for (int idb = 0; idb < cserver.dbnum; ++idb)
+                    {
+                        g_pserver->db[idb]->processChanges();
+                        g_pserver->db[idb]->commitChanges();
+                        g_pserver->db[idb]->trackChanges(true);
+                    }
+                    freeMemoryIfNeeded();
+                }
+            }
+            
             /* Add the new object in the hash table */
             int fInserted = dbMerge(db, key, val, rsi && rsi->fForceSetKey);   // Note: dbMerge will incrRef
 
             if (fInserted)
             {
+                ++ckeysLoaded;
+
                 /* Set the expire time if needed */
                 if (expiretime != -1)
                     setExpire(NULL,db,key,nullptr,expiretime);

@@ -3,13 +3,13 @@
 #include <sstream>
 #include <mutex>
 
-static const char *keyprefix = INTERNAL_KEY_PREFIX;
+static const char keyprefix[] = INTERNAL_KEY_PREFIX;
 
 bool FInternalKey(const char *key, size_t cch)
 {
-    if (cch > strlen(INTERNAL_KEY_PREFIX))
+    if (cch >= sizeof(INTERNAL_KEY_PREFIX))
     {
-        if (memcmp(key, keyprefix, strlen(INTERNAL_KEY_PREFIX)) == 0)
+        if (memcmp(key, keyprefix, sizeof(INTERNAL_KEY_PREFIX)-1) == 0)
             return true;
     }
     return false;

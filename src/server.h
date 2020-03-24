@@ -1293,16 +1293,8 @@ public:
     //  to allow you to release the global lock before commiting.  To prevent deadlocks you *must*
     //  either release the global lock or keep the same global lock between the two functions as
     //  a second look is kept to ensure writes to secondary storage are ordered
-    struct changedesc
-    {
-        sdsimmutablestring strkey;
-        bool fUpdate;
-
-        changedesc(const char *strkey, bool fUpdate) : strkey(strkey), fUpdate(fUpdate) {}
-    };
-    typedef std::vector<std::pair<changedesc, unique_sds_ptr>> changelist;
-    changelist processChanges();
-    void commitChanges(const changelist &vec);
+    void processChanges();
+    void commitChanges();
 
     // This should only be used if you look at the key, we do not fixup
     //  objects stored elsewhere
@@ -1326,6 +1318,13 @@ protected:
     uint64_t m_mvccCheckpoint = 0;
 
 private:
+    struct changedesc
+    {
+        sdsimmutablestring strkey;
+        bool fUpdate;
+
+        changedesc(const char *strkey, bool fUpdate) : strkey(strkey), fUpdate(fUpdate) {}
+    };
     struct changedescCmp
     {
         using is_transparent = void;    // C++14 to allow comparisons with different types

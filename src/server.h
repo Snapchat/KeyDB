@@ -1380,7 +1380,7 @@ public:
     using redisDbPersistentData::endSnapshotAsync;
     using redisDbPersistentData::end;
 
-    dict_iter random_cache_threadsafe() const;
+    dict_iter random_cache_threadsafe(bool fPrimaryOnly = false) const;
     dict_iter find_cached_threadsafe(const char *key) const;
 
     expireEntry *getExpire(robj_roptr key) { return getExpire(szFromObj(key)); }

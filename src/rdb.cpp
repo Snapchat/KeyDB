@@ -2534,8 +2534,8 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
     for (int idb = 0; idb < cserver.dbnum; ++idb)
     {
-        auto vec = g_pserver->db[idb]->processChanges();
-        g_pserver->db[idb]->commitChanges(vec);
+        g_pserver->db[idb]->processChanges();
+        g_pserver->db[idb]->commitChanges();
     }
     return C_OK;
 

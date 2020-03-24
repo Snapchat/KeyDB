@@ -2339,21 +2339,20 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     static thread_local bool fFirstRun = true;
     // note: we also copy the DB pointer in case a DB swap is done while the lock is released
-    std::vector<std::pair<redisDb*, redisDbPersistentData::changelist>> vecchanges;
+    std::vector<redisDb*> vecdb;    // note we cache the database pointer in case a dbswap is done while the lock is released
     if (!fFirstRun) {
-        for (int idb = 0; idb < cserver.dbnum; ++idb)
-        {
-            auto vec = g_pserver->db[idb]->processChanges();
-            vecchanges.emplace_back(g_pserver->db[idb], std::move(vec));
+        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+            vecdb.push_back(g_pserver->db[idb]);
+            g_pserver->db[idb]->processChanges();
         }
-    }
-    else {
+    } else {
         fFirstRun = false;
     }
 
     aeReleaseLock();
-    for (auto &pair : vecchanges)
-        pair.first->commitChanges(pair.second);
+    for (redisDb *db : vecdb)
+        db->commitChanges();
+    
     
     handleClientsWithPendingWrites(iel);
     if (serverTL->gcEpoch != 0)

@@ -219,6 +219,7 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
     const unsigned char *p = (const unsigned char*)ptr;
 
     g_pserver->master_repl_offset += len;
+    g_pserver->master_repl_meaningful_offset = g_pserver->master_repl_offset;
 
     /* This is a circular buffer, so write as much data we can at every
      * iteration and rewind the "idx" index if we reach the limit. */
@@ -2066,6 +2067,7 @@ void readSyncBulkPayload(connection *conn) {
         * we are starting a new history. */
         memcpy(g_pserver->replid,mi->master->replid,sizeof(g_pserver->replid));
         g_pserver->master_repl_offset = mi->master->reploff;
+        g_pserver->master_repl_meaningful_offset = mi->master->reploff;
     }
     clearReplicationId2();
 
@@ -3159,10 +3161,41 @@ void replicationCacheMaster(redisMaster *mi, client *c) {
  * current offset if no data was lost during the failover. So we use our
  * current replication ID and offset in order to synthesize a cached master. */
 void replicationCacheMasterUsingMyself(redisMaster *mi) {
+    serverLog(LL_NOTICE,
+        "Before turning into a replica, using my own master parameters "
+        "to synthesize a cached master: I may be able to synchronize with "
+        "the new master with just a partial transfer.");
+
     if (mi->cached_master != nullptr)
     {
         // This can happen on first load of the RDB, the master we created in config load is stale
         freeClient(mi->cached_master);
+    }
+
+    /* This will be used to populate the field server.master->reploff
+     * by replicationCreateMasterClient(). We'll later set the created
+     * master as server.cached_master, so the replica will use such
+     * offset for PSYNC. */
+    mi->master_initial_offset = g_pserver->master_repl_offset;
+
+    /* However if the "meaningful" offset, that is the offset without
+     * the final PINGs in the stream, is different, use this instead:
+     * often when the master is no longer reachable, replicas will never
+     * receive the PINGs, however the master will end with an incremented
+     * offset because of the PINGs and will not be able to incrementally
+     * PSYNC with the new master. */
+    if (g_pserver->master_repl_offset > g_pserver->master_repl_meaningful_offset) {
+        long long delta = g_pserver->master_repl_offset -
+                          g_pserver->master_repl_meaningful_offset;
+        serverLog(LL_NOTICE,
+            "Using the meaningful offset %lld instead of %lld to exclude "
+            "the final PINGs (%lld bytes difference)",
+                g_pserver->master_repl_meaningful_offset,
+                g_pserver->master_repl_offset,
+                delta);
+        mi->master_initial_offset = g_pserver->master_repl_meaningful_offset;
+        g_pserver->repl_backlog_histlen -= delta;
+        if (g_pserver->repl_backlog_histlen < 0) g_pserver->repl_backlog_histlen = 0;
     }
 
     /* The master client we create can be set to any DBID, because
@@ -3178,7 +3211,6 @@ void replicationCacheMasterUsingMyself(redisMaster *mi) {
     unlinkClient(mi->master);
     mi->cached_master = mi->master;
     mi->master = NULL;
-    serverLog(LL_NOTICE,"Before turning into a replica, using my master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.");
 }
 
 /* Free a cached master, called when there are no longer the conditions for
@@ -3583,10 +3615,18 @@ void replicationCron(void) {
             clientsArePaused();
 
         if (!manual_failover_in_progress) {
+            long long before_ping = g_pserver->master_repl_meaningful_offset;
             ping_argv[0] = createStringObject("PING",4);
             replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb,
                 ping_argv, 1);
             decrRefCount(ping_argv[0]);
+            /* The server.master_repl_meaningful_offset variable represents
+             * the offset of the replication stream without the pending PINGs.
+             * This is useful to set the right replication offset for PSYNC
+             * when the master is turned into a replica. Otherwise pending
+             * PINGs may not allow it to perform an incremental sync with the
+             * new master. */
+            g_pserver->master_repl_meaningful_offset = before_ping;
         }
     }
 

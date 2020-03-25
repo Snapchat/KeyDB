@@ -43,6 +43,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include "config.h"
 
 #ifdef __APPLE__
 #include <TargetConditionals.h>
@@ -58,6 +59,11 @@
 
 #ifndef UNUSED
 #define UNUSED(x) ((void)x)
+#endif
+
+#ifdef HAVE_BACKTRACE
+#include <ucontext.h>
+__attribute__((weak)) void logStackTrace(ucontext_t *) {}
 #endif
 
 extern int g_fInCrash;
@@ -149,6 +155,43 @@ __attribute__((weak)) void serverLog(int , const char *fmt, ...)
     printf("\n");
 }
 
+extern "C" pid_t gettid()
+{
+    static thread_local int pidCache = -1;
+#ifdef __linux__
+    if (pidCache == -1)
+        pidCache = syscall(SYS_gettid);
+#else
+	if (pidCache == -1) {
+		uint64_t tidT;
+		pthread_threadid_np(nullptr, &tidT);
+		assert(tidT < UINT_MAX);
+		pidCache = (int)tidT;
+	}
+#endif
+    return pidCache;
+}
+
+void printTrace()
+{
+#ifdef HAVE_BACKTRACE
+    serverLog(3 /*LL_WARNING*/, "printing backtrace for thread %d", gettid());
+    ucontext_t ctxt;
+    getcontext(&ctxt);
+    logStackTrace(&ctxt);
+#endif
+}
+
+
+#ifdef __linux__
+static int futex(volatile unsigned *uaddr, int futex_op, int val,
+    const struct timespec *timeout, int val3)
+{
+    return syscall(SYS_futex, uaddr, futex_op, val,
+                    timeout, uaddr, val3);
+}
+#endif
+
 class DeadlockDetector
 {
     std::map<pid_t, fastlock *> m_mapwait;
@@ -156,9 +199,19 @@ class DeadlockDetector
 public:
     void registerwait(fastlock *lock, pid_t thispid)
     {
+        static volatile bool fInDeadlock = false;
+
         if (lock == &m_lock || g_fInCrash)
             return;
         fastlock_lock(&m_lock);
+        
+        if (fInDeadlock)
+        {
+            printTrace();
+            fastlock_unlock(&m_lock);
+            return;
+        }
+
         m_mapwait.insert(std::make_pair(thispid, lock));
 
         // Detect cycles
@@ -184,6 +237,19 @@ public:
                     if (pidCheck == thispid)
                         break;
                 }
+                // Wake All sleeping threads so they can print their callstacks
+#ifdef HAVE_BACKTRACE
+#ifdef __linux__
+                int mask = -1;
+                fInDeadlock = true;
+                fastlock_unlock(&m_lock);
+                futex(&lock->m_ticket.u, FUTEX_WAKE_BITSET_PRIVATE, INT_MAX, nullptr, mask);
+                futex(&itr->second->m_ticket.u, FUTEX_WAKE_BITSET_PRIVATE, INT_MAX, nullptr, mask);
+                sleep(2);
+                fastlock_lock(&m_lock);
+                printTrace();
+#endif
+#endif
                 serverLog(3 /*LL_WARNING*/, "!!! KeyDB Will Now Crash !!!");
                 _serverPanic(__FILE__, __LINE__, "Deadlock detected");
             }
@@ -220,32 +286,6 @@ uint64_t fastlock_getlongwaitcount()
     uint64_t rval;
     __atomic_load(&g_longwaits, &rval, __ATOMIC_RELAXED);
     return rval;
-}
-
-#ifdef __linux__
-static int futex(volatile unsigned *uaddr, int futex_op, int val,
-    const struct timespec *timeout, int val3)
-{
-    return syscall(SYS_futex, uaddr, futex_op, val,
-                    timeout, uaddr, val3);
-}
-#endif
-
-extern "C" pid_t gettid()
-{
-    static thread_local int pidCache = -1;
-#ifdef __linux__
-    if (pidCache == -1)
-        pidCache = syscall(SYS_gettid);
-#else
-	if (pidCache == -1) {
-		uint64_t tidT;
-		pthread_threadid_np(nullptr, &tidT);
-		assert(tidT < UINT_MAX);
-		pidCache = (int)tidT;
-	}
-#endif
-    return pidCache;
 }
 
 extern "C" void fastlock_sleep(fastlock *lock, pid_t pid, unsigned wake, unsigned mask)

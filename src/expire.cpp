@@ -135,6 +135,15 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
 
     if (deleted)
     {
+        if (!pfat->FEmpty())
+        {
+            // We need to resort the expire entry since it may no longer be in the correct position
+            auto itr = db->setexpire->find(e.key());
+            expireEntry eT = std::move(e);
+            db->setexpire->erase(itr);
+            db->setexpire->insert(eT);
+        }
+
         robj objT;
         switch (val->type)
         {

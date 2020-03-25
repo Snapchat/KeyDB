@@ -2095,7 +2095,7 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
                 incrRefCount(subexpireKey);
             } else if (!strcasecmp(szFromObj(auxkey), "keydb-subexpire-when")) {
                 if (key == nullptr || subexpireKey == nullptr) {
-                    serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping.");
+                    serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping. key: %s subkey: %s", key != nullptr ? szFromObj(key) : "(null)", subexpireKey != nullptr ? szFromObj(subexpireKey) : "(null)");
                 }
                 else {
                     setExpire(NULL, db, key, subexpireKey, strtoll(szFromObj(auxval), nullptr, 10));
@@ -2187,8 +2187,6 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
                 decrRefCount(val);
                 val = nullptr;
             }
-            decrRefCount(key);
-            key = nullptr;
         }
 
         /* Reset the state that is key-specified and is populated by
@@ -2199,7 +2197,10 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
     }
 
     if (key != nullptr)
+    {
         decrRefCount(key);
+        key = nullptr;
+    }
 
     if (subexpireKey != nullptr)
     {
@@ -2226,6 +2227,17 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
     return C_OK;
 
 eoferr: /* unexpected end of file is handled here with a fatal exit */
+    if (key != nullptr)
+    {
+        decrRefCount(key);
+        key = nullptr;
+    }
+    if (subexpireKey != nullptr)
+    {
+        decrRefCount(subexpireKey);
+        subexpireKey = nullptr;
+    }
+
     serverLog(LL_WARNING,"Short read or OOM loading DB. Unrecoverable error, aborting now.");
     rdbExitReportCorruptRDB("Unexpected EOF reading RDB file");
     return C_ERR; /* Just to avoid warning */

@@ -1277,6 +1277,7 @@ public:
     size_t expireSize() const { return m_setexpire->size(); }
     int removeExpire(robj *key, dict_iter itr);
     int removeSubkeyExpire(robj *key, robj *subkey);
+    void resortExpire(expireEntry &e);
     void clear(void(callback)(void*));
     void emptyDbAsync();
     // Note: If you do not need the obj then use the objless iterator version.  It's faster
@@ -1468,6 +1469,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::consolidate_snapshot;
     using redisDbPersistentData::removeAllCachedValues;
     using redisDbPersistentData::dictUnsafeKeyOnly;
+    using redisDbPersistentData::resortExpire;
 
 public:
     expireset::setiter expireitr;

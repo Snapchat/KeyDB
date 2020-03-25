@@ -2290,7 +2290,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 incrRefCount(subexpireKey);
             } else if (!strcasecmp(szFromObj(auxkey), "keydb-subexpire-when")) {
                 if (key == nullptr || subexpireKey == nullptr) {
-                    serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping.");
+                    serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping. key: %s subkey: %s", key != nullptr ? szFromObj(key) : "(null)", subexpireKey != nullptr ? szFromObj(subexpireKey) : "(null)");
                 }
                 else {
                     setExpire(NULL, db, key, subexpireKey, strtoll(szFromObj(auxval), nullptr, 10));
@@ -2371,6 +2371,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         /* Read value */
         if ((val = rdbLoadObject(type,rdb,key, mvcc_tstamp)) == NULL) {
             decrRefCount(key);
+            key = nullptr;
             goto eoferr;
         }
         bool fStaleMvccKey = (rsi) ? val->mvcc_tstamp < rsi->mvccMinThreshold : false;
@@ -2409,8 +2410,6 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 decrRefCount(val);
                 val = nullptr;
             }
-            decrRefCount(key);
-            key = nullptr;
         }
         if (g_pserver->key_load_delay)
             usleep(g_pserver->key_load_delay);
@@ -2423,7 +2422,10 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     }
 
     if (key != nullptr)
+    {
         decrRefCount(key);
+        key = nullptr;
+    }
 
     if (subexpireKey != nullptr)
     {
@@ -2454,6 +2456,17 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
      * the RDB file from a socket during initial SYNC (diskless replica mode),
      * we'll report the error to the caller, so that we can retry. */
 eoferr:
+    if (key != nullptr)
+    {
+        decrRefCount(key);
+        key = nullptr;
+    }
+    if (subexpireKey != nullptr)
+    {
+        decrRefCount(subexpireKey);
+        subexpireKey = nullptr;
+    }
+
     serverLog(LL_WARNING,
         "Short read or OOM loading DB. Unrecoverable error, aborting now.");
     rdbReportReadError("Unexpected EOF reading RDB file");

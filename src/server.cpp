@@ -5036,7 +5036,7 @@ void OnTerminate()
         The easiest way to achieve that is to acutally segfault, so we assert
         here.
     */
-    serverAssert(false);
+    serverPanic("std::teminate() called");
 }
 
 void *workerThreadMain(void *parg)

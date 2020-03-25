@@ -1469,6 +1469,14 @@ int redisDbPersistentData::removeSubkeyExpire(robj *key, robj *subkey) {
     return found;
 }
 
+void redisDbPersistentData::resortExpire(expireEntry &e)
+{
+    auto itr = m_setexpire->find(e.key());
+    expireEntry eT = std::move(e);
+    m_setexpire->erase(itr);
+    m_setexpire->insert(eT);
+}
+
 /* Set an expire to the specified key. If the expire is set in the context
  * of an user calling a command 'c' is the client, otherwise 'c' is set
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds

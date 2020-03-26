@@ -2875,8 +2875,6 @@ void freeMasterInfo(redisMaster *mi)
     zfree(mi->masteruser);
     if (mi->repl_transfer_tmpfile)
         zfree(mi->repl_transfer_tmpfile);
-    if (mi->clientFake)
-        freeClient(mi->clientFake);
     delete mi->staleKeyMap;
     if (mi->cached_master != nullptr)
         freeClientAsync(mi->cached_master);
@@ -2955,11 +2953,6 @@ void replicationHandleMasterDisconnection(redisMaster *mi) {
         mi->master = NULL;
         mi->repl_state = REPL_STATE_CONNECT;
         mi->repl_down_since = g_pserver->unixtime;
-        if (mi->clientFake) {
-            freeClient(mi->clientFake);
-            mi->clientFake = nullptr;
-
-        }
         /* We lost connection with our master, don't disconnect slaves yet,
         * maybe we'll be able to PSYNC with our master later. We'll disconnect
         * the slaves only if we'll have to do a full resync with our master. */
@@ -3856,8 +3849,13 @@ bool FInReplicaReplay()
     return s_pstate != nullptr && s_pstate->nesting() > 0;
 }
 
+struct RemoteMasterState
+{
+    uint64_t mvcc = 0;
+    client *cFake = nullptr;
+};
 
-static std::unordered_map<std::string, uint64_t> g_mapmvcc;
+static std::unordered_map<std::string, RemoteMasterState> g_mapremote;
 
 void replicaReplayCommand(client *c)
 {
@@ -3933,12 +3931,15 @@ void replicaReplayCommand(client *c)
     if (!s_pstate->FPush())
         return;
 
-    redisMaster *mi = s_pstate->getMi(c);
-    client *cFake = mi->clientFake;
-    if (mi->clientFakeNesting != s_pstate->nesting())
-        cFake = nullptr;
-    serverAssert(mi != nullptr);
-    if (mvcc != 0 && g_mapmvcc[uuid] >= mvcc)
+    RemoteMasterState &remoteState = g_mapremote[uuid];
+    if (remoteState.cFake == nullptr)
+        remoteState.cFake = createClient(nullptr, c->iel);
+    else
+        remoteState.cFake->iel = c->iel;
+
+    client *cFake = remoteState.cFake;
+
+    if (mvcc != 0 && remoteState.mvcc >= mvcc)
     {
         s_pstate->Cancel();
         s_pstate->Pop();
@@ -3947,8 +3948,6 @@ void replicaReplayCommand(client *c)
 
     // OK We've recieved a command lets execute
     client *current_clientSave = serverTL->current_client;
-    if (cFake == nullptr)
-        cFake = createClient(nullptr, c->iel);
     cFake->lock.lock();
     cFake->authenticated = c->authenticated;
     cFake->puser = c->puser;
@@ -3961,13 +3960,15 @@ void replicaReplayCommand(client *c)
     bool fExec = ccmdPrev != serverTL->commandsExecuted;
     cFake->lock.unlock();
     if (cFake->master_error)
-        addReplyError(c, "Error in rreplay command, please check logs");
+    {
+        addReplyError(c, "Error in rreplay command, please check logs.");
+    }
     if (fExec || cFake->flags & CLIENT_MULTI)
     {
         addReply(c, shared.ok);
         selectDb(c, cFake->db->id);
-        if (mvcc > g_mapmvcc[uuid])
-            g_mapmvcc[uuid] = mvcc;
+        if (mvcc > remoteState.mvcc)
+            remoteState.mvcc = mvcc;
     }
     else
     {
@@ -3975,17 +3976,6 @@ void replicaReplayCommand(client *c)
         addReplyError(c, "command did not execute");
     }
     serverAssert(sdslen(cFake->querybuf) == 0);
-    if (cFake->flags & CLIENT_MULTI)
-    {
-        mi->clientFake = cFake;
-        mi->clientFakeNesting = s_pstate->nesting();
-    }
-    else
-    {
-        if (mi->clientFake == cFake)
-            mi->clientFake = nullptr;
-        freeClient(cFake);
-    }
     serverTL->current_client = current_clientSave;
 
     // call() will not propogate this for us, so we do so here

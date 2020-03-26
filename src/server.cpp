@@ -3593,11 +3593,11 @@ int processCommand(client *c, int callFlags) {
             return C_OK;
         }
     }
-
-    incrementMvccTstamp();
     
     if (!locker.isArmed())
         locker.arm(c);
+
+    incrementMvccTstamp();
 
     /* Handle the maxmemory directive.
      *
@@ -5018,14 +5018,15 @@ void incrementMvccTstamp()
     msPrev >>= MVCC_MS_SHIFT;  // convert to milliseconds
 
     long long mst;
-    __atomic_load(&g_pserver->mstime, &mst, __ATOMIC_RELAXED);
+    __atomic_load(&g_pserver->mstime, &mst, __ATOMIC_ACQUIRE);
     if (msPrev >= (uint64_t)mst)  // we can be greater if the count overflows
     {
-        atomicIncr(g_pserver->mvcc_tstamp, 1);
+        __atomic_fetch_add(&g_pserver->mvcc_tstamp, 1, __ATOMIC_RELEASE);
     }
     else
     {
-        atomicSet(g_pserver->mvcc_tstamp, ((uint64_t)g_pserver->mstime) << MVCC_MS_SHIFT);
+        uint64_t val = ((uint64_t)g_pserver->mstime) << MVCC_MS_SHIFT;
+        __atomic_store(&g_pserver->mvcc_tstamp, &val, __ATOMIC_RELEASE);
     }
 }
 

@@ -1042,6 +1042,7 @@ struct redisCommand redisCommandTable[] = {
 /* We use a private localtime implementation which is fork-safe. The logging
  * function of Redis may be called from other threads. */
 extern "C" void nolocks_localtime(struct tm *tmp, time_t t, time_t tz, int dst);
+extern "C" pid_t gettid();
 
 /* Low level logging. To use only for very big messages, otherwise
  * serverLog() is to prefer. */
@@ -1079,8 +1080,8 @@ void serverLogRaw(int level, const char *msg) {
         } else {
             role_char = (listLength(g_pserver->masters) ? 'S':'M'); /* Slave or Master. */
         }
-        fprintf(fp,"%d:%c %s %c %s\n",
-            (int)getpid(),role_char, buf,c[level],msg);
+        fprintf(fp,"%d:%d:%c %s %c %s\n",
+            (int)getpid(),(int)gettid(),role_char, buf,c[level],msg);
     }
     fflush(fp);
 
@@ -2339,21 +2340,20 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     static thread_local bool fFirstRun = true;
     // note: we also copy the DB pointer in case a DB swap is done while the lock is released
-    std::vector<std::pair<redisDb*, redisDbPersistentData::changelist>> vecchanges;
+    std::vector<redisDb*> vecdb;    // note we cache the database pointer in case a dbswap is done while the lock is released
     if (!fFirstRun) {
-        for (int idb = 0; idb < cserver.dbnum; ++idb)
-        {
-            auto vec = g_pserver->db[idb]->processChanges();
-            vecchanges.emplace_back(g_pserver->db[idb], std::move(vec));
+        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+            vecdb.push_back(g_pserver->db[idb]);
+            g_pserver->db[idb]->processChanges();
         }
-    }
-    else {
+    } else {
         fFirstRun = false;
     }
 
     aeReleaseLock();
-    for (auto &pair : vecchanges)
-        pair.first->commitChanges(pair.second);
+    for (redisDb *db : vecdb)
+        db->commitChanges();
+    
     
     handleClientsWithPendingWrites(iel);
     if (serverTL->gcEpoch != 0)
@@ -3834,8 +3834,6 @@ int processCommand(client *c, int callFlags) {
         }
     }
 
-    incrementMvccTstamp();
-
     /* Handle the maxmemory directive.
      *
      * Note that we do not want to reclaim memory if we are here re-entering
@@ -3980,6 +3978,7 @@ int processCommand(client *c, int callFlags) {
                 return C_OK;
         }
         locker.arm(c);
+        incrementMvccTstamp();
         call(c,callFlags);
         c->woff = g_pserver->master_repl_offset;
         if (listLength(g_pserver->ready_keys))
@@ -5219,6 +5218,20 @@ int checkForSentinelMode(int argc, char **argv) {
 /* Function called at startup to load RDB or AOF file in memory. */
 void loadDataFromDisk(void) {
     long long start = ustime();
+
+    if (g_pserver->m_pstorageFactory)
+    {
+        for (int idb = 0; idb < cserver.dbnum; ++idb)
+        {
+            if (g_pserver->db[idb]->size() > 0)
+            {
+                serverLog(LL_NOTICE, "Not loading the RDB because a storage provider is set and the database is not empty");
+                return;
+            }
+        }
+        serverLog(LL_NOTICE, "Loading the RDB even though we have a storage provider because the database is empty");
+    }
+    
     if (g_pserver->aof_state == AOF_ON) {
         if (loadAppendOnlyFile(g_pserver->aof_filename) == C_OK)
             serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
@@ -5362,14 +5375,15 @@ void incrementMvccTstamp()
     msPrev >>= MVCC_MS_SHIFT;  // convert to milliseconds
 
     long long mst;
-    __atomic_load(&g_pserver->mstime, &mst, __ATOMIC_RELAXED);
+    __atomic_load(&g_pserver->mstime, &mst, __ATOMIC_ACQUIRE);
     if (msPrev >= (uint64_t)mst)  // we can be greater if the count overflows
     {
-        atomicIncr(g_pserver->mvcc_tstamp, 1);
+        __atomic_fetch_add(&g_pserver->mvcc_tstamp, 1, __ATOMIC_RELEASE);
     }
     else
     {
-        atomicSet(g_pserver->mvcc_tstamp, ((uint64_t)mst) << MVCC_MS_SHIFT);
+        uint64_t val = ((uint64_t)mst) << MVCC_MS_SHIFT;
+        __atomic_store(&g_pserver->mvcc_tstamp, &val, __ATOMIC_RELEASE);
     }
 }
 
@@ -5401,7 +5415,7 @@ void OnTerminate()
         }
     }
 
-    serverAssert(false);
+    serverPanic("std::teminate() called");
 }
 
 void *workerThreadMain(void *parg)

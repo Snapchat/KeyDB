@@ -1469,6 +1469,14 @@ int redisDbPersistentData::removeSubkeyExpire(robj *key, robj *subkey) {
     return found;
 }
 
+void redisDbPersistentData::resortExpire(expireEntry &e)
+{
+    auto itr = m_setexpire->find(e.key());
+    expireEntry eT = std::move(e);
+    m_setexpire->erase(itr);
+    m_setexpire->insert(eT);
+}
+
 /* Set an expire to the specified key. If the expire is set in the context
  * of an user calling a command 'c' is the client, otherwise 'c' is set
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds
@@ -2257,13 +2265,12 @@ void redisDbPersistentData::storeDatabase()
     dictReleaseIterator(di);
 }
 
-redisDbPersistentData::changelist redisDbPersistentData::processChanges()
+void redisDbPersistentData::processChanges()
 {
     serverAssert(GlobalLocksAcquired());
 
     --m_fTrackingChanges;
     serverAssert(m_fTrackingChanges >= 0);
-    changelist vecRet;
 
     if (m_spstorage != nullptr)
     {
@@ -2285,23 +2292,18 @@ redisDbPersistentData::changelist redisDbPersistentData::processChanges()
                         continue;
                     robj *o = (robj*)dictGetVal(de);
                     sds temp = serializeStoredObjectAndExpire(this, (const char*) dictGetKey(de), o);
-                    vecRet.emplace_back(std::move(change), unique_sds_ptr(temp));
+                    m_spstorage->insert(change.strkey.get(), sdslen(change.strkey.get()), temp, sdslen(temp), change.fUpdate);
+                    sdsfree(temp);
                 }
             }
             m_setchanged.clear();
             m_cnewKeysPending = 0;
         }
     }
-    
-    return vecRet;
 }
 
-void redisDbPersistentData::commitChanges(const changelist &vec)
+void redisDbPersistentData::commitChanges()
 {
-    for (auto &pair : vec)
-    {
-        m_spstorage->insert(pair.first.strkey.get(), sdslen(pair.first.strkey.get()), pair.second.get(), sdslen(pair.second.get()), pair.first.fUpdate);
-    }
     if (m_spstorage != nullptr)
         m_spstorage->endWriteBatch();
 }
@@ -2379,8 +2381,8 @@ void redisDbPersistentData::removeAllCachedValues()
     // First we have to flush the tracked changes
     if (m_fTrackingChanges)
     {
-        auto vec = processChanges();
-        commitChanges(vec);
+        processChanges();
+        commitChanges();
         trackChanges(false);
     }
 

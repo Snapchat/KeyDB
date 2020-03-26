@@ -495,7 +495,7 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
 
         if (c->querybuf && sdslen(c->querybuf)) {
             std::string str = escapeString(c->querybuf);
-            serverLog(LL_WARNING, "\tquerybuf: %s", str.c_str());
+            printf("\tquerybuf: %s\n", str.c_str());
         }
         c->master_error = 1;
     }

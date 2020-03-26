@@ -429,9 +429,12 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
      * to subtract the slaves output buffers. We can just return ASAP. */
     mem_reported = zmalloc_used_memory();
     if (total) *total = mem_reported;
+    size_t maxmemory = g_pserver->maxmemory;
+    if (g_pserver->FRdbSaveInProgress())
+        maxmemory *= 2;
 
     /* We may return ASAP if there is no need to compute the level. */
-    int return_ok_asap = !g_pserver->maxmemory || mem_reported <= g_pserver->maxmemory;
+    int return_ok_asap = !maxmemory || mem_reported <= maxmemory;
     if (return_ok_asap && !level) return C_OK;
 
     /* Remove the size of slaves output buffers and AOF buffer from the
@@ -442,20 +445,20 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 
     /* Compute the ratio of memory usage. */
     if (level) {
-        if (!g_pserver->maxmemory) {
+        if (!maxmemory) {
             *level = 0;
         } else {
-            *level = (float)mem_used / (float)g_pserver->maxmemory;
+            *level = (float)mem_used / (float)maxmemory;
         }
     }
 
     if (return_ok_asap) return C_OK;
 
     /* Check if we are still over the memory limit. */
-    if (mem_used <= g_pserver->maxmemory) return C_OK;
+    if (mem_used <= maxmemory) return C_OK;
 
     /* Compute how much memory we need to free. */
-    mem_tofree = mem_used - g_pserver->maxmemory;
+    mem_tofree = mem_used - maxmemory;
 
     if (logical) *logical = mem_used;
     if (tofree) *tofree = mem_tofree;
@@ -483,6 +486,8 @@ int freeMemoryIfNeeded(void) {
     mstime_t latency, eviction_latency;
     long long delta;
     int slaves = listLength(g_pserver->slaves);
+    const bool fEvictToStorage = !cserver.delete_on_evict && g_pserver->db[0]->FStorageProvider();
+
 
     /* When clients are paused the dataset should be static not just from the
      * POV of clients not being able to write, but also from the POV of
@@ -503,6 +508,7 @@ int freeMemoryIfNeeded(void) {
         sds bestkey = NULL;
         int bestdbid;
         redisDb *db;
+        bool fFallback = false;
 
         if (g_pserver->maxmemory_policy & (MAXMEMORY_FLAG_LRU|MAXMEMORY_FLAG_LFU) ||
             g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_TTL)
@@ -534,7 +540,9 @@ int freeMemoryIfNeeded(void) {
 
                 /* Go backward from best to worst element to evict. */
                 for (k = EVPOOL_SIZE-1; k >= 0; k--) {
-                    if (pool[k].key == NULL) continue;
+                    if (pool[k].key == NULL) {
+                        continue;
+                    } 
                     bestdbid = pool[k].dbid;
                     sds key = nullptr;
 
@@ -558,11 +566,14 @@ int freeMemoryIfNeeded(void) {
                     }
                 }
             }
+            if (bestkey == nullptr && fEvictToStorage)
+                fFallback = true;
         }
 
         /* volatile-random and allkeys-random policy */
-        else if (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM ||
-                 g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_RANDOM)
+        if (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM ||
+                 g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_RANDOM
+                 || fEvictToStorage)
         {
             /* When evicting a random key, we try to evict a key for
              * each DB, so we use the static 'next_db' variable to
@@ -570,10 +581,10 @@ int freeMemoryIfNeeded(void) {
             for (i = 0; i < cserver.dbnum; i++) {
                 j = (++next_db) % cserver.dbnum;
                 db = g_pserver->db[j];
-                if (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM)
+                if (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM || fFallback)
                 {
                     if (db->size() != 0) {
-                        auto itr = db->random_cache_threadsafe();
+                        auto itr = db->random_cache_threadsafe(true /*fPrimaryOnly*/);  // primary only because we can't evict a snapshot key
                         bestkey = itr.key();
                         bestdbid = j;
                         break;
@@ -595,7 +606,7 @@ int freeMemoryIfNeeded(void) {
         if (bestkey) {
             db = g_pserver->db[bestdbid];
 
-            if (!cserver.delete_on_evict && db->FStorageProvider())
+            if (fEvictToStorage)
             {
                 // This key is in the storage so we only need to free the object
                 delta = (long long) zmalloc_used_memory();

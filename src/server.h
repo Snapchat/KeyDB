@@ -1277,6 +1277,7 @@ public:
     size_t expireSize() const { return m_setexpire->size(); }
     int removeExpire(robj *key, dict_iter itr);
     int removeSubkeyExpire(robj *key, robj *subkey);
+    void resortExpire(expireEntry &e);
     void clear(void(callback)(void*));
     void emptyDbAsync();
     // Note: If you do not need the obj then use the objless iterator version.  It's faster
@@ -1293,16 +1294,8 @@ public:
     //  to allow you to release the global lock before commiting.  To prevent deadlocks you *must*
     //  either release the global lock or keep the same global lock between the two functions as
     //  a second look is kept to ensure writes to secondary storage are ordered
-    struct changedesc
-    {
-        sdsimmutablestring strkey;
-        bool fUpdate;
-
-        changedesc(const char *strkey, bool fUpdate) : strkey(strkey), fUpdate(fUpdate) {}
-    };
-    typedef std::vector<std::pair<changedesc, unique_sds_ptr>> changelist;
-    changelist processChanges();
-    void commitChanges(const changelist &vec);
+    void processChanges();
+    void commitChanges();
 
     // This should only be used if you look at the key, we do not fixup
     //  objects stored elsewhere
@@ -1326,6 +1319,13 @@ protected:
     uint64_t m_mvccCheckpoint = 0;
 
 private:
+    struct changedesc
+    {
+        sdsimmutablestring strkey;
+        bool fUpdate;
+
+        changedesc(const char *strkey, bool fUpdate) : strkey(strkey), fUpdate(fUpdate) {}
+    };
     struct changedescCmp
     {
         using is_transparent = void;    // C++14 to allow comparisons with different types
@@ -1380,7 +1380,7 @@ public:
     using redisDbPersistentData::endSnapshotAsync;
     using redisDbPersistentData::end;
 
-    dict_iter random_cache_threadsafe() const;
+    dict_iter random_cache_threadsafe(bool fPrimaryOnly = false) const;
     dict_iter find_cached_threadsafe(const char *key) const;
 
     expireEntry *getExpire(robj_roptr key) { return getExpire(szFromObj(key)); }
@@ -1469,6 +1469,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::consolidate_snapshot;
     using redisDbPersistentData::removeAllCachedValues;
     using redisDbPersistentData::dictUnsafeKeyOnly;
+    using redisDbPersistentData::resortExpire;
 
 public:
     expireset::setiter expireitr;
@@ -1917,8 +1918,6 @@ struct redisMaster {
     int masterport;                 /* Port of master */
     client *cached_master;          /* Cached master to be reused for PSYNC. */
     client *master;
-    client *clientFake;
-    int clientFakeNesting;
     /* The following two fields is where we store master PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
      * the server->master client structure. */

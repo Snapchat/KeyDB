@@ -1534,8 +1534,6 @@ struct redisMaster {
     int masterport;                 /* Port of master */
     client *cached_master;          /* Cached master to be reused for PSYNC. */
     client *master;
-    client *clientFake;
-    int clientFakeNesting;
     /* The following two fields is where we store master PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
      * the server->master client structure. */

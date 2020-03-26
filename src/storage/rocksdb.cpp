@@ -3,6 +3,18 @@
 #include <sstream>
 #include <mutex>
 
+static const char keyprefix[] = INTERNAL_KEY_PREFIX;
+
+bool FInternalKey(const char *key, size_t cch)
+{
+    if (cch >= sizeof(INTERNAL_KEY_PREFIX))
+    {
+        if (memcmp(key, keyprefix, sizeof(INTERNAL_KEY_PREFIX)-1) == 0)
+            return true;
+    }
+    return false;
+}
+
 RocksDBStorageProvider::RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count)
     : m_spdb(spdb), m_psnapshot(psnapshot), m_spcolfamily(spcolfam), m_count(count)
 {
@@ -78,6 +90,8 @@ bool RocksDBStorageProvider::enumerate(callback fn) const
     std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spcolfamily.get()));
     size_t count = 0;
     for (it->SeekToFirst(); it->Valid(); it->Next()) {
+        if (FInternalKey(it->key().data(), it->key().size()))
+            continue;
         ++count;
         bool fContinue = fn(it->key().data(), it->key().size(), it->value().data(), it->value().size());
         if (!fContinue)

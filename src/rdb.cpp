@@ -2231,6 +2231,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now;
     long long lru_clock = 0;
     uint64_t mvcc_tstamp = OBJ_MVCC_INVALID;
+    size_t ckeysLoaded = 0;
     robj *subexpireKey = nullptr;
     robj *key = nullptr;
 
@@ -2374,7 +2375,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 incrRefCount(subexpireKey);
             } else if (!strcasecmp(szFromObj(auxkey), "keydb-subexpire-when")) {
                 if (key == nullptr || subexpireKey == nullptr) {
-                    serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping.");
+                    serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping. key: %s subkey: %s", key != nullptr ? szFromObj(key) : "(null)", subexpireKey != nullptr ? szFromObj(subexpireKey) : "(null)");
                 }
                 else {
                     setExpire(NULL, db, key, subexpireKey, strtoll(szFromObj(auxval), nullptr, 10));
@@ -2455,6 +2456,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         /* Read value */
         if ((val = rdbLoadObject(type,rdb,key, mvcc_tstamp)) == NULL) {
             decrRefCount(key);
+            key = nullptr;
             goto eoferr;
         }
         bool fStaleMvccKey = (rsi) ? val->mvcc_tstamp < rsi->mvccMinThreshold : false;
@@ -2476,11 +2478,29 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             decrRefCount(val);
             val = nullptr;
         } else {
+            /* If we have a storage provider check if we need to evict some keys to stay under our memory limit,
+                do this every 16 keys to limit the perf impact */
+            if (g_pserver->m_pstorageFactory && (ckeysLoaded % 16) == 0)
+            {
+                if (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK)
+                {
+                    for (int idb = 0; idb < cserver.dbnum; ++idb)
+                    {
+                        g_pserver->db[idb]->processChanges();
+                        g_pserver->db[idb]->commitChanges();
+                        g_pserver->db[idb]->trackChanges(true);
+                    }
+                    freeMemoryIfNeeded();
+                }
+            }
+            
             /* Add the new object in the hash table */
             int fInserted = dbMerge(db, key, val, rsi && rsi->fForceSetKey);   // Note: dbMerge will incrRef
 
             if (fInserted)
             {
+                ++ckeysLoaded;
+
                 /* Set the expire time if needed */
                 if (expiretime != -1)
                     setExpire(NULL,db,key,nullptr,expiretime);
@@ -2493,8 +2513,6 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 decrRefCount(val);
                 val = nullptr;
             }
-            decrRefCount(key);
-            key = nullptr;
         }
         if (g_pserver->key_load_delay)
             usleep(g_pserver->key_load_delay);
@@ -2507,7 +2525,10 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     }
 
     if (key != nullptr)
+    {
         decrRefCount(key);
+        key = nullptr;
+    }
 
     if (subexpireKey != nullptr)
     {
@@ -2534,8 +2555,8 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
     for (int idb = 0; idb < cserver.dbnum; ++idb)
     {
-        auto vec = g_pserver->db[idb]->processChanges();
-        g_pserver->db[idb]->commitChanges(vec);
+        g_pserver->db[idb]->processChanges();
+        g_pserver->db[idb]->commitChanges();
     }
     return C_OK;
 
@@ -2544,6 +2565,17 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
      * the RDB file from a socket during initial SYNC (diskless replica mode),
      * we'll report the error to the caller, so that we can retry. */
 eoferr:
+    if (key != nullptr)
+    {
+        decrRefCount(key);
+        key = nullptr;
+    }
+    if (subexpireKey != nullptr)
+    {
+        decrRefCount(subexpireKey);
+        subexpireKey = nullptr;
+    }
+
     serverLog(LL_WARNING,
         "Short read or OOM loading DB. Unrecoverable error, aborting now.");
     rdbReportReadError("Unexpected EOF reading RDB file");

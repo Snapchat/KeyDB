@@ -120,6 +120,8 @@ IStorage *RocksDBStorageFactory::create(int db)
         printf("\tDatabase was not shutdown cleanly, recomputing metrics\n");
         std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(rocksdb::ReadOptions(), spcolfamily.get()));
         for (it->SeekToFirst(); it->Valid(); it->Next()) {
+            if (FInternalKey(it->key().data(), it->key().size()))
+                continue;
             ++count;
         }
     }

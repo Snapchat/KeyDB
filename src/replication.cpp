@@ -3870,7 +3870,7 @@ void replicaReplayCommand(client *c)
 
     RemoteMasterState &remoteState = g_mapremote[uuid];
     if (remoteState.cFake == nullptr)
-        remoteState.cFake = createClient(-1, c->iel);
+        remoteState.cFake = createClient(nullptr, c->iel);
     else
         remoteState.cFake->iel = c->iel;
 
@@ -3885,11 +3885,6 @@ void replicaReplayCommand(client *c)
 
     // OK We've recieved a command lets execute
     client *current_clientSave = serverTL->current_client;
-<<<<<<< HEAD
-    if (cFake == nullptr)
-        cFake = createClient(nullptr, c->iel);
-=======
->>>>>>> unstable
     cFake->lock.lock();
     cFake->authenticated = c->authenticated;
     cFake->puser = c->puser;

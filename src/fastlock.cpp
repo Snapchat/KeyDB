@@ -27,6 +27,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "fmacros.h"
 #include "fastlock.h"
 #include <unistd.h>
 #include <sys/syscall.h>

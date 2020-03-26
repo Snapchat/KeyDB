@@ -132,8 +132,19 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
         pfat->popfrontExpireEntry();
     }
 
+    robj *keyobj = nullptr;
+
+    if (deleted || pfat->FEmpty())
+        keyobj = createStringObject(e.key(),sdslen(e.key()));
+
     if (deleted)
     {
+        if (!pfat->FEmpty())
+        {
+            // We need to resort the expire entry since it may no longer be in the correct position
+            db->resortExpire(e);
+        }
+
         robj objT;
         switch (val->type)
         {
@@ -147,10 +158,11 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
 
     if (pfat->FEmpty())
     {
-        robj *keyobj = createStringObject(e.key(),sdslen(e.key()));
         removeExpire(db, keyobj);
-        decrRefCount(keyobj);
     }
+
+    if (keyobj)
+        decrRefCount(keyobj);
 }
 
 int parseUnitString(const char *sz)

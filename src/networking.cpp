@@ -496,7 +496,7 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
 
         if (c->querybuf && sdslen(c->querybuf)) {
             std::string str = escapeString(c->querybuf);
-            serverLog(LL_WARNING, "\tquerybuf: %s", str.c_str());
+            printf("\tquerybuf: %s\n", str.c_str());
         }
         c->master_error = 1;
     }
@@ -1745,7 +1745,10 @@ void sendReplyToClient(connection *conn) {
         c->lock.lock();
         ae.arm(c);
         if (c->flags & CLIENT_CLOSE_ASAP)
-            freeClient(c);
+        {
+            if (!freeClient(c))
+                c->lock.unlock();
+        }
     }
 }
 
@@ -3230,12 +3233,23 @@ int processEventsWhileBlocked(int iel) {
     int iterations = 4; /* See the function top-comment. */
     int count = 0;
 
-    client *c = serverTL->current_client;
-    if (c != nullptr)
+    std::vector<client*> vecclients;
+    listIter li;
+    listNode *ln;
+    listRewind(g_pserver->clients, &li);
+
+    // All client locks must be acquired *after* the global lock is reacquired to prevent deadlocks
+    //  so unlock here, and save them for reacquisition later
+    while ((ln = listNext(&li)) != nullptr)
     {
-        serverAssert(c->flags & CLIENT_PROTECTED);
-        c->lock.unlock();
+        client *c = (client*)listNodeValue(ln);
+        if (c->lock.fOwnLock()) {
+            serverAssert(c->flags & CLIENT_PROTECTED);  // If the client is not protected we have no gurantee they won't be free'd in the event loop
+            c->lock.unlock();
+            vecclients.push_back(c);
+        }
     }
+    
 
     aeReleaseLock();
     serverAssertDebug(!GlobalLocksAcquired());
@@ -3253,18 +3267,18 @@ int processEventsWhileBlocked(int iel) {
     {
         // Caller expects us to be locked so fix and rethrow
         AeLocker locker;
-        if (c != nullptr)
-            c->lock.lock();
-        locker.arm(c);
+        locker.arm(nullptr);
         locker.release();
+        for (client *c : vecclients)
+            c->lock.lock();
         throw;
     }
     
     AeLocker locker;
-    if (c != nullptr)
-        c->lock.lock();
-    locker.arm(c);
+    locker.arm(nullptr);
     locker.release();
+    for (client *c : vecclients)
+        c->lock.lock();
     return count;
 }
 

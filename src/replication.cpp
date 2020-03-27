@@ -358,8 +358,8 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     char szMvcc[128];
     incrementMvccTstamp();
     uint64_t mvccTstamp = getMvccTstamp();
-    int cchMvccNum = snprintf(szMvcc, sizeof(szMvcc), "%lu", mvccTstamp);
-    int cchMvcc = snprintf(szMvcc, sizeof(szMvcc), "$%d\r\n%lu\r\n", cchMvccNum, mvccTstamp);
+    int cchMvccNum = snprintf(szMvcc, sizeof(szMvcc), "%" PRIu64, mvccTstamp);
+    int cchMvcc = snprintf(szMvcc, sizeof(szMvcc), "$%d\r\n%" PRIu64 "\r\n", cchMvccNum, mvccTstamp);
     cchMvcc = std::min<int>(cchMvcc, sizeof(szMvcc));    // tricky snprintf
 
     /* Write the command to the replication backlog if any. */

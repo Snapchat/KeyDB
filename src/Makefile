@@ -83,6 +83,10 @@ ifneq (,$(findstring armv,$(uname_M)))
 endif
 endif
 
+ifneq (,$(findstring armv,$(uname_M)))
+	FINAL_LIBS+=-latomic
+endif	
+
 # Backwards compatibility for selecting an allocator
 ifeq ($(USE_TCMALLOC),yes)
 	MALLOC=tcmalloc
@@ -106,7 +110,7 @@ endif
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
 FINAL_CXXFLAGS=$(CXX_STD) $(WARN) $(OPT) $(DEBUG) $(CXXFLAGS) $(REDIS_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
-FINAL_LIBS=-lm -lcurl
+FINAL_LIBS+=-lm -lcurl
 DEBUG=-g -ggdb
 
 # Linux ARM needs -latomic at linking time

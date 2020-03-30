@@ -91,6 +91,10 @@ else
 	LICENSE_LIB_DIR=../deps/license/x64/
 endif
 
+ifneq (,$(findstring armv,$(uname_M)))
+	FINAL_LIBS+=-latomic
+endif	
+
 # Backwards compatibility for selecting an allocator
 ifeq ($(USE_TCMALLOC),yes)
 	MALLOC=tcmalloc
@@ -119,7 +123,7 @@ endif
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
 FINAL_CXXFLAGS=$(CXX_STD) $(WARN) $(OPT) $(DEBUG) $(CXXFLAGS) $(REDIS_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
-FINAL_LIBS=-lm -lcurl -lz -latomic -L$(LICENSE_LIB_DIR) -lkey -lcrypto
+FINAL_LIBS+=-lm -lcurl -lz -latomic -L$(LICENSE_LIB_DIR) -lkey -lcrypto
 DEBUG=-g -ggdb
 
 # Linux ARM needs -latomic at linking time
@@ -262,10 +266,10 @@ MAKECOLOR="\033[32;1m"
 ENDCOLOR="\033[0m"
 
 ifndef V
-QUIET_CC = @printf '    %b %b\n' $(CCCOLOR)CC$(ENDCOLOR) $(SRCCOLOR)$@$(ENDCOLOR) 1>&2;
-QUIET_CP = @printf '    %b %b\n' $(CCCOLOR)COPY$(ENDCOLOR) $(SRCCOLOR)$@$(ENDCOLOR) 1>&2;
-QUIET_LINK = @printf '    %b %b\n' $(LINKCOLOR)LINK$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
-QUIET_INSTALL = @printf '    %b %b\n' $(LINKCOLOR)INSTALL$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
+QUIET_CC = @printf '    %b %b\n' $(CCCOLOR)CC$(ENDCOLOR) $(SRCCOLOR)$@$(ENDCOLOR);
+QUIET_CP = @printf '    %b %b\n' $(CCCOLOR)COPY$(ENDCOLOR) $(SRCCOLOR)$@$(ENDCOLOR);
+QUIET_LINK = @printf '    %b %b\n' $(LINKCOLOR)LINK$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR);
+QUIET_INSTALL = @printf '    %b %b\n' $(LINKCOLOR)INSTALL$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR);
 endif
 
 REDIS_SERVER_NAME=keydb-pro-server

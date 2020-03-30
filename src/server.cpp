@@ -3682,7 +3682,8 @@ int processCommand(client *c, int callFlags) {
      * link with master. */
     if (FBrokenLinkToMaster() &&
         g_pserver->repl_serve_stale_data == 0 &&
-        !(c->cmd->flags & CMD_STALE))
+        !(c->cmd->flags & CMD_STALE)
+        && !(g_pserver->fActiveReplica && c->cmd->proc == syncCommand))
     {
         flagTransaction(c);
         addReply(c, shared.masterdownerr);

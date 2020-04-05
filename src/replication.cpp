@@ -2594,6 +2594,8 @@ void roleCommand(client *c) {
         listNode *ln;
         listRewind(g_pserver->masters, &li);
 
+        if (listLength(g_pserver->masters) > 1)
+            addReplyArrayLen(c,listLength(g_pserver->masters));
         while ((ln = listNext(&li)))
         {
             redisMaster *mi = (redisMaster*)listNodeValue(ln);

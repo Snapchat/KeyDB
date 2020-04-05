@@ -1372,6 +1372,7 @@ expireEntry *getExpire(redisDb *db, robj_roptr key) {
  * keys. */
 void propagateExpire(redisDb *db, robj *key, int lazy) {
     serverAssert(GlobalLocksAcquired());
+
     robj *argv[2];
 
     argv[0] = lazy ? shared.unlink : shared.del;
@@ -1387,6 +1388,48 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
 
     decrRefCount(argv[0]);
     decrRefCount(argv[1]);
+}
+
+void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey)
+{
+    robj *argv[3];
+    robj objT;
+    redisCommand *cmd = nullptr;
+    switch (type)
+    {
+    case OBJ_SET:
+        argv[0] = shared.srem;
+        argv[1] = key;
+        argv[2] = subkey;
+        cmd = cserver.sremCommand;
+        break;
+
+    case OBJ_HASH:
+        argv[0] = shared.hdel;
+        argv[1] = key;
+        argv[2] = subkey;
+        cmd = cserver.hdelCommand;
+        break;
+
+    case OBJ_ZSET:
+        argv[0] = shared.zrem;
+        argv[1] = key;
+        argv[2] = subkey;
+        cmd = cserver.zremCommand;
+        break;
+
+    case OBJ_CRON:
+        return; // CRON jobs replicate in their own handler
+
+    default:
+        serverPanic("Unknown subkey type");
+    }
+
+    if (g_pserver->aof_state != AOF_OFF)
+        feedAppendOnlyFile(cmd,db->id,argv,3);
+    // Active replicas do their own expiries, do not propogate
+    if (!g_pserver->fActiveReplica)
+        replicationFeedSlaves(g_pserver->slaves,db->id,argv,3);
 }
 
 /* Check if the key is expired. Note, this does not check subexpires */

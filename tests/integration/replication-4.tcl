@@ -151,5 +151,93 @@ start_server {tags {"repl"}} {
                 fail "SPOP replication inconsistency"
             }
         }
+
+        test {Replication of EXPIREMEMBER (set) command} {
+            $master sadd testkey a b c d
+            wait_for_condition 50 100 {
+                [$master debug digest] eq [$slave debug digest]
+            } else {
+                fail "Failed to replicate set"
+            }
+            $master expiremember testkey a 1
+            after 1000
+            wait_for_condition 50 100 {
+                [$master scard testkey] eq 3
+            } else {
+                fail "expiremember failed to work on master"
+            }
+            wait_for_condition 50 100 {
+                [$slave scard testkey] eq 3
+            } else {
+                assert_equal [$slave scard testkey] 3
+            }
+			$master del testkey
+        }
+
+		test {Replication of EXPIREMEMBER (hash) command} {
+            $master hset testkey a value
+			$master hset testkey b value
+            wait_for_condition 50 100 {
+                [$master debug digest] eq [$slave debug digest]
+            } else {
+                fail "Failed to replicate set"
+            }
+            $master expiremember testkey a 1
+            after 1000
+            wait_for_condition 50 100 {
+                [$master hlen testkey] eq 1
+            } else {
+                fail "expiremember failed to work on master"
+            }
+            wait_for_condition 50 100 {
+                [$slave hlen testkey] eq 1
+            } else {
+                assert_equal [$slave hlen testkey] 1
+            }
+			$master del testkey
+        }
+
+		test {Replication of EXPIREMEMBER (zset) command} {
+            $master zadd testkey 1 a
+			$master zadd testkey 2 b
+            wait_for_condition 50 100 {
+                [$master debug digest] eq [$slave debug digest]
+            } else {
+                fail "Failed to replicate set"
+            }
+            $master expiremember testkey a 1
+            after 1000
+            wait_for_condition 50 100 {
+                [$master zcard testkey] eq 1
+            } else {
+                fail "expiremember failed to work on master"
+            }
+            wait_for_condition 50 100 {
+                [$slave zcard testkey] eq 1
+            } else {
+                assert_equal [$slave zcard testkey] 1
+            }
+        }
+
+		test {keydb.cron replicates} {
+            $master del testkey
+            $master keydb.cron testjob repeat 0 1000000 {redis.call("incr", "testkey")} 1 testkey
+            after 300
+            assert_equal 1 [$master get testkey]
+            assert_equal 1 [$master exists testjob]
+
+            wait_for_condition 50 100 {
+                [$master debug digest] eq [$slave debug digest]
+            } else {
+                fail "KEYDB.CRON failed to replicate"
+            }
+            $master del testjob
+            $master del testkey
+            wait_for_condition 50 1000 {
+                [$master debug digest] eq [$slave debug digest]
+            } else {
+                fail "cron delete failed to propogate"
+            }
+        }
     }
 }

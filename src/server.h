@@ -1574,6 +1574,7 @@ struct redisServerConst {
 
     int cthreads;               /* Number of main worker threads */
     int fThreadAffinity;        /* Should we pin threads to cores? */
+    int threadAffinityOffset = 0; /* Where should we start pinning them? */
     char *pidfile;              /* PID file path */
 
     /* Fast pointers to often looked up command */

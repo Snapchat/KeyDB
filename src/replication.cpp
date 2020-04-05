@@ -251,6 +251,8 @@ void feedReplicationBacklogWithObject(robj *o) {
     feedReplicationBacklog(p,len);
 }
 
+sds catCommandForAofAndActiveReplication(sds buf, struct redisCommand *cmd, robj **argv, int argc);
+
 void replicationFeedSlave(client *replica, int dictid, robj **argv, int argc, bool fSendRaw)
 {
     char llstr[LONG_STR_SIZE];
@@ -289,13 +291,23 @@ void replicationFeedSlave(client *replica, int dictid, robj **argv, int argc, bo
      * are queued in the output buffer until the initial SYNC completes),
      * or are already in sync with the master. */
 
-    /* Add the multi bulk length. */
-    addReplyArrayLenAsync(replica,argc);
+    if (fSendRaw)
+    {
+        /* Add the multi bulk length. */
+        addReplyArrayLenAsync(replica,argc);
 
-    /* Finally any additional argument that was not stored inside the
-        * static buffer if any (from j to argc). */
-    for (int j = 0; j < argc; j++)
-        addReplyBulkAsync(replica,argv[j]);
+        /* Finally any additional argument that was not stored inside the
+            * static buffer if any (from j to argc). */
+        for (int j = 0; j < argc; j++)
+            addReplyBulkAsync(replica,argv[j]);
+    }
+    else
+    {
+        struct redisCommand *cmd = lookupCommand(szFromObj(argv[0]));
+        sds buf = catCommandForAofAndActiveReplication(sdsempty(), cmd, argv, argc);
+        addReplyProtoAsync(replica, buf, sdslen(buf));
+        sdsfree(buf);
+    }
 }
 
 /* Propagate write commands to slaves, and populate the replication backlog

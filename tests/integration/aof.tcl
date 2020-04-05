@@ -257,4 +257,26 @@ tags {"aof"} {
             r expire x -1
         }
     }
+
+    ## Test that PEXPIREMEMBERAT is loaded correctly
+    create_aof {
+        append_to_aof [formatCommand sadd testkey a b c d]
+        append_to_aof [formatCommand pexpirememberat testkey a 1000]
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "AOF+EXPIREMEMBER: Server shuold have been started" {
+            assert_equal 1 [is_alive $srv]
+        }
+
+        test "AOF+PEXPIREMEMBERAT: set should have 3 values" {
+            set client [redis [dict get $srv host] [dict get $srv port]]
+            wait_for_condition 50 100 {
+                [catch {$client ping} e] == 0
+            } else {
+                fail "Loading DB is taking too much time."
+            }
+            assert_equal 3 [$client scard testkey]
+        }
+    }
 }

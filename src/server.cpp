@@ -634,6 +634,10 @@ struct redisCommand redisCommandTable[] = {
     {"expirememberat", expireMemberAtCommand, 4,
      "write fast @keyspace",
      0,NULL,1,1,1,0,0,0},
+    
+    {"pexpirememberat", pexpireMemberAtCommand, 4,
+     "write fast @keyspace",
+     0,NULL,1,1,1,0,0,0},
 
     {"pexpire",pexpireCommand,3,
      "write fast @keyspace",
@@ -2289,6 +2293,9 @@ void createSharedObjects(void) {
     shared.rpoplpush = makeObjectShared(createStringObject("RPOPLPUSH",9));
     shared.zpopmin = makeObjectShared(createStringObject("ZPOPMIN",7));
     shared.zpopmax = makeObjectShared(createStringObject("ZPOPMAX",7));
+    shared.hdel = makeObjectShared(createStringObject("HDEL", 4));
+    shared.zrem = makeObjectShared(createStringObject("ZREM", 4));
+    shared.srem = makeObjectShared(createStringObject("SREM", 4));
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =
             makeObjectShared(createObject(OBJ_STRING,(void*)(long)j));
@@ -2514,6 +2521,8 @@ void initServerConfig(void) {
     cserver.xclaimCommand = lookupCommandByCString("xclaim");
     cserver.xgroupCommand = lookupCommandByCString("xgroup");
     cserver.rreplayCommand = lookupCommandByCString("rreplay");
+    cserver.hdelCommand = lookupCommandByCString("hdel");
+    cserver.zremCommand = lookupCommandByCString("zrem");
 
     /* Slow log */
     g_pserver->slowlog_log_slower_than = CONFIG_DEFAULT_SLOWLOG_LOG_SLOWER_THAN;

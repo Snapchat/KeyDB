@@ -597,21 +597,59 @@ sds catAppendOnlyExpireAtCommand(sds buf, struct redisCommand *cmd, robj *key, r
     return buf;
 }
 
-void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int argc) {
-    sds buf = sdsempty();
-    robj *tmpargv[3];
-
-    /* The DB this command was targeting is not the same as the last command
-     * we appended. To issue a SELECT command is needed. */
-    if (dictid != g_pserver->aof_selected_db) {
-        char seldb[64];
-
-        snprintf(seldb,sizeof(seldb),"%d",dictid);
-        buf = sdscatprintf(buf,"*2\r\n$6\r\nSELECT\r\n$%lu\r\n%s\r\n",
-            (unsigned long)strlen(seldb),seldb);
-        g_pserver->aof_selected_db = dictid;
+sds catAppendOnlyExpireMemberAtCommand(sds buf, struct redisCommand *cmd, robj **argv, const size_t argc) {
+    long long when = 0;
+    int unit = UNIT_SECONDS;
+    bool fAbsolute = false;
+    
+    if (cmd->proc == expireMemberCommand) {
+        if (getLongLongFromObject(argv[3], &when) != C_OK)
+            serverPanic("propogating invalid EXPIREMEMBER command");
+        
+        if (argc == 5) {
+            unit = parseUnitString(szFromObj(argv[4]));
+        }
+    } else if (cmd->proc == expireMemberAtCommand) {
+        if (getLongLongFromObject(argv[3], &when) != C_OK)
+            serverPanic("propogating invalid EXPIREMEMBERAT command");
+        fAbsolute = true;
+    } else if (cmd->proc == pexpireMemberAtCommand) {
+        if (getLongLongFromObject(argv[3], &when) != C_OK)
+            serverPanic("propogating invalid PEXPIREMEMBERAT command");
+        fAbsolute = true;
+        unit = UNIT_MILLISECONDS;
+    } else {
+        serverPanic("Unknown expiremember command");
     }
 
+    switch (unit)
+    {
+    case UNIT_SECONDS:
+        when *= 1000;
+        break;
+
+    case UNIT_MILLISECONDS:
+        break;
+    }
+
+    if (!fAbsolute)
+        when += mstime();
+    
+    robj *argvNew[4];
+    argvNew[0] = createStringObject("PEXPIREMEMBERAT",15);
+    argvNew[1] = argv[1];
+    argvNew[2] = argv[2];
+    argvNew[3] = createStringObjectFromLongLong(when);
+    buf = catAppendOnlyGenericCommand(buf, 4, argvNew);
+    decrRefCount(argvNew[0]);
+    decrRefCount(argvNew[3]);
+    return buf;
+}
+
+sds catCommandForAofAndActiveReplication(sds buf, struct redisCommand *cmd, robj **argv, int argc)
+{
+    robj *tmpargv[3];
+    
     if (cmd->proc == expireCommand || cmd->proc == pexpireCommand ||
         cmd->proc == expireatCommand) {
         /* Translate EXPIRE/PEXPIRE/EXPIREAT into PEXPIREAT */
@@ -640,12 +678,35 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
         if (pxarg)
             buf = catAppendOnlyExpireAtCommand(buf,cserver.pexpireCommand,argv[1],
                                                pxarg);
+    } else if (cmd->proc == expireMemberCommand || cmd->proc == expireMemberAtCommand ||
+        cmd->proc == pexpireMemberAtCommand) {
+        /* Translate subkey expire commands to PEXPIREMEMBERAT */
+        buf = catAppendOnlyExpireMemberAtCommand(buf, cmd, argv, argc);
     } else {
         /* All the other commands don't need translation or need the
          * same translation already operated in the command vector
          * for the replication itself. */
         buf = catAppendOnlyGenericCommand(buf,argc,argv);
     }
+
+    return buf;
+}
+
+void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int argc) {
+    sds buf = sdsempty();
+
+    /* The DB this command was targeting is not the same as the last command
+     * we appended. To issue a SELECT command is needed. */
+    if (dictid != g_pserver->aof_selected_db) {
+        char seldb[64];
+
+        snprintf(seldb,sizeof(seldb),"%d",dictid);
+        buf = sdscatprintf(buf,"*2\r\n$6\r\nSELECT\r\n$%lu\r\n%s\r\n",
+            (unsigned long)strlen(seldb),seldb);
+        g_pserver->aof_selected_db = dictid;
+    }
+
+    buf = catCommandForAofAndActiveReplication(buf, cmd, argv, argc);
 
     /* Append to the AOF buffer. This will be flushed on disk just before
      * of re-entering the event loop, so before the client will get a
@@ -1378,7 +1439,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                     }
                     else
                     {
-                        char cmd[]="*4\r\n$12\r\nEXPIREMEMBER\r\n";
+                        char cmd[]="*4\r\n$12\r\nPEXPIREMEMBERAT\r\n";
                         if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) goto werr;
                         if (rioWriteBulkObject(aof,&key) == 0) goto werr;
                         if (rioWrite(aof,subExpire.subkey(),sdslen(subExpire.subkey())) == 0) goto werr;

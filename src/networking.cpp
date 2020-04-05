@@ -1073,7 +1073,7 @@ static void acceptCommonHandler(int fd, int flags, char *ip, int iel) {
     // Set thread affinity
     if (cserver.fThreadAffinity)
     {
-        int cpu = iel;
+        int cpu = iel + cserver.threadAffinityOffset;
         if (setsockopt(fd, SOL_SOCKET, SO_INCOMING_CPU, &cpu, sizeof(iel)) != 0)
         {
             serverLog(LL_WARNING, "Failed to set socket affinity");

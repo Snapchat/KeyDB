@@ -2547,6 +2547,7 @@ void initServerConfig(void) {
     /* Multithreading */
     cserver.cthreads = CONFIG_DEFAULT_THREADS;
     cserver.fThreadAffinity = CONFIG_DEFAULT_THREAD_AFFINITY;
+    cserver.threadAffinityOffset = 0;
 }
 
 extern char **environ;
@@ -5350,10 +5351,10 @@ int main(int argc, char **argv) {
 #ifdef __linux__
             cpu_set_t cpuset;
             CPU_ZERO(&cpuset);
-            CPU_SET(iel, &cpuset);
+            CPU_SET(iel + cserver.threadAffinityOffset, &cpuset);
             if (pthread_setaffinity_np(rgthread[iel], sizeof(cpu_set_t), &cpuset) == 0)
             {
-                serverLog(LOG_INFO, "Binding thread %d to cpu %d", iel, iel);
+                serverLog(LOG_INFO, "Binding thread %d to cpu %d", iel, iel + cserver.threadAffinityOffset + 1);
             }
 #else
 			serverLog(LL_WARNING, "CPU pinning not available on this platform");

@@ -5452,6 +5452,8 @@ void *workerThreadMain(void *parg)
 
 static void validateConfiguration()
 {
+    updateMasterAuth();
+    
     if (cserver.cthreads > (int)std::thread::hardware_concurrency()) {
         serverLog(LL_WARNING, "WARNING: server-threads is greater than this machine's core count.  Truncating to %u threads", std::thread::hardware_concurrency());
         cserver.cthreads = (int)std::thread::hardware_concurrency();

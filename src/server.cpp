@@ -3602,8 +3602,11 @@ int processCommand(client *c, int callFlags) {
      * ACLs. */
     if (c->puser && !(c->puser->flags & USER_FLAG_ALLCOMMANDS))
         locker.arm(c);  // ACLs require the lock
-    int acl_retval = ACLCheckCommandPerm(c);
+
+    int acl_keypos;
+    int acl_retval = ACLCheckCommandPerm(c,&acl_keypos);
     if (acl_retval != ACL_OK) {
+        addACLLogEntry(c,acl_retval,acl_keypos,NULL);
         flagTransaction(c);
         if (acl_retval == ACL_DENIED_CMD)
             addReplyErrorFormat(c,

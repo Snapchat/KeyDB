@@ -485,10 +485,11 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
      * Where the master must propagate the first change even if the second
      * will produce an error. However it is useful to log such events since
      * they are rare and may hint at errors in a script or a bug in Redis. */
-    if (c->flags & (CLIENT_MASTER|CLIENT_SLAVE) && !(c->flags & CLIENT_MONITOR)) {
-        const char* to = reinterpret_cast<const char*>(c->flags & CLIENT_MASTER? "master": "replica");
-        const char* from = reinterpret_cast<const char*>(c->flags & CLIENT_MASTER? "replica": "master");
-        const char *cmdname = reinterpret_cast<const char*>(c->lastcmd ? c->lastcmd->name : "<unknown>");
+    int ctype = getClientType(c);
+    if (ctype == CLIENT_TYPE_MASTER || ctype == CLIENT_TYPE_SLAVE) {
+        const char* to = ctype == CLIENT_TYPE_MASTER? "master": "replica";
+        const char* from = ctype == CLIENT_TYPE_MASTER? "replica": "master";
+        const char *cmdname = c->lastcmd ? c->lastcmd->name : "<unknown>";
         serverLog(LL_WARNING,"== CRITICAL == This %s is sending an error "
                              "to its %s: '%s' after processing the command "
                              "'%s'", from, to, s, cmdname);
@@ -1492,7 +1493,7 @@ bool freeClient(client *c) {
     }
 
     /* Log link disconnection with replica */
-    if ((c->flags & CLIENT_SLAVE) && !(c->flags & CLIENT_MONITOR)) {
+    if (getClientType(c) == CLIENT_TYPE_SLAVE) {
         serverLog(LL_WARNING,"Connection with replica %s lost.",
             replicationGetSlaveName(c));
     }
@@ -1539,7 +1540,7 @@ bool freeClient(client *c) {
         /* We need to remember the time when we started to have zero
          * attached slaves, as after some time we'll free the replication
          * backlog. */
-        if (c->flags & CLIENT_SLAVE && listLength(g_pserver->slaves) == 0)
+        if (getClientType(c) == CLIENT_TYPE_SLAVE && listLength(g_pserver->slaves) == 0)
             g_pserver->repl_no_slaves_since = g_pserver->unixtime;
         refreshGoodSlavesCount();
         /* Fire the replica change modules event. */
@@ -1689,8 +1690,8 @@ int writeToClient(client *c, int handler_installed) {
          * just deliver as much data as it is possible to deliver.
          *
          * Moreover, we also send as much as possible if the client is
-         * a replica (otherwise, on high-speed traffic, the replication
-         * buffer will grow indefinitely) */
+         * a replica or a monitor (otherwise, on high-speed traffic, the
+         * replication/output buffer will grow indefinitely) */
         if (totwritten > NET_MAX_WRITES_PER_EVENT &&
             (g_pserver->maxmemory == 0 ||
              zmalloc_used_memory() < g_pserver->maxmemory) &&
@@ -2000,7 +2001,7 @@ int processInlineBuffer(client *c) {
     /* Newline from slaves can be used to refresh the last ACK time.
      * This is useful for a replica to ping back while loading a big
      * RDB file. */
-    if (querylen == 0 && c->flags & CLIENT_SLAVE)
+    if (querylen == 0 && getClientType(c) == CLIENT_TYPE_SLAVE)
         c->repl_ack_time = g_pserver->unixtime;
 
     /* Move querybuffer position to the next query in the buffer. */
@@ -3008,12 +3009,14 @@ unsigned long getClientOutputBufferMemoryUsage(client *c) {
  *
  * The function will return one of the following:
  * CLIENT_TYPE_NORMAL -> Normal client
- * CLIENT_TYPE_SLAVE  -> Slave or client executing MONITOR command
+ * CLIENT_TYPE_SLAVE  -> Slave
  * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
  * CLIENT_TYPE_MASTER -> The client representing our replication master.
  */
 int getClientType(client *c) {
     if (c->flags & CLIENT_MASTER) return CLIENT_TYPE_MASTER;
+    /* Even though MONITOR clients are marked as replicas, we
+     * want the expose them as normal clients. */
     if ((c->flags & CLIENT_SLAVE) && !(c->flags & CLIENT_MONITOR))
         return CLIENT_TYPE_SLAVE;
     if (c->flags & CLIENT_PUBSUB) return CLIENT_TYPE_PUBSUB;

@@ -192,8 +192,9 @@ typedef struct typeInterface {
     void (*init)(typeData data);
     /* Called on server start, should return 1 on success, 0 on error and should set err */
     int (*load)(typeData data, sds *argc, int argv, const char **err);
-    /* Called on CONFIG SET, returns 1 on success, 0 on error */
-    int (*set)(typeData data, sds value, const char **err);
+    /* Called on server startup and CONFIG SET, returns 1 on success, 0 on error
+     * and can set a verbose err string, update is true when called from CONFIG SET */
+    int (*set)(typeData data, sds value, int update, const char **err);
     /* Called on CONFIG GET, required to add output to the client */
     void (*get)(client *c, typeData data);
     /* Called on CONFIG REWRITE, required to rewrite the config state */
@@ -332,7 +333,11 @@ void loadServerConfigFromString(char *config) {
             if ((!strcasecmp(argv[0],config->name) ||
                 (config->alias && !strcasecmp(argv[0],config->alias))))
             {
-                if (!config->interface.load(config->data, argv, argc, &err)) {
+                if (argc != 2) {
+                    err = "wrong number of arguments";
+                    goto loaderr;
+                }
+                if (!config->interface.set(config->data, argv[1], 0, &err)) {
                     goto loaderr;
                 }
 
@@ -648,7 +653,7 @@ void configSetCommand(client *c) {
         if(config->modifiable && (!strcasecmp(szFromObj(c->argv[2]),config->name) ||
             (config->alias && !strcasecmp(szFromObj(c->argv[2]),config->alias))))
         {
-            if (!config->interface.set(config->data,szFromObj(o), &errstr)) {
+            if (!config->interface.set(config->data,szFromObj(o),1,&errstr)) {
                 goto badfmt;
             }
             addReply(c,shared.ok);
@@ -1611,8 +1616,8 @@ static char loadbuf[LOADBUF_SIZE];
 #define embedCommonConfig(config_name, config_alias, is_modifiable) \
     config_name, config_alias, is_modifiable,
 
-#define embedConfigInterface(initfn, loadfn, setfn, getfn, rewritefn) { \
-    initfn, loadfn, setfn, getfn, rewritefn, \
+#define embedConfigInterface(initfn, setfn, getfn, rewritefn) { \
+    initfn, nullptr, setfn, getfn, rewritefn, \
 },
 
 /* What follows is the generic config types that are supported. To add a new
@@ -1632,31 +1637,19 @@ static void boolConfigInit(typeData data) {
     *data.yesno.config = data.yesno.default_value;
 }
 
-static int boolConfigLoad(typeData data, sds *argv, int argc, const char **err) {
-    int yn;
-    if (argc != 2) {
-        *err = "wrong number of arguments";
-        return 0;
-    }
-    if ((yn = yesnotoi(argv[1])) == -1) {
-        if ((yn = truefalsetoi(argv[1])) == -1)
-        *err = "argument must be 'yes' or 'no'";
-        return 0;
-    }
-    if (data.yesno.is_valid_fn && !data.yesno.is_valid_fn(yn, err))
-        return 0;
-    *data.yesno.config = yn;
-    return 1;
-}
-
-static int boolConfigSet(typeData data, sds value, const char **err) {
+static int boolConfigSet(typeData data, sds value, int update, const char **err) {
     int yn = yesnotoi(value);
-    if (yn == -1) return 0;
+    if (yn == -1) {
+        if ((yn = truefalsetoi(value)) == -1) {
+            *err = "argument must be 'yes' or 'no'";
+            return 0;
+        }
+    }
     if (data.yesno.is_valid_fn && !data.yesno.is_valid_fn(yn, err))
         return 0;
     int prev = *(data.yesno.config);
     *(data.yesno.config) = yn;
-    if (data.yesno.update_fn && !data.yesno.update_fn(yn, prev, err)) {
+    if (update && data.yesno.update_fn && !data.yesno.update_fn(yn, prev, err)) {
         *(data.yesno.config) = prev;
         return 0;
     }
@@ -1675,7 +1668,7 @@ constexpr standardConfig createBoolConfig(const char *name, const char *alias, i
 {
     standardConfig conf = {
         embedCommonConfig(name, alias, modifiable)
-        { boolConfigInit, boolConfigLoad, boolConfigSet, boolConfigGet, boolConfigRewrite }
+        { boolConfigInit, nullptr, boolConfigSet, boolConfigGet, boolConfigRewrite }
     };
     conf.data.yesno.config = &config_addr;
     conf.data.yesno.default_value = defaultValue;
@@ -1693,23 +1686,7 @@ static void stringConfigInit(typeData data) {
     }
 }
 
-static int stringConfigLoad(typeData data, sds *argv, int argc, const char **err) {
-    if (argc != 2) {
-        *err = "wrong number of arguments";
-        return 0;
-    }
-    if (data.string.is_valid_fn && !data.string.is_valid_fn(argv[1], err))
-        return 0;
-    zfree(*data.string.config);
-    if (data.string.convert_empty_to_null) {
-        *data.string.config = argv[1][0] ? zstrdup(argv[1]) : NULL;
-    } else {
-        *data.string.config = zstrdup(argv[1]);
-    }
-    return 1;
-}
-
-static int stringConfigSet(typeData data, sds value, const char **err) {
+static int stringConfigSet(typeData data, sds value, int update, const char **err) {
     if (data.string.is_valid_fn && !data.string.is_valid_fn(value, err))
         return 0;
     char *prev = *data.string.config;
@@ -1718,7 +1695,7 @@ static int stringConfigSet(typeData data, sds value, const char **err) {
     } else {
         *data.string.config = zstrdup(value);
     }
-    if (data.string.update_fn && !data.string.update_fn(*data.string.config, prev, err)) {
+    if (update && data.string.update_fn && !data.string.update_fn(*data.string.config, prev, err)) {
         zfree(*data.string.config);
         *data.string.config = prev;
         return 0;
@@ -1741,7 +1718,7 @@ static void stringConfigRewrite(typeData data, const char *name, struct rewriteC
 constexpr standardConfig createStringConfig(const char *name, const char *alias, int modifiable, int empty_to_null, char *&config_addr, const char *defaultValue, int (*is_valid)(char*,const char**), int (*update)(char*,char*,const char**)) {
     standardConfig conf = {
         embedCommonConfig(name, alias, modifiable)
-        embedConfigInterface(stringConfigInit, stringConfigLoad, stringConfigSet, stringConfigGet, stringConfigRewrite)
+        embedConfigInterface(stringConfigInit, stringConfigSet, stringConfigGet, stringConfigRewrite)
     };
     conf.data.string = {
         &(config_addr),
@@ -1754,17 +1731,12 @@ constexpr standardConfig createStringConfig(const char *name, const char *alias,
 }
 
 /* Enum configs */
-static void configEnumInit(typeData data) {
+static void enumConfigInit(typeData data) {
     *data.enumd.config = data.enumd.default_value;
 }
 
-static int configEnumLoad(typeData data, sds *argv, int argc, const char **err) {
-    if (argc != 2) {
-        *err = "wrong number of arguments";
-        return 0;
-    }
-
-    int enumval = configEnumGetValue(data.enumd.enum_value, argv[1]);
+static int enumConfigSet(typeData data, sds value, int update, const char **err) {
+    int enumval = configEnumGetValue(data.enumd.enum_value, value);
     if (enumval == INT_MIN) {
         sds enumerr = sdsnew("argument must be one of the following: ");
         configEnum *enumNode = data.enumd.enum_value;
@@ -1786,36 +1758,27 @@ static int configEnumLoad(typeData data, sds *argv, int argc, const char **err) 
     }
     if (data.enumd.is_valid_fn && !data.enumd.is_valid_fn(enumval, err))
         return 0;
-    *(data.enumd.config) = enumval;
-    return 1;
-}
-
-static int configEnumSet(typeData data, sds value, const char **err) {
-    int enumval = configEnumGetValue(data.enumd.enum_value, value);
-    if (enumval == INT_MIN) return 0;
-    if (data.enumd.is_valid_fn && !data.enumd.is_valid_fn(enumval, err))
-        return 0;
     int prev = *(data.enumd.config);
     *(data.enumd.config) = enumval;
-    if (data.enumd.update_fn && !data.enumd.update_fn(enumval, prev, err)) {
+    if (update && data.enumd.update_fn && !data.enumd.update_fn(enumval, prev, err)) {
         *(data.enumd.config) = prev;
         return 0;
     }
     return 1;
 }
 
-static void configEnumGet(client *c, typeData data) {
+static void enumConfigGet(client *c, typeData data) {
     addReplyBulkCString(c, configEnumGetNameOrUnknown(data.enumd.enum_value,*data.enumd.config));
 }
 
-static void configEnumRewrite(typeData data, const char *name, struct rewriteConfigState *state) {
+static void enumConfigRewrite(typeData data, const char *name, struct rewriteConfigState *state) {
     rewriteConfigEnumOption(state, name,*(data.enumd.config), data.enumd.enum_value, data.enumd.default_value);
 }
 
 constexpr standardConfig createEnumConfig(const char *name, const char *alias, int modifiable, configEnum *enumVal, int &config_addr, int defaultValue, int (*is_valid)(int,const char**), int (*update)(int,int,const char**)) {
     standardConfig c = {
         embedCommonConfig(name, alias, modifiable)
-        embedConfigInterface(configEnumInit, configEnumLoad, configEnumSet, configEnumGet, configEnumRewrite)
+        embedConfigInterface(enumConfigInit, enumConfigSet, enumConfigGet, enumConfigRewrite)
     };
     c.data.enumd = {
         &(config_addr),
@@ -1913,23 +1876,17 @@ static int numericBoundaryCheck(typeData data, long long ll, const char **err) {
     return 1;
 }
 
-static int numericConfigLoad(typeData data, sds *argv, int argc, const char **err) {
-    long long ll;
-
-    if (argc != 2) {
-        *err = "wrong number of arguments";
-        return 0;
-    }
-
+static int numericConfigSet(typeData data, sds value, int update, const char **err) {
+    long long ll, prev = 0;
     if (data.numeric.is_memory) {
         int memerr;
-        ll = memtoll(argv[1], &memerr);
+        ll = memtoll(value, &memerr);
         if (memerr || ll < 0) {
             *err = "argument must be a memory value";
             return 0;
         }
     } else {
-        if (!string2ll(argv[1], sdslen(argv[1]),&ll)) {
+        if (!string2ll(value, sdslen(value),&ll)) {
             *err = "argument couldn't be parsed into an integer" ;
             return 0;
         }
@@ -1941,31 +1898,10 @@ static int numericConfigLoad(typeData data, sds *argv, int argc, const char **er
     if (data.numeric.is_valid_fn && !data.numeric.is_valid_fn(ll, err))
         return 0;
 
-    SET_NUMERIC_TYPE(ll)
-
-    return 1;
-}
-
-static int numericConfigSet(typeData data, sds value, const char **err) {
-    long long ll, prev = 0;
-    if (data.numeric.is_memory) {
-        int memerr;
-        ll = memtoll(value, &memerr);
-        if (memerr || ll < 0) return 0;
-    } else {
-        if (!string2ll(value, sdslen(value),&ll)) return 0;
-    }
-
-    if (!numericBoundaryCheck(data, ll, err))
-        return 0;
-
-    if (data.numeric.is_valid_fn && !data.numeric.is_valid_fn(ll, err))
-        return 0;
-
     GET_NUMERIC_TYPE(prev)
     SET_NUMERIC_TYPE(ll)
 
-    if (data.numeric.update_fn && !data.numeric.update_fn(ll, prev, err)) {
+    if (update && data.numeric.update_fn && !data.numeric.update_fn(ll, prev, err)) {
         SET_NUMERIC_TYPE(prev)
         return 0;
     }
@@ -2000,7 +1936,7 @@ static void numericConfigRewrite(typeData data, const char *name, struct rewrite
 constexpr standardConfig embedCommonNumericalConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
     standardConfig conf = {
         embedCommonConfig(name, alias, modifiable)
-        embedConfigInterface(numericConfigInit, numericConfigLoad, numericConfigSet, numericConfigGet, numericConfigRewrite)
+        embedConfigInterface(numericConfigInit, numericConfigSet, numericConfigGet, numericConfigRewrite)
     };
     conf.data.numeric.is_memory = (memory);
     conf.data.numeric.lower_bound = (lower);

@@ -257,6 +257,7 @@ void stopAppendOnly(void) {
     g_pserver->aof_fd = -1;
     g_pserver->aof_selected_db = -1;
     g_pserver->aof_state = AOF_OFF;
+    g_pserver->aof_rewrite_scheduled = 0;
     killAppendOnlyChild();
 }
 

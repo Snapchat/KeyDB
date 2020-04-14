@@ -340,6 +340,8 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listIter li, liReply;
     int j, len;
     serverAssert(GlobalLocksAcquired());
+    static client *fake = nullptr;
+
     if (dictid < 0)
         dictid = 0; // this can happen if we send a PING before any real operation
 
@@ -357,8 +359,12 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     /* We can't have slaves attached and no backlog. */
     serverAssert(!(listLength(slaves) != 0 && g_pserver->repl_backlog == NULL));
 
-    client *fake = createClient(-1, serverTL - g_pserver->rgthreadvar);
-    fake->flags |= CLIENT_FORCE_REPLY;
+    if (fake == nullptr)
+    {
+        fake = createClient(-1, serverTL - g_pserver->rgthreadvar);
+        fake->flags |= CLIENT_FORCE_REPLY;
+    }
+
     bool fSendRaw = !g_pserver->fActiveReplica;
     replicationFeedSlave(fake, dictid, argv, argc, fSendRaw); // Note: updates the repl log, keep above the repl update code below
 
@@ -374,10 +380,6 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     serverAssert(argc > 0);
     serverAssert(cchbuf > 0);
 
-    char uuid[37];
-    uuid_unparse(cserver.uuid, uuid);
-
-
     // The code below used to be: snprintf(proto, sizeof(proto), "*5\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
     //  but that was much too slow
     static const char *protoRREPLAY = "*5\r\n$7\r\nRREPLAY\r\n$36\r\n00000000-0000-0000-0000-000000000000\r\n$";
@@ -385,8 +387,11 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     int cchProto = 0;
     if (!fSendRaw)
     {
+        char uuid[37];
+        uuid_unparse(cserver.uuid, uuid);
+
         cchProto = strlen(protoRREPLAY);
-	memcpy(proto, protoRREPLAY, strlen(protoRREPLAY));
+        memcpy(proto, protoRREPLAY, strlen(protoRREPLAY));
         memcpy(proto + 22, uuid, 36); // Note UUID_STR_LEN includes the \0 trailing byte which we don't want
         cchProto += ll2string(proto + cchProto, sizeof(proto)-cchProto, cchbuf);
         memcpy(proto + cchProto, "\r\n", 3);
@@ -405,9 +410,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     int cchMvcc = 0;
     incrementMvccTstamp();	// Always increment MVCC tstamp so we're consistent with active and normal replication
     if (!fSendRaw)
-    {
     	cchMvcc = writeProtoNum(szMvcc, sizeof(szMvcc), getMvccTstamp());
-    }
 
     /* Write the command to the replication backlog if any. */
     if (g_pserver->repl_backlog) 
@@ -492,7 +495,11 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         }
     }
 
-    freeClient(fake);
+    // Cleanup cached fake client output buffers
+    fake->bufpos = 0;
+    fake->sentlen = 0;
+    fake->reply_bytes = 0;
+    listEmpty(fake->reply);
 }
 
 /* This function is used in order to proxy what we receive from our master

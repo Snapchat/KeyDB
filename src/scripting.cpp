@@ -620,8 +620,10 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     }
 
     /* Check the ACLs. */
-    acl_retval = ACLCheckCommandPerm(c);
+    int acl_keypos;
+    acl_retval = ACLCheckCommandPerm(c,&acl_keypos);
     if (acl_retval != ACL_OK) {
+        addACLLogEntry(c,acl_retval,acl_keypos,NULL);
         if (acl_retval == ACL_DENIED_CMD)
             luaPushError(lua, "The user executing the script can't run this "
                               "command or subcommand");
@@ -2491,6 +2493,7 @@ void ldbEval(lua_State *lua, sds *argv, int argc) {
             ldbLog(sdscatfmt(sdsempty(),"<error> %s",lua_tostring(lua,-1)));
             lua_pop(lua,1);
             sdsfree(code);
+            sdsfree(expr);
             return;
         }
     }

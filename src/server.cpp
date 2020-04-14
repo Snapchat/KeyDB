@@ -1494,7 +1494,7 @@ int hasActiveChildProcess() {
 /* Return true if this instance has persistence completely turned off:
  * both RDB and AOF are disabled. */
 int allPersistenceDisabled(void) {
-    return server.saveparamslen == 0 && server.aof_state == AOF_OFF;
+    return g_pserver->saveparamslen == 0 && g_pserver->aof_state == AOF_OFF;
 }
 
 /* ======================= Cron: called every 100 ms ======================== */
@@ -3488,7 +3488,7 @@ void call(client *c, int flags) {
 
         if (flags & CMD_CALL_PROPAGATE) {
             bool multi_emitted = false;
-            /* Wrap the commands in server.also_propagate array,
+            /* Wrap the commands in g_pserver->also_propagate array,
              * but don't wrap it if we are already in MULIT context,
              * in case the nested MULIT/EXEC.
              *

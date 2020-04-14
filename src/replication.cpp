@@ -1147,15 +1147,16 @@ void putSlaveOnline(client *replica) {
  * to take RDB files around, this violates certain policies in certain
  * environments. */
 void removeRDBUsedToSyncReplicas(void) {
+    serverAssert(GlobalLocksAcquired());
     if (allPersistenceDisabled() && RDBGeneratedByReplication) {
         client *slave;
         listNode *ln;
         listIter li;
 
         int delrdb = 1;
-        listRewind(server.slaves,&li);
+        listRewind(g_pserver->slaves,&li);
         while((ln = listNext(&li))) {
-            slave = ln->value;
+            slave = (client*)ln->value;
             if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START ||
                 slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END ||
                 slave->replstate == SLAVE_STATE_SEND_BULK)
@@ -1166,7 +1167,7 @@ void removeRDBUsedToSyncReplicas(void) {
         }
         if (delrdb) {
             RDBGeneratedByReplication = 0;
-            unlink(server.rdb_filename);
+            unlink(g_pserver->rdb_filename);
         }
     }
 }
@@ -1237,7 +1238,7 @@ void rdbPipeWriteHandlerConnRemoved(struct connection *conn) {
     /* if there are no more writes for now for this conn, or write error: */
     if (g_pserver->rdb_pipe_numconns_writing == 0) {
         if (aeCreateFileEvent(serverTL->el, g_pserver->rdb_pipe_read, AE_READABLE, rdbPipeReadHandler,NULL) == AE_ERR) {
-            serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
+            serverPanic("Unrecoverable error creating g_pserver->rdb_pipe_read file event.");
         }
     }
 }
@@ -2032,7 +2033,7 @@ void readSyncBulkPayload(connection *conn) {
         }
 
         /* Cleanup. */
-        if (allPersistenceDisabled()) unlink(server.rdb_filename);
+        if (allPersistenceDisabled()) unlink(g_pserver->rdb_filename);
         if (fUpdate)
             unlink(mi->repl_transfer_tmpfile);
         zfree(mi->repl_transfer_tmpfile);
@@ -2626,7 +2627,7 @@ void syncWithMaster(connection *conn) {
 
     if (psync_result == PSYNC_CONTINUE) {
         serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Master accepted a Partial Resynchronization.");
-        if (server.supervised_mode == SUPERVISED_SYSTEMD) {
+        if (cserver.supervised_mode == SUPERVISED_SYSTEMD) {
             redisCommunicateSystemd("STATUS=MASTER <-> REPLICA sync: Partial Resynchronization accepted. Ready to accept connections.\n");
             redisCommunicateSystemd("READY=1\n");
         }

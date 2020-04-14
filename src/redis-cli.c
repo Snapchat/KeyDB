@@ -1407,15 +1407,15 @@ static int parseOptions(int argc, char **argv) {
 #ifdef USE_OPENSSL
         } else if (!strcmp(argv[i],"--tls")) {
             config.tls = 1;
-        } else if (!strcmp(argv[i],"--sni")) {
+        } else if (!strcmp(argv[i],"--sni") && !lastarg) {
             config.sni = argv[++i];
-        } else if (!strcmp(argv[i],"--cacertdir")) {
+        } else if (!strcmp(argv[i],"--cacertdir") && !lastarg) {
             config.cacertdir = argv[++i];
-        } else if (!strcmp(argv[i],"--cacert")) {
+        } else if (!strcmp(argv[i],"--cacert") && !lastarg) {
             config.cacert = argv[++i];
-        } else if (!strcmp(argv[i],"--cert")) {
+        } else if (!strcmp(argv[i],"--cert") && !lastarg) {
             config.cert = argv[++i];
-        } else if (!strcmp(argv[i],"--key")) {
+        } else if (!strcmp(argv[i],"--key") && !lastarg) {
             config.key = argv[++i];
 #endif
         } else if (!strcmp(argv[i],"-v") || !strcmp(argv[i], "--version")) {
@@ -1500,8 +1500,8 @@ static void usage(void) {
 "                     You can also use the " REDIS_CLI_AUTH_ENV " environment\n"
 "                     variable to pass this password more safely\n"
 "                     (if both are used, this argument takes predecence).\n"
-"  -user <username>   Used to send ACL style 'AUTH username pass'. Needs -a.\n"
-"  -pass <password>   Alias of -a for consistency with the new --user option.\n"
+"  --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
+"  --pass <password>  Alias of -a for consistency with the new --user option.\n"
 "  -u <uri>           Server URI.\n"
 "  -r <repeat>        Execute specified command N times.\n"
 "  -i <interval>      When -r is used, waits <interval> seconds per command.\n"
@@ -1513,12 +1513,13 @@ static void usage(void) {
 "  -c                 Enable cluster mode (follow -ASK and -MOVED redirections).\n"
 #ifdef USE_OPENSSL
 "  --tls              Establish a secure TLS connection.\n"
-"  --cacert           CA Certificate file to verify with.\n"
-"  --cacertdir        Directory where trusted CA certificates are stored.\n"
+"  --sni <host>       Server name indication for TLS.\n"
+"  --cacert <file>    CA Certificate file to verify with.\n"
+"  --cacertdir <dir>  Directory where trusted CA certificates are stored.\n"
 "                     If neither cacert nor cacertdir are specified, the default\n"
 "                     system-wide trusted root certs configuration will apply.\n"
-"  --cert             Client certificate to authenticate with.\n"
-"  --key              Private key file to authenticate with.\n"
+"  --cert <file>      Client certificate to authenticate with.\n"
+"  --key <file>       Private key file to authenticate with.\n"
 #endif
 "  --raw              Use raw formatting for replies (default when STDOUT is\n"
 "                     not a tty).\n"

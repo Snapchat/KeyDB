@@ -1975,7 +1975,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
         }
     } else if (rdbtype == RDB_TYPE_MODULE || rdbtype == RDB_TYPE_MODULE_2) {
         uint64_t moduleid = rdbLoadLen(rdb,NULL);
-        if (rioGetReadError(rdb)) return NULL;
+        if (rioGetReadError(rdb)) {
+            rdbReportReadError("Short read module id");
+            return NULL;
+        }
         moduleType *mt = moduleTypeLookupModuleByID(moduleid);
         char name[10];
 

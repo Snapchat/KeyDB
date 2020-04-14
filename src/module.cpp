@@ -3981,7 +3981,7 @@ void RM_SaveLongDouble(RedisModuleIO *io, long double value) {
     /* Long double has different number of bits in different platforms, so we
      * save it as a string type. */
     size_t len = ld2string(buf,sizeof(buf),value,LD_STR_HEX);
-    RM_SaveStringBuffer(io,buf,len+1); /* len+1 for '\0' */
+    RM_SaveStringBuffer(io,buf,len);
 }
 
 /* In the context of the rdb_save method of a module data type, loads back the
@@ -4356,6 +4356,21 @@ void unblockClientFromModule(client *c) {
         bc->disconnect_callback(&ctx,bc);
         moduleFreeContext(&ctx);
     }
+
+    /* If we made it here and client is still blocked it means that the command
+     * timed-out, client was killed or disconnected and disconnect_callback was
+     * not implemented (or it was, but RM_UnblockClient was not called from
+     * within it, as it should).
+     * We must call moduleUnblockClient in order to free privdata and
+     * RedisModuleBlockedClient.
+     *
+     * Note that clients implementing threads and working with private data,
+     * should make sure to stop the threads or protect the private data
+     * in some other way in the disconnection and timeout callback, because
+     * here we are going to free the private data associated with the
+     * blocked client. */
+    if (!bc->unblocked)
+        moduleUnblockClient(c);
 
     bc->client = NULL;
     /* Reset the client for a new query since, for blocking commands implemented

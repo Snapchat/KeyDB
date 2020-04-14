@@ -310,6 +310,26 @@ void replicationFeedSlave(client *replica, int dictid, robj **argv, int argc, bo
     }
 }
 
+static int writeProtoNum(char *dst, const size_t cchdst, long long num)
+{
+    if (cchdst < 1)
+        return 0;
+    dst[0] = '$';
+    int cch = 1;
+    cch += ll2string(dst + cch, cchdst - cch, digits10(num));
+    int chCpyT = std::min<int>(cchdst - cch, 2);
+    memcpy(dst + cch, "\r\n", chCpyT);
+    cch += chCpyT;
+    cch += ll2string(dst + cch, cchdst-cch, num);
+    chCpyT = std::min<int>(cchdst - cch, 3);
+    memcpy(dst + cch, "\r\n", chCpyT);
+    if (chCpyT == 3)
+        cch += 2;
+    else
+        cch += chCpyT;
+    return cch;
+}
+
 /* Propagate write commands to slaves, and populate the replication backlog
  * as well. This function is used if the instance is a master: we use
  * the commands received by our clients in order to create the replication
@@ -354,24 +374,28 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     serverAssert(argc > 0);
     serverAssert(cchbuf > 0);
 
-    char uuid[40] = {'\0'};
+    char uuid[37];
     uuid_unparse(cserver.uuid, uuid);
-    char proto[1024];
-    int cchProto = snprintf(proto, sizeof(proto), "*5\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
-    cchProto = std::min((int)sizeof(proto), cchProto);
+
+
+    // The code below used to be: snprintf(proto, sizeof(proto), "*5\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
+    //  but that was much too slow
+    char proto[1024] = "*5\r\n$7\r\nRREPLAY\r\n$36\r\n00000000-0000-0000-0000-000000000000\r\n$";
+    int cchProto = strlen(proto);
+    memcpy(proto + 22, uuid, 36); // Note UUID_STR_LEN includes the \0 trailing byte which we don't want
+    cchProto += ll2string(proto + cchProto, sizeof(proto)-cchProto, cchbuf);
+    memcpy(proto + cchProto, "\r\n", 3);
+    cchProto += 2;
+
     long long master_repl_offset_start = g_pserver->master_repl_offset;
     
     char szDbNum[128];
-    int cchDictIdNum = snprintf(szDbNum, sizeof(szDbNum), "%d", dictid);
-    int cchDbNum = snprintf(szDbNum, sizeof(szDbNum), "$%d\r\n%d\r\n", cchDictIdNum, dictid);
-    cchDbNum = std::min<int>(cchDbNum, sizeof(szDbNum)); // snprintf is tricky like that
+    int cchDbNum = writeProtoNum(szDbNum, sizeof(szDbNum), dictid);
+    
 
     char szMvcc[128];
     incrementMvccTstamp();
-    uint64_t mvccTstamp = getMvccTstamp();
-    int cchMvccNum = snprintf(szMvcc, sizeof(szMvcc), "%" PRIu64, mvccTstamp);
-    int cchMvcc = snprintf(szMvcc, sizeof(szMvcc), "$%d\r\n%" PRIu64 "\r\n", cchMvccNum, mvccTstamp);
-    cchMvcc = std::min<int>(cchMvcc, sizeof(szMvcc));    // tricky snprintf
+    int cchMvcc = writeProtoNum(szMvcc, sizeof(szMvcc), getMvccTstamp());
 
     /* Write the command to the replication backlog if any. */
     if (g_pserver->repl_backlog) 

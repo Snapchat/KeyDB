@@ -51,6 +51,8 @@ list *UsersToLoad;  /* This is a list of users found in the configuration file
                        array of SDS pointers: the first is the user name,
                        all the remaining pointers are ACL rules in the same
                        format as ACLSetUser(). */
+list *ACLLog;       /* Our security log, the user is able to inspect that
+                       using the ACL LOG command .*/
 
 struct ACLCategoryItem {
     const char *name;
@@ -95,6 +97,7 @@ struct ACLUserFlag {
 void ACLResetSubcommandsForCommand(user *u, unsigned long id);
 void ACLResetSubcommands(user *u);
 void ACLAddAllowedSubcommand(user *u, unsigned long id, const char *sub);
+void ACLFreeLogEntry(struct ACLLogEntry *le);
 
 /* The length of the string representation of a hashed password. */
 #define HASH_PASSWORD_LEN SHA256_BLOCK_SIZE*2
@@ -922,6 +925,7 @@ void ACLInitDefaultUser(void) {
 void ACLInit(void) {
     Users = raxNew();
     UsersToLoad = listCreate();
+    ACLLog = listCreate();
     ACLInitDefaultUser();
 }
 
@@ -980,6 +984,7 @@ int ACLAuthenticateUser(client *c, robj *username, robj *password) {
         moduleNotifyUserChanged(c);
         return C_OK;
     } else {
+        addACLLogEntry(c,ACL_DENIED_AUTH,0,szFromObj(username));
         return C_ERR;
     }
 }
@@ -1029,14 +1034,14 @@ user *ACLGetUserByName(const char *name, size_t namelen) {
 
 /* Check if the command is ready to be executed in the client 'c', already
  * referenced by c->cmd, and can be executed by this client according to the
- * ACLs associated to the client user c->user.
+ * ACLs associated to the client user c->puser.
  *
  * If the user can execute the command ACL_OK is returned, otherwise
  * ACL_DENIED_CMD or ACL_DENIED_KEY is returned: the first in case the
  * command cannot be executed because the user is not allowed to run such
  * command, the second if the command is denied because the user is trying
  * to access keys that are not among the specified patterns. */
-int ACLCheckCommandPerm(client *c) {
+int ACLCheckCommandPerm(client *c, int *keyidxptr) {
     user *u = c->puser;
     uint64_t id = c->cmd->id;
 
@@ -1096,6 +1101,7 @@ int ACLCheckCommandPerm(client *c) {
                 }
             }
             if (!match) {
+                if (keyidxptr) *keyidxptr = keyidx[j];
                 getKeysFreeResult(keyidx);
                 return ACL_DENIED_KEY;
             }
@@ -1457,6 +1463,131 @@ void ACLLoadUsersAtStartup(void) {
 }
 
 /* =============================================================================
+ * ACL log
+ * ==========================================================================*/
+
+#define ACL_LOG_CTX_TOPLEVEL 0
+#define ACL_LOG_CTX_LUA 1
+#define ACL_LOG_CTX_MULTI 2
+#define ACL_LOG_GROUPING_MAX_TIME_DELTA 60000
+
+/* This structure defines an entry inside the ACL log. */
+typedef struct ACLLogEntry {
+    uint64_t count;     /* Number of times this happened recently. */
+    int reason;         /* Reason for denying the command. ACL_DENIED_*. */
+    int context;        /* Toplevel, Lua or MULTI/EXEC? ACL_LOG_CTX_*. */
+    sds object;         /* The key name or command name. */
+    sds username;       /* User the client is authenticated with. */
+    mstime_t ctime;     /* Milliseconds time of last update to this entry. */
+    sds cinfo;          /* Client info (last client if updated). */
+} ACLLogEntry;
+
+/* This function will check if ACL entries 'a' and 'b' are similar enough
+ * that we should actually update the existing entry in our ACL log instead
+ * of creating a new one. */
+int ACLLogMatchEntry(ACLLogEntry *a, ACLLogEntry *b) {
+    if (a->reason != b->reason) return 0;
+    if (a->context != b->context) return 0;
+    mstime_t delta = a->ctime - b->ctime;
+    if (delta < 0) delta = -delta;
+    if (delta > ACL_LOG_GROUPING_MAX_TIME_DELTA) return 0;
+    if (sdscmp(a->object,b->object) != 0) return 0;
+    if (sdscmp(a->username,b->username) != 0) return 0;
+    return 1;
+}
+
+/* Release an ACL log entry. */
+void ACLFreeLogEntry(ACLLogEntry *leptr) {
+    ACLLogEntry *le = leptr;
+    sdsfree(le->object);
+    sdsfree(le->username);
+    sdsfree(le->cinfo);
+    zfree(le);
+}
+
+/* Adds a new entry in the ACL log, making sure to delete the old entry
+ * if we reach the maximum length allowed for the log. This function attempts
+ * to find similar entries in the current log in order to bump the counter of
+ * the log entry instead of creating many entries for very similar ACL
+ * rules issues.
+ *
+ * The keypos argument is only used when the reason is ACL_DENIED_KEY, since
+ * it allows the function to log the key name that caused the problem.
+ * Similarly the username is only passed when we failed to authenticate the
+ * user with AUTH or HELLO, for the ACL_DENIED_AUTH reason. Otherwise
+ * it will just be NULL.
+ */
+void addACLLogEntry(client *c, int reason, int keypos, sds username) {
+    /* Create a new entry. */
+    struct ACLLogEntry *le = (ACLLogEntry*)zmalloc(sizeof(*le));
+    le->count = 1;
+    le->reason = reason;
+    le->username = sdsdup(reason == ACL_DENIED_AUTH ? username : c->puser->name);
+    le->ctime = mstime();
+
+    switch(reason) {
+    case ACL_DENIED_CMD: le->object = sdsnew(c->cmd->name); break;
+    case ACL_DENIED_KEY: le->object = sdsnew(szFromObj(c->argv[keypos])); break;
+    case ACL_DENIED_AUTH: le->object = sdsnew(szFromObj(c->argv[0])); break;
+    default: le->object = sdsempty();
+    }
+
+    client *realclient = c;
+    if (realclient->flags & CLIENT_LUA) realclient = g_pserver->lua_caller;
+
+    le->cinfo = catClientInfoString(sdsempty(),realclient);
+    if (c->flags & CLIENT_MULTI) {
+        le->context = ACL_LOG_CTX_MULTI;
+    } else if (c->flags & CLIENT_LUA) {
+        le->context = ACL_LOG_CTX_LUA;
+    } else {
+        le->context = ACL_LOG_CTX_TOPLEVEL;
+    }
+
+    /* Try to match this entry with past ones, to see if we can just
+     * update an existing entry instead of creating a new one. */
+    long toscan = 10; /* Do a limited work trying to find duplicated. */
+    listIter li;
+    listNode *ln;
+    listRewind(ACLLog,&li);
+    ACLLogEntry *match = NULL;
+    while (toscan-- && (ln = listNext(&li)) != NULL) {
+        ACLLogEntry *current = (ACLLogEntry*)listNodeValue(ln);
+        if (ACLLogMatchEntry(current,le)) {
+            match = current;
+            listDelNode(ACLLog,ln);
+            listAddNodeHead(ACLLog,current);
+            break;
+        }
+    }
+
+    /* If there is a match update the entry, otherwise add it as a
+     * new one. */
+    if (match) {
+        /* We update a few fields of the existing entry and bump the
+         * counter of events for this entry. */
+        sdsfree(match->cinfo);
+        match->cinfo = le->cinfo;
+        match->ctime = le->ctime;
+        match->count++;
+
+        /* Release the old entry. */
+        le->cinfo = NULL;
+        ACLFreeLogEntry(le);
+    } else {
+        /* Add it to our list of entires. We'll have to trim the list
+         * to its maximum size. */
+        listAddNodeHead(ACLLog, le);
+        while(listLength(ACLLog) > g_pserver->acllog_max_len) {
+            listNode *ln = listLast(ACLLog);
+            ACLLogEntry *le = (ACLLogEntry*)listNodeValue(ln);
+            ACLFreeLogEntry(le);
+            listDelNode(ACLLog,ln);
+        }
+    }
+}
+
+/* =============================================================================
  * ACL related commands
  * ==========================================================================*/
 
@@ -1471,6 +1602,7 @@ void ACLLoadUsersAtStartup(void) {
  * ACL GETUSER <username>
  * ACL GENPASS
  * ACL WHOAMI
+ * ACL LOG [<count> | RESET]
  */
 void aclCommand(client *c) {
     char *sub = szFromObj(c->argv[1]);
@@ -1657,6 +1789,71 @@ void aclCommand(client *c) {
         char pass[32]; /* 128 bits of actual pseudo random data. */
         getRandomHexChars(pass,sizeof(pass));
         addReplyBulkCBuffer(c,pass,sizeof(pass));
+    } else if (!strcasecmp(sub,"log") && (c->argc == 2 || c->argc ==3)) {
+        long count = 10; /* Number of entries to emit by default. */
+
+        /* Parse the only argument that LOG may have: it could be either
+         * the number of entires the user wants to display, or alternatively
+         * the "RESET" command in order to flush the old entires. */
+        if (c->argc == 3) {
+            if (!strcasecmp(szFromObj(c->argv[2]),"reset")) {
+                listSetFreeMethod(ACLLog,(void(*)(const void*))ACLFreeLogEntry);
+                listEmpty(ACLLog);
+                listSetFreeMethod(ACLLog,NULL);
+                addReply(c,shared.ok);
+                return;
+            } else if (getLongFromObjectOrReply(c,c->argv[2],&count,NULL)
+                       != C_OK)
+            {
+                return;
+            }
+            if (count < 0) count = 0;
+        }
+
+        /* Fix the count according to the number of entries we got. */
+        if ((size_t)count > listLength(ACLLog))
+            count = listLength(ACLLog);
+
+        addReplyArrayLen(c,count);
+        listIter li;
+        listNode *ln;
+        listRewind(ACLLog,&li);
+        mstime_t now = mstime();
+        while (count-- && (ln = listNext(&li)) != NULL) {
+            ACLLogEntry *le = (ACLLogEntry*)listNodeValue(ln);
+            addReplyMapLen(c,7);
+            addReplyBulkCString(c,"count");
+            addReplyLongLong(c,le->count);
+
+            addReplyBulkCString(c,"reason");
+            const char *reasonstr = "INVALID_REASON";
+            switch(le->reason) {
+            case ACL_DENIED_CMD: reasonstr="command"; break;
+            case ACL_DENIED_KEY: reasonstr="key"; break;
+            case ACL_DENIED_AUTH: reasonstr="auth"; break;
+            }
+            addReplyBulkCString(c,reasonstr);
+
+            addReplyBulkCString(c,"context");
+            const char *ctxstr;
+            switch(le->context) {
+            case ACL_LOG_CTX_TOPLEVEL: ctxstr="toplevel"; break;
+            case ACL_LOG_CTX_MULTI: ctxstr="multi"; break;
+            case ACL_LOG_CTX_LUA: ctxstr="lua"; break;
+            default: ctxstr="unknown";
+            }
+            addReplyBulkCString(c,ctxstr);
+
+            addReplyBulkCString(c,"object");
+            addReplyBulkCBuffer(c,le->object,sdslen(le->object));
+            addReplyBulkCString(c,"username");
+            addReplyBulkCBuffer(c,le->username,sdslen(le->username));
+            addReplyBulkCString(c,"age-seconds");
+            double age = (double)(now - le->ctime)/1000;
+            addReplyDouble(c,age);
+            addReplyBulkCString(c,"client-info");
+            addReplyBulkCBuffer(c,le->cinfo,sdslen(le->cinfo));
+        }
     } else if (!strcasecmp(sub,"help")) {
         const char *help[] = {
 "LOAD                              -- Reload users from the ACL file.",
@@ -1669,6 +1866,7 @@ void aclCommand(client *c) {
 "CAT <category>                    -- List commands inside category.",
 "GENPASS                           -- Generate a secure user password.",
 "WHOAMI                            -- Return the current connection username.",
+"LOG [<count> | RESET]             -- Show the ACL log entries.",
 NULL
         };
         addReplyHelp(c,help);

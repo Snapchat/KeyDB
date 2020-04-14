@@ -2927,6 +2927,10 @@ void replicationUnsetMaster(redisMaster *mi) {
     moduleFireServerEvent(REDISMODULE_EVENT_REPLICATION_ROLE_CHANGED,
                           REDISMODULE_EVENT_REPLROLECHANGED_NOW_MASTER,
                           NULL);
+
+    /* Restart the AOF subsystem in case we shut it down during a sync when
+     * we were still a slave. */
+    if (g_pserver->aof_enabled && g_pserver->aof_state == AOF_OFF) restartAOFAfterSYNC();
 }
 
 /* This function is called when the replica lose the connection with the
@@ -2969,9 +2973,6 @@ void replicaofCommand(client *c) {
             serverLog(LL_NOTICE,"MASTER MODE enabled (user request from '%s')",
                 client);
             sdsfree(client);
-            /* Restart the AOF subsystem in case we shut it down during a sync when
-             * we were still a slave. */
-            if (g_pserver->aof_enabled && g_pserver->aof_state == AOF_OFF) restartAOFAfterSYNC();
         }
     } else {
         long port;

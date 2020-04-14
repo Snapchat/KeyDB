@@ -1787,6 +1787,22 @@ int *georadiusGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numk
     return keys;
 }
 
+/* Helper function to extract keys from memory command.
+ * MEMORY USAGE <key> */
+int *memoryGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys) {
+    int *keys;
+    UNUSED(cmd);
+
+    if (argc >= 3 && !strcasecmp(szFromObj(argv[1]),"usage")) {
+        keys = (int*)zmalloc(sizeof(int) * 1);
+        keys[0] = 2;
+        *numkeys = 1;
+        return keys;
+    }
+    *numkeys = 0;
+    return NULL;
+}
+
 /* XREAD [BLOCK <milliseconds>] [COUNT <count>] [GROUP <groupname> <ttl>]
  *       STREAMS key_1 key_2 ... key_N ID_1 ID_2 ... ID_N */
 int *xreadGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys) {

@@ -165,7 +165,10 @@ int clusterLoadConfig(char *filename) {
         }
 
         /* Regular config lines have at least eight fields */
-        if (argc < 8) goto fmterr;
+        if (argc < 8) {
+            sdsfreesplitres(argv,argc);
+            goto fmterr;
+        }
 
         /* Create this node if it does not exist */
         n = clusterLookupNode(argv[0]);
@@ -174,7 +177,10 @@ int clusterLoadConfig(char *filename) {
             clusterAddNode(n);
         }
         /* Address and port */
-        if ((p = strrchr(argv[1],':')) == NULL) goto fmterr;
+        if ((p = strrchr(argv[1],':')) == NULL) {
+            sdsfreesplitres(argv,argc);
+            goto fmterr;
+        }
         *p = '\0';
         memcpy(n->ip,argv[1],strlen(argv[1])+1);
         char *port = p+1;
@@ -255,7 +261,10 @@ int clusterLoadConfig(char *filename) {
                 *p = '\0';
                 direction = p[1]; /* Either '>' or '<' */
                 slot = atoi(argv[j]+1);
-                if (slot < 0 || slot >= CLUSTER_SLOTS) goto fmterr;
+                if (slot < 0 || slot >= CLUSTER_SLOTS) {
+                    sdsfreesplitres(argv,argc);
+                    goto fmterr;
+                }
                 p += 3;
                 cn = clusterLookupNode(p);
                 if (!cn) {
@@ -275,8 +284,12 @@ int clusterLoadConfig(char *filename) {
             } else {
                 start = stop = atoi(argv[j]);
             }
-            if (start < 0 || start >= CLUSTER_SLOTS) goto fmterr;
-            if (stop < 0 || stop >= CLUSTER_SLOTS) goto fmterr;
+            if (start < 0 || start >= CLUSTER_SLOTS ||
+                stop < 0 || stop >= CLUSTER_SLOTS)
+            {
+                sdsfreesplitres(argv,argc);
+                goto fmterr;
+            }
             while(start <= stop) clusterAddSlot(n, start++);
         }
 

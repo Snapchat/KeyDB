@@ -660,21 +660,13 @@ int getDoubleFromObjectOrReply(client *c, robj *o, double *target, const char *m
 
 int getLongDoubleFromObject(robj *o, long double *target) {
     long double value;
-    char *eptr;
 
     if (o == NULL) {
         value = 0;
     } else {
         serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
         if (sdsEncodedObject(o)) {
-            errno = 0;
-            value = strtold(szFromObj(o), &eptr);
-            if (sdslen(szFromObj(o)) == 0 ||
-                isspace(((const char*)szFromObj(o))[0]) ||
-                (size_t)(eptr-(char*)szFromObj(o)) != sdslen(szFromObj(o)) ||
-                (errno == ERANGE &&
-                    (value == HUGE_VAL || value == -HUGE_VAL || value == 0)) ||
-                std::isnan(value))
+            if (!string2ld(szFromObj(o), sdslen(szFromObj(o)), &value))
                 return C_ERR;
         } else if (o->encoding == OBJ_ENCODING_INT) {
             value = (long)szFromObj(o);

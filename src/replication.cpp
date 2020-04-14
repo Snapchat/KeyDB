@@ -380,22 +380,34 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
     // The code below used to be: snprintf(proto, sizeof(proto), "*5\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
     //  but that was much too slow
-    char proto[1024] = "*5\r\n$7\r\nRREPLAY\r\n$36\r\n00000000-0000-0000-0000-000000000000\r\n$";
-    int cchProto = strlen(proto);
-    memcpy(proto + 22, uuid, 36); // Note UUID_STR_LEN includes the \0 trailing byte which we don't want
-    cchProto += ll2string(proto + cchProto, sizeof(proto)-cchProto, cchbuf);
-    memcpy(proto + cchProto, "\r\n", 3);
-    cchProto += 2;
+    static const char *protoRREPLAY = "*5\r\n$7\r\nRREPLAY\r\n$36\r\n00000000-0000-0000-0000-000000000000\r\n$";
+    char proto[1024];
+    int cchProto = 0;
+    if (!fSendRaw)
+    {
+        cchProto = strlen(protoRREPLAY);
+	memcpy(proto, protoRREPLAY, strlen(protoRREPLAY));
+        memcpy(proto + 22, uuid, 36); // Note UUID_STR_LEN includes the \0 trailing byte which we don't want
+        cchProto += ll2string(proto + cchProto, sizeof(proto)-cchProto, cchbuf);
+        memcpy(proto + cchProto, "\r\n", 3);
+        cchProto += 2;
+    }
 
     long long master_repl_offset_start = g_pserver->master_repl_offset;
     
     char szDbNum[128];
-    int cchDbNum = writeProtoNum(szDbNum, sizeof(szDbNum), dictid);
+    int cchDbNum = 0;
+    if (!fSendRaw)
+    	cchDbNum = writeProtoNum(szDbNum, sizeof(szDbNum), dictid);
     
 
     char szMvcc[128];
-    incrementMvccTstamp();
-    int cchMvcc = writeProtoNum(szMvcc, sizeof(szMvcc), getMvccTstamp());
+    int cchMvcc = 0;
+    incrementMvccTstamp();	// Always increment MVCC tstamp so we're consistent with active and normal replication
+    if (!fSendRaw)
+    {
+    	cchMvcc = writeProtoNum(szMvcc, sizeof(szMvcc), getMvccTstamp());
+    }
 
     /* Write the command to the replication backlog if any. */
     if (g_pserver->repl_backlog) 

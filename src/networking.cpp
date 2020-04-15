@@ -1919,6 +1919,12 @@ void resetClient(client *c) {
     if (!(c->flags & CLIENT_MULTI) && prevcmd != askingCommand)
         c->flags &= ~CLIENT_ASKING;
 
+    /* We do the same for the CACHING command as well. It also affects
+     * the next command or transaction executed, in a way very similar
+     * to ASKING. */
+    if (!(c->flags & CLIENT_MULTI) && prevcmd != clientCommand)
+        c->flags &= ~CLIENT_TRACKING_CACHING;
+
     /* Remove the CLIENT_REPLY_SKIP flag if any so that the reply
      * to the next command will be sent, but set the flag if the command
      * we just processed was "CLIENT REPLY SKIP". */
@@ -2601,7 +2607,7 @@ void clientCommand(client *c) {
 "REPLY (on|off|skip)    -- Control the replies sent to the current connection.",
 "SETNAME <name>         -- Assign the name <name> to the current connection.",
 "UNBLOCK <clientid> [TIMEOUT|ERROR] -- Unblock the specified blocked client.",
-"TRACKING (on|off) [REDIRECT <id>] -- Enable client keys tracking for client side caching.",
+"TRACKING (on|off) [REDIRECT <id>] [BCAST] [PREFIX first] [PREFIX second] [OPTIN] [OPTOUT]... -- Enable client keys tracking for client side caching.",
 "GETREDIR               -- Return the client ID we are redirecting to when tracking is enabled.",
 NULL
         };
@@ -2789,9 +2795,9 @@ NULL
         addReply(c,shared.ok);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"tracking") && c->argc >= 3) {
         /* CLIENT TRACKING (on|off) [REDIRECT <id>] [BCAST] [PREFIX first]
-         *                          [PREFIX second] ... */
+         *                          [PREFIX second] [OPTIN] [OPTOUT] ... */
         long long redir = 0;
-        int bcast = 0;
+        uint64_t options = 0;
         robj **prefix = NULL;
         size_t numprefix = 0;
 
@@ -2801,18 +2807,34 @@ NULL
 
             if (!strcasecmp(szFromObj(c->argv[j]),"redirect") && moreargs) {
                 j++;
+                if (redir != 0) {
+                    addReplyError(c,"A client can only redirect to a single "
+                                    "other client");
+                    zfree(prefix);
+                    return;
+                }
+
                 if (getLongLongFromObjectOrReply(c,c->argv[j],&redir,NULL) !=
-                    C_OK) return;
+                    C_OK)
+                {
+                    zfree(prefix);
+                    return;
+                }
                 /* We will require the client with the specified ID to exist
                  * right now, even if it is possible that it gets disconnected
                  * later. Still a valid sanity check. */
                 if (lookupClientByID(redir) == NULL) {
                     addReplyError(c,"The client ID you want redirect to "
                                     "does not exist");
+                    zfree(prefix);
                     return;
                 }
             } else if (!strcasecmp(szFromObj(c->argv[j]),"bcast")) {
-                bcast++;
+                options |= CLIENT_TRACKING_BCAST;
+            } else if (!strcasecmp(szFromObj(c->argv[j]),"optin")) {
+                options |= CLIENT_TRACKING_OPTIN;
+            } else if (!strcasecmp(szFromObj(c->argv[j]),"optout")) {
+                options |= CLIENT_TRACKING_OPTOUT;
             } else if (!strcasecmp(szFromObj(c->argv[j]),"prefix") && moreargs) {
                 j++;
                 prefix = (robj**)zrealloc(prefix,sizeof(robj*)*(numprefix+1), MALLOC_LOCAL);
@@ -2828,7 +2850,7 @@ NULL
         if (!strcasecmp(szFromObj(c->argv[2]),"on")) {
             /* Before enabling tracking, make sure options are compatible
              * among each other and with the current state of the client. */
-            if (!bcast && numprefix) {
+            if (!(options & CLIENT_TRACKING_BCAST) && numprefix) {
                 addReplyError(c,
                     "PREFIX option requires BCAST mode to be enabled");
                 zfree(prefix);
@@ -2837,7 +2859,8 @@ NULL
 
             if (c->flags & CLIENT_TRACKING) {
                 int oldbcast = !!(c->flags & CLIENT_TRACKING_BCAST);
-                if (oldbcast != bcast) {
+                int newbcast = !!(options & CLIENT_TRACKING_BCAST);
+                if (oldbcast != newbcast) {
                     addReplyError(c,
                     "You can't switch BCAST mode on/off before disabling "
                     "tracking for this client, and then re-enabling it with "
@@ -2846,7 +2869,17 @@ NULL
                     return;
                 }
             }
-            enableTracking(c,redir,bcast,prefix,numprefix);
+
+            if (options & CLIENT_TRACKING_BCAST &&
+                options & (CLIENT_TRACKING_OPTIN|CLIENT_TRACKING_OPTOUT))
+            {
+                addReplyError(c,
+                "OPTIN and OPTOUT are not compatible with BCAST");
+                zfree(prefix);
+                return;
+            }
+
+            enableTracking(c,redir,options,prefix,numprefix);
         } else if (!strcasecmp(szFromObj(c->argv[2]),"off")) {
             disableTracking(c);
         } else {
@@ -2855,6 +2888,36 @@ NULL
             return;
         }
         zfree(prefix);
+        addReply(c,shared.ok);
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"caching") && c->argc >= 3) {
+        if (!(c->flags & CLIENT_TRACKING)) {
+            addReplyError(c,"CLIENT CACHING can be called only when the "
+                            "client is in tracking mode with OPTIN or "
+                            "OPTOUT mode enabled");
+            return;
+        }
+
+        char *opt = szFromObj(c->argv[2]);
+        if (!strcasecmp(opt,"yes")) {
+            if (c->flags & CLIENT_TRACKING_OPTIN) {
+                c->flags |= CLIENT_TRACKING_CACHING;
+            } else {
+                addReplyError(c,"CLIENT CACHING YES is only valid when tracking is enabled in OPTIN mode.");
+                return;
+            }
+        } else if (!strcasecmp(opt,"no")) {
+            if (c->flags & CLIENT_TRACKING_OPTOUT) {
+                c->flags |= CLIENT_TRACKING_CACHING;
+            } else {
+                addReplyError(c,"CLIENT CACHING NO is only valid when tracking is enabled in OPTOUT mode.");
+                return;
+            }
+        } else {
+            addReply(c,shared.syntaxerr);
+            return;
+        }
+
+        /* Common reply for when we succeeded. */
         addReply(c,shared.ok);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"getredir") && c->argc == 2) {
         /* CLIENT GETREDIR */

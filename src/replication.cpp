@@ -3255,11 +3255,16 @@ void replicationCacheMasterUsingMyself(redisMaster *mi) {
                 g_pserver->master_repl_offset,
                 delta);
         mi->master_initial_offset = g_pserver->master_repl_meaningful_offset;
-        g_pserver->repl_backlog_histlen -= delta;
-        g_pserver->repl_backlog_idx =
-            (g_pserver->repl_backlog_idx + (g_pserver->repl_backlog_size - delta)) %
-            g_pserver->repl_backlog_size;
-        if (g_pserver->repl_backlog_histlen < 0) g_pserver->repl_backlog_histlen = 0;
+        g_pserver->master_repl_offset = g_pserver->master_repl_meaningful_offset;
+        if (g_pserver->repl_backlog_histlen <= delta) {
+            g_pserver->repl_backlog_histlen = 0;
+            g_pserver->repl_backlog_idx = 0;
+        } else {
+            g_pserver->repl_backlog_histlen -= delta;
+            g_pserver->repl_backlog_idx =
+                (g_pserver->repl_backlog_idx + (g_pserver->repl_backlog_size - delta)) %
+                g_pserver->repl_backlog_size;
+        }
     }
 
     /* The master client we create can be set to any DBID, because

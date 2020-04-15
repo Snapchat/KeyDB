@@ -98,7 +98,7 @@ struct client;
 
 stream *streamNew(void);
 void freeStream(stream *s);
-unsigned long streamLength(const robj *subject);
+unsigned long streamLength(robj_roptr subject);
 size_t streamReplyWithRange(client *c, stream *s, streamID *start, streamID *end, size_t count, int rev, streamCG *group, streamConsumer *consumer, int flags, streamPropInfo *spi);
 void streamIteratorStart(streamIterator *si, stream *s, streamID *start, streamID *end, int rev);
 int streamIteratorGetID(streamIterator *si, streamID *id, int64_t *numfields);

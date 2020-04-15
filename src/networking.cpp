@@ -488,9 +488,20 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
      * will produce an error. However it is useful to log such events since
      * they are rare and may hint at errors in a script or a bug in Redis. */
     int ctype = getClientType(c);
-    if (ctype == CLIENT_TYPE_MASTER || ctype == CLIENT_TYPE_SLAVE) {
-        const char* to = ctype == CLIENT_TYPE_MASTER? "master": "replica";
-        const char* from = ctype == CLIENT_TYPE_MASTER? "replica": "master";
+    if (ctype == CLIENT_TYPE_MASTER || ctype == CLIENT_TYPE_SLAVE || c->id == CLIENT_ID_AOF) {
+        const char *to, *from;
+
+        if (c->id == CLIENT_ID_AOF) {
+            to = "AOF-loading-client";
+            from = "server";
+        } else if (ctype == CLIENT_TYPE_MASTER) {
+            to = "master";
+            from = "replica";
+        } else {
+            to = "replica";
+            from = "master";
+        }
+
         const char *cmdname = c->lastcmd ? c->lastcmd->name : "<unknown>";
         serverLog(LL_WARNING,"== CRITICAL == This %s is sending an error "
                              "to its %s: '%s' after processing the command "
@@ -500,7 +511,8 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
             std::string str = escapeString(c->querybuf);
             printf("\tquerybuf: %s\n", str.c_str());
         }
-        c->master_error = 1;
+
+        g_pserver->stat_unexpected_error_replies++;
     }
 }
 

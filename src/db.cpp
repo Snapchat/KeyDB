@@ -224,6 +224,11 @@ void dbAdd(redisDb *db, robj *key, robj *val)
 {
     int retval = dbAddCore(db, key, val);
     serverAssertWithInfo(NULL,key,retval == DICT_OK);
+    if (val->type == OBJ_LIST ||
+        val->type == OBJ_ZSET ||
+        val->type == OBJ_STREAM)
+        signalKeyAsReady(db, key);
+    if (g_pserver->cluster_enabled) slotToKeyAdd(key);
 }
 
 void dbOverwriteCore(redisDb *db, dictEntry *de, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire)

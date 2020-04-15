@@ -45,11 +45,10 @@ typedef enum {
     CONN_STATE_ERROR
 } ConnectionState;
 
-#define CONN_FLAG_IN_HANDLER        (1<<0)      /* A handler execution is in progress */
-#define CONN_FLAG_CLOSE_SCHEDULED   (1<<1)      /* Closed scheduled by a handler */
-#define CONN_FLAG_WRITE_BARRIER     (1<<2)      /* Write barrier requested */
-#define CONN_FLAG_READ_THREADSAFE        (1<<3)
-#define CONN_FLAG_WRITE_THREADSAFE       (1<<4)
+#define CONN_FLAG_CLOSE_SCHEDULED   (1<<0)      /* Closed scheduled by a handler */
+#define CONN_FLAG_WRITE_BARRIER     (1<<1)      /* Write barrier requested */
+#define CONN_FLAG_READ_THREADSAFE        (1<<2)
+#define CONN_FLAG_WRITE_THREADSAFE       (1<<3)
 
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
@@ -72,7 +71,8 @@ typedef struct ConnectionType {
 struct connection {
     ConnectionType *type;
     ConnectionState state;
-    int flags;
+    short int flags;
+    short int refs;
     int last_errno;
     void *private_data;
     ConnectionCallbackFunc conn_handler;
@@ -90,6 +90,13 @@ struct connection {
  * connAccept() may directly call accept_handler(), or return and call it
  * at a later time. This behavior is a bit awkward but aims to reduce the need
  * to wait for the next event loop, if no additional handshake is required.
+ *
+ * IMPORTANT: accept_handler may decide to close the connection, calling connClose().
+ * To make this safe, the connection is only marked with CONN_FLAG_CLOSE_SCHEDULED
+ * in this case, and connAccept() returns with an error.
+ *
+ * connAccept() callers must always check the return value and on error (C_ERR)
+ * a connClose() must be called.
  */
 
 static inline int connAccept(connection *conn, ConnectionCallbackFunc accept_handler) {

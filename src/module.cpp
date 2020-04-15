@@ -1864,7 +1864,12 @@ int RM_GetSelectedDb(RedisModuleCtx *ctx) {
  * current request context (whether the client is a Lua script or in a MULTI),
  * and about the Redis instance in general, i.e replication and persistence.
  *
- * The available flags are:
+ * It is possible to call this function even with a NULL context, however
+ * in this case the following flags will not be reported:
+ *
+ *  * LUA, MULTI, REPLICATED, DIRTY (see below for more info).
+ *
+ * Available flags and their meaning:
  *
  *  * REDISMODULE_CTX_FLAGS_LUA: The command is running in a Lua script
  *
@@ -1917,20 +1922,22 @@ int RM_GetContextFlags(RedisModuleCtx *ctx) {
 
     int flags = 0;
     /* Client specific flags */
-    if (ctx->client) {
-        if (ctx->client->flags & CLIENT_LUA)
-         flags |= REDISMODULE_CTX_FLAGS_LUA;
-        if (ctx->client->flags & CLIENT_MULTI)
-         flags |= REDISMODULE_CTX_FLAGS_MULTI;
-        /* Module command recieved from MASTER, is replicated. */
-        if (ctx->client->flags & CLIENT_MASTER)
-         flags |= REDISMODULE_CTX_FLAGS_REPLICATED;
-    }
+    if (ctx) {
+        if (ctx->client) {
+            if (ctx->client->flags & CLIENT_LUA)
+             flags |= REDISMODULE_CTX_FLAGS_LUA;
+            if (ctx->client->flags & CLIENT_MULTI)
+             flags |= REDISMODULE_CTX_FLAGS_MULTI;
+            /* Module command recieved from MASTER, is replicated. */
+            if (ctx->client->flags & CLIENT_MASTER)
+             flags |= REDISMODULE_CTX_FLAGS_REPLICATED;
+        }
 
-    /* For DIRTY flags, we need the blocked client if used */
-    client *c = ctx->blocked_client ? ctx->blocked_client->client : ctx->client;
-    if (c && (c->flags & (CLIENT_DIRTY_CAS|CLIENT_DIRTY_EXEC))) {
-        flags |= REDISMODULE_CTX_FLAGS_MULTI_DIRTY;
+        /* For DIRTY flags, we need the blocked client if used */
+        client *c = ctx->blocked_client ? ctx->blocked_client->client : ctx->client;
+        if (c && (c->flags & (CLIENT_DIRTY_CAS|CLIENT_DIRTY_EXEC))) {
+            flags |= REDISMODULE_CTX_FLAGS_MULTI_DIRTY;
+        }
     }
 
     if (g_pserver->cluster_enabled)

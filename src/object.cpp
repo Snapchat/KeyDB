@@ -32,6 +32,7 @@
 #include "cron.h"
 #include <math.h>
 #include <ctype.h>
+#include <mutex>
 
 #ifdef __CYGWIN__
 #define strtold(a,b) ((long double)strtod((a),(b)))
@@ -1033,6 +1034,8 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
         while((ln = listNext(&li))) {
             size_t mem_curr = 0;
             client *c = (client*)listNodeValue(ln);
+            std::unique_lock<fastlock> ul(c->lock);
+            
             int type = getClientType(c);
             mem_curr += getClientOutputBufferMemoryUsage(c);
             mem_curr += sdsAllocSize(c->querybuf);

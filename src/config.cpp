@@ -2179,6 +2179,7 @@ standardConfig configs[] = {
     createBoolConfig("always-show-logo", NULL, IMMUTABLE_CONFIG, g_pserver->always_show_logo, 0, NULL, NULL),
     createBoolConfig("protected-mode", NULL, MODIFIABLE_CONFIG, g_pserver->protected_mode, 1, NULL, NULL),
     createBoolConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, g_pserver->rdb_compression, 1, NULL, NULL),
+    createBoolConfig("rdb-del-sync-files", NULL, MODIFIABLE_CONFIG, g_pserver->rdb_del_sync_files, 0, NULL, NULL),
     createBoolConfig("activerehashing", NULL, MODIFIABLE_CONFIG, g_pserver->activerehashing, 1, NULL, NULL),
     createBoolConfig("stop-writes-on-bgsave-error", NULL, MODIFIABLE_CONFIG, g_pserver->stop_writes_on_bgsave_err, 1, NULL, NULL),
     createBoolConfig("dynamic-hz", NULL, MODIFIABLE_CONFIG, g_pserver->dynamic_hz, 1, NULL, NULL), /* Adapt hz to # of clients.*/

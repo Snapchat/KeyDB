@@ -824,8 +824,12 @@ int startBgsaveForReplication(int mincapa) {
     }
 
     /* If we succeeded to start a BGSAVE with disk target, let's remember
-     * this fact, so that we can later delete the file if needed. */
-    if (retval == C_OK && !socket_target) RDBGeneratedByReplication = 1;
+     * this fact, so that we can later delete the file if needed. Note
+     * that we don't set the flag to 1 if the feature is disabled, otherwise
+     * it would never be cleared: the file is not deleted. This way if
+     * the user enables it later with CONFIG SET, we are fine. */
+    if (retval == C_OK && !socket_target && g_pserver->rdb_del_sync_files)
+        RDBGeneratedByReplication = 1;
 
     /* If we failed to BGSAVE, remove the slaves waiting for a full
      * resynchronization from the list of slaves, inform them with
@@ -1177,6 +1181,18 @@ void putSlaveOnline(client *replica) {
  * environments. */
 void removeRDBUsedToSyncReplicas(void) {
     serverAssert(GlobalLocksAcquired());
+
+    /* If the feature is disabled, return ASAP but also clear the
+     * RDBGeneratedByReplication flag in case it was set. Otherwise if the
+     * feature was enabled, but gets disabled later with CONFIG SET, the
+     * flag may remain set to one: then next time the feature is re-enabled
+     * via CONFIG SET we have have it set even if no RDB was generated
+     * because of replication recently. */
+    if (!g_pserver->rdb_del_sync_files) {
+        RDBGeneratedByReplication = 0;
+        return;
+    }
+
     if (allPersistenceDisabled() && RDBGeneratedByReplication) {
         client *slave;
         listNode *ln;
@@ -1195,8 +1211,14 @@ void removeRDBUsedToSyncReplicas(void) {
             }
         }
         if (delrdb) {
-            RDBGeneratedByReplication = 0;
-            bg_unlink(g_pserver->rdb_filename);
+            struct stat sb;
+            if (lstat(g_pserver->rdb_filename,&sb) != -1) {
+                RDBGeneratedByReplication = 0;
+                serverLog(LL_NOTICE,
+                    "Removing the RDB file used to feed replicas "
+                    "in a persistence-less instance");
+                bg_unlink(g_pserver->rdb_filename);
+            }
         }
     }
 }
@@ -2054,14 +2076,24 @@ void readSyncBulkPayload(connection *conn) {
                 "Failed trying to load the MASTER synchronization "
                 "DB from disk");
             cancelReplicationHandshake(mi);
-            if (allPersistenceDisabled()) bg_unlink(g_pserver->rdb_filename);
+            if (g_pserver->rdb_del_sync_files && allPersistenceDisabled()) {
+                serverLog(LL_NOTICE,"Removing the RDB file obtained from "
+                                    "the master. This replica has persistence "
+                                    "disabled");
+                bg_unlink(g_pserver->rdb_filename);
+            }
             /* Note that there's no point in restarting the AOF on sync failure,
                it'll be restarted when sync succeeds or replica promoted. */
             return;
         }
 
         /* Cleanup. */
-        if (allPersistenceDisabled()) bg_unlink(g_pserver->rdb_filename);
+        if (g_pserver->rdb_del_sync_files && allPersistenceDisabled()) {
+            serverLog(LL_NOTICE,"Removing the RDB file obtained from "
+                                "the master. This replica has persistence "
+                                "disabled");
+            bg_unlink(g_pserver->rdb_filename);
+        }
         if (fUpdate)
             unlink(mi->repl_transfer_tmpfile);
         zfree(mi->repl_transfer_tmpfile);

@@ -1056,6 +1056,17 @@ RedisModuleString *RM_CreateStringFromLongLong(RedisModuleCtx *ctx, long long ll
     return RM_CreateString(ctx,buf,len);
 }
 
+/* Like RedisModule_CreatString(), but creates a string starting from a double
+ * integer instead of taking a buffer and its length.
+ *
+ * The returned string must be released with RedisModule_FreeString() or by
+ * enabling automatic memory management. */
+RedisModuleString *RM_CreateStringFromDouble(RedisModuleCtx *ctx, double d) {
+    char buf[128];
+    size_t len = d2string(buf,sizeof(buf),d);
+    return RM_CreateString(ctx,buf,len);
+}
+
 /* Like RedisModule_CreatString(), but creates a string starting from a long
  * double.
  *
@@ -3605,6 +3616,8 @@ void moduleTypeNameByID(char *name, uint64_t moduleid) {
  *          // Optional fields
  *          .digest = myType_DigestCallBack,
  *          .mem_usage = myType_MemUsageCallBack,
+ *          .aux_load = myType_AuxRDBLoadCallBack,
+ *          .aux_save = myType_AuxRDBSaveCallBack,
  *      }
  *
  * * **rdb_load**: A callback function pointer that loads data from RDB files.
@@ -3612,6 +3625,10 @@ void moduleTypeNameByID(char *name, uint64_t moduleid) {
  * * **aof_rewrite**: A callback function pointer that rewrites data as commands.
  * * **digest**: A callback function pointer that is used for `DEBUG DIGEST`.
  * * **free**: A callback function pointer that can free a type value.
+ * * **aux_save**: A callback function pointer that saves out of keyspace data to RDB files.
+ *   'when' argument is either REDISMODULE_AUX_BEFORE_RDB or REDISMODULE_AUX_AFTER_RDB.
+ * * **aux_load**: A callback function pointer that loads out of keyspace data from RDB files.
+ *   Similar to aux_save, returns REDISMODULE_OK on success, and ERR otherwise.
  *
  * The **digest* and **mem_usage** methods should currently be omitted since
  * they are not yet implemented inside the Redis modules core.
@@ -6641,24 +6658,32 @@ void RM_ScanCursorDestroy(RedisModuleScanCursor *cursor) {
     zfree(cursor);
 }
 
-/* Scan api that allows a module to scan all the keys and value in the selected db.
+/* Scan API that allows a module to scan all the keys and value in
+ * the selected db.
  *
  * Callback for scan implementation.
- * void scan_callback(RedisModuleCtx *ctx, RedisModuleString *keyname, RedisModuleKey *key, void *privdata);
- * - ctx - the redis module context provided to for the scan.
- * - keyname - owned by the caller and need to be retained if used after this function.
- * - key - holds info on the key and value, it is provided as best effort, in some cases it might
- *   be NULL, in which case the user should (can) use RedisModule_OpenKey (and CloseKey too).
- *   when it is provided, it is owned by the caller and will be free when the callback returns.
- * - privdata - the user data provided to RedisModule_Scan.
+ * void scan_callback(RedisModuleCtx *ctx, RedisModuleString *keyname,
+ *                    RedisModuleKey *key, void *privdata);
+ * ctx - the redis module context provided to for the scan.
+ * keyname - owned by the caller and need to be retained if used after this
+ * function.
+ *
+ * key - holds info on the key and value, it is provided as best effort, in
+ * some cases it might be NULL, in which case the user should (can) use
+ * RedisModule_OpenKey (and CloseKey too).
+ * when it is provided, it is owned by the caller and will be free when the
+ * callback returns.
+ *
+ * privdata - the user data provided to RedisModule_Scan.
  *
  * The way it should be used:
  *      RedisModuleCursor *c = RedisModule_ScanCursorCreate();
  *      while(RedisModule_Scan(ctx, c, callback, privateData));
  *      RedisModule_ScanCursorDestroy(c);
  *
- * It is also possible to use this API from another thread while the lock is acquired durring 
- * the actuall call to RM_Scan:
+ * It is also possible to use this API from another thread while the lock
+ * is acquired durring the actuall call to RM_Scan:
+ *
  *      RedisModuleCursor *c = RedisModule_ScanCursorCreate();
  *      RedisModule_ThreadSafeContextLock(ctx);
  *      while(RedisModule_Scan(ctx, c, callback, privateData)){
@@ -6668,9 +6693,26 @@ void RM_ScanCursorDestroy(RedisModuleScanCursor *cursor) {
  *      }
  *      RedisModule_ScanCursorDestroy(c);
  *
- *  The function will return 1 if there are more elements to scan and 0 otherwise,
- *  possibly setting errno if the call failed.
- *  It is also possible to restart and existing cursor using RM_CursorRestart. */
+ * The function will return 1 if there are more elements to scan and
+ * 0 otherwise, possibly setting errno if the call failed.
+ *
+ * It is also possible to restart and existing cursor using RM_CursorRestart.
+ *
+ * IMPORTANT: This API is very similar to the Redis SCAN command from the
+ * point of view of the guarantees it provides. This means that the API
+ * may report duplicated keys, but guarantees to report at least one time
+ * every key that was there from the start to the end of the scanning process.
+ *
+ * NOTE: If you do database changes within the callback, you should be aware
+ * that the internal state of the database may change. For instance it is safe
+ * to delete or modify the current key, but may not be safe to delete any
+ * other key.
+ * Moreover playing with the Redis keyspace while iterating may have the
+ * effect of returning more duplicates. A safe pattern is to store the keys
+ * names you want to modify elsewhere, and perform the actions on the keys
+ * later when the iteration is complete. Howerver this can cost a lot of
+ * memory, so it may make sense to just operate on the current key when
+ * possible during the iteration, given that this is safe. */
 int RM_Scan(RedisModuleCtx *ctx, RedisModuleScanCursor *cursor, RedisModuleScanCB fn, void *privdata) {
     if (cursor->done) {
         errno = ENOENT;
@@ -6748,9 +6790,17 @@ static void moduleScanKeyCallback(void *privdata, const dictEntry *de) {
  *      RedisModule_CloseKey(key);
  *      RedisModule_ScanCursorDestroy(c);
  *
- *  The function will return 1 if there are more elements to scan and 0 otherwise,
- *  possibly setting errno if the call failed.
- *  It is also possible to restart and existing cursor using RM_CursorRestart. */
+ * The function will return 1 if there are more elements to scan and 0 otherwise,
+ * possibly setting errno if the call failed.
+ * It is also possible to restart and existing cursor using RM_CursorRestart.
+ *
+ * NOTE: Certain operations are unsafe while iterating the object. For instance
+ * while the API guarantees to return at least one time all the elements that
+ * are present in the data structure consistently from the start to the end
+ * of the iteration (see HSCAN and similar commands documentation), the more
+ * you play with the elements, the more duplicates you may get. In general
+ * deleting the current element of the data structure is safe, while removing
+ * the key you are iterating is not safe. */
 int RM_ScanKey(RedisModuleKey *key, RedisModuleScanCursor *cursor, RedisModuleScanKeyCB fn, void *privdata) {
     if (key == NULL || key->value == NULL) {
         errno = EINVAL;
@@ -6856,7 +6906,7 @@ int RM_Fork(RedisModuleForkDoneHandler cb, void *user_data) {
         g_pserver->module_child_pid = childpid;
         moduleForkInfo.done_handler = cb;
         moduleForkInfo.done_handler_user_data = user_data;
-        serverLog(LL_NOTICE, "Module fork started pid: %d ", childpid);
+        serverLog(LL_VERBOSE, "Module fork started pid: %d ", childpid);
     }
     return childpid;
 }
@@ -6879,7 +6929,7 @@ int TerminateModuleForkChild(int child_pid, int wait) {
         g_pserver->module_child_pid != child_pid) return C_ERR;
 
     int statloc;
-    serverLog(LL_NOTICE,"Killing running module fork child: %ld",
+    serverLog(LL_VERBOSE,"Killing running module fork child: %ld",
         (long) g_pserver->module_child_pid);
     if (kill(g_pserver->module_child_pid,SIGUSR1) != -1 && wait) {
         while(wait4(g_pserver->module_child_pid,&statloc,0,NULL) !=
@@ -7806,6 +7856,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(CreateStringFromCallReply);
     REGISTER_API(CreateString);
     REGISTER_API(CreateStringFromLongLong);
+    REGISTER_API(CreateStringFromDouble);
     REGISTER_API(CreateStringFromLongDouble);
     REGISTER_API(CreateStringFromString);
     REGISTER_API(CreateStringPrintf);

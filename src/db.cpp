@@ -1550,8 +1550,10 @@ int expireIfNeeded(redisDb *db, robj *key) {
     propagateExpire(db,key,g_pserver->lazyfree_lazy_expire);
     notifyKeyspaceEvent(NOTIFY_EXPIRED,
         "expired",key,db->id);
-    return g_pserver->lazyfree_lazy_expire ? dbAsyncDelete(db,key) :
-                                         dbSyncDelete(db,key);
+    int retval = g_pserver->lazyfree_lazy_expire ? dbAsyncDelete(db,key) :
+                                               dbSyncDelete(db,key);
+    if (retval) signalModifiedKey(db,key);
+    return retval;
 }
 
 /* -----------------------------------------------------------------------------

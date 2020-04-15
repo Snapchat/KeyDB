@@ -28,6 +28,7 @@
 
 #include "server.h"
 #include "cluster.h"
+#include <mutex>
 
 /* ========================== Clients timeouts ============================= */
 
@@ -163,10 +164,10 @@ void clientsHandleTimeout(void) {
 /* This function is called in beforeSleep() in order to unblock clients
  * that are waiting in blocking operations with a timeout set. */
 void handleBlockedClientsTimeout(void) {
-    if (raxSize(server.clients_timeout_table) == 0) return;
+    if (raxSize(g_pserver->clients_timeout_table) == 0) return;
     uint64_t now = mstime();
     raxIterator ri;
-    raxStart(&ri,server.clients_timeout_table);
+    raxStart(&ri,g_pserver->clients_timeout_table);
     raxSeek(&ri,"^",NULL,0);
 
     while(raxNext(&ri)) {
@@ -175,10 +176,11 @@ void handleBlockedClientsTimeout(void) {
         if (timeout >= now) break; /* All the timeouts are in the future. */
         client *c = lookupClientByID(id);
         if (c) {
+            std::unique_lock<fastlock> lock(c->lock);
             c->flags &= ~CLIENT_IN_TO_TABLE;
             checkBlockedClientTimeout(c,now);
         }
-        raxRemove(server.clients_timeout_table,ri.key,ri.key_len,NULL);
+        raxRemove(g_pserver->clients_timeout_table,ri.key,ri.key_len,NULL);
         raxSeek(&ri,"^",NULL,0);
     }
 }

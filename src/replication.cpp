@@ -155,6 +155,34 @@ client *replicaFromMaster(redisMaster *mi)
     return nullptr;
 }
 
+/* Plain unlink() can block for quite some time in order to actually apply
+ * the file deletion to the filesystem. This call removes the file in a
+ * background thread instead. We actually just do close() in the thread,
+ * by using the fact that if there is another instance of the same file open,
+ * the foreground unlink() will not really do anything, and deleting the
+ * file will only happen once the last reference is lost. */
+int bg_unlink(const char *filename) {
+    int fd = open(filename,O_RDONLY|O_NONBLOCK);
+    if (fd == -1) {
+        /* Can't open the file? Fall back to unlinking in the main thread. */
+        return unlink(filename);
+    } else {
+        /* The following unlink() will not do anything since file
+         * is still open. */
+        int retval = unlink(filename);
+        if (retval == -1) {
+            /* If we got an unlink error, we just return it, closing the
+             * new reference we have to the file. */
+            int old_errno = errno;
+            close(fd);  /* This would overwrite our errno. So we saved it. */
+            errno = old_errno;
+            return -1;
+        }
+        bioCreateBackgroundJob(BIO_CLOSE_FILE,(void*)(long)fd,NULL,NULL);
+        return 0; /* Success. */
+    }
+}
+
 /* ---------------------------------- MASTER -------------------------------- */
 
 void createReplicationBacklog(void) {
@@ -1168,7 +1196,7 @@ void removeRDBUsedToSyncReplicas(void) {
         }
         if (delrdb) {
             RDBGeneratedByReplication = 0;
-            unlink(g_pserver->rdb_filename);
+            bg_unlink(g_pserver->rdb_filename);
         }
     }
 }
@@ -2026,14 +2054,14 @@ void readSyncBulkPayload(connection *conn) {
                 "Failed trying to load the MASTER synchronization "
                 "DB from disk");
             cancelReplicationHandshake(mi);
-            if (allPersistenceDisabled()) unlink(g_pserver->rdb_filename);
+            if (allPersistenceDisabled()) bg_unlink(g_pserver->rdb_filename);
             /* Note that there's no point in restarting the AOF on sync failure,
                it'll be restarted when sync succeeds or replica promoted. */
             return;
         }
 
         /* Cleanup. */
-        if (allPersistenceDisabled()) unlink(g_pserver->rdb_filename);
+        if (allPersistenceDisabled()) bg_unlink(g_pserver->rdb_filename);
         if (fUpdate)
             unlink(mi->repl_transfer_tmpfile);
         zfree(mi->repl_transfer_tmpfile);

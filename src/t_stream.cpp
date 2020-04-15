@@ -1856,6 +1856,8 @@ NULL
             g_pserver->dirty++;
             notifyKeyspaceEvent(NOTIFY_STREAM,"xgroup-destroy",
                                 c->argv[2],c->db->id);
+            /* We want to unblock any XREADGROUP consumers with -NOGROUP. */
+            signalKeyAsReady(c->db,c->argv[2]);
         } else {
             addReply(c,shared.czero);
         }

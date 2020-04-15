@@ -719,9 +719,10 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
          * or schedule it for later depending on connection implementation.
          */
         if (connAccept(conn, clusterConnAcceptHandler) == C_ERR) {
-            serverLog(LL_VERBOSE,
-                    "Error accepting cluster node connection: %s",
-                    connGetLastError(conn));
+            if (connGetState(conn) == CONN_STATE_ERROR)
+                serverLog(LL_VERBOSE,
+                        "Error accepting cluster node connection: %s",
+                        connGetLastError(conn));
             connClose(conn);
             return;
         }
@@ -4328,7 +4329,7 @@ void clusterCommand(client *c) {
 "FORGET <node-id> -- Remove a node from the cluster.",
 "GETKEYSINSLOT <slot> <count> -- Return key names stored by current node in a slot.",
 "FLUSHSLOTS -- Delete current node own slots information.",
-"INFO - Return onformation about the cluster.",
+"INFO - Return information about the cluster.",
 "KEYSLOT <key> -- Return the hash slot for <key>.",
 "MEET <ip> <port> [bus-port] -- Connect nodes into a working cluster.",
 "MYID -- Return the node id.",
@@ -4339,6 +4340,7 @@ void clusterCommand(client *c) {
 "SET-config-epoch <epoch> - Set config epoch of current node.",
 "SETSLOT <slot> (importing|migrating|stable|node <node-id>) -- Set slot state.",
 "REPLICAS <node-id> -- Return <node-id> replicas.",
+"SAVECONFIG - Force saving cluster configuration on disk.",
 "SLOTS -- Return information about slots range mappings. Each range is made of:",
 "    start, end, master and replicas IP addresses, ports and ids",
 NULL

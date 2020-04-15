@@ -416,7 +416,8 @@ public:
 #define CLIENT_TRACKING_OPTOUT (1ULL<<35) /* Tracking in opt-out mode. */
 #define CLIENT_TRACKING_CACHING (1ULL<<36) /* CACHING yes/no was given,
                                               depending on optin/optout mode. */
-#define CLIENT_FORCE_REPLY (1ULL<<37) /* Should addReply be forced to write the text? */
+#define CLIENT_IN_TO_TABLE (1ULL<<37) /* This client is in the timeout table. */
+#define CLIENT_FORCE_REPLY (1ULL<<38) /* Should addReply be forced to write the text? */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -1656,6 +1657,7 @@ struct redisServer {
     list *clients;              /* List of active clients */
     list *clients_to_close;     /* Clients to close asynchronously */
     list *slaves, *monitors;    /* List of slaves and MONITORs */
+    rax *clients_timeout_table; /* Radix tree for blocked clients timeouts. */
     rax *clients_index;         /* Active clients dictionary by client ID. */
     mstime_t clients_pause_end_time; /* Time when we undo clients_paused */
     dict *migrate_cached_sockets;/* MIGRATE cached sockets */
@@ -1885,6 +1887,7 @@ struct redisServer {
     /* Pubsub */
     dict *pubsub_channels;  /* Map channels to list of subscribed clients */
     list *pubsub_patterns;  /* A list of pubsub_patterns */
+    dict *pubsub_patterns_dict;  /* A dict of pubsub_patterns */
     int notify_keyspace_events; /* Events to propagate via Pub/Sub. This is an
                                    xor of NOTIFY_... flags. */
     /* Cluster */
@@ -1936,6 +1939,9 @@ struct redisServer {
     /* ACLs */
     char *acl_filename;     /* ACL Users file. NULL if not configured. */
     unsigned long acllog_max_len; /* Maximum length of the ACL LOG list. */
+    sds requirepass;        /* Remember the cleartext password set with the
+                               old "requirepass" directive for backward
+                               compatibility with Redis <= 5. */
     /* Assert & bug reporting */
     const char *assert_failed;
     const char *assert_file;
@@ -2718,6 +2724,8 @@ void disconnectAllBlockedClients(void);
 void handleClientsBlockedOnKeys(void);
 void signalKeyAsReady(redisDb *db, robj *key);
 void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeout, robj *target, streamID *ids);
+void addClientToTimeoutTable(client *c);
+void removeClientFromTimeoutTable(client *c);
 
 /* expire.c -- Handling of expired keys */
 void activeExpireCycle(int type);
@@ -2760,6 +2768,7 @@ void existsCommand(client *c);
 void setbitCommand(client *c);
 void getbitCommand(client *c);
 void bitfieldCommand(client *c);
+void bitfieldroCommand(client *c);
 void setrangeCommand(client *c);
 void getrangeCommand(client *c);
 void incrCommand(client *c);
@@ -3020,5 +3029,7 @@ class ShutdownException
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define redisDebugMark() \
     printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
+
+int iAmMaster(void);
 
 #endif

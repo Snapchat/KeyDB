@@ -1103,7 +1103,11 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
         (argc == 3 && !strcasecmp(command,"latency") &&
                        !strcasecmp(argv[1],"graph")) ||
         (argc == 2 && !strcasecmp(command,"latency") &&
-                       !strcasecmp(argv[1],"doctor")))
+                       !strcasecmp(argv[1],"doctor")) ||
+        /* Format PROXY INFO command for Redis Cluster Proxy:
+         * https://github.com/artix75/redis-cluster-proxy */
+        (argc >= 2 && !strcasecmp(command,"proxy") &&
+                       !strcasecmp(argv[1],"info")))
     {
         output_raw = 1;
     }
@@ -1800,6 +1804,8 @@ static void repl(void) {
                     if (config.eval) {
                         config.eval_ldb = 1;
                         config.output = OUTPUT_RAW;
+                        sdsfreesplitres(argv,argc);
+                        linenoiseFree(line);
                         return; /* Return to evalMode to restart the session. */
                     } else {
                         printf("Use 'restart' only in Lua debugging mode.");

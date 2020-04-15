@@ -163,6 +163,7 @@ extern struct config {
     int hotkeys;
     int stdinarg; /* get last arg from stdin. (-x option) */
     char *auth;
+    int askpass;
     char *user;
     int output; /* output mode, see OUTPUT_* defines */
     sds mb_delim;

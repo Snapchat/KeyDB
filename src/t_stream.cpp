@@ -1073,9 +1073,7 @@ size_t streamReplyWithRangeFromConsumerPEL(client *c, stream *s, streamID *start
              * by the user by other means. In that case we signal it emitting
              * the ID but then a NULL entry for the fields. */
             addReplyArrayLen(c,2);
-            streamID id;
-            streamDecodeID(ri.key,&id);
-            addReplyStreamID(c,&id);
+            addReplyStreamID(c,&thisid);
             addReplyNullArray(c);
         } else {
             streamNACK *nack = (streamNACK*)ri.data;

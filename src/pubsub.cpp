@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include <mutex>
 
 int clientSubscriptionsCount(client *c);
 
@@ -209,6 +210,8 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify) {
 /* Subscribe a client to a pattern. Returns 1 if the operation succeeded, or 0 if the client was already subscribed to that pattern. */
 int pubsubSubscribePattern(client *c, robj *pattern) {
     serverAssert(GlobalLocksAcquired());
+    dictEntry *de;
+    list *clients;
     int retval = 0;
 
     if (listSearchKey(c->pubsub_patterns,pattern) == NULL) {
@@ -220,6 +223,16 @@ int pubsubSubscribePattern(client *c, robj *pattern) {
         pat->pattern = getDecodedObject(pattern);
         pat->pclient = c;
         listAddNodeTail(g_pserver->pubsub_patterns,pat);
+        /* Add the client to the pattern -> list of clients hash table */
+        de = dictFind(g_pserver->pubsub_patterns_dict,pattern);
+        if (de == NULL) {
+            clients = listCreate();
+            dictAdd(g_pserver->pubsub_patterns_dict,pattern,clients);
+            incrRefCount(pattern);
+        } else {
+            clients = (list*)dictGetVal(de);
+        }
+        listAddNodeTail(clients,c);
     }
     /* Notify the client */
     addReplyPubsubPatSubscribed(c,pattern);
@@ -229,6 +242,8 @@ int pubsubSubscribePattern(client *c, robj *pattern) {
 /* Unsubscribe a client from a channel. Returns 1 if the operation succeeded, or
  * 0 if the client was not subscribed to the specified channel. */
 int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
+    dictEntry *de;
+    list *clients;
     listNode *ln;
     pubsubPattern pat;
     int retval = 0;
@@ -241,6 +256,18 @@ int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
         pat.pattern = pattern;
         ln = listSearchKey(g_pserver->pubsub_patterns,&pat);
         listDelNode(g_pserver->pubsub_patterns,ln);
+        /* Remove the client from the pattern -> clients list hash table */
+        de = dictFind(g_pserver->pubsub_patterns_dict,pattern);
+        serverAssertWithInfo(c,NULL,de != NULL);
+        clients = (list*)dictGetVal(de);
+        ln = listSearchKey(clients,c);
+        serverAssertWithInfo(c,NULL,ln != NULL);
+        listDelNode(clients,ln);
+        if (listLength(clients) == 0) {
+            /* Free the list and associated hash entry at all if this was
+             * the latest client. */
+            dictDelete(g_pserver->pubsub_patterns_dict,pattern);
+        }
     }
     /* Notify the client */
     if (notify) addReplyPubsubPatUnsubscribed(c,pattern);
@@ -290,6 +317,7 @@ int pubsubPublishMessage(robj *channel, robj *message) {
     serverAssert(GlobalLocksAcquired());
     int receivers = 0;
     dictEntry *de;
+    dictIterator *di;
     listNode *ln;
     listIter li;
 
@@ -314,29 +342,31 @@ int pubsubPublishMessage(robj *channel, robj *message) {
         }
     }
     /* Send to clients listening to matching channels */
-    if (listLength(g_pserver->pubsub_patterns)) {
-        listRewind(g_pserver->pubsub_patterns,&li);
+    di = dictGetIterator(g_pserver->pubsub_patterns_dict);
+    if (di) {
         channel = getDecodedObject(channel);
-        while ((ln = listNext(&li)) != NULL) {
-            pubsubPattern *pat = (pubsubPattern*)ln->value;
+        while((de = dictNext(di)) != NULL) {
+            robj *pattern = (robj*)dictGetKey(de);
+            list *clients = (list*)dictGetVal(de);
+            if (!stringmatchlen(szFromObj(pattern),
+                                sdslen(szFromObj(pattern)),
+                                szFromObj(channel),
+                                sdslen(szFromObj(channel)),0)) continue;
 
-            if (stringmatchlen((char*)ptrFromObj(pat->pattern),
-                                sdslen(szFromObj(pat->pattern)),
-                                (char*)ptrFromObj(channel),
-                                sdslen(szFromObj(channel)),0))
-            {
-                if (pat->pclient->flags & CLIENT_CLOSE_ASAP)
+            listRewind(clients,&li);
+            while ((ln = listNext(&li)) != NULL) {
+                client *c = (client*)listNodeValue(ln);
+                if (c->flags & CLIENT_CLOSE_ASAP)
                     continue;
-                if (FCorrectThread(pat->pclient))
-                    fastlock_lock(&pat->pclient->lock);
-                addReplyPubsubPatMessage(pat->pclient,
-                    pat->pattern,channel,message);
-                if (FCorrectThread(pat->pclient))
-                    fastlock_unlock(&pat->pclient->lock);
+                std::unique_lock<fastlock> l(c->lock, std::defer_lock);
+                if (FCorrectThread(c))
+                    l.lock();
+                addReplyPubsubPatMessage(c,pattern,channel,message);
                 receivers++;
             }
         }
         decrRefCount(channel);
+        dictReleaseIterator(di);
     }
     return receivers;
 }

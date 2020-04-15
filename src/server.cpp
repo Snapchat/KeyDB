@@ -259,6 +259,10 @@ struct redisCommand redisCommandTable[] = {
      "write use-memory @bitmap",
      0,NULL,1,1,1,0,0,0},
 
+    {"bitfield_ro",bitfieldroCommand,-2,
+     "read-only fast @bitmap",
+     0,NULL,1,1,1,0,0,0},
+
     {"setrange",setrangeCommand,4,
      "write use-memory @string",
      0,NULL,1,1,1,0,0,0},
@@ -1497,6 +1501,137 @@ int allPersistenceDisabled(void) {
     return g_pserver->saveparamslen == 0 && g_pserver->aof_state == AOF_OFF;
 }
 
+/* ========================== Clients timeouts ============================= */
+
+/* Check if this blocked client timedout (does nothing if the client is
+ * not blocked right now). If so send a reply, unblock it, and return 1.
+ * Otherwise 0 is returned and no operation is performed. */
+int checkBlockedClientTimeout(client *c, mstime_t now) {
+    if (c->flags & CLIENT_BLOCKED &&
+        c->bpop.timeout != 0
+        && c->bpop.timeout < now)
+    {
+        /* Handle blocking operation specific timeout. */
+        replyToBlockedClientTimedOut(c);
+        unblockClient(c);
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+/* Check for timeouts. Returns non-zero if the client was terminated.
+ * The function gets the current time in milliseconds as argument since
+ * it gets called multiple times in a loop, so calling gettimeofday() for
+ * each iteration would be costly without any actual gain. */
+int clientsCronHandleTimeout(client *c, mstime_t now_ms) {
+    time_t now = now_ms/1000;
+
+    if (cserver.maxidletime &&
+        /* This handles the idle clients connection timeout if set. */
+        !(c->flags & CLIENT_SLAVE) &&   /* No timeout for slaves and monitors */
+        !(c->flags & CLIENT_MASTER) &&  /* No timeout for masters */
+        !(c->flags & CLIENT_BLOCKED) && /* No timeout for BLPOP */
+        !(c->flags & CLIENT_PUBSUB) &&  /* No timeout for Pub/Sub clients */
+        (now - c->lastinteraction > cserver.maxidletime))
+    {
+        serverLog(LL_VERBOSE,"Closing idle client");
+        freeClient(c);
+        return 1;
+    } else if (c->flags & CLIENT_BLOCKED) {
+        /* Cluster: handle unblock & redirect of clients blocked
+         * into keys no longer served by this server. */
+        if (g_pserver->cluster_enabled) {
+            if (clusterRedirectBlockedClientIfNeeded(c))
+                unblockClient(c);
+        }
+    }
+    return 0;
+}
+
+/* For blocked clients timeouts we populate a radix tree of 128 bit keys
+ * composed as such:
+ *
+ *  [8 byte big endian expire time]+[8 byte client ID]
+ *
+ * We don't do any cleanup in the Radix tree: when we run the clients that
+ * reached the timeout already, if they are no longer existing or no longer
+ * blocked with such timeout, we just go forward.
+ *
+ * Every time a client blocks with a timeout, we add the client in
+ * the tree. In beforeSleep() we call clientsHandleTimeout() to run
+ * the tree and unblock the clients. */
+
+#define CLIENT_ST_KEYLEN 16    /* 8 bytes mstime + 8 bytes client ID. */
+
+/* Given client ID and timeout, write the resulting radix tree key in buf. */
+void encodeTimeoutKey(unsigned char *buf, uint64_t timeout, uint64_t id) {
+    timeout = htonu64(timeout);
+    memcpy(buf,&timeout,sizeof(timeout));
+    memcpy(buf+8,&id,sizeof(id));
+}
+
+/* Given a key encoded with encodeTimeoutKey(), resolve the fields and write
+ * the timeout into *toptr and the client ID into *idptr. */
+void decodeTimeoutKey(unsigned char *buf, uint64_t *toptr, uint64_t *idptr) {
+    memcpy(toptr,buf,sizeof(*toptr));
+    *toptr = ntohu64(*toptr);
+    memcpy(idptr,buf+8,sizeof(*idptr));
+}
+
+/* Add the specified client id / timeout as a key in the radix tree we use
+ * to handle blocked clients timeouts. The client is not added to the list
+ * if its timeout is zero (block forever). */
+void addClientToTimeoutTable(client *c) {
+    if (c->bpop.timeout == 0) return;
+    uint64_t timeout = c->bpop.timeout;
+    uint64_t id = c->id;
+    unsigned char buf[CLIENT_ST_KEYLEN];
+    encodeTimeoutKey(buf,timeout,id);
+    if (raxTryInsert(g_pserver->clients_timeout_table,buf,sizeof(buf),NULL,NULL))
+        c->flags |= CLIENT_IN_TO_TABLE;
+}
+
+/* Remove the client from the table when it is unblocked for reasons
+ * different than timing out. */
+void removeClientFromTimeoutTable(client *c) {
+    if (!(c->flags & CLIENT_IN_TO_TABLE)) return;
+    c->flags &= ~CLIENT_IN_TO_TABLE;
+    uint64_t timeout = c->bpop.timeout;
+    uint64_t id = c->id;
+    unsigned char buf[CLIENT_ST_KEYLEN];
+    encodeTimeoutKey(buf,timeout,id);
+    raxRemove(g_pserver->clients_timeout_table,buf,sizeof(buf),NULL);
+}
+
+/* This function is called in beforeSleep() in order to unblock clients
+ * that are waiting in blocking operations with a timeout set. */
+void clientsHandleTimeout(void) {
+    serverAssert(GlobalLocksAcquired());
+
+    if (raxSize(g_pserver->clients_timeout_table) == 0) return;
+    uint64_t now = mstime();
+    raxIterator ri;
+    raxStart(&ri,g_pserver->clients_timeout_table);
+    raxSeek(&ri,"^",NULL,0);
+
+    while(raxNext(&ri)) {
+        uint64_t id, timeout;
+        decodeTimeoutKey(ri.key,&timeout,&id);
+        if (timeout >= now) break; /* All the timeouts are in the future. */
+        client *c = lookupClientByID(id);
+        if (c) {
+            std::unique_lock<fastlock> l(c->lock, std::defer_lock);
+            if (FCorrectThread(c))
+                l.lock();
+            c->flags &= ~CLIENT_IN_TO_TABLE;
+            checkBlockedClientTimeout(c,now);
+        }
+        raxRemove(g_pserver->clients_timeout_table,ri.key,ri.key_len,NULL);
+        raxSeek(&ri,"^",NULL,0);
+    }
+}
+
 /* ======================= Cron: called every 100 ms ======================== */
 
 /* Add a sample to the operations per second array of samples. */
@@ -1524,42 +1659,6 @@ long long getInstantaneousMetric(int metric) {
     for (j = 0; j < STATS_METRIC_SAMPLES; j++)
         sum += g_pserver->inst_metric[metric].samples[j];
     return sum / STATS_METRIC_SAMPLES;
-}
-
-/* Check for timeouts. Returns non-zero if the client was terminated.
- * The function gets the current time in milliseconds as argument since
- * it gets called multiple times in a loop, so calling gettimeofday() for
- * each iteration would be costly without any actual gain. */
-int clientsCronHandleTimeout(client *c, mstime_t now_ms) {
-    time_t now = now_ms/1000;
-
-    if (cserver.maxidletime &&
-        !(c->flags & CLIENT_SLAVE) &&    /* no timeout for slaves and monitors */
-        !(c->flags & CLIENT_MASTER) &&   /* no timeout for masters */
-        !(c->flags & CLIENT_BLOCKED) &&  /* no timeout for BLPOP */
-        !(c->flags & CLIENT_PUBSUB) &&   /* no timeout for Pub/Sub clients */
-        (now - c->lastinteraction > cserver.maxidletime))
-    {
-        serverLog(LL_VERBOSE,"Closing idle client");
-        freeClient(c);
-        return 1;
-    } else if (c->flags & CLIENT_BLOCKED) {
-        /* Blocked OPS timeout is handled with milliseconds resolution.
-         * However note that the actual resolution is limited by
-         * g_pserver->hz. */
-
-        if (c->bpop.timeout != 0 && c->bpop.timeout < now_ms) {
-            /* Handle blocking operation specific timeout. */
-            replyToBlockedClientTimedOut(c);
-            unblockClient(c);
-        } else if (g_pserver->cluster_enabled) {
-            /* Cluster: handle unblock & redirect of clients blocked
-             * into keys no longer served by this g_pserver-> */
-            if (clusterRedirectBlockedClientIfNeeded(c))
-                unblockClient(c);
-        }
-    }
-    return 0;
 }
 
 /* The client query buffer is an sds.c string that can end with a lot of
@@ -1728,10 +1827,12 @@ void clientsCron(int iel) {
 void databasesCron(void) {
     /* Expire keys by random sampling. Not required for slaves
      * as master will synthesize DELs for us. */
-    if (g_pserver->active_expire_enabled && (listLength(g_pserver->masters) == 0 || g_pserver->fActiveReplica)) {
-        activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
-    } else if (listLength(g_pserver->masters) && !g_pserver->fActiveReplica) {
-        expireSlaveKeys();
+    if (g_pserver->active_expire_enabled) {
+        if (iAmMaster()) {
+            activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
+        } else {
+            expireSlaveKeys();
+        }
     }
 
     /* Defrag keys gradually. */
@@ -2163,8 +2264,12 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
 void beforeSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
 
+    /* Handle precise timeouts of blocked clients. */
+    clientsHandleTimeout();
+
     /* Handle TLS pending data. (must be done before flushAppendOnlyFile) */
     tlsProcessPendingData();
+
     /* If tls still has pending unread data don't sleep at all. */
     aeSetDontWait(eventLoop, tlsHasPendingData());
 
@@ -2424,6 +2529,7 @@ void initServerConfig(void) {
     g_pserver->clients = listCreate();
     g_pserver->slaves = listCreate();
     g_pserver->monitors = listCreate();
+    g_pserver->clients_timeout_table = raxNew();
     g_pserver->timezone = getTimeZone(); /* Initialized by tzset(). */
     cserver.configfile = NULL;
     cserver.executable = NULL;
@@ -3003,6 +3109,7 @@ void initServer(void) {
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
     g_pserver->pubsub_channels = dictCreate(&keylistDictType,NULL);
     g_pserver->pubsub_patterns = listCreate();
+    g_pserver->pubsub_patterns_dict = dictCreate(&keylistDictType,NULL);
     listSetFreeMethod(g_pserver->pubsub_patterns,freePubsubPattern);
     listSetMatchMethod(g_pserver->pubsub_patterns,listMatchPubsubPattern);
     g_pserver->cronloops = 0;
@@ -3593,7 +3700,7 @@ int processCommand(client *c, int callFlags) {
     /* Check if the user is authenticated. This check is skipped in case
      * the default user is flagged as "nopass" and is active. */
     int auth_required = (!(DefaultUser->flags & USER_FLAG_NOPASS) ||
-                           DefaultUser->flags & USER_FLAG_DISABLED) &&
+                          (DefaultUser->flags & USER_FLAG_DISABLED)) &&
                         !c->authenticated;
     if (auth_required) {
         /* AUTH and HELLO and no auth modules are valid even in
@@ -3727,6 +3834,7 @@ int processCommand(client *c, int callFlags) {
         !(c->flags & CLIENT_MASTER) &&
         c->cmd->flags & CMD_WRITE)
     {
+        flagTransaction(c);
         addReply(c, shared.roslaveerr);
         return C_OK;
     }
@@ -3766,11 +3874,19 @@ int processCommand(client *c, int callFlags) {
         return C_OK;
     }
 
-    /* Lua script too slow? Only allow a limited number of commands. */
+    /* Lua script too slow? Only allow a limited number of commands.
+     * Note that we need to allow the transactions commands, otherwise clients
+     * sending a transaction with pipelining without error checking, may have
+     * the MULTI plus a few initial commands refused, then the timeout
+     * condition resolves, and the bottom-half of the transaction gets
+     * executed, see Github PR #7022. */
     if (g_pserver->lua_timedout &&
           c->cmd->proc != authCommand &&
           c->cmd->proc != helloCommand &&
           c->cmd->proc != replconfCommand &&
+          c->cmd->proc != multiCommand &&
+          c->cmd->proc != execCommand &&
+          c->cmd->proc != discardCommand &&
         !(c->cmd->proc == shutdownCommand &&
           c->argc == 2 &&
           tolower(((char*)ptrFromObj(c->argv[1]))[0]) == 'n') &&
@@ -4225,11 +4341,13 @@ sds genRedisInfoString(const char *section) {
             "client_recent_max_output_buffer:%zu\r\n"
             "blocked_clients:%d\r\n"
             "tracking_clients:%d\r\n"
+            "clients_in_timeout_table:%" PRIu64 "\r\n"
             "current_client_thread:%d\r\n",
             listLength(g_pserver->clients)-listLength(g_pserver->slaves),
             maxin, maxout,
             g_pserver->blocked_clients,
             g_pserver->tracking_clients,
+            raxSize(g_pserver->clients_timeout_table),
             static_cast<int>(serverTL - g_pserver->rgthreadvar));
         for (int ithread = 0; ithread < cserver.cthreads; ++ithread)
         {
@@ -5230,6 +5348,12 @@ static void validateConfiguration()
         exit(EXIT_FAILURE);
     }
 }
+
+int iAmMaster(void) {
+    return ((!g_pserver->cluster_enabled && (listLength(g_pserver->masters) == 0 || g_pserver->fActiveReplica)) ||
+            (g_pserver->cluster_enabled && nodeIsMaster(g_pserver->cluster->myself)));
+}
+
 
 int main(int argc, char **argv) {
     struct timeval tv;

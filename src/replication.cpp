@@ -3256,12 +3256,14 @@ void replicationCacheMasterUsingMyself(redisMaster *mi) {
                 delta);
         mi->master_initial_offset = g_pserver->master_repl_meaningful_offset;
         g_pserver->repl_backlog_histlen -= delta;
+        g_pserver->repl_backlog_idx =
+            (g_pserver->repl_backlog_idx + (g_pserver->repl_backlog_size - delta)) %
+            g_pserver->repl_backlog_size;
         if (g_pserver->repl_backlog_histlen < 0) g_pserver->repl_backlog_histlen = 0;
     }
 
     /* The master client we create can be set to any DBID, because
      * the new master will start its replication stream with SELECT. */
-    mi->master_initial_offset = g_pserver->master_repl_offset;
     replicationCreateMasterClient(mi,NULL,-1);
     std::lock_guard<decltype(mi->master->lock)> lock(mi->master->lock);
 

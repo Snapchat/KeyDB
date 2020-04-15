@@ -4370,12 +4370,15 @@ void unblockClientFromModule(client *c) {
      * We must call moduleUnblockClient in order to free privdata and
      * RedisModuleBlockedClient.
      *
-     * Note that clients implementing threads and working with private data,
-     * should make sure to stop the threads or protect the private data
-     * in some other way in the disconnection and timeout callback, because
-     * here we are going to free the private data associated with the
-     * blocked client. */
-    if (!bc->unblocked)
+     * Note that we only do that for clients that are blocked on keys, for which
+     * the contract is that the module should not call RM_UnblockClient under
+     * normal circumstances.
+     * Clients implementing threads and working with private data should be
+     * aware that calling RM_UnblockClient for every blocked client is their
+     * responsibility, and if they fail to do so memory may leak. Ideally they
+     * should implement the disconnect and timeout callbacks and call
+     * RM_UnblockClient, but any other way is also acceptable. */
+    if (bc->blocked_on_keys && !bc->unblocked)
         moduleUnblockClient(c);
 
     bc->client = NULL;
@@ -4489,6 +4492,10 @@ int moduleTryServeClientBlockedOnKey(client *c, robj *key) {
  *
  *     free_privdata:   called in order to free the private data that is passed
  *                      by RedisModule_UnblockClient() call.
+ *
+ * Note: RedisModule_UnblockClient should be called for every blocked client,
+ *       even if client was killed, timed-out or disconnected. Failing to do so
+ *       will result in memory leaks.
  */
 RedisModuleBlockedClient *RM_BlockClient(RedisModuleCtx *ctx, RedisModuleCmdFunc reply_callback, RedisModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*), long long timeout_ms) {
     return moduleBlockClient(ctx,reply_callback,timeout_callback,free_privdata,timeout_ms, NULL,0,NULL);
@@ -4543,7 +4550,15 @@ RedisModuleBlockedClient *RM_BlockClient(RedisModuleCtx *ctx, RedisModuleCmdFunc
  * freed using the free_privdata callback provided by the user.
  *
  * However the reply callback will be able to access the argument vector of
- * the command, so the private data is often not needed. */
+ * the command, so the private data is often not needed.
+ *
+ * Note: Under normal circumstances RedisModule_UnblockClient should not be
+ *       called for clients that are blocked on keys (Either the key will
+ *       become ready or a timeout will occur). If for some reason you do want
+ *       to call RedisModule_UnblockClient it is possible: Client will be
+ *       handled as if it were timed-out (You must implement the timeout
+ *       callback in that case).
+ */
 RedisModuleBlockedClient *RM_BlockClientOnKeys(RedisModuleCtx *ctx, RedisModuleCmdFunc reply_callback, RedisModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*), long long timeout_ms, RedisModuleString **keys, int numkeys, void *privdata) {
     return moduleBlockClient(ctx,reply_callback,timeout_callback,free_privdata,timeout_ms, keys,numkeys,privdata);
 }
@@ -4821,9 +4836,9 @@ int RM_BlockedClientDisconnected(RedisModuleCtx *ctx) {
  *
  * To call non-reply APIs, the thread safe context must be prepared with:
  *
- *     RedisModule_ThreadSafeCallStart(ctx);
+ *     RedisModule_ThreadSafeContextLock(ctx);
  *     ... make your call here ...
- *     RedisModule_ThreadSafeCallStop(ctx);
+ *     RedisModule_ThreadSafeContextUnlock(ctx);
  *
  * This is not needed when using `RedisModule_Reply*` functions, assuming
  * that a blocked client was used when the context was created, otherwise

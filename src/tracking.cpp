@@ -44,7 +44,7 @@
 rax *TrackingTable = NULL;
 rax *PrefixTable = NULL;
 uint64_t TrackingTableTotalItems = 0; /* Total number of IDs stored across
-                                         the whole tracking table. This givesn
+                                         the whole tracking table. This gives
                                          an hint about the total memory we
                                          are using server side for CSC. */
 robj *TrackingChannelName;
@@ -93,7 +93,8 @@ void disableTracking(client *c) {
     if (c->flags & CLIENT_TRACKING) {
         g_pserver->tracking_clients--;
         c->flags &= ~(CLIENT_TRACKING|CLIENT_TRACKING_BROKEN_REDIR|
-                      CLIENT_TRACKING_BCAST);
+                      CLIENT_TRACKING_BCAST|CLIENT_TRACKING_OPTIN|
+                      CLIENT_TRACKING_OPTOUT);
     }
 }
 
@@ -124,10 +125,11 @@ void enableBcastTrackingForPrefix(client *c, const char *prefix, size_t plen) {
  * eventually get freed, we'll send a message to the original client to
  * inform it of the condition. Multiple clients can redirect the invalidation
  * messages to the same client ID. */
-void enableTracking(client *c, uint64_t redirect_to, int bcast, robj **prefix, size_t numprefix) {
+void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix) {
     if (!(c->flags & CLIENT_TRACKING)) g_pserver->tracking_clients++;
     c->flags |= CLIENT_TRACKING;
-    c->flags &= ~(CLIENT_TRACKING_BROKEN_REDIR|CLIENT_TRACKING_BCAST);
+    c->flags &= ~(CLIENT_TRACKING_BROKEN_REDIR|CLIENT_TRACKING_BCAST|
+                  CLIENT_TRACKING_OPTIN|CLIENT_TRACKING_OPTOUT);
     c->client_tracking_redirection = redirect_to;
     if (TrackingTable == NULL) {
         TrackingTable = raxNew();
@@ -135,7 +137,7 @@ void enableTracking(client *c, uint64_t redirect_to, int bcast, robj **prefix, s
         TrackingChannelName = createStringObject("__redis__:invalidate",20);
     }
 
-    if (bcast) {
+    if (options & CLIENT_TRACKING_BCAST) {
         c->flags |= CLIENT_TRACKING_BCAST;
         if (numprefix == 0) enableBcastTrackingForPrefix(c,"",0);
         for (size_t j = 0; j < numprefix; j++) {
@@ -143,14 +145,23 @@ void enableTracking(client *c, uint64_t redirect_to, int bcast, robj **prefix, s
             enableBcastTrackingForPrefix(c,sdsprefix,sdslen(sdsprefix));
         }
     }
+    c->flags |= options & (CLIENT_TRACKING_OPTIN|CLIENT_TRACKING_OPTOUT);
 }
 
-/* This function is called after the excution of a readonly command in the
- * case the client 'c' has keys tracking enabled. It will populate the
- * tracking ivalidation table according to the keys the user fetched, so that
- * Redis will know what are the clients that should receive an invalidation
- * message with certain groups of keys are modified. */
+/* This function is called after the execution of a readonly command in the
+ * case the client 'c' has keys tracking enabled and the tracking is not
+ * in BCAST mode. It will populate the tracking invalidation table according
+ * to the keys the user fetched, so that Redis will know what are the clients
+ * that should receive an invalidation message with certain groups of keys
+ * are modified. */
 void trackingRememberKeys(client *c) {
+    /* Return if we are in optin/out mode and the right CACHING command
+     * was/wasn't given in order to modify the default behavior. */
+    uint64_t optin = c->flags & CLIENT_TRACKING_OPTIN;
+    uint64_t optout = c->flags & CLIENT_TRACKING_OPTOUT;
+    uint64_t caching_given = c->flags & CLIENT_TRACKING_CACHING;
+    if ((optin && !caching_given) || (optout && caching_given)) return;
+
     int numkeys;
     int *keys = getKeysFromCommand(c->cmd,c->argv,c->argc,&numkeys);
     if (keys == NULL) return;
@@ -292,19 +303,12 @@ void trackingInvalidateKey(robj *keyobj) {
 }
 
 /* This function is called when one or all the Redis databases are flushed
- * (dbid == -1 in case of FLUSHALL). Caching slots are not specific for
- * each DB but are global: currently what we do is sending a special
+ * (dbid == -1 in case of FLUSHALL). Caching keys are not specific for
+ * each DB but are global: currently what we do is send a special
  * notification to clients with tracking enabled, invalidating the caching
- * slot "-1", which means, "all the keys", in order to avoid flooding clients
+ * key "", which means, "all the keys", in order to avoid flooding clients
  * with many invalidation messages for all the keys they may hold.
- *
- * However trying to flush the tracking table here is very costly:
- * we need scanning 16 million caching slots in the table to check
- * if they are used, this introduces a big delay. So what we do is to really
- * flush the table in the case of FLUSHALL. When a FLUSHDB is called instead
- * we just send the invalidation message to all the clients, but don't
- * flush the table: it will slowly get garbage collected as more keys
- * are modified in the used caching slots. */
+ */
 void freeTrackingRadixTree(void *rt) {
     raxFree((rax*)rt);
 }
@@ -325,6 +329,7 @@ void trackingInvalidateKeysOnFlush(int dbid) {
     /* In case of FLUSHALL, reclaim all the memory used by tracking. */
     if (dbid == -1 && TrackingTable) {
         raxFreeWithCallback(TrackingTable,freeTrackingRadixTree);
+        TrackingTable = raxNew();
         TrackingTableTotalItems = 0;
     }
 }

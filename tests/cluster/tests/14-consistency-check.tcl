@@ -64,7 +64,7 @@ proc test_slave_load_expired_keys {aof} {
         kill_instance redis $replica_id
 
         set master_port [get_instance_attrib redis $master_id port]
-        exec ../../../src/redis-cli -h 127.0.0.1 -p $master_port debug sleep [expr $data_ttl+3] > /dev/null &
+        exec ../../../src/keydb-cli -h 127.0.0.1 -p $master_port debug sleep [expr $data_ttl+3] > /dev/null &
 
         while {[clock seconds] <= $end_time} {
             #wait for $data_ttl seconds

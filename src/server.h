@@ -412,6 +412,7 @@ public:
                                    perform client side caching. */
 #define CLIENT_TRACKING_BROKEN_REDIR (1ULL<<32) /* Target client is invalid. */
 #define CLIENT_FORCE_REPLY (1ULL<<33) /* Should addReply be forced to write the text? */
+#define CLIENT_TRACKING_BCAST (1ULL<<34) /* Tracking in BCAST mode. */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -1298,7 +1299,9 @@ typedef struct client {
      * invalidation messages for keys fetched by this client will be send to
      * the specified client ID. */
     uint64_t client_tracking_redirection;
-
+    rax *client_tracking_prefixes; /* A dictionary of prefixes we are already
+                                      subscribed to in BCAST mode, in the
+                                      context of client side caching. */
     /* Response buffer */
     int bufpos;
     char buf[PROTO_REPLY_CHUNK_BYTES];
@@ -1848,7 +1851,7 @@ struct redisServer {
     list *ready_keys;        /* List of readyList structures for BLPOP & co */
     /* Client side caching. */
     unsigned int tracking_clients;  /* # of clients with tracking enabled.*/
-    int tracking_table_max_fill;    /* Max fill percentage. */
+    size_t tracking_table_max_keys; /* Max number of keys in tracking table. */
     /* Sort parameters - qsort_r() is only available under BSD so we
      * have to take this state global, in order to pass it to sortCompare() */
     int sort_desc;
@@ -2224,13 +2227,15 @@ void addReplyStatusFormat(client *c, const char *fmt, ...);
 #endif
 
 /* Client side caching (tracking mode) */
-void enableTracking(client *c, uint64_t redirect_to);
+void enableTracking(client *c, uint64_t redirect_to, int bcast, robj **prefix, size_t numprefix);
 void disableTracking(client *c);
 void trackingRememberKeys(client *c);
 void trackingInvalidateKey(robj *keyobj);
 void trackingInvalidateKeysOnFlush(int dbid);
 void trackingLimitUsedSlots(void);
 uint64_t trackingGetTotalItems(void);
+uint64_t trackingGetTotalKeys(void);
+void trackingBroadcastInvalidationMessages(void);
 
 /* List data type */
 void listTypeTryConversion(robj *subject, robj *value);

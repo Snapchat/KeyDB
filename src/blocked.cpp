@@ -113,6 +113,7 @@ void blockClient(client *c, int btype) {
     c->btype = btype;
     g_pserver->blocked_clients++;
     g_pserver->blocked_clients_by_type[btype]++;
+    addClientToTimeoutTable(c);
 }
 
 /* This function is called in the beforeSleep() function of the event loop
@@ -200,6 +201,7 @@ void unblockClient(client *c) {
     g_pserver->blocked_clients_by_type[c->btype]--;
     c->flags &= ~CLIENT_BLOCKED;
     c->btype = BLOCKED_NONE;
+    removeClientFromTimeoutTable(c);
     queueClientForReprocessing(c);
 }
 

@@ -694,9 +694,12 @@ NULL
         sds stats = sdsempty();
         char buf[4096];
 
-        if (getLongFromObjectOrReply(c, c->argv[2], &dbid, NULL) != C_OK)
+        if (getLongFromObjectOrReply(c, c->argv[2], &dbid, NULL) != C_OK) {
+            sdsfree(stats);
             return;
+        }
         if (dbid < 0 || dbid >= cserver.dbnum) {
+            sdsfree(stats);
             addReplyError(c,"Out of range database");
             return;
         }

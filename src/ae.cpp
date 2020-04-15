@@ -403,6 +403,7 @@ extern "C" void aeDeleteEventLoop(aeEventLoop *eventLoop) {
     close(eventLoop->fdCmdRead);
     close(eventLoop->fdCmdWrite);
 
+    /* Free the time events list. */
     auto *te = eventLoop->timeEventHead;
     while (te)
     {

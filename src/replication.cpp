@@ -3767,7 +3767,6 @@ void replicationCron(void) {
 
     propagateMasterStaleKeys();
 
-
     /* Remove the RDB file used for replication if Redis is not running
      * with any persistence. */
     removeRDBUsedToSyncReplicas();

@@ -68,7 +68,7 @@ void freeStream(stream *s) {
 }
 
 /* Return the length of a stream. */
-unsigned long streamLength(const robj *subject) {
+unsigned long streamLength(robj_roptr subject) {
     stream *s = (stream*)ptrFromObj(subject);
     return s->length;
 }

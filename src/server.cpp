@@ -2796,6 +2796,7 @@ void resetServerStats(void) {
     }
     g_pserver->stat_net_input_bytes = 0;
     g_pserver->stat_net_output_bytes = 0;
+    g_pserver->stat_unexpected_error_replies = 0;
     g_pserver->aof_delayed_fsync = 0;
 }
 
@@ -3470,12 +3471,16 @@ void call(client *c, int flags) {
         if (flags & CMD_CALL_PROPAGATE) {
             bool multi_emitted = false;
             /* Wrap the commands in g_pserver->also_propagate array,
-             * but don't wrap it if we are already in MULIT context,
-             * in case the nested MULIT/EXEC.
+             * but don't wrap it if we are already in MULTI context,
+             * in case the nested MULTI/EXEC.
              *
              * And if the array contains only one command, no need to
              * wrap it, since the single command is atomic. */
-            if (g_pserver->also_propagate.numops > 1 && !(c->flags & CLIENT_MULTI)) {
+            if (g_pserver->also_propagate.numops > 1 &&
+                !(c->cmd->flags & CMD_MODULE) &&
+                !(c->flags & CLIENT_MULTI) &&
+                !(flags & CMD_CALL_NOWRAP))
+            {
                 execCommandPropagateMulti(c);
                 multi_emitted = true;
             }
@@ -4473,7 +4478,8 @@ sds genRedisInfoString(const char *section) {
             "active_defrag_key_hits:%lld\r\n"
             "active_defrag_key_misses:%lld\r\n"
             "tracking_total_keys:%lld\r\n"
-            "tracking_total_items:%llu\r\n",
+            "tracking_total_items:%llu\r\n"
+             "unexpected_error_replies:%lld\r\n",
             g_pserver->stat_numconnections,
             g_pserver->stat_numcommands,
             getInstantaneousMetric(STATS_METRIC_COMMAND),
@@ -4502,7 +4508,8 @@ sds genRedisInfoString(const char *section) {
             g_pserver->stat_active_defrag_key_hits,
             g_pserver->stat_active_defrag_key_misses,
             (unsigned long long) trackingGetTotalKeys(),
-            (unsigned long long) trackingGetTotalItems());
+            (unsigned long long) trackingGetTotalItems(),
+            g_pserver->stat_unexpected_error_replies);
     }
 
     /* Replication */

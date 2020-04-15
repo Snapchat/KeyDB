@@ -3402,13 +3402,8 @@ RedisModuleCallReply *RM_Call(RedisModuleCtx *ctx, const char *cmdname, const ch
      * a Lua script in the context of AOF and slaves. */
     if (replicate) moduleReplicateMultiIfNeeded(ctx);
 
-    if (ctx->client->flags & CLIENT_MULTI ||
-        ctx->flags & REDISMODULE_CTX_MULTI_EMITTED) {
-        c->flags |= CLIENT_MULTI;
-    }
-
     /* Run the command */
-    call_flags = CMD_CALL_SLOWLOG | CMD_CALL_STATS;
+    call_flags = CMD_CALL_SLOWLOG | CMD_CALL_STATS | CMD_CALL_NOWRAP;
     if (replicate) {
         if (!(flags & REDISMODULE_ARGV_NO_AOF))
             call_flags |= CMD_CALL_PROPAGATE_AOF;
@@ -3417,9 +3412,7 @@ RedisModuleCallReply *RM_Call(RedisModuleCtx *ctx, const char *cmdname, const ch
     }
     call(c,call_flags);
 
-    /* Convert the result of the Redis command into a suitable Lua type.
-     * The first thing we need is to create a single string from the client
-     * output buffers. */
+    /* Convert the result of the Redis command into a module reply. */
     proto = sdsnewlen(c->buf,c->bufpos);
     c->bufpos = 0;
     while(listLength(c->reply)) {

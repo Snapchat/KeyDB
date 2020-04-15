@@ -563,6 +563,8 @@ public:
 #define CMD_CALL_PROPAGATE_REPL (1<<3)
 #define CMD_CALL_PROPAGATE (CMD_CALL_PROPAGATE_AOF|CMD_CALL_PROPAGATE_REPL)
 #define CMD_CALL_FULL (CMD_CALL_SLOWLOG | CMD_CALL_STATS | CMD_CALL_PROPAGATE)
+#define CMD_CALL_NOWRAP (1<<4)  /* Don't wrap also propagate array into
+                                   MULTI/EXEC: the caller will handle it.  */
 
 /* Command propagation flags, see propagate() function */
 #define PROPAGATE_NONE 0
@@ -1704,6 +1706,7 @@ struct redisServer {
     size_t stat_rdb_cow_bytes;      /* Copy on write bytes during RDB saving. */
     size_t stat_aof_cow_bytes;      /* Copy on write bytes during AOF rewrite. */
     size_t stat_module_cow_bytes;   /* Copy on write bytes during module fork. */
+    long long stat_unexpected_error_replies; /* Number of unexpected (aof-loading, replica to master, etc.) error replies */
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {

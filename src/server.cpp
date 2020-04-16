@@ -1077,7 +1077,9 @@ void serverLogRaw(int level, const char *msg) {
 
         gettimeofday(&tv,NULL);
         struct tm tm;
-        nolocks_localtime(&tm,tv.tv_sec,g_pserver->timezone,g_pserver->daylight_active);
+        int daylight_active;
+        __atomic_load(&g_pserver->daylight_active, &daylight_active, __ATOMIC_RELAXED);
+        nolocks_localtime(&tm,tv.tv_sec,g_pserver->timezone,daylight_active);
         off = strftime(buf,sizeof(buf),"%d %b %Y %H:%M:%S.",&tm);
         snprintf(buf+off,sizeof(buf)-off,"%03d",(int)tv.tv_usec/1000);
         if (g_pserver->sentinel_mode) {
@@ -1777,7 +1779,7 @@ void updateCachedTime(int update_daylight_info) {
         struct tm tm;
         time_t ut = g_pserver->unixtime;
         localtime_r(&ut,&tm);
-        g_pserver->daylight_active = tm.tm_isdst;
+        __atomic_store(&g_pserver->daylight_active, &tm.tm_isdst, __ATOMIC_RELAXED);
     }
 }
 

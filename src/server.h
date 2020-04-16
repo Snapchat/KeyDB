@@ -1343,7 +1343,7 @@ struct sharedObjectsStruct {
     *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
     *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink,
     *rpop, *lpop, *lpush, *rpoplpush, *zpopmin, *zpopmax, *emptyscan,
-    *multi, *exec,
+    *multi, *exec, *srem, *hdel, *zrem,
     *select[PROTO_SHARED_SELECT_CMDS],
     *integers[OBJ_SHARED_INTEGERS],
     *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
@@ -1577,6 +1577,7 @@ struct redisServerConst {
 
     int cthreads;               /* Number of main worker threads */
     int fThreadAffinity;        /* Should we pin threads to cores? */
+    int threadAffinityOffset = 0; /* Where should we start pinning them? */
     char *pidfile;              /* PID file path */
 
     /* Fast pointers to often looked up command */
@@ -1584,7 +1585,8 @@ struct redisServerConst {
                         *lpopCommand, *rpopCommand, *zpopminCommand,
                         *zpopmaxCommand, *sremCommand, *execCommand,
                         *expireCommand, *pexpireCommand, *xclaimCommand,
-                        *xgroupCommand, *rreplayCommand, *rpoplpushCommand;
+                        *xgroupCommand, *rreplayCommand, *rpoplpushCommand,
+                        *hdelCommand, *zremCommand;
 
     /* Configuration */
     char *default_masteruser;               /* AUTH with this user and masterauth with master */
@@ -2622,6 +2624,7 @@ int removeExpire(redisDb *db, robj *key);
 int removeExpireCore(redisDb *db, robj *key, dictEntry *de);
 int removeSubkeyExpire(redisDb *db, robj *key, robj *subkey);
 void propagateExpire(redisDb *db, robj *key, int lazy);
+void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey);
 int expireIfNeeded(redisDb *db, robj *key);
 expireEntry *getExpire(redisDb *db, robj_roptr key);
 void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when);
@@ -2759,6 +2762,8 @@ extern "C" char *redisGitDirty(void);
 extern "C" uint64_t redisBuildId(void);
 extern "C" char *redisBuildIdString(void);
 
+int parseUnitString(const char *sz);
+
 /* Commands prototypes */
 void authCommand(client *c);
 void pingCommand(client *c);
@@ -2837,6 +2842,7 @@ void expireCommand(client *c);
 void expireatCommand(client *c);
 void expireMemberCommand(client *c);
 void expireMemberAtCommand(client *c);
+void pexpireMemberAtCommand(client *c);
 void pexpireCommand(client *c);
 void pexpireatCommand(client *c);
 void getsetCommand(client *c);

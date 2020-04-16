@@ -530,8 +530,14 @@ void loadServerConfigFromString(char *config) {
             } else if (strcasecmp(argv[1], "false") == 0) {
                 cserver.fThreadAffinity = FALSE;
             } else {
-                err = "Unknown argument: server-thread-affinity expects either true or false";
-                goto loaderr;
+                int offset = atoi(argv[1]);
+                if (offset > 0) {
+                    cserver.fThreadAffinity = TRUE;
+                    cserver.threadAffinityOffset = offset-1;
+                } else {
+                    err = "Unknown argument: server-thread-affinity expects either true or false";
+                    goto loaderr;
+                }
             }
         } else if (!strcasecmp(argv[0], "active-replica") && argc == 2) {
             g_pserver->fActiveReplica = yesnotoi(argv[1]);

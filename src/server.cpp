@@ -2565,7 +2565,17 @@ int restartServer(int flags, mstime_t delay) {
     for (j = 3; j < (int)g_pserver->maxclients + 1024; j++) {
         /* Test the descriptor validity before closing it, otherwise
          * Valgrind issues a warning on close(). */
-        if (fcntl(j,F_GETFD) != -1) close(j);
+        if (fcntl(j,F_GETFD) != -1)
+        {
+            /* This user to just close() here, but sanitizers detected that as an FD race.
+                The race doesn't matter since we're about to call exec() however we want
+                to cut down on noise, so instead we ask the kernel to close when we call
+                exec(), and only do it ourselves if that fails. */
+            if (fcntl(j, F_SETFD, FD_CLOEXEC) == -1)
+            {
+                close(j);   // failed to set close on exec, close here
+            }
+        }
     }
 
     /* Execute the server with the original command line. */
@@ -4374,7 +4384,7 @@ sds genRedisInfoString(const char *section) {
             "aof_last_cow_size:%zu\r\n"
             "module_fork_in_progress:%d\r\n"
             "module_fork_last_cow_size:%zu\r\n",
-            g_pserver->loading,
+            g_pserver->loading.load(std::memory_order_relaxed),
             g_pserver->dirty,
             g_pserver->rdb_child_pid != -1,
             (intmax_t)g_pserver->lastsave,

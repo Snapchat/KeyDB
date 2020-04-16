@@ -1631,7 +1631,7 @@ struct redisServer {
     struct redisServerThreadVars rgthreadvar[MAX_EVENT_LOOPS];
 
     std::atomic<unsigned int> lruclock;      /* Clock for LRU eviction */
-    int shutdown_asap;          /* SHUTDOWN needed ASAP */
+    std::atomic<int> shutdown_asap;          /* SHUTDOWN needed ASAP */
     int activerehashing;        /* Incremental rehash in serverCron() */
     int active_defrag_running;  /* Active defragmentation running (holds current scan aggressiveness) */
     int cronloops;              /* Number of times the cron function run */
@@ -1666,7 +1666,7 @@ struct redisServer {
     std::atomic<uint64_t> next_client_id; /* Next client unique ID. Incremental. */
     int protected_mode;         /* Don't accept external connections. */
     /* RDB / AOF loading information */
-    int loading;                /* We are loading data from disk if true */
+    std::atomic<int> loading;                /* We are loading data from disk if true */
     off_t loading_total_bytes;
     off_t loading_loaded_bytes;
     time_t loading_start_time;

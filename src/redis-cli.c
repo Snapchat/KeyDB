@@ -51,6 +51,7 @@
 #include <hiredis.h>
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>
+#include <openssl/err.h>
 #include <hiredis_ssl.h>
 #endif
 #include <sds.h> /* use sds.h from hiredis, so that only one set of sds functions will be present in the binary */
@@ -1102,7 +1103,11 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
         (argc == 3 && !strcasecmp(command,"latency") &&
                        !strcasecmp(argv[1],"graph")) ||
         (argc == 2 && !strcasecmp(command,"latency") &&
-                       !strcasecmp(argv[1],"doctor")))
+                       !strcasecmp(argv[1],"doctor")) ||
+        /* Format PROXY INFO command for Redis Cluster Proxy:
+         * https://github.com/artix75/redis-cluster-proxy */
+        (argc >= 2 && !strcasecmp(command,"proxy") &&
+                       !strcasecmp(argv[1],"info")))
     {
         output_raw = 1;
     }
@@ -1261,6 +1266,8 @@ static int parseOptions(int argc, char **argv) {
             config.dbnum = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--no-auth-warning")) {
             config.no_auth_warning = 1;
+        } else if (!strcmp(argv[i], "--askpass")) {
+            config.askpass = 1;
         } else if ((!strcmp(argv[i],"-a") || !strcmp(argv[i],"--pass"))
                    && !lastarg)
         {
@@ -1406,15 +1413,15 @@ static int parseOptions(int argc, char **argv) {
 #ifdef USE_OPENSSL
         } else if (!strcmp(argv[i],"--tls")) {
             config.tls = 1;
-        } else if (!strcmp(argv[i],"--sni")) {
+        } else if (!strcmp(argv[i],"--sni") && !lastarg) {
             config.sni = argv[++i];
-        } else if (!strcmp(argv[i],"--cacertdir")) {
+        } else if (!strcmp(argv[i],"--cacertdir") && !lastarg) {
             config.cacertdir = argv[++i];
-        } else if (!strcmp(argv[i],"--cacert")) {
+        } else if (!strcmp(argv[i],"--cacert") && !lastarg) {
             config.cacert = argv[++i];
-        } else if (!strcmp(argv[i],"--cert")) {
+        } else if (!strcmp(argv[i],"--cert") && !lastarg) {
             config.cert = argv[++i];
-        } else if (!strcmp(argv[i],"--key")) {
+        } else if (!strcmp(argv[i],"--key") && !lastarg) {
             config.key = argv[++i];
 #endif
         } else if (!strcmp(argv[i],"-v") || !strcmp(argv[i], "--version")) {
@@ -1499,8 +1506,11 @@ static void usage(void) {
 "                     You can also use the " REDIS_CLI_AUTH_ENV " environment\n"
 "                     variable to pass this password more safely\n"
 "                     (if both are used, this argument takes predecence).\n"
-"  -user <username>   Used to send ACL style 'AUTH username pass'. Needs -a.\n"
-"  -pass <password>   Alias of -a for consistency with the new --user option.\n"
+"  --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
+"  --pass <password>  Alias of -a for consistency with the new --user option.\n"
+"  --askpass          Force user to input password with mask from STDIN.\n"
+"                     If this argument is used, '-a' and " REDIS_CLI_AUTH_ENV "\n"
+"                     environment variable will be ignored.\n"
 "  -u <uri>           Server URI.\n"
 "  -r <repeat>        Execute specified command N times.\n"
 "  -i <interval>      When -r is used, waits <interval> seconds per command.\n"
@@ -1512,12 +1522,13 @@ static void usage(void) {
 "  -c                 Enable cluster mode (follow -ASK and -MOVED redirections).\n"
 #ifdef USE_OPENSSL
 "  --tls              Establish a secure TLS connection.\n"
-"  --cacert           CA Certificate file to verify with.\n"
-"  --cacertdir        Directory where trusted CA certificates are stored.\n"
+"  --sni <host>       Server name indication for TLS.\n"
+"  --cacert <file>    CA Certificate file to verify with.\n"
+"  --cacertdir <dir>  Directory where trusted CA certificates are stored.\n"
 "                     If neither cacert nor cacertdir are specified, the default\n"
 "                     system-wide trusted root certs configuration will apply.\n"
-"  --cert             Client certificate to authenticate with.\n"
-"  --key              Private key file to authenticate with.\n"
+"  --cert <file>      Client certificate to authenticate with.\n"
+"  --key <file>       Private key file to authenticate with.\n"
 #endif
 "  --raw              Use raw formatting for replies (default when STDOUT is\n"
 "                     not a tty).\n"
@@ -1793,6 +1804,8 @@ static void repl(void) {
                     if (config.eval) {
                         config.eval_ldb = 1;
                         config.output = OUTPUT_RAW;
+                        sdsfreesplitres(argv,argc);
+                        linenoiseFree(line);
                         return; /* Return to evalMode to restart the session. */
                     } else {
                         printf("Use 'restart' only in Lua debugging mode.");
@@ -6625,7 +6638,7 @@ static void LRUTestMode(void) {
          * to fill the target instance easily. */
         start_cycle = mstime();
         long long hits = 0, misses = 0;
-        while(mstime() - start_cycle < 1000) {
+        while(mstime() - start_cycle < LRU_CYCLE_PERIOD) {
             /* Write cycle. */
             for (j = 0; j < LRU_CYCLE_PIPELINE_SIZE; j++) {
                 char val[6];
@@ -6746,6 +6759,13 @@ static void intrinsicLatencyMode(void) {
     }
 }
 
+static sds askPassword() {
+    linenoiseMaskModeEnable();
+    sds auth = linenoise("Please input password: ");
+    linenoiseMaskModeDisable();
+    return auth;
+}
+
 /*------------------------------------------------------------------------------
  * Program main()
  *--------------------------------------------------------------------------- */
@@ -6783,6 +6803,7 @@ int main(int argc, char **argv) {
     config.hotkeys = 0;
     config.stdinarg = 0;
     config.auth = NULL;
+    config.askpass = 0;
     config.user = NULL;
     config.eval = NULL;
     config.eval_ldb = 0;
@@ -6823,6 +6844,18 @@ int main(int argc, char **argv) {
     argv += firstarg;
 
     parseEnv();
+
+    if (config.askpass) {
+        config.auth = askPassword();
+    }
+
+#ifdef USE_OPENSSL
+    if (config.tls) {
+        ERR_load_crypto_strings();
+        SSL_load_error_strings();
+        SSL_library_init();
+    }
+#endif
 
     /* Cluster Manager mode */
     if (CLUSTER_MANAGER_MODE()) {
@@ -6942,3 +6975,4 @@ int main(int argc, char **argv) {
         return noninteractive(argc,convertToSds(argc,argv));
     }
 }
+

@@ -407,6 +407,7 @@ extern "C" void aeDeleteEventLoop(aeEventLoop *eventLoop) {
     close(eventLoop->fdCmdRead);
     close(eventLoop->fdCmdWrite);
 
+    /* Free the time events list. */
     auto *te = eventLoop->timeEventHead;
     while (te)
     {
@@ -684,6 +685,7 @@ extern "C" void ProcessEventCore(aeEventLoop *eventLoop, aeFileEvent *fe, int ma
         LOCK_IF_NECESSARY(fe, AE_READ_THREADSAFE);
         fe->rfileProc(eventLoop,fd,fe->clientData,mask | (fe->mask & AE_READ_THREADSAFE));
         fired++;
+        fe = &eventLoop->events[fd]; /* Refresh in case of resize. */
     }
 
     /* Fire the writable event. */

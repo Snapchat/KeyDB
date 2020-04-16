@@ -37,7 +37,7 @@ if {[catch {cd tmp}]} {
 
 # Execute the specified instance of the server specified by 'type', using
 # the provided configuration file. Returns the PID of the process.
-proc exec_instance {type cfgfile} {
+proc exec_instance {type cfgfile dir} {
     if {$type eq "redis"} {
         set prgname keydb-pro-server
     } elseif {$type eq "sentinel"} {
@@ -46,10 +46,13 @@ proc exec_instance {type cfgfile} {
         error "Unknown instance type."
     }
 
+    set stdout [format "%s/%s" $dir "stdout"]
+    set stderr [format "%s/%s" $dir "stderr"]
+
     if {$::valgrind} {
         set pid [exec valgrind --track-origins=yes --suppressions=../../../src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full ../../../src/${prgname} $cfgfile &]
     } else {
-        set pid [exec ../../../src/${prgname} $cfgfile &]
+        set pid [exec ../../../src/${prgname} $cfgfile > $stdout 2> $stderr &]
     }
     return $pid
 }
@@ -92,7 +95,7 @@ proc spawn_instance {type base_port count {conf {}}} {
         close $cfg
 
         # Finally exec it and remember the pid for later cleanup.
-        set pid [exec_instance $type $cfgfile]
+        set pid [exec_instance $type $cfgfile $dirname]
         lappend ::pids $pid
 
         # Check availability
@@ -502,7 +505,7 @@ proc restart_instance {type id} {
 
     # Execute the instance with its old setup and append the new pid
     # file for cleanup.
-    set pid [exec_instance $type $cfgfile]
+    set pid [exec_instance $type $cfgfile $dirname]
     set_instance_attrib $type $id pid $pid
     lappend ::pids $pid
 

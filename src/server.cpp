@@ -260,6 +260,10 @@ struct redisCommand redisCommandTable[] = {
      "write use-memory @bitmap",
      0,NULL,1,1,1,0,0,0},
 
+    {"bitfield_ro",bitfieldroCommand,-2,
+     "read-only fast @bitmap",
+     0,NULL,1,1,1,0,0,0},
+
     {"setrange",setrangeCommand,4,
      "write use-memory @string",
      0,NULL,1,1,1,0,0,0},
@@ -601,7 +605,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"select",selectCommand,2,
-     "ok-loading fast @keyspace",
+     "ok-loading fast ok-stale @keyspace",
      0,NULL,0,0,0,0,0,0},
 
     {"swapdb",swapdbCommand,3,
@@ -635,6 +639,10 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
     
     {"expirememberat", expireMemberAtCommand, 4,
+     "write fast @keyspace",
+     0,NULL,1,1,1,0,0,0},
+    
+    {"pexpirememberat", pexpireMemberAtCommand, 4,
      "write fast @keyspace",
      0,NULL,1,1,1,0,0,0},
 
@@ -690,7 +698,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"lastsave",lastsaveCommand,1,
-     "read-only random fast @admin @dangerous",
+     "read-only random fast ok-loading ok-stale @admin @dangerous",
      0,NULL,0,0,0,0,0,0},
 
     {"type",typeCommand,2,
@@ -738,7 +746,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"monitor",monitorCommand,1,
-     "admin no-script",
+     "admin no-script ok-loading ok-stale",
      0,NULL,0,0,0,0,0,0},
 
     {"ttl",ttlCommand,-2,
@@ -770,7 +778,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"debug",debugCommand,-2,
-     "admin no-script",
+     "admin no-script ok-loading ok-stale",
      0,NULL,0,0,0,0,0,0},
 
     {"config",configCommand,-2,
@@ -847,14 +855,14 @@ struct redisCommand redisCommandTable[] = {
 
     {"memory",memoryCommand,-2,
      "random read-only",
-     0,NULL,0,0,0,0,0,0},
+     0,memoryGetKeys,0,0,0,0,0,0},
 
     {"client",clientCommand,-2,
-     "admin no-script random @connection",
+     "admin no-script random ok-loading ok-stale @connection",
      0,NULL,0,0,0,0,0,0},
 
     {"hello",helloCommand,-2,
-     "no-auth no-script fast no-monitor no-slowlog @connection",
+     "no-auth no-script fast no-monitor ok-loading ok-stale no-slowlog @connection",
      0,NULL,0,0,0,0,0,0},
 
     /* EVAL can modify the dataset, however it is not flagged as a write
@@ -868,7 +876,7 @@ struct redisCommand redisCommandTable[] = {
      0,evalGetKeys,0,0,0,0,0,0},
 
     {"slowlog",slowlogCommand,-2,
-     "admin random",
+     "admin random ok-loading ok-stale",
      0,NULL,0,0,0,0,0,0},
 
     {"script",scriptCommand,-2,
@@ -876,7 +884,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"time",timeCommand,1,
-     "read-only random fast",
+     "read-only random fast ok-loading ok-stale",
      0,NULL,0,0,0,0,0,0},
 
     {"bitop",bitopCommand,-4,
@@ -1531,10 +1539,18 @@ void updateDictResizePolicy(void) {
         dictDisableResize();
 }
 
+/* Return true if there are no active children processes doing RDB saving,
+ * AOF rewriting, or some side process spawned by a loaded module. */
 int hasActiveChildProcess() {
     return g_pserver->FRdbSaveInProgress() ||
            g_pserver->aof_child_pid != -1 ||
            g_pserver->module_child_pid != -1;
+}
+
+/* Return true if this instance has persistence completely turned off:
+ * both RDB and AOF are disabled. */
+int allPersistenceDisabled(void) {
+    return g_pserver->saveparamslen == 0 && g_pserver->aof_state == AOF_OFF;
 }
 
 /* ======================= Cron: called every 100 ms ======================== */
@@ -1564,42 +1580,6 @@ long long getInstantaneousMetric(int metric) {
     for (j = 0; j < STATS_METRIC_SAMPLES; j++)
         sum += g_pserver->inst_metric[metric].samples[j];
     return sum / STATS_METRIC_SAMPLES;
-}
-
-/* Check for timeouts. Returns non-zero if the client was terminated.
- * The function gets the current time in milliseconds as argument since
- * it gets called multiple times in a loop, so calling gettimeofday() for
- * each iteration would be costly without any actual gain. */
-int clientsCronHandleTimeout(client *c, mstime_t now_ms) {
-    time_t now = now_ms/1000;
-
-    if (cserver.maxidletime &&
-        !(c->flags & CLIENT_SLAVE) &&    /* no timeout for slaves */
-        !(c->flags & CLIENT_MASTER) &&   /* no timeout for masters */
-        !(c->flags & CLIENT_BLOCKED) &&  /* no timeout for BLPOP */
-        !(c->flags & CLIENT_PUBSUB) &&   /* no timeout for Pub/Sub clients */
-        (now - c->lastinteraction > cserver.maxidletime))
-    {
-        serverLog(LL_VERBOSE,"Closing idle client");
-        freeClient(c);
-        return 1;
-    } else if (c->flags & CLIENT_BLOCKED) {
-        /* Blocked OPS timeout is handled with milliseconds resolution.
-         * However note that the actual resolution is limited by
-         * g_pserver->hz. */
-
-        if (c->bpop.timeout != 0 && c->bpop.timeout < now_ms) {
-            /* Handle blocking operation specific timeout. */
-            replyToBlockedClientTimedOut(c);
-            unblockClient(c);
-        } else if (g_pserver->cluster_enabled) {
-            /* Cluster: handle unblock & redirect of clients blocked
-             * into keys no longer served by this g_pserver-> */
-            if (clusterRedirectBlockedClientIfNeeded(c))
-                unblockClient(c);
-        }
-    }
-    return 0;
 }
 
 /* The client query buffer is an sds.c string that can end with a lot of
@@ -1829,10 +1809,12 @@ void clientsCron(int iel) {
 void databasesCron(void) {
     /* Expire keys by random sampling. Not required for slaves
      * as master will synthesize DELs for us. */
-    if (g_pserver->active_expire_enabled && (listLength(g_pserver->masters) == 0 || g_pserver->fActiveReplica)) {
-        activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
-    } else if (listLength(g_pserver->masters) && !g_pserver->fActiveReplica) {
-        expireSlaveKeys();
+    if (g_pserver->active_expire_enabled) {
+        if (iAmMaster()) {
+            activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
+        } else {
+            expireSlaveKeys();
+        }
     }
 
     /* Defrag keys gradually. */
@@ -2289,10 +2271,14 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Handle TLS pending data. (must be done before flushAppendOnlyFile) */
     tlsProcessPendingData();
+
     /* If tls still has pending unread data don't sleep at all. */
     aeSetDontWait(eventLoop, tlsHasPendingData());
 
     aeAcquireLock();
+
+    /* Handle precise timeouts of blocked clients. */
+    handleBlockedClientsTimeout();
 
     /* Call the Redis Cluster before sleep function. Note that this function
      * may change the state of Redis Cluster (from ok to fail or vice versa),
@@ -2335,6 +2321,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         processUnblockedClients(iel);
     }
 
+    /* Send the invalidation messages to clients participating to the
+     * client side caching protocol in broadcasting (BCAST) mode. */
+    trackingBroadcastInvalidationMessages();
+
     /* Write the AOF buffer on disk */
     flushAppendOnlyFile(0);
 
@@ -2350,12 +2340,13 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         fFirstRun = false;
     }
 
+    int aof_state = g_pserver->aof_state;
     aeReleaseLock();
     for (redisDb *db : vecdb)
         db->commitChanges();
     
     
-    handleClientsWithPendingWrites(iel);
+    handleClientsWithPendingWrites(iel, aof_state);
     if (serverTL->gcEpoch != 0)
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);
     serverTL->gcEpoch = 0;
@@ -2491,6 +2482,9 @@ void createSharedObjects(void) {
     shared.zpopmax = makeObjectShared("ZPOPMAX",7);
     shared.multi = makeObjectShared("MULTI",5);
     shared.exec = makeObjectShared("EXEC",4);
+    shared.hdel = makeObjectShared(createStringObject("HDEL", 4));
+    shared.zrem = makeObjectShared(createStringObject("ZREM", 4));
+    shared.srem = makeObjectShared(createStringObject("SREM", 4));
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =
             makeObjectShared(createObject(OBJ_STRING,(void*)(long)j));
@@ -2548,6 +2542,7 @@ void initServerConfig(void) {
     g_pserver->clients = listCreate();
     g_pserver->slaves = listCreate();
     g_pserver->monitors = listCreate();
+    g_pserver->clients_timeout_table = raxNew();
     g_pserver->timezone = getTimeZone(); /* Initialized by tzset(). */
     cserver.configfile = NULL;
     cserver.executable = NULL;
@@ -2603,6 +2598,7 @@ void initServerConfig(void) {
     g_pserver->enable_multimaster = CONFIG_DEFAULT_ENABLE_MULTIMASTER;
     g_pserver->repl_syncio_timeout = CONFIG_REPL_SYNCIO_TIMEOUT;
     g_pserver->master_repl_offset = 0;
+    g_pserver->master_repl_meaningful_offset = 0;
 
     /* Replication partial resync backlog */
     g_pserver->repl_backlog = NULL;
@@ -2642,6 +2638,8 @@ void initServerConfig(void) {
     cserver.xgroupCommand = lookupCommandByCString("xgroup");
     cserver.rreplayCommand = lookupCommandByCString("rreplay");
     cserver.rpoplpushCommand = lookupCommandByCString("rpoplpush");
+    cserver.hdelCommand = lookupCommandByCString("hdel");
+    cserver.zremCommand = lookupCommandByCString("zrem");
 
     /* Debugging */
     g_pserver->assert_failed = "<no assertion failed>";
@@ -2664,6 +2662,7 @@ void initServerConfig(void) {
     //  so make sure its zero and initialized
     g_pserver->db = (redisDb**)zcalloc(sizeof(redisDb*)*std::max(cserver.dbnum, 1), MALLOC_LOCAL);
 
+    cserver.threadAffinityOffset = 0;
     initConfigValues();
 }
 
@@ -2718,7 +2717,17 @@ int restartServer(int flags, mstime_t delay) {
     for (j = 3; j < (int)g_pserver->maxclients + 1024; j++) {
         /* Test the descriptor validity before closing it, otherwise
          * Valgrind issues a warning on close(). */
-        if (fcntl(j,F_GETFD) != -1) close(j);
+        if (fcntl(j,F_GETFD) != -1)
+        {
+            /* This user to just close() here, but sanitizers detected that as an FD race.
+                The race doesn't matter since we're about to call exec() however we want
+                to cut down on noise, so instead we ask the kernel to close when we call
+                exec(), and only do it ourselves if that fails. */
+            if (fcntl(j, F_SETFD, FD_CLOEXEC) == -1)
+            {
+                close(j);   // failed to set close on exec, close here
+            }
+        }
     }
 
     /* Execute the server with the original command line. */
@@ -3004,6 +3013,7 @@ void resetServerStats(void) {
     }
     g_pserver->stat_net_input_bytes = 0;
     g_pserver->stat_net_output_bytes = 0;
+    g_pserver->stat_unexpected_error_replies = 0;
     g_pserver->aof_delayed_fsync = 0;
 }
 
@@ -3184,6 +3194,7 @@ void initServer(void) {
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
     g_pserver->pubsub_channels = dictCreate(&keylistDictType,NULL);
     g_pserver->pubsub_patterns = listCreate();
+    g_pserver->pubsub_patterns_dict = dictCreate(&keylistDictType,NULL);
     listSetFreeMethod(g_pserver->pubsub_patterns,freePubsubPattern);
     listSetMatchMethod(g_pserver->pubsub_patterns,listMatchPubsubPattern);
     g_pserver->cronloops = 0;
@@ -3680,13 +3691,17 @@ void call(client *c, int flags) {
 
         if (flags & CMD_CALL_PROPAGATE) {
             bool multi_emitted = false;
-            /* Wrap the commands in server.also_propagate array,
-             * but don't wrap it if we are already in MULIT context,
-             * in case the nested MULIT/EXEC.
+            /* Wrap the commands in g_pserver->also_propagate array,
+             * but don't wrap it if we are already in MULTI context,
+             * in case the nested MULTI/EXEC.
              *
              * And if the array contains only one command, no need to
              * wrap it, since the single command is atomic. */
-            if (g_pserver->also_propagate.numops > 1 && !(c->flags & CLIENT_MULTI)) {
+            if (g_pserver->also_propagate.numops > 1 &&
+                !(c->cmd->flags & CMD_MODULE) &&
+                !(c->flags & CLIENT_MULTI) &&
+                !(flags & CMD_CALL_NOWRAP))
+            {
                 execCommandPropagateMulti(c);
                 multi_emitted = true;
             }
@@ -3717,8 +3732,11 @@ void call(client *c, int flags) {
     if (c->cmd->flags & CMD_READONLY) {
         client *caller = (c->flags & CLIENT_LUA && g_pserver->lua_caller) ?
                             g_pserver->lua_caller : c;
-        if (caller->flags & CLIENT_TRACKING)
+        if (caller->flags & CLIENT_TRACKING &&
+            !(caller->flags & CLIENT_TRACKING_BCAST))
+        {
             trackingRememberKeys(caller);
+        }
     }
 
     g_pserver->stat_numcommands++;
@@ -3777,7 +3795,7 @@ int processCommand(client *c, int callFlags) {
     /* Check if the user is authenticated. This check is skipped in case
      * the default user is flagged as "nopass" and is active. */
     int auth_required = (!(DefaultUser->flags & USER_FLAG_NOPASS) ||
-                           DefaultUser->flags & USER_FLAG_DISABLED) &&
+                          (DefaultUser->flags & USER_FLAG_DISABLED)) &&
                         !c->authenticated;
     if (auth_required) {
         /* AUTH and HELLO and no auth modules are valid even in
@@ -3793,8 +3811,11 @@ int processCommand(client *c, int callFlags) {
      * ACLs. */
     if (c->puser && !(c->puser->flags & USER_FLAG_ALLCOMMANDS))
         locker.arm(c);  // ACLs require the lock
-    int acl_retval = ACLCheckCommandPerm(c);
+
+    int acl_keypos;
+    int acl_retval = ACLCheckCommandPerm(c,&acl_keypos);
     if (acl_retval != ACL_OK) {
+        addACLLogEntry(c,acl_retval,acl_keypos,NULL);
         flagTransaction(c);
         if (acl_retval == ACL_DENIED_CMD)
             addReplyErrorFormat(c,
@@ -3907,6 +3928,7 @@ int processCommand(client *c, int callFlags) {
             !(c->flags & CLIENT_MASTER) &&
             c->cmd->flags & CMD_WRITE)
         {
+            flagTransaction(c);
             addReply(c, shared.roslaveerr);
             return C_OK;
         }
@@ -3920,7 +3942,10 @@ int processCommand(client *c, int callFlags) {
         c->cmd->proc != unsubscribeCommand &&
         c->cmd->proc != psubscribeCommand &&
         c->cmd->proc != punsubscribeCommand) {
-        addReplyError(c,"only (P)SUBSCRIBE / (P)UNSUBSCRIBE / PING / QUIT allowed in this context");
+        addReplyErrorFormat(c,
+            "Can't execute '%s': only (P)SUBSCRIBE / "
+            "(P)UNSUBSCRIBE / PING / QUIT are allowed in this context",
+            c->cmd->name);
         return C_OK;
     }
 
@@ -3948,11 +3973,19 @@ int processCommand(client *c, int callFlags) {
         return C_OK;
     }
 
-    /* Lua script too slow? Only allow a limited number of commands. */
+    /* Lua script too slow? Only allow a limited number of commands.
+     * Note that we need to allow the transactions commands, otherwise clients
+     * sending a transaction with pipelining without error checking, may have
+     * the MULTI plus a few initial commands refused, then the timeout
+     * condition resolves, and the bottom-half of the transaction gets
+     * executed, see Github PR #7022. */
     if (g_pserver->lua_timedout &&
           c->cmd->proc != authCommand &&
           c->cmd->proc != helloCommand &&
           c->cmd->proc != replconfCommand &&
+          c->cmd->proc != multiCommand &&
+          c->cmd->proc != execCommand &&
+          c->cmd->proc != discardCommand &&
         !(c->cmd->proc == shutdownCommand &&
           c->argc == 2 &&
           tolower(((char*)ptrFromObj(c->argv[1]))[0]) == 'n') &&
@@ -4209,6 +4242,7 @@ void addReplyCommand(client *c, struct redisCommand *cmd) {
         flagcount += addReplyCommandFlag(c,cmd,CMD_SKIP_SLOWLOG, "skip_slowlog");
         flagcount += addReplyCommandFlag(c,cmd,CMD_ASKING, "asking");
         flagcount += addReplyCommandFlag(c,cmd,CMD_FAST, "fast");
+        flagcount += addReplyCommandFlag(c,cmd,CMD_NO_AUTH, "no_auth");
         if ((cmd->getkeys_proc && !(cmd->flags & CMD_MODULE)) ||
             cmd->flags & CMD_MODULE_GETKEYS)
         {
@@ -4413,11 +4447,13 @@ sds genRedisInfoString(const char *section) {
             "client_recent_max_output_buffer:%zu\r\n"
             "blocked_clients:%d\r\n"
             "tracking_clients:%d\r\n"
+            "clients_in_timeout_table:%" PRIu64 "\r\n"
             "current_client_thread:%d\r\n",
             listLength(g_pserver->clients)-listLength(g_pserver->slaves),
             maxin, maxout,
             g_pserver->blocked_clients,
             g_pserver->tracking_clients,
+            raxSize(g_pserver->clients_timeout_table),
             static_cast<int>(serverTL - g_pserver->rgthreadvar));
         for (int ithread = 0; ithread < cserver.cthreads; ++ithread)
         {
@@ -4572,7 +4608,7 @@ sds genRedisInfoString(const char *section) {
             "aof_last_cow_size:%zu\r\n"
             "module_fork_in_progress:%d\r\n"
             "module_fork_last_cow_size:%zu\r\n",
-            g_pserver->loading,
+            g_pserver->loading.load(std::memory_order_relaxed),
             g_pserver->dirty,
             g_pserver->FRdbSaveInProgress(),
             (intmax_t)g_pserver->lastsave,
@@ -4675,7 +4711,9 @@ sds genRedisInfoString(const char *section) {
             "active_defrag_misses:%lld\r\n"
             "active_defrag_key_hits:%lld\r\n"
             "active_defrag_key_misses:%lld\r\n"
-            "tracking_used_slots:%llu\r\n",
+            "tracking_total_keys:%lld\r\n"
+            "tracking_total_items:%llu\r\n"
+             "unexpected_error_replies:%lld\r\n",
             g_pserver->stat_numconnections,
             g_pserver->stat_numcommands,
             getInstantaneousMetric(STATS_METRIC_COMMAND),
@@ -4703,7 +4741,9 @@ sds genRedisInfoString(const char *section) {
             g_pserver->stat_active_defrag_misses,
             g_pserver->stat_active_defrag_key_hits,
             g_pserver->stat_active_defrag_key_misses,
-            trackingGetUsedSlots());
+            (unsigned long long) trackingGetTotalKeys(),
+            (unsigned long long) trackingGetTotalItems(),
+            g_pserver->stat_unexpected_error_replies);
     }
 
     /* Replication */
@@ -4831,6 +4871,7 @@ sds genRedisInfoString(const char *section) {
             "master_replid:%s\r\n"
             "master_replid2:%s\r\n"
             "master_repl_offset:%lld\r\n"
+            "master_repl_meaningful_offset:%lld\r\n"
             "second_repl_offset:%lld\r\n"
             "repl_backlog_active:%d\r\n"
             "repl_backlog_size:%lld\r\n"
@@ -4839,6 +4880,7 @@ sds genRedisInfoString(const char *section) {
             g_pserver->replid,
             g_pserver->replid2,
             g_pserver->master_repl_offset,
+            g_pserver->master_repl_meaningful_offset,
             g_pserver->second_replid_offset,
             g_pserver->repl_backlog != NULL,
             g_pserver->repl_backlog_size,
@@ -5255,6 +5297,7 @@ void loadDataFromDisk(void) {
             {
                 memcpy(g_pserver->replid,rsi.repl_id,sizeof(g_pserver->replid));
                 g_pserver->master_repl_offset = rsi.repl_offset;
+                g_pserver->master_repl_meaningful_offset = rsi.repl_offset;
                 listIter li;
                 listNode *ln;
                 
@@ -5467,8 +5510,12 @@ static void validateConfiguration()
     }
 }
 
-bool initializeStorageProvider(const char **err);
+int iAmMaster(void) {
+    return ((!g_pserver->cluster_enabled && (listLength(g_pserver->masters) == 0 || g_pserver->fActiveReplica)) ||
+            (g_pserver->cluster_enabled && nodeIsMaster(g_pserver->cluster->myself)));
+}
 
+bool initializeStorageProvider(const char **err);
 int main(int argc, char **argv) {
     struct timeval tv;
     int j;
@@ -5747,10 +5794,10 @@ int main(int argc, char **argv) {
 #ifdef __linux__
             cpu_set_t cpuset;
             CPU_ZERO(&cpuset);
-            CPU_SET(iel, &cpuset);
+            CPU_SET(iel + cserver.threadAffinityOffset, &cpuset);
             if (pthread_setaffinity_np(rgthread[iel], sizeof(cpu_set_t), &cpuset) == 0)
             {
-                serverLog(LOG_INFO, "Binding thread %d to cpu %d", iel, iel);
+                serverLog(LOG_INFO, "Binding thread %d to cpu %d", iel, iel + cserver.threadAffinityOffset + 1);
             }
 #else
 			serverLog(LL_WARNING, "CPU pinning not available on this platform");

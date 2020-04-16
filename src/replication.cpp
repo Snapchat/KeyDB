@@ -1228,6 +1228,7 @@ void sendBulkToSlave(connection *conn) {
     serverAssert(FCorrectThread(replica));
     char buf[PROTO_IOBUF_LEN];
     ssize_t nwritten, buflen;
+    std::unique_lock<fastlock> ul(replica->lock);
 
     /* Before sending the RDB file, we send the preamble as configured by the
      * replication process. Currently the preamble is just the bulk count of
@@ -3109,6 +3110,10 @@ void roleCommand(client *c) {
         while ((ln = listNext(&li)))
         {
             redisMaster *mi = (redisMaster*)listNodeValue(ln);
+            std::unique_lock<fastlock> lock;
+            if (mi->master != nullptr)
+                lock = std::unique_lock<fastlock>(mi->master->lock);
+
             const char *slavestate = NULL;
             addReplyArrayLen(c,5);
             if (g_pserver->fActiveReplica)
@@ -3952,6 +3957,13 @@ struct RemoteMasterState
 {
     uint64_t mvcc = 0;
     client *cFake = nullptr;
+
+    ~RemoteMasterState()
+    {
+        aeAcquireLock();
+        freeClient(cFake);
+        aeReleaseLock();
+    }
 };
 
 static std::unordered_map<std::string, RemoteMasterState> g_mapremote;

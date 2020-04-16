@@ -31,6 +31,7 @@
 #include "server.h"
 #include "sha1.h"   /* SHA1 is used for DEBUG DIGEST */
 #include "crc64.h"
+#include "cron.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -251,6 +252,10 @@ void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj
             mt->digest(&md,mv->value);
             xorDigest(digest,md.x,sizeof(md.x));
         }
+    } else if (o->type == OBJ_CRON) {
+        cronjob *job = (cronjob*)ptrFromObj(o);
+        mixDigest(digest, &job->interval, sizeof(job->interval));
+        mixDigest(digest, job->script.get(), job->script.size());
     } else {
         serverPanic("Unknown object type");
     }

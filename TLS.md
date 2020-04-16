@@ -51,19 +51,7 @@ Connections
 All socket operations now go through a connection abstraction layer that hides
 I/O and read/write event handling from the caller.
 
-**Multi-threading I/O is not currently supported for TLS**, as a TLS connection
-needs to do its own manipulation of AE events which is not thread safe. The
-solution is probably to manage independent AE loops for I/O threads and longer
-term association of connections with threads. This may potentially improve
-overall performance as well.
-
-Sync IO for TLS is currently implemented in a hackish way, i.e. making the
-socket blocking and configuring socket-level timeout.  This means the timeout
-value may not be so accurate, and there would be a lot of syscall overhead.
-However I believe that getting rid of syncio completely in favor of pure async
-work is probably a better move than trying to fix that. For replication it would
-probably not be so hard. For cluster keys migration it might be more difficult,
-but there are probably other good reasons to improve that part anyway.
+Note that unlike Redis, KeyDB fully supports multithreading of TLS connections.
 
 To-Do List
 ----------

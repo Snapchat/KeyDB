@@ -8,7 +8,9 @@ jobs:
     steps:
     - uses: actions/checkout@v1
     - name: make
-      run: make
+      run: |
+          sudo apt-get install uuid-dev
+          make
     - name: test
       run: |
         sudo apt-get install tcl8.5

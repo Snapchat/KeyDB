@@ -70,6 +70,7 @@ void cronCommand(client *c)
     decrRefCount(o);
     // use an expire to trigger execution.  Note: We use a subkey expire here so legacy clients don't delete it.
     setExpire(c, c->db, c->argv[ARG_NAME], c->argv[ARG_NAME], base + interval);
+    ++g_pserver->dirty;
     addReply(c, shared.ok);
 }
 
@@ -86,6 +87,7 @@ void executeCronJobExpireHook(const char *key, robj *o)
     serverAssert(cFake->argc == 0);
 
     // Setup the args for the EVAL command
+    cFake->cmd = lookupCommandByCString("EVAL");
     cFake->argc = 3 + job->veckeys.size() + job->vecargs.size();
     cFake->argv = (robj**)zmalloc(sizeof(robj*) * cFake->argc, MALLOC_LOCAL);
     cFake->argv[0] = createStringObject("EVAL", 4);
@@ -96,7 +98,17 @@ void executeCronJobExpireHook(const char *key, robj *o)
     for (size_t i = 0; i < job->vecargs.size(); ++i)
         cFake->argv[3+job->veckeys.size()+i] = createStringObject(job->vecargs[i].get(), job->vecargs[i].size());
 
+    int lua_replicate_backup = g_pserver->lua_always_replicate_commands;
+    g_pserver->lua_always_replicate_commands = 0;
     evalCommand(cFake);
+    g_pserver->lua_always_replicate_commands = lua_replicate_backup;
+
+    if (g_pserver->aof_state != AOF_OFF)
+        feedAppendOnlyFile(cFake->cmd,cFake->db->id,cFake->argv,cFake->argc);
+    // Active replicas do their own expiries, do not propogate
+    if (!g_pserver->fActiveReplica)
+        replicationFeedSlaves(g_pserver->slaves,cFake->db->id,cFake->argv,cFake->argc);
+
     resetClient(cFake);
 
     robj *keyobj = createStringObject(key,sdslen(key));

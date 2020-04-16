@@ -640,6 +640,10 @@ struct redisCommand redisCommandTable[] = {
     {"expirememberat", expireMemberAtCommand, 4,
      "write fast @keyspace",
      0,NULL,1,1,1,0,0,0},
+    
+    {"pexpirememberat", pexpireMemberAtCommand, 4,
+     "write fast @keyspace",
+     0,NULL,1,1,1,0,0,0},
 
     {"pexpire",pexpireCommand,3,
      "write fast @keyspace",
@@ -2343,6 +2347,9 @@ void createSharedObjects(void) {
     shared.zpopmax = makeObjectShared("ZPOPMAX",7);
     shared.multi = makeObjectShared("MULTI",5);
     shared.exec = makeObjectShared("EXEC",4);
+    shared.hdel = makeObjectShared(createStringObject("HDEL", 4));
+    shared.zrem = makeObjectShared(createStringObject("ZREM", 4));
+    shared.srem = makeObjectShared(createStringObject("SREM", 4));
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =
             makeObjectShared(createObject(OBJ_STRING,(void*)(long)j));
@@ -2496,6 +2503,8 @@ void initServerConfig(void) {
     cserver.xgroupCommand = lookupCommandByCString("xgroup");
     cserver.rreplayCommand = lookupCommandByCString("rreplay");
     cserver.rpoplpushCommand = lookupCommandByCString("rpoplpush");
+    cserver.hdelCommand = lookupCommandByCString("hdel");
+    cserver.zremCommand = lookupCommandByCString("zrem");
 
     /* Debugging */
     g_pserver->assert_failed = "<no assertion failed>";
@@ -2513,6 +2522,7 @@ void initServerConfig(void) {
     /* Multithreading */
     cserver.cthreads = CONFIG_DEFAULT_THREADS;
     cserver.fThreadAffinity = CONFIG_DEFAULT_THREAD_AFFINITY;
+    cserver.threadAffinityOffset = 0;
     initConfigValues();
 }
 
@@ -5515,10 +5525,10 @@ int main(int argc, char **argv) {
 #ifdef __linux__
             cpu_set_t cpuset;
             CPU_ZERO(&cpuset);
-            CPU_SET(iel, &cpuset);
+            CPU_SET(iel + cserver.threadAffinityOffset, &cpuset);
             if (pthread_setaffinity_np(rgthread[iel], sizeof(cpu_set_t), &cpuset) == 0)
             {
-                serverLog(LOG_INFO, "Binding thread %d to cpu %d", iel, iel);
+                serverLog(LOG_INFO, "Binding thread %d to cpu %d", iel, iel + cserver.threadAffinityOffset + 1);
             }
 #else
 			serverLog(LL_WARNING, "CPU pinning not available on this platform");

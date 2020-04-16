@@ -258,7 +258,9 @@ tags {"aof"} {
         }
     }
 
-    start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} appendfsync always}} {
+    # Because of how this test works its inherently unreliable with multithreading, so force threads 1
+    #   No real client should rely on this undocumented behavior
+    start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} appendfsync always server-threads 1}} {
         test {AOF fsync always barrier issue} {
             set rd [redis_deferring_client]
             # Set a sleep when aof is flushed, so that we have a chance to look

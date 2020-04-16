@@ -2191,8 +2191,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     flushAppendOnlyFile(0);
 
     /* Handle writes with pending output buffers. */
+    int aof_state = g_pserver->aof_state;
     aeReleaseLock();
-    handleClientsWithPendingWrites(IDX_EVENT_LOOP_MAIN);
+    handleClientsWithPendingWrites(IDX_EVENT_LOOP_MAIN, aof_state);
     aeAcquireLock();
 
     /* Close clients that need to be closed asynchronous */
@@ -2217,10 +2218,11 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
     /* Check if there are clients unblocked by modules that implement
      * blocking commands. */
     if (moduleCount()) moduleHandleBlockedClients(ielFromEventLoop(eventLoop));
+    int aof_state = g_pserver->aof_state;
     aeReleaseLock();
 
     /* Handle writes with pending output buffers. */
-    handleClientsWithPendingWrites(iel);
+    handleClientsWithPendingWrites(iel, aof_state);
 
     aeAcquireLock();
     /* Close clients that need to be closed asynchronous */

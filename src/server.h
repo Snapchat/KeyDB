@@ -2203,7 +2203,7 @@ void pauseClients(mstime_t duration);
 int clientsArePaused(void);
 void unpauseClientsIfNecessary();
 int processEventsWhileBlocked(int iel);
-int handleClientsWithPendingWrites(int iel);
+int handleClientsWithPendingWrites(int iel, int aof_state);
 int clientHasPendingReplies(client *c);
 void unlinkClient(client *c);
 int writeToClient(client *c, int handler_installed);

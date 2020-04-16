@@ -31,6 +31,7 @@
 #include "server.h"
 #include "sha1.h"   /* SHA1 is used for DEBUG DIGEST */
 #include "crc64.h"
+#include "cron.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -251,6 +252,10 @@ void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj
             mt->digest(&md,mv->value);
             xorDigest(digest,md.x,sizeof(md.x));
         }
+    } else if (o->type == OBJ_CRON) {
+        cronjob *job = (cronjob*)ptrFromObj(o);
+        mixDigest(digest, &job->interval, sizeof(job->interval));
+        mixDigest(digest, job->script.get(), job->script.size());
     } else {
         serverPanic("Unknown object type");
     }
@@ -358,6 +363,7 @@ void debugCommand(client *c) {
 "CRASH-AND-RECOVER <milliseconds> -- Hard crash and restart after <milliseconds> delay.",
 "DIGEST -- Output a hex signature representing the current DB content.",
 "DIGEST-VALUE <key-1> ... <key-N>-- Output a hex signature of the values of all the specified keys.",
+"DEBUG PROTOCOL [string|integer|double|bignum|null|array|set|map|attrib|push|verbatim|true|false]",
 "ERROR <string> -- Return a Redis protocol error with <string> as message. Useful for clients unit tests to simulate Redis errors.",
 "LOG <message> -- write message to the server log.",
 "HTSTATS <dbid> -- Return hash table statistics of the specified Redis database.",
@@ -365,6 +371,7 @@ void debugCommand(client *c) {
 "LOADAOF -- Flush the AOF buffers on disk and reload the AOF in memory.",
 "LUA-ALWAYS-REPLICATE-COMMANDS <0|1> -- Setting it to 1 makes Lua replication defaulting to replicating single commands, without the script having to enable effects replication.",
 "OBJECT <key> -- Show low level info about key and associated value.",
+"OOM -- Crash the server simulating an out-of-memory error.",
 "PANIC -- Crash the server simulating a panic.",
 "POPULATE <count> [prefix] [size] -- Create <count> string keys named key:<num>. If a prefix is specified is used instead of the 'key' prefix.",
 "RELOAD -- Save the RDB on disk and reload it back in memory.",
@@ -586,8 +593,8 @@ NULL
         }
     } else if (!strcasecmp(szFromObj(c->argv[1]),"protocol") && c->argc == 3) {
         /* DEBUG PROTOCOL [string|integer|double|bignum|null|array|set|map|
-         *                 attrib|push|verbatim|true|false|state|err|bloberr] */
-        char *name = szFromObj(c->argv[2]);
+         *                 attrib|push|verbatim|true|false] */
+        const char *name = szFromObj(c->argv[2]);
         if (!strcasecmp(name,"string")) {
             addReplyBulkCString(c,"Hello World");
         } else if (!strcasecmp(name,"integer")) {
@@ -634,7 +641,7 @@ NULL
         } else if (!strcasecmp(name,"verbatim")) {
             addReplyVerbatim(c,"This is a verbatim\nstring",25,"txt");
         } else {
-            addReplyError(c,"Wrong protocol type name. Please use one of the following: string|integer|double|bignum|null|array|set|map|attrib|push|verbatim|true|false|state|err|bloberr");
+            addReplyError(c,"Wrong protocol type name. Please use one of the following: string|integer|double|bignum|null|array|set|map|attrib|push|verbatim|true|false");
         }
     } else if (!strcasecmp(szFromObj(c->argv[1]),"sleep") && c->argc == 3) {
         double dtime = strtod(szFromObj(c->argv[2]),NULL);
@@ -683,9 +690,12 @@ NULL
         sds stats = sdsempty();
         char buf[4096];
 
-        if (getLongFromObjectOrReply(c, c->argv[2], &dbid, NULL) != C_OK)
+        if (getLongFromObjectOrReply(c, c->argv[2], &dbid, NULL) != C_OK) {
+            sdsfree(stats);
             return;
+        }
         if (dbid < 0 || dbid >= cserver.dbnum) {
+            sdsfree(stats);
             addReplyError(c,"Out of range database");
             return;
         }
@@ -832,6 +842,8 @@ void serverLogObjectDebugInfo(robj_roptr o) {
         serverLog(LL_WARNING,"Sorted set size: %d", (int) zsetLength(o));
         if (o->encoding == OBJ_ENCODING_SKIPLIST)
             serverLog(LL_WARNING,"Skiplist level: %d", (int) ((const zset*)ptrFromObj(o))->zsl->level);
+    } else if (o->type == OBJ_STREAM) {
+        serverLog(LL_WARNING,"Stream size: %d", (int) streamLength(o));
     }
 }
 

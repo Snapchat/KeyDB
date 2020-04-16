@@ -77,6 +77,10 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
     expireEntryFat *pfat = e.pfatentry();
     robj *val = db->find(e.key());
     int deleted = 0;
+
+    robj objKey;
+    initStaticStringObject(objKey, (char*)e.key());
+
     while (!pfat->FEmpty())
     {
         if (pfat->nextExpireEntry().when > now)
@@ -129,13 +133,13 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
         default:
             serverAssert(false);
         }
+        
+        robj objSubkey;
+        initStaticStringObject(objSubkey, (char*)pfat->nextExpireEntry().spsubkey.get());
+        propagateSubkeyExpire(db, val->type, &objKey, &objSubkey);
+        
         pfat->popfrontExpireEntry();
     }
-
-    robj *keyobj = nullptr;
-
-    if (deleted || pfat->FEmpty())
-        keyobj = createStringObject(e.key(),sdslen(e.key()));
 
     if (deleted)
     {
@@ -145,24 +149,19 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
             db->resortExpire(e);
         }
 
-        robj objT;
         switch (val->type)
         {
         case OBJ_SET:
-            initStaticStringObject(objT, (char*)e.key());
-            signalModifiedKey(db,&objT);
-            notifyKeyspaceEvent(NOTIFY_SET,"srem",&objT,db->id);
+            signalModifiedKey(db,&objKey);
+            notifyKeyspaceEvent(NOTIFY_SET,"srem",&objKey,db->id);
             break;
         }
     }
 
     if (pfat->FEmpty())
     {
-        removeExpire(db, keyobj);
+        removeExpire(db, &objKey);
     }
-
-    if (keyobj)
-        decrRefCount(keyobj);
 }
 
 int parseUnitString(const char *sz)
@@ -226,7 +225,8 @@ void expireMemberCore(client *c, robj *key, robj *subkey, long long basetime, lo
     }
 
     setExpire(c, c->db, key, subkey, when);
-
+    signalModifiedKey(c->db, key);
+    g_pserver->dirty++;
     addReply(c, shared.cone);
 }
 
@@ -258,6 +258,14 @@ void expireMemberAtCommand(client *c)
     expireMemberCore(c, c->argv[1], c->argv[2], 0, when, UNIT_SECONDS);
 }
 
+void pexpireMemberAtCommand(client *c)
+{
+    long long when;
+    if (getLongLongFromObjectOrReply(c, c->argv[3], &when, NULL) != C_OK)
+        return;
+
+    expireMemberCore(c, c->argv[1], c->argv[2], 0, when, UNIT_MILLISECONDS);
+}
 
 /* Try to expire a few timed out keys. The algorithm used is adaptive and
  * will use few CPU cycles if there are few expiring keys, otherwise

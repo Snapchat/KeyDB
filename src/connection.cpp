@@ -153,7 +153,7 @@ static void connSocketClose(connection *conn) {
     /* If called from within a handler, schedule the close but
      * keep the connection until the handler returns.
      */
-    if (conn->flags & CONN_FLAG_IN_HANDLER) {
+    if (connHasRefs(conn)) {
         conn->flags |= CONN_FLAG_CLOSE_SCHEDULED;
         return;
     }
@@ -184,10 +184,16 @@ static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
 }
 
 static int connSocketAccept(connection *conn, ConnectionCallbackFunc accept_handler) {
+    int ret = C_OK;
+
     if (conn->state != CONN_STATE_ACCEPTING) return C_ERR;
     conn->state = CONN_STATE_CONNECTED;
-    if (!callHandler(conn, accept_handler)) return C_ERR;
-    return C_OK;
+
+    connIncrRefs(conn);
+    if (!callHandler(conn, accept_handler)) ret = C_ERR;
+    connDecrRefs(conn);
+
+    return ret;
 }
 
 /* Register a write handler, to be called when the connection is writable.
@@ -440,16 +446,4 @@ void connSetThreadAffinity(connection *conn, int cpu) {
 const char *connGetInfo(connection *conn, char *buf, size_t buf_len) {
     snprintf(buf, buf_len-1, "fd=%i", conn->fd);
     return buf;
-}
-
-
-int callHandler(connection *conn, ConnectionCallbackFunc handler) {
-    conn->flags |= CONN_FLAG_IN_HANDLER;
-    if (handler) handler(conn);
-    conn->flags &= ~CONN_FLAG_IN_HANDLER;
-    if (conn->flags & CONN_FLAG_CLOSE_SCHEDULED) {
-        connClose(conn);
-        return 0;
-    }
-    return 1;
 }

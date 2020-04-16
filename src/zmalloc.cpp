@@ -449,9 +449,6 @@ size_t zmalloc_get_smap_bytes_by_field(const char *field, long pid) {
     return bytes;
 }
 #else
-<<<<<<< HEAD:src/zmalloc.cpp
-size_t zmalloc_get_smap_bytes_by_field(const char *field, long pid) {
-=======
 /* Get sum of the specified field from libproc api call.
  * As there are per page value basis we need to convert
  * them accordingly.
@@ -459,7 +456,7 @@ size_t zmalloc_get_smap_bytes_by_field(const char *field, long pid) {
  * Note that AnonHugePages is a no-op as THP feature
  * is not supported in this platform
  */
-size_t zmalloc_get_smap_bytes_by_field(char *field, long pid) {
+size_t zmalloc_get_smap_bytes_by_field(const char *field, long pid) {
 #if defined(__APPLE__)
     struct proc_regioninfo pri;
     if (proc_pidinfo(pid, PROC_PIDREGIONINFO, 0, &pri, PROC_PIDREGIONINFO_SIZE) ==
@@ -474,7 +471,6 @@ size_t zmalloc_get_smap_bytes_by_field(char *field, long pid) {
     }
     return 0;
 #endif
->>>>>>> redis/6.0:src/zmalloc.c
     ((void) field);
     ((void) pid);
     return 0;

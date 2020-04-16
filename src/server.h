@@ -474,7 +474,13 @@ public:
 #define CLIENT_TRACKING (1ULL<<31) /* Client enabled keys tracking in order to
                                    perform client side caching. */
 #define CLIENT_TRACKING_BROKEN_REDIR (1ULL<<32) /* Target client is invalid. */
-#define CLIENT_FORCE_REPLY (1ULL<<33) /* Should addReply be forced to write the text? */
+#define CLIENT_TRACKING_BCAST (1ULL<<33) /* Tracking in BCAST mode. */
+#define CLIENT_TRACKING_OPTIN (1ULL<<34)  /* Tracking in opt-in mode. */
+#define CLIENT_TRACKING_OPTOUT (1ULL<<35) /* Tracking in opt-out mode. */
+#define CLIENT_TRACKING_CACHING (1ULL<<36) /* CACHING yes/no was given,
+                                              depending on optin/optout mode. */
+#define CLIENT_IN_TO_TABLE (1ULL<<37) /* This client is in the timeout table. */
+#define CLIENT_FORCE_REPLY (1ULL<<38) /* Should addReply be forced to write the text? */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -569,7 +575,7 @@ public:
 /* Anti-warning macro... */
 #define UNUSED(V) ((void) V)
 
-#define ZSKIPLIST_MAXLEVEL 64 /* Should be enough for 2^64 elements */
+#define ZSKIPLIST_MAXLEVEL 32 /* Should be enough for 2^64 elements */
 #define ZSKIPLIST_P 0.25      /* Skiplist P = 1/4 */
 
 /* Append only defines */
@@ -623,6 +629,8 @@ public:
 #define CMD_CALL_PROPAGATE_REPL (1<<3)
 #define CMD_CALL_PROPAGATE (CMD_CALL_PROPAGATE_AOF|CMD_CALL_PROPAGATE_REPL)
 #define CMD_CALL_FULL (CMD_CALL_SLOWLOG | CMD_CALL_STATS | CMD_CALL_PROPAGATE)
+#define CMD_CALL_NOWRAP (1<<4)  /* Don't wrap also propagate array into
+                                   MULTI/EXEC: the caller will handle it.  */
 
 /* Command propagation flags, see propagate() function */
 #define PROPAGATE_NONE 0
@@ -647,8 +655,8 @@ public:
 #define NOTIFY_EXPIRED (1<<8)     /* x */
 #define NOTIFY_EVICTED (1<<9)     /* e */
 #define NOTIFY_STREAM (1<<10)     /* t */
-#define NOTIFY_KEY_MISS (1<<11)   /* m */
-#define NOTIFY_ALL (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_EXPIRED | NOTIFY_EVICTED | NOTIFY_STREAM | NOTIFY_KEY_MISS) /* A flag */
+#define NOTIFY_KEY_MISS (1<<11)   /* m (Note: This one is excluded from NOTIFY_ALL on purpose) */
+#define NOTIFY_ALL (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_EXPIRED | NOTIFY_EVICTED | NOTIFY_STREAM) /* A flag */
 
 /* Get the first bind addr or NULL */
 #define NET_FIRST_BIND_ADDR (g_pserver->bindaddr_count ? g_pserver->bindaddr[0] : NULL)
@@ -1674,7 +1682,9 @@ typedef struct client {
      * invalidation messages for keys fetched by this client will be send to
      * the specified client ID. */
     uint64_t client_tracking_redirection;
-
+    rax *client_tracking_prefixes; /* A dictionary of prefixes we are already
+                                      subscribed to in BCAST mode, in the
+                                      context of client side caching. */
     /* Response buffer */
     int bufpos;
     char buf[PROTO_REPLY_CHUNK_BYTES];
@@ -1711,7 +1721,7 @@ struct sharedObjectsStruct {
     *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
     *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink,
     *rpop, *lpop, *lpush, *rpoplpush, *zpopmin, *zpopmax, *emptyscan,
-    *multi, *exec,
+    *multi, *exec, *srem, *hdel, *zrem,
     *select[PROTO_SHARED_SELECT_CMDS],
     *integers[OBJ_SHARED_INTEGERS],
     *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
@@ -1951,6 +1961,7 @@ struct redisServerConst {
 
     int cthreads;               /* Number of main worker threads */
     int fThreadAffinity;        /* Should we pin threads to cores? */
+    int threadAffinityOffset = 0; /* Where should we start pinning them? */
     char *pidfile;              /* PID file path */
 
     /* Fast pointers to often looked up command */
@@ -1958,7 +1969,8 @@ struct redisServerConst {
                         *lpopCommand, *rpopCommand, *zpopminCommand,
                         *zpopmaxCommand, *sremCommand, *execCommand,
                         *expireCommand, *pexpireCommand, *xclaimCommand,
-                        *xgroupCommand, *rreplayCommand, *rpoplpushCommand;
+                        *xgroupCommand, *rreplayCommand, *rpoplpushCommand,
+                        *hdelCommand, *zremCommand;
 
     /* Configuration */
     char *default_masteruser;               /* AUTH with this user and masterauth with master */
@@ -2008,7 +2020,7 @@ struct redisServer {
     struct redisServerThreadVars rgthreadvar[MAX_EVENT_LOOPS];
 
     std::atomic<unsigned int> lruclock;      /* Clock for LRU eviction */
-    int shutdown_asap;          /* SHUTDOWN needed ASAP */
+    std::atomic<int> shutdown_asap;          /* SHUTDOWN needed ASAP */
     int activerehashing;        /* Incremental rehash in serverCron() */
     int active_defrag_running;  /* Active defragmentation running (holds current scan aggressiveness) */
     int cronloops;              /* Number of times the cron function run */
@@ -2036,13 +2048,14 @@ struct redisServer {
     list *clients;              /* List of active clients */
     list *clients_to_close;     /* Clients to close asynchronously */
     list *slaves, *monitors;    /* List of slaves and MONITORs */
+    rax *clients_timeout_table; /* Radix tree for blocked clients timeouts. */
     rax *clients_index;         /* Active clients dictionary by client ID. */
     mstime_t clients_pause_end_time; /* Time when we undo clients_paused */
     dict *migrate_cached_sockets;/* MIGRATE cached sockets */
     std::atomic<uint64_t> next_client_id; /* Next client unique ID. Incremental. */
     int protected_mode;         /* Don't accept external connections. */
     /* RDB / AOF loading information */
-    int loading;                /* We are loading data from disk if true */
+    std::atomic<int> loading;                /* We are loading data from disk if true */
     off_t loading_total_bytes;
     off_t loading_loaded_bytes;
     time_t loading_start_time;
@@ -2082,6 +2095,7 @@ struct redisServer {
     size_t stat_rdb_cow_bytes;      /* Copy on write bytes during RDB saving. */
     size_t stat_aof_cow_bytes;      /* Copy on write bytes during AOF rewrite. */
     size_t stat_module_cow_bytes;   /* Copy on write bytes during module fork. */
+    long long stat_unexpected_error_replies; /* Number of unexpected (aof-loading, replica to master, etc.) error replies */
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {
@@ -2138,7 +2152,7 @@ struct redisServer {
     struct _rdbThreadVars
     {
         bool fRdbThreadActive = false;
-        volatile bool fRdbThreadCancel = false;
+        std::atomic<bool> fRdbThreadCancel {false};
         pthread_t rdb_child_thread;     /* PID of RDB saving child */
         int tmpfileNum = 0;
     } rdbThreadVars;
@@ -2148,6 +2162,8 @@ struct redisServer {
     char *rdb_s3bucketpath;         /* Path for AWS S3 backup of RDB file */
     int rdb_compression;            /* Use compression in RDB? */
     int rdb_checksum;               /* Use RDB checksum? */
+    int rdb_del_sync_files;         /* Remove RDB files used only for SYNC if
+                                       the instance does not use persistence. */
     time_t lastsave;                /* Unix time of last successful save */
     time_t lastbgsave_try;          /* Unix time of last attempted bgsave */
     time_t rdb_save_time_last;      /* Time used by last RDB save run. */
@@ -2185,6 +2201,7 @@ struct redisServer {
     char replid[CONFIG_RUN_ID_SIZE+1];  /* My current replication ID. */
     char replid2[CONFIG_RUN_ID_SIZE+1]; /* replid inherited from master*/
     long long master_repl_offset;   /* My current replication offset */
+    long long master_repl_meaningful_offset; /* Offset minus latest PINGs. */
     long long second_replid_offset; /* Accept offsets up to this for replid2. */
     int replicaseldb;                 /* Last SELECTed DB in replication output */
     int repl_ping_slave_period;     /* Master pings the replica every N seconds */
@@ -2240,7 +2257,7 @@ struct redisServer {
     list *ready_keys;        /* List of readyList structures for BLPOP & co */
     /* Client side caching. */
     unsigned int tracking_clients;  /* # of clients with tracking enabled.*/
-    int tracking_table_max_fill;    /* Max fill percentage. */
+    size_t tracking_table_max_keys; /* Max number of keys in tracking table. */
     /* Sort parameters - qsort_r() is only available under BSD so we
      * have to take this state global, in order to pass it to sortCompare() */
     int sort_desc;
@@ -2268,6 +2285,7 @@ struct redisServer {
     /* Pubsub */
     dict *pubsub_channels;  /* Map channels to list of subscribed clients */
     list *pubsub_patterns;  /* A list of pubsub_patterns */
+    dict *pubsub_patterns_dict;  /* A dict of pubsub_patterns */
     int notify_keyspace_events; /* Events to propagate via Pub/Sub. This is an
                                    xor of NOTIFY_... flags. */
     /* Cluster */
@@ -2318,6 +2336,10 @@ struct redisServer {
     dict *latency_events;
     /* ACLs */
     char *acl_filename;     /* ACL Users file. NULL if not configured. */
+    unsigned long acllog_max_len; /* Maximum length of the ACL LOG list. */
+    sds requirepass;        /* Remember the cleartext password set with the
+                               old "requirepass" directive for backward
+                               compatibility with Redis <= 5. */
     /* Assert & bug reporting */
     const char *assert_failed;
     const char *assert_file;
@@ -2589,7 +2611,7 @@ void pauseClients(mstime_t duration);
 int clientsArePaused(void);
 void unpauseClientsIfNecessary();
 int processEventsWhileBlocked(int iel);
-int handleClientsWithPendingWrites(int iel);
+int handleClientsWithPendingWrites(int iel, int aof_state);
 int clientHasPendingReplies(client *c);
 void unlinkClient(client *c);
 int writeToClient(client *c, int handler_installed);
@@ -2628,13 +2650,15 @@ void addReplyStatusFormat(client *c, const char *fmt, ...);
 #endif
 
 /* Client side caching (tracking mode) */
-void enableTracking(client *c, uint64_t redirect_to);
+void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix);
 void disableTracking(client *c);
 void trackingRememberKeys(client *c);
 void trackingInvalidateKey(robj *keyobj);
 void trackingInvalidateKeysOnFlush(int dbid);
 void trackingLimitUsedSlots(void);
-unsigned long long trackingGetUsedSlots(void);
+uint64_t trackingGetTotalItems(void);
+uint64_t trackingGetTotalKeys(void);
+void trackingBroadcastInvalidationMessages(void);
 
 /* List data type */
 void listTypeTryConversion(robj *subject, robj *value);
@@ -2768,6 +2792,7 @@ void loadingProgress(off_t pos);
 void stopLoading(int success);
 void startSaving(int rdbflags);
 void stopSaving(int success);
+int allPersistenceDisabled(void);
 
 #define DISK_ERROR_TYPE_AOF 1       /* Don't accept writes: AOF errors. */
 #define DISK_ERROR_TYPE_RDB 2       /* Don't accept writes: RDB errors. */
@@ -2812,11 +2837,12 @@ void ACLInit(void);
 #define ACL_OK 0
 #define ACL_DENIED_CMD 1
 #define ACL_DENIED_KEY 2
+#define ACL_DENIED_AUTH 3 /* Only used for ACL LOG entries. */
 int ACLCheckUserCredentials(robj *username, robj *password);
 int ACLAuthenticateUser(client *c, robj *username, robj *password);
 unsigned long ACLGetCommandID(const char *cmdname);
 user *ACLGetUserByName(const char *name, size_t namelen);
-int ACLCheckCommandPerm(client *c);
+int ACLCheckCommandPerm(client *c, int *keyidxptr);
 int ACLSetUser(user *u, const char *op, ssize_t oplen);
 sds ACLDefaultUserFirstPassword(void);
 uint64_t ACLGetCommandCategoryFlagByName(const char *name);
@@ -2828,6 +2854,7 @@ void ACLLoadUsersAtStartup(void);
 void addReplyCommandCategories(client *c, struct redisCommand *cmd);
 user *ACLCreateUnlinkedUser();
 void ACLFreeUserAndKillClients(user *u);
+void addACLLogEntry(client *c, int reason, int keypos, sds username);
 
 /* Sorted sets data type */
 
@@ -3007,6 +3034,7 @@ void initConfigValues();
 int removeExpire(redisDb *db, robj *key);
 int removeSubkeyExpire(redisDb *db, robj *key, robj *subkey);
 void propagateExpire(redisDb *db, robj *key, int lazy);
+void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey);
 int expireIfNeeded(redisDb *db, robj *key);
 void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when);
 void setExpire(client *c, redisDb *db, robj *key, expireEntry &&entry);
@@ -3037,6 +3065,7 @@ int dbnumFromDb(redisDb *db);
 
 #define EMPTYDB_NO_FLAGS 0      /* No flags. */
 #define EMPTYDB_ASYNC (1<<0)    /* Reclaim memory in another thread. */
+#define EMPTYDB_BACKUP (1<<2)   /* DB array is a backup for REPL_DISKLESS_LOAD_SWAPDB. */
 long long emptyDb(int dbnum, int flags, void(callback)(void*));
 long long emptyDbGeneric(redisDb **dbarray, int dbnum, int flags, void(callback)(void*));
 void flushAllDataAndResetRDB(int flags);
@@ -3068,6 +3097,7 @@ int *sortGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);
 int *migrateGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);
 int *georadiusGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);
 int *xreadGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);
+int *memoryGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);
 
 /* Cluster */
 void clusterInit(void);
@@ -3111,6 +3141,12 @@ void handleClientsBlockedOnKeys(void);
 void signalKeyAsReady(redisDb *db, robj *key);
 void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeout, robj *target, streamID *ids);
 
+/* timeout.c -- Blocked clients timeout and connections timeout. */
+void addClientToTimeoutTable(client *c);
+void removeClientFromTimeoutTable(client *c);
+void handleBlockedClientsTimeout(void);
+int clientsCronHandleTimeout(client *c, mstime_t now_ms);
+
 /* expire.c -- Handling of expired keys */
 void activeExpireCycle(int type);
 void expireSlaveKeys(void);
@@ -3136,6 +3172,8 @@ extern "C" char *redisGitDirty(void);
 extern "C" uint64_t redisBuildId(void);
 extern "C" char *redisBuildIdString(void);
 
+int parseUnitString(const char *sz);
+
 /* Commands prototypes */
 void authCommand(client *c);
 void pingCommand(client *c);
@@ -3152,6 +3190,7 @@ void existsCommand(client *c);
 void setbitCommand(client *c);
 void getbitCommand(client *c);
 void bitfieldCommand(client *c);
+void bitfieldroCommand(client *c);
 void setrangeCommand(client *c);
 void getrangeCommand(client *c);
 void incrCommand(client *c);
@@ -3213,6 +3252,7 @@ void expireCommand(client *c);
 void expireatCommand(client *c);
 void expireMemberCommand(client *c);
 void expireMemberAtCommand(client *c);
+void pexpireMemberAtCommand(client *c);
 void pexpireCommand(client *c);
 void pexpireatCommand(client *c);
 void getsetCommand(client *c);
@@ -3413,5 +3453,7 @@ class ShutdownException
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define redisDebugMark() \
     printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
+
+int iAmMaster(void);
 
 #endif

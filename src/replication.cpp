@@ -286,6 +286,8 @@ void feedReplicationBacklogWithObject(robj *o) {
     feedReplicationBacklog(p,len);
 }
 
+sds catCommandForAofAndActiveReplication(sds buf, struct redisCommand *cmd, robj **argv, int argc);
+
 void replicationFeedSlave(client *replica, int dictid, robj **argv, int argc, bool fSendRaw)
 {
     char llstr[LONG_STR_SIZE];
@@ -324,13 +326,43 @@ void replicationFeedSlave(client *replica, int dictid, robj **argv, int argc, bo
      * are queued in the output buffer until the initial SYNC completes),
      * or are already in sync with the master. */
 
-    /* Add the multi bulk length. */
-    addReplyArrayLenAsync(replica,argc);
+    if (fSendRaw)
+    {
+        /* Add the multi bulk length. */
+        addReplyArrayLenAsync(replica,argc);
 
-    /* Finally any additional argument that was not stored inside the
-        * static buffer if any (from j to argc). */
-    for (int j = 0; j < argc; j++)
-        addReplyBulkAsync(replica,argv[j]);
+        /* Finally any additional argument that was not stored inside the
+            * static buffer if any (from j to argc). */
+        for (int j = 0; j < argc; j++)
+            addReplyBulkAsync(replica,argv[j]);
+    }
+    else
+    {
+        struct redisCommand *cmd = lookupCommand(szFromObj(argv[0]));
+        sds buf = catCommandForAofAndActiveReplication(sdsempty(), cmd, argv, argc);
+        addReplyProtoAsync(replica, buf, sdslen(buf));
+        sdsfree(buf);
+    }
+}
+
+static int writeProtoNum(char *dst, const size_t cchdst, long long num)
+{
+    if (cchdst < 1)
+        return 0;
+    dst[0] = '$';
+    int cch = 1;
+    cch += ll2string(dst + cch, cchdst - cch, digits10(num));
+    int chCpyT = std::min<int>(cchdst - cch, 2);
+    memcpy(dst + cch, "\r\n", chCpyT);
+    cch += chCpyT;
+    cch += ll2string(dst + cch, cchdst-cch, num);
+    chCpyT = std::min<int>(cchdst - cch, 3);
+    memcpy(dst + cch, "\r\n", chCpyT);
+    if (chCpyT == 3)
+        cch += 2;
+    else
+        cch += chCpyT;
+    return cch;
 }
 
 /* Propagate write commands to slaves, and populate the replication backlog
@@ -343,6 +375,8 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listIter li, liReply;
     int j, len;
     serverAssert(GlobalLocksAcquired());
+    static client *fake = nullptr;
+
     if (dictid < 0)
         dictid = 0; // this can happen if we send a PING before any real operation
 
@@ -360,8 +394,12 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     /* We can't have slaves attached and no backlog. */
     serverAssert(!(listLength(slaves) != 0 && g_pserver->repl_backlog == NULL));
 
-    client *fake = createClient(nullptr, serverTL - g_pserver->rgthreadvar);
-    fake->flags |= CLIENT_FORCE_REPLY;
+    if (fake == nullptr)
+    {
+        fake = createClient(nullptr, serverTL - g_pserver->rgthreadvar);
+        fake->flags |= CLIENT_FORCE_REPLY;
+    }
+
     bool fSendRaw = !g_pserver->fActiveReplica;
     replicationFeedSlave(fake, dictid, argv, argc, fSendRaw); // Note: updates the repl log, keep above the repl update code below
 
@@ -377,24 +415,37 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     serverAssert(argc > 0);
     serverAssert(cchbuf > 0);
 
-    char uuid[40] = {'\0'};
-    uuid_unparse(cserver.uuid, uuid);
+    // The code below used to be: snprintf(proto, sizeof(proto), "*5\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
+    //  but that was much too slow
+    static const char *protoRREPLAY = "*5\r\n$7\r\nRREPLAY\r\n$36\r\n00000000-0000-0000-0000-000000000000\r\n$";
     char proto[1024];
-    int cchProto = snprintf(proto, sizeof(proto), "*5\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
-    cchProto = std::min((int)sizeof(proto), cchProto);
+    int cchProto = 0;
+    if (!fSendRaw)
+    {
+        char uuid[37];
+        uuid_unparse(cserver.uuid, uuid);
+
+        cchProto = strlen(protoRREPLAY);
+        memcpy(proto, protoRREPLAY, strlen(protoRREPLAY));
+        memcpy(proto + 22, uuid, 36); // Note UUID_STR_LEN includes the \0 trailing byte which we don't want
+        cchProto += ll2string(proto + cchProto, sizeof(proto)-cchProto, cchbuf);
+        memcpy(proto + cchProto, "\r\n", 3);
+        cchProto += 2;
+    }
+
     long long master_repl_offset_start = g_pserver->master_repl_offset;
     
     char szDbNum[128];
-    int cchDictIdNum = snprintf(szDbNum, sizeof(szDbNum), "%d", dictid);
-    int cchDbNum = snprintf(szDbNum, sizeof(szDbNum), "$%d\r\n%d\r\n", cchDictIdNum, dictid);
-    cchDbNum = std::min<int>(cchDbNum, sizeof(szDbNum)); // snprintf is tricky like that
+    int cchDbNum = 0;
+    if (!fSendRaw)
+    	cchDbNum = writeProtoNum(szDbNum, sizeof(szDbNum), dictid);
+    
 
     char szMvcc[128];
-    incrementMvccTstamp();
-    uint64_t mvccTstamp = getMvccTstamp();
-    int cchMvccNum = snprintf(szMvcc, sizeof(szMvcc), "%" PRIu64, mvccTstamp);
-    int cchMvcc = snprintf(szMvcc, sizeof(szMvcc), "$%d\r\n%" PRIu64 "\r\n", cchMvccNum, mvccTstamp);
-    cchMvcc = std::min<int>(cchMvcc, sizeof(szMvcc));    // tricky snprintf
+    int cchMvcc = 0;
+    incrementMvccTstamp();	// Always increment MVCC tstamp so we're consistent with active and normal replication
+    if (!fSendRaw)
+    	cchMvcc = writeProtoNum(szMvcc, sizeof(szMvcc), getMvccTstamp());
 
     /* Write the command to the replication backlog if any. */
     if (g_pserver->repl_backlog) 
@@ -483,7 +534,11 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         }
     }
 
-    freeClient(fake);
+    // Cleanup cached fake client output buffers
+    fake->bufpos = 0;
+    fake->sentlen = 0;
+    fake->reply_bytes = 0;
+    listEmpty(fake->reply);
 }
 
 /* This function is used in order to proxy what we receive from our master
@@ -3107,6 +3162,8 @@ void roleCommand(client *c) {
         listNode *ln;
         listRewind(g_pserver->masters, &li);
 
+        if (listLength(g_pserver->masters) > 1)
+            addReplyArrayLen(c,listLength(g_pserver->masters));
         while ((ln = listNext(&li)))
         {
             redisMaster *mi = (redisMaster*)listNodeValue(ln);

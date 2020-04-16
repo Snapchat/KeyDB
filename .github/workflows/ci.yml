@@ -21,7 +21,7 @@ jobs:
     steps:
     - uses: actions/checkout@v1
     - name: make
-      run: 
+      run: | 
         sudo apt-get install uuid-dev libcurl4-openssl-dev
         make
 

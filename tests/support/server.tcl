@@ -230,6 +230,9 @@ proc start_server {options {code undefined}} {
     set unixsocket [file normalize [format "%s/%s" [dict get $config "dir"] "socket"]]
     dict set config "unixsocket" $unixsocket
 
+    #Ensure all tests validate multithreading
+    dict set config "testmode" "yes"
+
     # apply overrides from global space and arguments
     foreach {directive arguments} [concat $::global_overrides $overrides] {
         dict set config $directive $arguments

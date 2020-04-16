@@ -222,7 +222,8 @@ public:
             auto itr = m_mapwait.find(pidCheck);
             if (itr == m_mapwait.end())
                 break;
-            pidCheck = itr->second->m_pidOwner;
+
+            __atomic_load(&itr->second->m_pidOwner, &pidCheck, __ATOMIC_RELAXED);
             if (pidCheck == thispid)
             {
                 // Deadlock detected, printout some debugging info and crash
@@ -233,7 +234,7 @@ public:
                 {
                     auto itr = m_mapwait.find(pidCheck);
                     serverLog(3 /* LL_WARNING */, "\t%d: (%p) %s", pidCheck, itr->second, itr->second->szName);
-                    pidCheck = itr->second->m_pidOwner;
+                    __atomic_load(&itr->second->m_pidOwner, &pidCheck, __ATOMIC_RELAXED);
                     if (pidCheck == thispid)
                         break;
                 }

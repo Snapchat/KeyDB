@@ -135,7 +135,7 @@ int _dictInit(dict *d, dictType *type,
  * but with the invariant of a USED/BUCKETS ratio near to <= 1 */
 int dictResize(dict *d)
 {
-    int minimal;
+    unsigned long minimal;
 
     if (!dict_can_resize || dictIsRehashing(d)) return DICT_ERR;
     minimal = d->ht[0].used;
@@ -925,6 +925,10 @@ unsigned long dictScan(dict *d,
 
     if (dictSize(d) == 0) return 0;
 
+    /* Having a safe iterator means no rehashing can happen, see _dictRehashStep.
+     * This is needed in case the scan callback tries to do dictFind or alike. */
+    d->iterators++;
+
     if (!dictIsRehashing(d)) {
         t0 = &(d->ht[0]);
         m0 = t0->sizemask;
@@ -990,6 +994,9 @@ unsigned long dictScan(dict *d,
             /* Continue while bits covered by mask difference is non-zero */
         } while (v & (m0 ^ m1));
     }
+
+    /* undo the ++ at the top */
+    d->iterators--;
 
     return v;
 }

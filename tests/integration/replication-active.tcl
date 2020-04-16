@@ -77,6 +77,94 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
             $master flushall
         }
 
+		test {Replication of EXPIREMEMBER (set) command (Active)} {
+            $master sadd testkey a b c d
+            wait_for_condition 50 100 {
+                [$master debug digest] eq [$slave debug digest]
+            } else {
+                fail "Failed to replicate set"
+            }
+            $master expiremember testkey a 1
+            after 1000
+            wait_for_condition 50 100 {
+                [$master scard testkey] eq 3
+            } else {
+                fail "expiremember failed to work on master"
+            }
+            wait_for_condition 50 100 {
+                [$slave scard testkey] eq 3
+            } else {
+                assert_equal [$slave scard testkey] 3
+            }
+            $master del testkey
+        }
+
+		test {Replication of EXPIREMEMBER (hash) command (Active)} {
+            $master hset testkey a value
+            $master hset testkey b value
+            wait_for_condition 50 100 {
+                [$master debug digest] eq [$slave debug digest]
+            } else {
+                fail "Failed to replicate set"
+            }
+            $master expiremember testkey a 1
+            after 1000
+            wait_for_condition 50 100 {
+                [$master hlen testkey] eq 1
+            } else {
+                fail "expiremember failed to work on master"
+            }
+            wait_for_condition 50 100 {
+                [$slave hlen testkey] eq 1
+            } else {
+                assert_equal [$slave hlen testkey] 1
+            }
+            $master del testkey
+        }
+
+        test {Replication of EXPIREMEMBER (zset) command (Active)} {
+            $master zadd testkey 1 a
+            $master zadd testkey 2 b
+            wait_for_condition 50 100 {
+                [$master debug digest] eq [$slave debug digest]
+            } else {
+                fail "Failed to replicate set"
+            }
+            $master expiremember testkey a 1
+            after 1000
+            wait_for_condition 50 100 {
+                [$master zcard testkey] eq 1
+            } else {
+                fail "expiremember failed to work on master"
+            }
+            wait_for_condition 50 100 {
+                [$slave zcard testkey] eq 1
+            } else {
+                assert_equal [$slave zcard testkey] 1
+            }
+        }
+
+        test {keydb.cron replicates (Active) } {
+            $master del testkey
+	        $master keydb.cron testjob repeat 0 1000000 {redis.call("incr", "testkey")} 1 testkey
+         	after 300
+    	    assert_equal 1 [$master get testkey]
+	        assert_equal 1 [$master exists testjob]
+			
+			wait_for_condition 50 100 {
+				[$master debug digest] eq [$slave debug digest]
+			} else {
+                fail "KEYDB.CRON failed to replicate"
+            }
+        	$master del testjob
+            $master del testkey
+            wait_for_condition 50 1000 {
+                [$master debug digest] eq [$slave debug digest]
+            } else {
+                fail "cron delete failed to propogate"
+            }
+    	}
+
         test {Active replicas WAIT} {
             # Test that wait succeeds since replicas should be syncronized
             $master set testkey foo
@@ -113,37 +201,37 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
             assert_equal {0} [$slave del testkey1]
         }
 
-	test {Active replica expire propogates when source is down} {
-            $slave flushall
-	    $slave set testkey2 foo
-            $slave set testkey1 foo
-            wait_for_condition 50 1000 {
-                [string match *foo* [$master get testkey1]]
-            } else {
-                fail "Replication failed to propogate"
-            }
-            $slave expire testkey1 2
-	    assert_equal {1} [$slave wait 1 500] { "value should propogate
-		                    within 0.5 seconds" }
-	    exec kill -SIGSTOP $slave_pid
+    test {Active replica expire propogates when source is down} {
+        $slave flushall
+        $slave set testkey2 foo
+        $slave set testkey1 foo
+        wait_for_condition 50 1000 {
+            [string match *foo* [$master get testkey1]]
+        } else {
+            fail "Replication failed to propogate"
+        }
+        $slave expire testkey1 2
+        assert_equal {1} [$slave wait 1 500] { "value should propogate
+                    within 0.5 seconds" }
+        exec kill -SIGSTOP $slave_pid
             after 3000
-	    # Ensure testkey1 is gone.  Note, we can't do this directly as the normal commands lie to us
-	    # about what is actually in the dict.  The only way to know is with a count from info
+        # Ensure testkey1 is gone.  Note, we can't do this directly as the normal commands lie to us
+        # about what is actually in the dict.  The only way to know is with a count from info
             assert_equal {1} [expr [string first {keys=1} [$master info keyspace]] >= 0]  {"slave expired"}
-	}
-	exec kill -SIGCONT $slave_pid
+    }
 
-        test {Active replica different databases} {
-            $master select 3
-            $master set testkey abcd
-            $master select 2
-            $master del testkey
-            $slave select 3
-            wait_for_condition 50 1000 {
-                [string match abcd [$slave get testkey]]
-            } else {
-                fail "Replication failed to propogate DB 3"
-            }
+    exec kill -SIGCONT $slave_pid
+
+    test {Active replica different databases} {
+        $master select 3
+        $master set testkey abcd
+        $master select 2
+        $master del testkey
+        $slave select 3
+        wait_for_condition 50 1000 {
+            [string match abcd [$slave get testkey]]
+        } else {
+            fail "Replication failed to propogate DB 3"
         }
     }
 }
@@ -174,4 +262,5 @@ foreach mdl {no yes} {
             }
         }
     }
+}
 }

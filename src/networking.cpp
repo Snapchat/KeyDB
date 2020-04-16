@@ -1856,7 +1856,7 @@ void ProcessPendingAsyncWrites()
  * we can just write the replies to the client output buffer without any
  * need to use a syscall in order to install the writable event handler,
  * get it called, and so forth. */
-int handleClientsWithPendingWrites(int iel) {
+int handleClientsWithPendingWrites(int iel, int aof_state) {
     std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[iel].lockPendingWrite);
     auto &vec = g_pserver->rgthreadvar[iel].clients_pending_write;
     int processed = (int)vec.size();
@@ -1868,7 +1868,7 @@ int handleClientsWithPendingWrites(int iel) {
         * so that in the middle of receiving the query, and serving it
         * to the client, we'll call beforeSleep() that will do the
         * actual fsync of AOF to disk. AE_BARRIER ensures that. */
-    if (g_pserver->aof_state == AOF_ON &&
+    if (aof_state == AOF_ON &&
         g_pserver->aof_fsync == AOF_FSYNC_ALWAYS)
     {
         ae_flags |= AE_BARRIER;
@@ -3359,6 +3359,7 @@ int processEventsWhileBlocked(int iel) {
     }
     
 
+    int aof_state = g_pserver->aof_state;
     aeReleaseLock();
     serverAssertDebug(!GlobalLocksAcquired());
     try
@@ -3366,7 +3367,7 @@ int processEventsWhileBlocked(int iel) {
         while (iterations--) {
             int events = 0;
             events += aeProcessEvents(g_pserver->rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
-            events += handleClientsWithPendingWrites(iel);
+            events += handleClientsWithPendingWrites(iel, aof_state);
             if (!events) break;
             count += events;
         }

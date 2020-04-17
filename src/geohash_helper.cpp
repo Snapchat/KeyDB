@@ -46,13 +46,10 @@
 #define ECCENT (sqrt(1.0 - (RATIO *RATIO)))
 #define COM (0.5 * ECCENT)
 
-/// @brief The usual PI/180 constant
-const double DEG_TO_RAD = 0.017453292519943295769236907684886;
 /// @brief Earth's quatratic mean radius for WGS-84
 const double EARTH_RADIUS_IN_METERS = 6372797.560856;
 
 const double MERCATOR_MAX = 20037726.37;
-const double MERCATOR_MIN = -20037726.37;
 
 static inline double deg_rad(double ang) { return ang * D_R; }
 static inline double rad_deg(double ang) { return ang / D_R; }

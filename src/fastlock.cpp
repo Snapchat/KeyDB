@@ -140,13 +140,11 @@ extern "C" void unlock_futex(struct fastlock *lock, uint16_t ifutex);
 
 #endif
 
-#pragma weak _serverPanic
 extern "C"  __attribute__((weak)) void _serverPanic(const char * /*file*/, int /*line*/, const char * /*msg*/, ...)
 {
     *((char*)-1) = 'x';
 }
 
-#pragma weak serverLog
 __attribute__((weak)) void serverLog(int , const char *fmt, ...)
 {
     va_list args;

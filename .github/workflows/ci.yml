@@ -10,7 +10,20 @@ jobs:
     - name: make
       run: |
           sudo apt-get install uuid-dev libcurl4-openssl-dev
-          make
+          make -j2
+    - name: test
+      run: |
+        sudo apt-get install tcl8.5
+        ./runtest --clients 2 --verbose
+        
+  test-ubuntu-arm:
+    runs-on: [self-hosted, linux, arm]
+    steps:
+    - uses: actions/checkout@v1
+    - name: make
+      run: |
+          sudo apt-get install uuid-dev libcurl4-openssl-dev
+          make -j4
     - name: test
       run: |
         sudo apt-get install tcl8.5
@@ -20,7 +33,7 @@ jobs:
     runs-on: ubuntu-16.04
     steps:
     - uses: actions/checkout@v1
-    - name: make
+    - name: make -j2
       run: | 
         sudo apt-get install uuid-dev libcurl4-openssl-dev
         make
@@ -30,4 +43,4 @@ jobs:
     steps:
     - uses: actions/checkout@v1
     - name: make
-      run: make
+      run: make -j2

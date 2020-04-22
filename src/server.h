@@ -1276,7 +1276,7 @@ public:
     void getStats(char *buf, size_t bufsize) { dictGetStats(buf, bufsize, m_pdict); }
     void getExpireStats(char *buf, size_t bufsize) { m_setexpire->getstats(buf, bufsize); }
 
-    bool insert(char *k, robj *o);
+    bool insert(char *k, robj *o, bool fAssumeNew = false);
     void tryResize();
     int incrementallyRehash();
     void updateValue(dict_iter itr, robj *val);

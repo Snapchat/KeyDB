@@ -106,8 +106,13 @@ endif
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
 FINAL_CXXFLAGS=$(CXX_STD) $(WARN) $(OPT) $(DEBUG) $(CXXFLAGS) $(REDIS_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
-FINAL_LIBS+=-lm -lcurl -latomic
+FINAL_LIBS+=-lm -lcurl
 DEBUG=-g -ggdb
+
+ifneq ($(uname_S),Darwin)
+	FINAL_LIBS+=-latomic
+endif
+
 
 ifeq ($(uname_S),SunOS)
 	# SunOS

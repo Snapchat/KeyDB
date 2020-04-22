@@ -210,12 +210,13 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
-bool dbAddCore(redisDb *db, robj *key, robj *val) {
+bool dbAddCore(redisDb *db, robj *key, robj *val, bool fAssumeNew = false) {
     serverAssert(!val->FExpires());
     sds copy = sdsdupshared(szFromObj(key));
-    bool fInserted = db->insert(copy, val);
     if (g_pserver->fActiveReplica)
         val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
+
+    bool fInserted = db->insert(copy, val, fAssumeNew);
 
     if (fInserted)
     {
@@ -307,7 +308,7 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
     }
     else
     {
-        return (dbAddCore(db, key, val) == true);
+        return (dbAddCore(db, key, val, true) == true);
     }
 }
 
@@ -2175,10 +2176,12 @@ void redisDb::initialize(int id)
         this->setStorageProvider(g_pserver->m_pstorageFactory->create(id));
 }
 
-bool redisDbPersistentData::insert(char *key, robj *o)
+bool redisDbPersistentData::insert(char *key, robj *o, bool fAssumeNew)
 {
-    ensure(key);
+    if (!fAssumeNew)
+        ensure(key);
     int res = dictAdd(m_pdict, key, o);
+    serverAssert(FImplies(fAssumeNew, res == DICT_OK));
     if (res == DICT_OK)
     {
         if (m_pdbSnapshot != nullptr && m_pdbSnapshot->find_cached_threadsafe(key) != nullptr)

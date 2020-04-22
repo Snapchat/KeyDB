@@ -459,6 +459,10 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 
     /* Compute how much memory we need to free. */
     mem_tofree = mem_used - maxmemory;
+    if (g_pserver->m_pstorageFactory)
+    {
+        mem_tofree += static_cast<size_t>(maxmemory * 0.05); // if we have a storage provider be much more aggressive
+    }
 
     if (logical) *logical = mem_used;
     if (tofree) *tofree = mem_tofree;

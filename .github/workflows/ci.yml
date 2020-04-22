@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v1
-    with:
+      with:
         submodules: true
     - name: make
       run: |
@@ -22,18 +22,10 @@ jobs:
     runs-on: ubuntu-16.04
     steps:
     - uses: actions/checkout@v1
-    with:
+      with:
         submodules: true
     - name: make
       run: | 
         sudo apt-get install uuid-dev libcurl4-openssl-dev
         make
 
-  build-macos-latest:
-    runs-on: macos-latest
-    steps:
-    - uses: actions/checkout@v1
-    with:
-        submodules: true
-    - name: make
-      run: make

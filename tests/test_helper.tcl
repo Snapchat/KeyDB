@@ -52,6 +52,7 @@ set ::all_tests {
     integration/logging
     integration/psync2
     integration/psync2-reg
+    integration/psync2-pingoff
     unit/pubsub
     unit/slowlog
     unit/scripting
@@ -93,7 +94,7 @@ set ::file ""; # If set, runs only the tests in this comma separated list
 set ::curfile ""; # Hold the filename of the current suite
 set ::accurate 0; # If true runs fuzz tests with more iterations
 set ::force_failure 0
-set ::timeout 600; # 10 minutes without progresses will quit the test.
+set ::timeout 1200; # 20 minutes without progresses will quit the test.
 set ::last_progress [clock seconds]
 set ::active_servers {} ; # Pids of active Redis instances.
 set ::dont_clean 0
@@ -295,7 +296,7 @@ proc read_from_test_client fd {
         puts "\[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)"
         lappend ::clients_time_history $elapsed $data
         signal_idle_client $fd
-        set ::active_clients_task($fd) DONE
+        set ::active_clients_task($fd) "(DONE) $data"
     } elseif {$status eq {ok}} {
         if {!$::quiet} {
             puts "\[[colorstr green $status]\]: $data"
@@ -326,10 +327,16 @@ proc read_from_test_client fd {
         exit 1
     } elseif {$status eq {testing}} {
         set ::active_clients_task($fd) "(IN PROGRESS) $data"
+    } elseif {$status eq {server-spawning}} {
+        set ::active_clients_task($fd) "(SPAWNING SERVER) $data"
     } elseif {$status eq {server-spawned}} {
         lappend ::active_servers $data
+        set ::active_clients_task($fd) "(SPAWNED SERVER) pid:$data"
+    } elseif {$status eq {server-killing}} {
+        set ::active_clients_task($fd) "(KILLING SERVER) pid:$data"
     } elseif {$status eq {server-killed}} {
         set ::active_servers [lsearch -all -inline -not -exact $::active_servers $data]
+        set ::active_clients_task($fd) "(KILLED SERVER) pid:$data"
     } else {
         if {!$::quiet} {
             puts "\[$status\]: $data"
@@ -339,7 +346,7 @@ proc read_from_test_client fd {
 
 proc show_clients_state {} {
     # The following loop is only useful for debugging tests that may
-    # enter an infinite loop. Commented out normally.
+    # enter an infinite loop.
     foreach x $::active_clients {
         if {[info exist ::active_clients_task($x)]} {
             puts "$x => $::active_clients_task($x)"
@@ -369,8 +376,6 @@ proc signal_idle_client fd {
     set ::active_clients \
         [lsearch -all -inline -not -exact $::active_clients $fd]
 
-    if 0 {show_clients_state}
-
     # New unit to process?
     if {$::next_test != [llength $::all_tests]} {
         if {!$::quiet} {
@@ -386,6 +391,7 @@ proc signal_idle_client fd {
         }
     } else {
         lappend ::idle_clients $fd
+        set ::active_clients_task($fd) "SLEEPING, no more units to assign"
         if {[llength $::active_clients] == 0} {
             the_end
         }
@@ -506,6 +512,9 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--host}} {
         set ::external 1
         set ::host $arg
+        # If we use an external server, we can only set numclients to 1,
+        # otherwise the port will be miscalculated.
+        set ::numclients 1
         incr j
     } elseif {$opt eq {--port}} {
         set ::port $arg

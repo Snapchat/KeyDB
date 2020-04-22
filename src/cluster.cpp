@@ -165,7 +165,10 @@ int clusterLoadConfig(char *filename) {
         }
 
         /* Regular config lines have at least eight fields */
-        if (argc < 8) goto fmterr;
+        if (argc < 8) {
+            sdsfreesplitres(argv,argc);
+            goto fmterr;
+        }
 
         /* Create this node if it does not exist */
         n = clusterLookupNode(argv[0]);
@@ -174,7 +177,10 @@ int clusterLoadConfig(char *filename) {
             clusterAddNode(n);
         }
         /* Address and port */
-        if ((p = strrchr(argv[1],':')) == NULL) goto fmterr;
+        if ((p = strrchr(argv[1],':')) == NULL) {
+            sdsfreesplitres(argv,argc);
+            goto fmterr;
+        }
         *p = '\0';
         memcpy(n->ip,argv[1],strlen(argv[1])+1);
         char *port = p+1;
@@ -255,7 +261,10 @@ int clusterLoadConfig(char *filename) {
                 *p = '\0';
                 direction = p[1]; /* Either '>' or '<' */
                 slot = atoi(argv[j]+1);
-                if (slot < 0 || slot >= CLUSTER_SLOTS) goto fmterr;
+                if (slot < 0 || slot >= CLUSTER_SLOTS) {
+                    sdsfreesplitres(argv,argc);
+                    goto fmterr;
+                }
                 p += 3;
                 cn = clusterLookupNode(p);
                 if (!cn) {
@@ -275,8 +284,12 @@ int clusterLoadConfig(char *filename) {
             } else {
                 start = stop = atoi(argv[j]);
             }
-            if (start < 0 || start >= CLUSTER_SLOTS) goto fmterr;
-            if (stop < 0 || stop >= CLUSTER_SLOTS) goto fmterr;
+            if (start < 0 || start >= CLUSTER_SLOTS ||
+                stop < 0 || stop >= CLUSTER_SLOTS)
+            {
+                sdsfreesplitres(argv,argc);
+                goto fmterr;
+            }
             while(start <= stop) clusterAddSlot(n, start++);
         }
 
@@ -706,9 +719,10 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
          * or schedule it for later depending on connection implementation.
          */
         if (connAccept(conn, clusterConnAcceptHandler) == C_ERR) {
-            serverLog(LL_VERBOSE,
-                    "Error accepting cluster node connection: %s",
-                    connGetLastError(conn));
+            if (connGetState(conn) == CONN_STATE_ERROR)
+                serverLog(LL_VERBOSE,
+                        "Error accepting cluster node connection: %s",
+                        connGetLastError(conn));
             connClose(conn);
             return;
         }
@@ -4315,7 +4329,7 @@ void clusterCommand(client *c) {
 "FORGET <node-id> -- Remove a node from the cluster.",
 "GETKEYSINSLOT <slot> <count> -- Return key names stored by current node in a slot.",
 "FLUSHSLOTS -- Delete current node own slots information.",
-"INFO - Return onformation about the cluster.",
+"INFO - Return information about the cluster.",
 "KEYSLOT <key> -- Return the hash slot for <key>.",
 "MEET <ip> <port> [bus-port] -- Connect nodes into a working cluster.",
 "MYID -- Return the node id.",
@@ -4326,6 +4340,7 @@ void clusterCommand(client *c) {
 "SET-config-epoch <epoch> - Set config epoch of current node.",
 "SETSLOT <slot> (importing|migrating|stable|node <node-id>) -- Set slot state.",
 "REPLICAS <node-id> -- Return <node-id> replicas.",
+"SAVECONFIG - Force saving cluster configuration on disk.",
 "SLOTS -- Return information about slots range mappings. Each range is made of:",
 "    start, end, master and replicas IP addresses, ports and ids",
 NULL
@@ -5054,6 +5069,7 @@ eoferr:
     }
     objectSetLRUOrLFU(obj,lfu_freq,lru_idle,lru_clock,1000);
     signalModifiedKey(c->db,c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_GENERIC,"restore",c->argv[1],c->db->id);
     addReply(c,shared.ok);
     g_pserver->dirty++;
 }
@@ -5402,6 +5418,7 @@ try_again:
                 /* No COPY option: remove the local key, signal the change. */
                 dbDelete(c->db,kv[j]);
                 signalModifiedKey(c->db,kv[j]);
+                notifyKeyspaceEvent(NOTIFY_GENERIC,"del",kv[j],c->db->id);
                 g_pserver->dirty++;
 
                 /* Populate the argument vector to replace the old one. */
@@ -5567,7 +5584,7 @@ void readwriteCommand(client *c) {
  * already "down" but it is fragile to rely on the update of the global state,
  * so we also handle it here.
  *
- * CLUSTER_REDIR_DOWN_STATE and CLUSTER_REDIR_DOWN_RO_STATE if the cluster is 
+ * CLUSTER_REDIR_DOWN_STATE and CLUSTER_REDIR_DOWN_RO_STATE if the cluster is
  * down but the user attempts to execute a command that addresses one or more keys. */
 clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, int argc, int *hashslot, int *error_code) {
     clusterNode *n = NULL;

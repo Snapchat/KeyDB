@@ -257,6 +257,7 @@ void stopAppendOnly(void) {
     g_pserver->aof_fd = -1;
     g_pserver->aof_selected_db = -1;
     g_pserver->aof_state = AOF_OFF;
+    g_pserver->aof_rewrite_scheduled = 0;
     killAppendOnlyChild();
 }
 
@@ -598,21 +599,59 @@ sds catAppendOnlyExpireAtCommand(sds buf, struct redisCommand *cmd, robj *key, r
     return buf;
 }
 
-void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int argc) {
-    sds buf = sdsempty();
-    robj *tmpargv[3];
-
-    /* The DB this command was targeting is not the same as the last command
-     * we appended. To issue a SELECT command is needed. */
-    if (dictid != g_pserver->aof_selected_db) {
-        char seldb[64];
-
-        snprintf(seldb,sizeof(seldb),"%d",dictid);
-        buf = sdscatprintf(buf,"*2\r\n$6\r\nSELECT\r\n$%lu\r\n%s\r\n",
-            (unsigned long)strlen(seldb),seldb);
-        g_pserver->aof_selected_db = dictid;
+sds catAppendOnlyExpireMemberAtCommand(sds buf, struct redisCommand *cmd, robj **argv, const size_t argc) {
+    long long when = 0;
+    int unit = UNIT_SECONDS;
+    bool fAbsolute = false;
+    
+    if (cmd->proc == expireMemberCommand) {
+        if (getLongLongFromObject(argv[3], &when) != C_OK)
+            serverPanic("propogating invalid EXPIREMEMBER command");
+        
+        if (argc == 5) {
+            unit = parseUnitString(szFromObj(argv[4]));
+        }
+    } else if (cmd->proc == expireMemberAtCommand) {
+        if (getLongLongFromObject(argv[3], &when) != C_OK)
+            serverPanic("propogating invalid EXPIREMEMBERAT command");
+        fAbsolute = true;
+    } else if (cmd->proc == pexpireMemberAtCommand) {
+        if (getLongLongFromObject(argv[3], &when) != C_OK)
+            serverPanic("propogating invalid PEXPIREMEMBERAT command");
+        fAbsolute = true;
+        unit = UNIT_MILLISECONDS;
+    } else {
+        serverPanic("Unknown expiremember command");
     }
 
+    switch (unit)
+    {
+    case UNIT_SECONDS:
+        when *= 1000;
+        break;
+
+    case UNIT_MILLISECONDS:
+        break;
+    }
+
+    if (!fAbsolute)
+        when += mstime();
+    
+    robj *argvNew[4];
+    argvNew[0] = createStringObject("PEXPIREMEMBERAT",15);
+    argvNew[1] = argv[1];
+    argvNew[2] = argv[2];
+    argvNew[3] = createStringObjectFromLongLong(when);
+    buf = catAppendOnlyGenericCommand(buf, 4, argvNew);
+    decrRefCount(argvNew[0]);
+    decrRefCount(argvNew[3]);
+    return buf;
+}
+
+sds catCommandForAofAndActiveReplication(sds buf, struct redisCommand *cmd, robj **argv, int argc)
+{
+    robj *tmpargv[3];
+    
     if (cmd->proc == expireCommand || cmd->proc == pexpireCommand ||
         cmd->proc == expireatCommand) {
         /* Translate EXPIRE/PEXPIRE/EXPIREAT into PEXPIREAT */
@@ -641,12 +680,35 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
         if (pxarg)
             buf = catAppendOnlyExpireAtCommand(buf,cserver.pexpireCommand,argv[1],
                                                pxarg);
+    } else if (cmd->proc == expireMemberCommand || cmd->proc == expireMemberAtCommand ||
+        cmd->proc == pexpireMemberAtCommand) {
+        /* Translate subkey expire commands to PEXPIREMEMBERAT */
+        buf = catAppendOnlyExpireMemberAtCommand(buf, cmd, argv, argc);
     } else {
         /* All the other commands don't need translation or need the
          * same translation already operated in the command vector
          * for the replication itself. */
         buf = catAppendOnlyGenericCommand(buf,argc,argv);
     }
+
+    return buf;
+}
+
+void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int argc) {
+    sds buf = sdsempty();
+
+    /* The DB this command was targeting is not the same as the last command
+     * we appended. To issue a SELECT command is needed. */
+    if (dictid != g_pserver->aof_selected_db) {
+        char seldb[64];
+
+        snprintf(seldb,sizeof(seldb),"%d",dictid);
+        buf = sdscatprintf(buf,"*2\r\n$6\r\nSELECT\r\n$%lu\r\n%s\r\n",
+            (unsigned long)strlen(seldb),seldb);
+        g_pserver->aof_selected_db = dictid;
+    }
+
+    buf = catCommandForAofAndActiveReplication(buf, cmd, argv, argc);
 
     /* Append to the AOF buffer. This will be flushed on disk just before
      * of re-entering the event loop, so before the client will get a
@@ -821,12 +883,14 @@ int loadAppendOnlyFile(char *filename) {
 
         for (j = 0; j < argc; j++) {
             /* Parse the argument len. */
-            if (fgets(buf,sizeof(buf),fp) == NULL ||
-                buf[0] != '$')
-            {
+            char *readres = fgets(buf,sizeof(buf),fp);
+            if (readres == NULL || buf[0] != '$') {
                 fakeClient->argc = j; /* Free up to j-1. */
                 freeFakeClientArgv(fakeClient);
-                goto readerr;
+                if (readres == NULL)
+                    goto readerr;
+                else
+                    goto fmterr;
             }
             len = strtol(buf+1,NULL,10);
 
@@ -860,7 +924,7 @@ int loadAppendOnlyFile(char *filename) {
         if (cmd == cserver.multiCommand) valid_before_multi = valid_up_to;
 
         /* Run the command in the context of a fake client */
-        fakeClient->cmd = cmd;
+        fakeClient->cmd = fakeClient->lastcmd = cmd;
         if (fakeClient->flags & CLIENT_MULTI &&
             fakeClient->cmd->proc != execCommand)
         {
@@ -1184,7 +1248,7 @@ int rioWriteBulkStreamID(rio *r,streamID *id) {
     int retval;
 
     sds replyid = sdscatfmt(sdsempty(),"%U-%U",id->ms,id->seq);
-    if ((retval = rioWriteBulkString(r,replyid,sdslen(replyid))) == 0) return 0;
+    retval = rioWriteBulkString(r,replyid,sdslen(replyid));
     sdsfree(replyid);
     return retval;
 }
@@ -1246,12 +1310,13 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
         /* Use the XADD MAXLEN 0 trick to generate an empty stream if
          * the key we are serializing is an empty string, which is possible
          * for the Stream type. */
+        id.ms = 0; id.seq = 1; 
         if (rioWriteBulkCount(r,'*',7) == 0) return 0;
         if (rioWriteBulkString(r,"XADD",4) == 0) return 0;
         if (rioWriteBulkObject(r,key) == 0) return 0;
         if (rioWriteBulkString(r,"MAXLEN",6) == 0) return 0;
         if (rioWriteBulkString(r,"0",1) == 0) return 0;
-        if (rioWriteBulkStreamID(r,&s->last_id) == 0) return 0;
+        if (rioWriteBulkStreamID(r,&id) == 0) return 0;
         if (rioWriteBulkString(r,"x",1) == 0) return 0;
         if (rioWriteBulkString(r,"y",1) == 0) return 0;
     }
@@ -1344,7 +1409,6 @@ ssize_t aofReadDiffFromParent(void) {
 }
 
 int rewriteAppendOnlyFileRio(rio *aof) {
-    dictIterator *di = NULL;
     size_t processed = 0;
     int j;
 
@@ -1399,7 +1463,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                     }
                     else
                     {
-                        char cmd[]="*4\r\n$12\r\nEXPIREMEMBER\r\n";
+                        char cmd[]="*4\r\n$12\r\nPEXPIREMEMBERAT\r\n";
                         if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) return false;
                         if (rioWriteBulkObject(aof,&key) == 0) return false;
                         if (rioWrite(aof,subExpire.subkey(),sdslen(subExpire.subkey())) == 0) return false;
@@ -1420,7 +1484,6 @@ int rewriteAppendOnlyFileRio(rio *aof) {
     return C_OK;
 
 werr:
-    if (di) dictReleaseIterator(di);
     return C_ERR;
 }
 
@@ -1856,14 +1919,15 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
         serverLog(LL_VERBOSE,
             "Background AOF rewrite signal handler took %lldus", ustime()-now);
     } else if (!bysignal && exitcode != 0) {
+        g_pserver->aof_lastbgrewrite_status = C_ERR;
+
+        serverLog(LL_WARNING,
+            "Background AOF rewrite terminated with error");
+    } else {
         /* SIGUSR1 is whitelisted, so we have a way to kill a child without
          * tirggering an error condition. */
         if (bysignal != SIGUSR1)
             g_pserver->aof_lastbgrewrite_status = C_ERR;
-        serverLog(LL_WARNING,
-            "Background AOF rewrite terminated with error");
-    } else {
-        g_pserver->aof_lastbgrewrite_status = C_ERR;
 
         serverLog(LL_WARNING,
             "Background AOF rewrite terminated by signal %d", bysignal);

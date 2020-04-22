@@ -29,11 +29,3 @@ jobs:
         sudo apt-get install uuid-dev libcurl4-openssl-dev
         make
 
-  build-macos-latest:
-    runs-on: macos-latest
-    steps:
-    - uses: actions/checkout@v1
-    with:
-        submodules: true
-    - name: make
-      run: make

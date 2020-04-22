@@ -2486,13 +2486,13 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 do this every 16 keys to limit the perf impact */
             if (g_pserver->m_pstorageFactory && (ckeysLoaded % 16) == 0)
             {
-                if (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK)
+                if (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK || (ckeysLoaded % (1024)) == 0)
                 {
                     for (int idb = 0; idb < cserver.dbnum; ++idb)
                     {
                         g_pserver->db[idb]->processChanges();
                         g_pserver->db[idb]->commitChanges();
-                        g_pserver->db[idb]->trackChanges(true);
+                        g_pserver->db[idb]->trackChanges(false);
                     }
                     freeMemoryIfNeeded();
                 }

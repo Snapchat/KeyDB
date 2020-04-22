@@ -728,9 +728,9 @@ void RM_KeyAtPos(RedisModuleCtx *ctx, int pos) {
  * flags into the command flags used by the Redis core.
  *
  * It returns the set of flags, or -1 if unknown flags are found. */
-int commandFlagsFromString(char *s) {
+int64_t commandFlagsFromString(char *s) {
     int count, j;
-    int flags = 0;
+    int64_t flags = 0;
     sds *tokens = sdssplitlen(s,strlen(s)," ",1,&count);
     for (j = 0; j < count; j++) {
         char *t = tokens[j];
@@ -744,6 +744,7 @@ int commandFlagsFromString(char *s) {
         else if (!strcasecmp(t,"random")) flags |= CMD_RANDOM;
         else if (!strcasecmp(t,"allow-stale")) flags |= CMD_STALE;
         else if (!strcasecmp(t,"no-monitor")) flags |= CMD_SKIP_MONITOR;
+        else if (!strcasecmp(t,"no-slowlog")) flags |= CMD_SKIP_SLOWLOG;
         else if (!strcasecmp(t,"fast")) flags |= CMD_FAST;
         else if (!strcasecmp(t,"no-auth")) flags |= CMD_NO_AUTH;
         else if (!strcasecmp(t,"getkeys-api")) flags |= CMD_MODULE_GETKEYS;
@@ -795,6 +796,8 @@ int commandFlagsFromString(char *s) {
  *                      this means.
  * * **"no-monitor"**: Don't propagate the command on monitor. Use this if
  *                     the command has sensible data among the arguments.
+ * * **"no-slowlog"**: Don't log this command in the slowlog. Use this if
+ *                     the command has sensible data among the arguments.
  * * **"fast"**:      The command time complexity is not greater
  *                    than O(log(N)) where N is the size of the collection or
  *                    anything else representing the normal scalability
@@ -812,7 +815,7 @@ int commandFlagsFromString(char *s) {
  *                     to authenticate a client. 
  */
 int RM_CreateCommand(RedisModuleCtx *ctx, const char *name, RedisModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) {
-    int flags = strflags ? commandFlagsFromString((char*)strflags) : 0;
+    int64_t flags = strflags ? commandFlagsFromString((char*)strflags) : 0;
     if (flags == -1) return REDISMODULE_ERR;
     if ((flags & CMD_MODULE_NO_CLUSTER) && g_pserver->cluster_enabled)
         return REDISMODULE_ERR;
@@ -873,6 +876,7 @@ void RM_SetModuleAttribs(RedisModuleCtx *ctx, const char *name, int ver, int api
     module->in_call = 0;
     module->in_hook = 0;
     module->options = 0;
+    module->info_cb = 0;
     ctx->module = module;
 }
 
@@ -903,7 +907,8 @@ void RM_SetModuleOptions(RedisModuleCtx *ctx, int options) {
     ctx->module->options = options;
 }
 
-/* Signals that the key is modified from user's perspective (i.e. invalidate WATCH). */
+/* Signals that the key is modified from user's perspective (i.e. invalidate WATCH
+ * and client side caching). */
 int RM_SignalModifiedKey(RedisModuleCtx *ctx, RedisModuleString *keyname) {
     signalModifiedKey(ctx->client->db,keyname);
     return REDISMODULE_OK;
@@ -1048,6 +1053,17 @@ RedisModuleString *RM_CreateStringPrintf(RedisModuleCtx *ctx, const char *fmt, .
 RedisModuleString *RM_CreateStringFromLongLong(RedisModuleCtx *ctx, long long ll) {
     char buf[LONG_STR_SIZE];
     size_t len = ll2string(buf,sizeof(buf),ll);
+    return RM_CreateString(ctx,buf,len);
+}
+
+/* Like RedisModule_CreatString(), but creates a string starting from a double
+ * integer instead of taking a buffer and its length.
+ *
+ * The returned string must be released with RedisModule_FreeString() or by
+ * enabling automatic memory management. */
+RedisModuleString *RM_CreateStringFromDouble(RedisModuleCtx *ctx, double d) {
+    char buf[128];
+    size_t len = d2string(buf,sizeof(buf),d);
     return RM_CreateString(ctx,buf,len);
 }
 
@@ -1848,7 +1864,12 @@ int RM_GetSelectedDb(RedisModuleCtx *ctx) {
  * current request context (whether the client is a Lua script or in a MULTI),
  * and about the Redis instance in general, i.e replication and persistence.
  *
- * The available flags are:
+ * It is possible to call this function even with a NULL context, however
+ * in this case the following flags will not be reported:
+ *
+ *  * LUA, MULTI, REPLICATED, DIRTY (see below for more info).
+ *
+ * Available flags and their meaning:
  *
  *  * REDISMODULE_CTX_FLAGS_LUA: The command is running in a Lua script
  *
@@ -1901,20 +1922,22 @@ int RM_GetContextFlags(RedisModuleCtx *ctx) {
 
     int flags = 0;
     /* Client specific flags */
-    if (ctx->client) {
-        if (ctx->client->flags & CLIENT_LUA)
-         flags |= REDISMODULE_CTX_FLAGS_LUA;
-        if (ctx->client->flags & CLIENT_MULTI)
-         flags |= REDISMODULE_CTX_FLAGS_MULTI;
-        /* Module command recieved from MASTER, is replicated. */
-        if (ctx->client->flags & CLIENT_MASTER)
-         flags |= REDISMODULE_CTX_FLAGS_REPLICATED;
-    }
+    if (ctx) {
+        if (ctx->client) {
+            if (ctx->client->flags & CLIENT_LUA)
+             flags |= REDISMODULE_CTX_FLAGS_LUA;
+            if (ctx->client->flags & CLIENT_MULTI)
+             flags |= REDISMODULE_CTX_FLAGS_MULTI;
+            /* Module command recieved from MASTER, is replicated. */
+            if (ctx->client->flags & CLIENT_MASTER)
+             flags |= REDISMODULE_CTX_FLAGS_REPLICATED;
+        }
 
-    /* For DIRTY flags, we need the blocked client if used */
-    client *c = ctx->blocked_client ? ctx->blocked_client->client : ctx->client;
-    if (c && (c->flags & (CLIENT_DIRTY_CAS|CLIENT_DIRTY_EXEC))) {
-        flags |= REDISMODULE_CTX_FLAGS_MULTI_DIRTY;
+        /* For DIRTY flags, we need the blocked client if used */
+        client *c = ctx->blocked_client ? ctx->blocked_client->client : ctx->client;
+        if (c && (c->flags & (CLIENT_DIRTY_CAS|CLIENT_DIRTY_EXEC))) {
+            flags |= REDISMODULE_CTX_FLAGS_MULTI_DIRTY;
+        }
     }
 
     if (g_pserver->cluster_enabled)
@@ -3379,13 +3402,8 @@ RedisModuleCallReply *RM_Call(RedisModuleCtx *ctx, const char *cmdname, const ch
      * a Lua script in the context of AOF and slaves. */
     if (replicate) moduleReplicateMultiIfNeeded(ctx);
 
-    if (ctx->client->flags & CLIENT_MULTI ||
-        ctx->flags & REDISMODULE_CTX_MULTI_EMITTED) {
-        c->flags |= CLIENT_MULTI;
-    }
-
     /* Run the command */
-    call_flags = CMD_CALL_SLOWLOG | CMD_CALL_STATS;
+    call_flags = CMD_CALL_SLOWLOG | CMD_CALL_STATS | CMD_CALL_NOWRAP;
     if (replicate) {
         if (!(flags & REDISMODULE_ARGV_NO_AOF))
             call_flags |= CMD_CALL_PROPAGATE_AOF;
@@ -3394,9 +3412,7 @@ RedisModuleCallReply *RM_Call(RedisModuleCtx *ctx, const char *cmdname, const ch
     }
     call(c,call_flags);
 
-    /* Convert the result of the Redis command into a suitable Lua type.
-     * The first thing we need is to create a single string from the client
-     * output buffers. */
+    /* Convert the result of the Redis command into a module reply. */
     proto = sdsnewlen(c->buf,c->bufpos);
     c->bufpos = 0;
     while(listLength(c->reply)) {
@@ -3600,6 +3616,8 @@ void moduleTypeNameByID(char *name, uint64_t moduleid) {
  *          // Optional fields
  *          .digest = myType_DigestCallBack,
  *          .mem_usage = myType_MemUsageCallBack,
+ *          .aux_load = myType_AuxRDBLoadCallBack,
+ *          .aux_save = myType_AuxRDBSaveCallBack,
  *      }
  *
  * * **rdb_load**: A callback function pointer that loads data from RDB files.
@@ -3607,6 +3625,10 @@ void moduleTypeNameByID(char *name, uint64_t moduleid) {
  * * **aof_rewrite**: A callback function pointer that rewrites data as commands.
  * * **digest**: A callback function pointer that is used for `DEBUG DIGEST`.
  * * **free**: A callback function pointer that can free a type value.
+ * * **aux_save**: A callback function pointer that saves out of keyspace data to RDB files.
+ *   'when' argument is either REDISMODULE_AUX_BEFORE_RDB or REDISMODULE_AUX_AFTER_RDB.
+ * * **aux_load**: A callback function pointer that loads out of keyspace data from RDB files.
+ *   Similar to aux_save, returns REDISMODULE_OK on success, and ERR otherwise.
  *
  * The **digest* and **mem_usage** methods should currently be omitted since
  * they are not yet implemented inside the Redis modules core.
@@ -3724,14 +3746,15 @@ void moduleRDBLoadError(RedisModuleIO *io) {
         io->error = 1;
         return;
     }
-    serverLog(LL_WARNING,
+    serverPanic(
         "Error loading data from RDB (short read or EOF). "
         "Read performed by module '%s' about type '%s' "
-        "after reading '%llu' bytes of a value.",
+        "after reading '%llu' bytes of a value "
+        "for key named: '%s'.",
         io->type->module->name,
         io->type->name,
-        (unsigned long long)io->bytes);
-    exit(1);
+        (unsigned long long)io->bytes,
+        io->key? szFromObj(io->key): "(null)");
 }
 
 /* Returns 0 if there's at least one registered data type that did not declare
@@ -3981,7 +4004,7 @@ void RM_SaveLongDouble(RedisModuleIO *io, long double value) {
     /* Long double has different number of bits in different platforms, so we
      * save it as a string type. */
     size_t len = ld2string(buf,sizeof(buf),value,LD_STR_HEX);
-    RM_SaveStringBuffer(io,buf,len+1); /* len+1 for '\0' */
+    RM_SaveStringBuffer(io,buf,len);
 }
 
 /* In the context of the rdb_save method of a module data type, loads back the
@@ -4357,6 +4380,24 @@ void unblockClientFromModule(client *c) {
         moduleFreeContext(&ctx);
     }
 
+    /* If we made it here and client is still blocked it means that the command
+     * timed-out, client was killed or disconnected and disconnect_callback was
+     * not implemented (or it was, but RM_UnblockClient was not called from
+     * within it, as it should).
+     * We must call moduleUnblockClient in order to free privdata and
+     * RedisModuleBlockedClient.
+     *
+     * Note that we only do that for clients that are blocked on keys, for which
+     * the contract is that the module should not call RM_UnblockClient under
+     * normal circumstances.
+     * Clients implementing threads and working with private data should be
+     * aware that calling RM_UnblockClient for every blocked client is their
+     * responsibility, and if they fail to do so memory may leak. Ideally they
+     * should implement the disconnect and timeout callbacks and call
+     * RM_UnblockClient, but any other way is also acceptable. */
+    if (bc->blocked_on_keys && !bc->unblocked)
+        moduleUnblockClient(c);
+
     bc->client = NULL;
     /* Reset the client for a new query since, for blocking commands implemented
      * into modules, we do not it immediately after the command returns (and
@@ -4468,6 +4509,10 @@ int moduleTryServeClientBlockedOnKey(client *c, robj *key) {
  *
  *     free_privdata:   called in order to free the private data that is passed
  *                      by RedisModule_UnblockClient() call.
+ *
+ * Note: RedisModule_UnblockClient should be called for every blocked client,
+ *       even if client was killed, timed-out or disconnected. Failing to do so
+ *       will result in memory leaks.
  */
 RedisModuleBlockedClient *RM_BlockClient(RedisModuleCtx *ctx, RedisModuleCmdFunc reply_callback, RedisModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*), long long timeout_ms) {
     return moduleBlockClient(ctx,reply_callback,timeout_callback,free_privdata,timeout_ms, NULL,0,NULL);
@@ -4522,7 +4567,15 @@ RedisModuleBlockedClient *RM_BlockClient(RedisModuleCtx *ctx, RedisModuleCmdFunc
  * freed using the free_privdata callback provided by the user.
  *
  * However the reply callback will be able to access the argument vector of
- * the command, so the private data is often not needed. */
+ * the command, so the private data is often not needed.
+ *
+ * Note: Under normal circumstances RedisModule_UnblockClient should not be
+ *       called for clients that are blocked on keys (Either the key will
+ *       become ready or a timeout will occur). If for some reason you do want
+ *       to call RedisModule_UnblockClient it is possible: Client will be
+ *       handled as if it were timed-out (You must implement the timeout
+ *       callback in that case).
+ */
 RedisModuleBlockedClient *RM_BlockClientOnKeys(RedisModuleCtx *ctx, RedisModuleCmdFunc reply_callback, RedisModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*), long long timeout_ms, RedisModuleString **keys, int numkeys, void *privdata) {
     return moduleBlockClient(ctx,reply_callback,timeout_callback,free_privdata,timeout_ms, keys,numkeys,privdata);
 }
@@ -4800,9 +4853,9 @@ int RM_BlockedClientDisconnected(RedisModuleCtx *ctx) {
  *
  * To call non-reply APIs, the thread safe context must be prepared with:
  *
- *     RedisModule_ThreadSafeCallStart(ctx);
+ *     RedisModule_ThreadSafeContextLock(ctx);
  *     ... make your call here ...
- *     RedisModule_ThreadSafeCallStop(ctx);
+ *     RedisModule_ThreadSafeContextUnlock(ctx);
  *
  * This is not needed when using `RedisModule_Reply*` functions, assuming
  * that a blocked client was used when the context was created, otherwise
@@ -4918,7 +4971,8 @@ int moduleGILAcquiredByModule(void) {
  *  - REDISMODULE_NOTIFY_EXPIRED: Expiration events
  *  - REDISMODULE_NOTIFY_EVICTED: Eviction events
  *  - REDISMODULE_NOTIFY_STREAM: Stream events
- *  - REDISMODULE_NOTIFY_ALL: All events
+ *  - REDISMODULE_NOTIFY_KEYMISS: Key-miss events
+ *  - REDISMODULE_NOTIFY_ALL: All events (Excluding REDISMODULE_NOTIFY_KEYMISS)
  *
  * We do not distinguish between key events and keyspace events, and it is up
  * to the module to filter the actions taken based on the key.
@@ -6309,7 +6363,7 @@ int moduleUnregisterUsedAPI(RedisModule *module) {
         RedisModule *used = (RedisModule*)ln->value;
         listNode *ln = listSearchKey(used->usedby,module);
         if (ln) {
-            listDelNode(module->usingMods,ln);
+            listDelNode(used->usedby,ln);
             count++;
         }
     }
@@ -6604,24 +6658,32 @@ void RM_ScanCursorDestroy(RedisModuleScanCursor *cursor) {
     zfree(cursor);
 }
 
-/* Scan api that allows a module to scan all the keys and value in the selected db.
+/* Scan API that allows a module to scan all the keys and value in
+ * the selected db.
  *
  * Callback for scan implementation.
- * void scan_callback(RedisModuleCtx *ctx, RedisModuleString *keyname, RedisModuleKey *key, void *privdata);
- * - ctx - the redis module context provided to for the scan.
- * - keyname - owned by the caller and need to be retained if used after this function.
- * - key - holds info on the key and value, it is provided as best effort, in some cases it might
- *   be NULL, in which case the user should (can) use RedisModule_OpenKey (and CloseKey too).
- *   when it is provided, it is owned by the caller and will be free when the callback returns.
- * - privdata - the user data provided to RedisModule_Scan.
+ * void scan_callback(RedisModuleCtx *ctx, RedisModuleString *keyname,
+ *                    RedisModuleKey *key, void *privdata);
+ * ctx - the redis module context provided to for the scan.
+ * keyname - owned by the caller and need to be retained if used after this
+ * function.
+ *
+ * key - holds info on the key and value, it is provided as best effort, in
+ * some cases it might be NULL, in which case the user should (can) use
+ * RedisModule_OpenKey (and CloseKey too).
+ * when it is provided, it is owned by the caller and will be free when the
+ * callback returns.
+ *
+ * privdata - the user data provided to RedisModule_Scan.
  *
  * The way it should be used:
  *      RedisModuleCursor *c = RedisModule_ScanCursorCreate();
  *      while(RedisModule_Scan(ctx, c, callback, privateData));
  *      RedisModule_ScanCursorDestroy(c);
  *
- * It is also possible to use this API from another thread while the lock is acquired durring 
- * the actuall call to RM_Scan:
+ * It is also possible to use this API from another thread while the lock
+ * is acquired durring the actuall call to RM_Scan:
+ *
  *      RedisModuleCursor *c = RedisModule_ScanCursorCreate();
  *      RedisModule_ThreadSafeContextLock(ctx);
  *      while(RedisModule_Scan(ctx, c, callback, privateData)){
@@ -6631,9 +6693,26 @@ void RM_ScanCursorDestroy(RedisModuleScanCursor *cursor) {
  *      }
  *      RedisModule_ScanCursorDestroy(c);
  *
- *  The function will return 1 if there are more elements to scan and 0 otherwise,
- *  possibly setting errno if the call failed.
- *  It is also possible to restart and existing cursor using RM_CursorRestart. */
+ * The function will return 1 if there are more elements to scan and
+ * 0 otherwise, possibly setting errno if the call failed.
+ *
+ * It is also possible to restart and existing cursor using RM_CursorRestart.
+ *
+ * IMPORTANT: This API is very similar to the Redis SCAN command from the
+ * point of view of the guarantees it provides. This means that the API
+ * may report duplicated keys, but guarantees to report at least one time
+ * every key that was there from the start to the end of the scanning process.
+ *
+ * NOTE: If you do database changes within the callback, you should be aware
+ * that the internal state of the database may change. For instance it is safe
+ * to delete or modify the current key, but may not be safe to delete any
+ * other key.
+ * Moreover playing with the Redis keyspace while iterating may have the
+ * effect of returning more duplicates. A safe pattern is to store the keys
+ * names you want to modify elsewhere, and perform the actions on the keys
+ * later when the iteration is complete. Howerver this can cost a lot of
+ * memory, so it may make sense to just operate on the current key when
+ * possible during the iteration, given that this is safe. */
 int RM_Scan(RedisModuleCtx *ctx, RedisModuleScanCursor *cursor, RedisModuleScanCB fn, void *privdata) {
     if (cursor->done) {
         errno = ENOENT;
@@ -6711,9 +6790,17 @@ static void moduleScanKeyCallback(void *privdata, const dictEntry *de) {
  *      RedisModule_CloseKey(key);
  *      RedisModule_ScanCursorDestroy(c);
  *
- *  The function will return 1 if there are more elements to scan and 0 otherwise,
- *  possibly setting errno if the call failed.
- *  It is also possible to restart and existing cursor using RM_CursorRestart. */
+ * The function will return 1 if there are more elements to scan and 0 otherwise,
+ * possibly setting errno if the call failed.
+ * It is also possible to restart and existing cursor using RM_CursorRestart.
+ *
+ * NOTE: Certain operations are unsafe while iterating the object. For instance
+ * while the API guarantees to return at least one time all the elements that
+ * are present in the data structure consistently from the start to the end
+ * of the iteration (see HSCAN and similar commands documentation), the more
+ * you play with the elements, the more duplicates you may get. In general
+ * deleting the current element of the data structure is safe, while removing
+ * the key you are iterating is not safe. */
 int RM_ScanKey(RedisModuleKey *key, RedisModuleScanCursor *cursor, RedisModuleScanKeyCB fn, void *privdata) {
     if (key == NULL || key->value == NULL) {
         errno = EINVAL;
@@ -6819,7 +6906,7 @@ int RM_Fork(RedisModuleForkDoneHandler cb, void *user_data) {
         g_pserver->module_child_pid = childpid;
         moduleForkInfo.done_handler = cb;
         moduleForkInfo.done_handler_user_data = user_data;
-        serverLog(LL_NOTICE, "Module fork started pid: %d ", childpid);
+        serverLog(LL_VERBOSE, "Module fork started pid: %d ", childpid);
     }
     return childpid;
 }
@@ -6842,7 +6929,7 @@ int TerminateModuleForkChild(int child_pid, int wait) {
         g_pserver->module_child_pid != child_pid) return C_ERR;
 
     int statloc;
-    serverLog(LL_NOTICE,"Killing running module fork child: %ld",
+    serverLog(LL_VERBOSE,"Killing running module fork child: %ld",
         (long) g_pserver->module_child_pid);
     if (kill(g_pserver->module_child_pid,SIGUSR1) != -1 && wait) {
         while(wait4(g_pserver->module_child_pid,&statloc,0,NULL) !=
@@ -7769,6 +7856,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(CreateStringFromCallReply);
     REGISTER_API(CreateString);
     REGISTER_API(CreateStringFromLongLong);
+    REGISTER_API(CreateStringFromDouble);
     REGISTER_API(CreateStringFromLongDouble);
     REGISTER_API(CreateStringFromString);
     REGISTER_API(CreateStringPrintf);

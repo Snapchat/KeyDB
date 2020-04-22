@@ -137,7 +137,8 @@ client *createClient(connection *conn, int iel) {
     c->ctime = c->lastinteraction = g_pserver->unixtime;
     /* If the default user does not require authentication, the user is
      * directly authenticated. */
-    c->authenticated = (c->puser->flags & USER_FLAG_NOPASS) != 0;
+    c->authenticated = (c->puser->flags & USER_FLAG_NOPASS) &&
+                       !(c->puser->flags & USER_FLAG_DISABLED);
     c->replstate = REPL_STATE_NONE;
     c->repl_put_online_on_ack = 0;
     c->reploff = 0;
@@ -177,6 +178,7 @@ client *createClient(connection *conn, int iel) {
     c->master_error = 0;
     memset(c->uuid, 0, UUID_BINARY_LEN);
 
+    c->client_tracking_prefixes = NULL;
     c->auth_callback = NULL;
     c->auth_callback_privdata = NULL;
     c->auth_module = NULL;
@@ -486,10 +488,22 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
      * Where the master must propagate the first change even if the second
      * will produce an error. However it is useful to log such events since
      * they are rare and may hint at errors in a script or a bug in Redis. */
-    if (c->flags & (CLIENT_MASTER|CLIENT_SLAVE) && !(c->flags & CLIENT_MONITOR)) {
-        const char* to = reinterpret_cast<const char*>(c->flags & CLIENT_MASTER? "master": "replica");
-        const char* from = reinterpret_cast<const char*>(c->flags & CLIENT_MASTER? "replica": "master");
-        const char *cmdname = reinterpret_cast<const char*>(c->lastcmd ? c->lastcmd->name : "<unknown>");
+    int ctype = getClientType(c);
+    if (ctype == CLIENT_TYPE_MASTER || ctype == CLIENT_TYPE_SLAVE || c->id == CLIENT_ID_AOF) {
+        const char *to, *from;
+
+        if (c->id == CLIENT_ID_AOF) {
+            to = "AOF-loading-client";
+            from = "server";
+        } else if (ctype == CLIENT_TYPE_MASTER) {
+            to = "master";
+            from = "replica";
+        } else {
+            to = "replica";
+            from = "master";
+        }
+
+        const char *cmdname = c->lastcmd ? c->lastcmd->name : "<unknown>";
         serverLog(LL_WARNING,"== CRITICAL == This %s is sending an error "
                              "to its %s: '%s' after processing the command "
                              "'%s'", from, to, s, cmdname);
@@ -498,7 +512,8 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
             std::string str = escapeString(c->querybuf);
             printf("\tquerybuf: %s\n", str.c_str());
         }
-        c->master_error = 1;
+
+        g_pserver->stat_unexpected_error_replies++;
     }
 }
 
@@ -1100,7 +1115,7 @@ void clientAcceptHandler(connection *conn) {
         serverLog(LL_WARNING,
                 "Error accepting a client connection: %s",
                 connGetLastError(conn));
-        freeClient(c);
+        freeClientAsync(c);
         return;
     }
 
@@ -1146,7 +1161,7 @@ void clientAcceptHandler(connection *conn) {
                 /* Nothing to do, Just to avoid the warning... */
             }
             g_pserver->stat_rejected_conn++;
-            freeClient(c);
+            freeClientAsync(c);
             return;
         }
     }
@@ -1207,9 +1222,10 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) 
      */
     if (connAccept(conn, clientAcceptHandler) == C_ERR) {
         char conninfo[100];
-        serverLog(LL_WARNING,
-                "Error accepting a client connection: %s (conn: %s)",
-                connGetLastError(conn), connGetInfo(conn, conninfo, sizeof(conninfo)));
+        if (connGetState(conn) == CONN_STATE_ERROR)
+            serverLog(LL_WARNING,
+                    "Error accepting a client connection: %s (conn: %s)",
+                    connGetLastError(conn), connGetInfo(conn, conninfo, sizeof(conninfo)));
         freeClient((client*)connGetPrivateData(conn));
         return;
     }
@@ -1495,7 +1511,7 @@ bool freeClient(client *c) {
     }
 
     /* Log link disconnection with replica */
-    if ((c->flags & CLIENT_SLAVE) && !(c->flags & CLIENT_MONITOR)) {
+    if (getClientType(c) == CLIENT_TYPE_SLAVE) {
         serverLog(LL_WARNING,"Connection with replica %s lost.",
             replicationGetSlaveName(c));
     }
@@ -1546,7 +1562,7 @@ bool freeClient(client *c) {
         /* We need to remember the time when we started to have zero
          * attached slaves, as after some time we'll free the replication
          * backlog. */
-        if (c->flags & CLIENT_SLAVE && listLength(g_pserver->slaves) == 0)
+        if (getClientType(c) == CLIENT_TYPE_SLAVE && listLength(g_pserver->slaves) == 0)
             g_pserver->repl_no_slaves_since = g_pserver->unixtime;
         refreshGoodSlavesCount();
         /* Fire the replica change modules event. */
@@ -1696,8 +1712,8 @@ int writeToClient(client *c, int handler_installed) {
          * just deliver as much data as it is possible to deliver.
          *
          * Moreover, we also send as much as possible if the client is
-         * a replica (otherwise, on high-speed traffic, the replication
-         * buffer will grow indefinitely) */
+         * a replica or a monitor (otherwise, on high-speed traffic, the
+         * replication/output buffer will grow indefinitely) */
         if (totwritten > NET_MAX_WRITES_PER_EVENT &&
             (g_pserver->maxmemory == 0 ||
              zmalloc_used_memory() < g_pserver->maxmemory) &&
@@ -1847,7 +1863,7 @@ void ProcessPendingAsyncWrites()
  * we can just write the replies to the client output buffer without any
  * need to use a syscall in order to install the writable event handler,
  * get it called, and so forth. */
-int handleClientsWithPendingWrites(int iel) {
+int handleClientsWithPendingWrites(int iel, int aof_state) {
     std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[iel].lockPendingWrite);
     auto &vec = g_pserver->rgthreadvar[iel].clients_pending_write;
     int processed = (int)vec.size();
@@ -1859,7 +1875,7 @@ int handleClientsWithPendingWrites(int iel) {
         * so that in the middle of receiving the query, and serving it
         * to the client, we'll call beforeSleep() that will do the
         * actual fsync of AOF to disk. AE_BARRIER ensures that. */
-    if (g_pserver->aof_state == AOF_ON &&
+    if (aof_state == AOF_ON &&
         g_pserver->aof_fsync == AOF_FSYNC_ALWAYS)
     {
         ae_flags |= AE_BARRIER;
@@ -1923,6 +1939,12 @@ void resetClient(client *c) {
      * if what we just executed is not the ASKING command itself. */
     if (!(c->flags & CLIENT_MULTI) && prevcmd != askingCommand)
         c->flags &= ~CLIENT_ASKING;
+
+    /* We do the same for the CACHING command as well. It also affects
+     * the next command or transaction executed, in a way very similar
+     * to ASKING. */
+    if (!(c->flags & CLIENT_MULTI) && prevcmd != clientCommand)
+        c->flags &= ~CLIENT_TRACKING_CACHING;
 
     /* Remove the CLIENT_REPLY_SKIP flag if any so that the reply
      * to the next command will be sent, but set the flag if the command
@@ -2007,7 +2029,7 @@ int processInlineBuffer(client *c) {
     /* Newline from slaves can be used to refresh the last ACK time.
      * This is useful for a replica to ping back while loading a big
      * RDB file. */
-    if (querylen == 0 && c->flags & CLIENT_SLAVE)
+    if (querylen == 0 && getClientType(c) == CLIENT_TYPE_SLAVE)
         c->repl_ack_time = g_pserver->unixtime;
 
     /* Move querybuffer position to the next query in the buffer. */
@@ -2591,7 +2613,6 @@ int clientSetNameOrReply(client *c, robj *name) {
 void clientCommand(client *c) {
     listNode *ln;
     listIter li;
-    client *client;
 
     if (c->argc == 2 && !strcasecmp((const char*)ptrFromObj(c->argv[1]),"help")) {
         const char *help[] = {
@@ -2608,7 +2629,7 @@ void clientCommand(client *c) {
 "REPLY (on|off|skip)    -- Control the replies sent to the current connection.",
 "SETNAME <name>         -- Assign the name <name> to the current connection.",
 "UNBLOCK <clientid> [TIMEOUT|ERROR] -- Unblock the specified blocked client.",
-"TRACKING (on|off) [REDIRECT <id>] -- Enable client keys tracking for client side caching.",
+"TRACKING (on|off) [REDIRECT <id>] [BCAST] [PREFIX first] [PREFIX second] [OPTIN] [OPTOUT]... -- Enable client keys tracking for client side caching.",
 "GETREDIR               -- Return the client ID we are redirecting to when tracking is enabled.",
 NULL
         };
@@ -2705,7 +2726,7 @@ NULL
         /* Iterate clients killing all the matching clients. */
         listRewind(g_pserver->clients,&li);
         while ((ln = listNext(&li)) != NULL) {
-            client = (struct client*)listNodeValue(ln);
+            client *client = (struct client*)listNodeValue(ln);
             if (addr && strcmp(getClientPeerId(client),addr) != 0) continue;
             if (type != -1 && getClientType(client) != type) continue;
             if (id != 0 && client->id != id) continue;
@@ -2794,38 +2815,131 @@ NULL
                 UNIT_MILLISECONDS) != C_OK) return;
         pauseClients(duration);
         addReply(c,shared.ok);
-    } else if (!strcasecmp(szFromObj(c->argv[1]),"tracking") &&
-               (c->argc == 3 || c->argc == 5))
-    {
-        /* CLIENT TRACKING (on|off) [REDIRECT <id>] */
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"tracking") && c->argc >= 3) {
+        /* CLIENT TRACKING (on|off) [REDIRECT <id>] [BCAST] [PREFIX first]
+         *                          [PREFIX second] [OPTIN] [OPTOUT] ... */
         long long redir = 0;
+        uint64_t options = 0;
+        robj **prefix = NULL;
+        size_t numprefix = 0;
 
-        /* Parse the redirection option: we'll require the client with
-         * the specified ID to exist right now, even if it is possible
-         * it will get disconnected later. */
-        if (c->argc == 5) {
-            if (strcasecmp(szFromObj(c->argv[3]),"redirect") != 0) {
-                addReply(c,shared.syntaxerr);
-                return;
-            } else {
-                if (getLongLongFromObjectOrReply(c,c->argv[4],&redir,NULL) !=
-                    C_OK) return;
+        /* Parse the options. */
+        for (int j = 3; j < c->argc; j++) {
+            int moreargs = (c->argc-1) - j;
+
+            if (!strcasecmp(szFromObj(c->argv[j]),"redirect") && moreargs) {
+                j++;
+                if (redir != 0) {
+                    addReplyError(c,"A client can only redirect to a single "
+                                    "other client");
+                    zfree(prefix);
+                    return;
+                }
+
+                if (getLongLongFromObjectOrReply(c,c->argv[j],&redir,NULL) !=
+                    C_OK)
+                {
+                    zfree(prefix);
+                    return;
+                }
+                /* We will require the client with the specified ID to exist
+                 * right now, even if it is possible that it gets disconnected
+                 * later. Still a valid sanity check. */
                 if (lookupClientByID(redir) == NULL) {
                     addReplyError(c,"The client ID you want redirect to "
                                     "does not exist");
+                    zfree(prefix);
                     return;
                 }
+            } else if (!strcasecmp(szFromObj(c->argv[j]),"bcast")) {
+                options |= CLIENT_TRACKING_BCAST;
+            } else if (!strcasecmp(szFromObj(c->argv[j]),"optin")) {
+                options |= CLIENT_TRACKING_OPTIN;
+            } else if (!strcasecmp(szFromObj(c->argv[j]),"optout")) {
+                options |= CLIENT_TRACKING_OPTOUT;
+            } else if (!strcasecmp(szFromObj(c->argv[j]),"prefix") && moreargs) {
+                j++;
+                prefix = (robj**)zrealloc(prefix,sizeof(robj*)*(numprefix+1), MALLOC_LOCAL);
+                prefix[numprefix++] = c->argv[j];
+            } else {
+                zfree(prefix);
+                addReply(c,shared.syntaxerr);
+                return;
             }
         }
 
+        /* Options are ok: enable or disable the tracking for this client. */
         if (!strcasecmp(szFromObj(c->argv[2]),"on")) {
-            enableTracking(c,redir);
+            /* Before enabling tracking, make sure options are compatible
+             * among each other and with the current state of the client. */
+            if (!(options & CLIENT_TRACKING_BCAST) && numprefix) {
+                addReplyError(c,
+                    "PREFIX option requires BCAST mode to be enabled");
+                zfree(prefix);
+                return;
+            }
+
+            if (c->flags & CLIENT_TRACKING) {
+                int oldbcast = !!(c->flags & CLIENT_TRACKING_BCAST);
+                int newbcast = !!(options & CLIENT_TRACKING_BCAST);
+                if (oldbcast != newbcast) {
+                    addReplyError(c,
+                    "You can't switch BCAST mode on/off before disabling "
+                    "tracking for this client, and then re-enabling it with "
+                    "a different mode.");
+                    zfree(prefix);
+                    return;
+                }
+            }
+
+            if (options & CLIENT_TRACKING_BCAST &&
+                options & (CLIENT_TRACKING_OPTIN|CLIENT_TRACKING_OPTOUT))
+            {
+                addReplyError(c,
+                "OPTIN and OPTOUT are not compatible with BCAST");
+                zfree(prefix);
+                return;
+            }
+
+            enableTracking(c,redir,options,prefix,numprefix);
         } else if (!strcasecmp(szFromObj(c->argv[2]),"off")) {
             disableTracking(c);
+        } else {
+            zfree(prefix);
+            addReply(c,shared.syntaxerr);
+            return;
+        }
+        zfree(prefix);
+        addReply(c,shared.ok);
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"caching") && c->argc >= 3) {
+        if (!(c->flags & CLIENT_TRACKING)) {
+            addReplyError(c,"CLIENT CACHING can be called only when the "
+                            "client is in tracking mode with OPTIN or "
+                            "OPTOUT mode enabled");
+            return;
+        }
+
+        char *opt = szFromObj(c->argv[2]);
+        if (!strcasecmp(opt,"yes")) {
+            if (c->flags & CLIENT_TRACKING_OPTIN) {
+                c->flags |= CLIENT_TRACKING_CACHING;
+            } else {
+                addReplyError(c,"CLIENT CACHING YES is only valid when tracking is enabled in OPTIN mode.");
+                return;
+            }
+        } else if (!strcasecmp(opt,"no")) {
+            if (c->flags & CLIENT_TRACKING_OPTOUT) {
+                c->flags |= CLIENT_TRACKING_CACHING;
+            } else {
+                addReplyError(c,"CLIENT CACHING NO is only valid when tracking is enabled in OPTOUT mode.");
+                return;
+            }
         } else {
             addReply(c,shared.syntaxerr);
             return;
         }
+
+        /* Common reply for when we succeeded. */
         addReply(c,shared.ok);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"getredir") && c->argc == 2) {
         /* CLIENT GETREDIR */
@@ -3016,12 +3130,14 @@ unsigned long getClientOutputBufferMemoryUsage(client *c) {
  *
  * The function will return one of the following:
  * CLIENT_TYPE_NORMAL -> Normal client
- * CLIENT_TYPE_SLAVE  -> Slave or client executing MONITOR command
+ * CLIENT_TYPE_SLAVE  -> Slave
  * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
  * CLIENT_TYPE_MASTER -> The client representing our replication master.
  */
 int getClientType(client *c) {
     if (c->flags & CLIENT_MASTER) return CLIENT_TYPE_MASTER;
+    /* Even though MONITOR clients are marked as replicas, we
+     * want the expose them as normal clients. */
     if ((c->flags & CLIENT_SLAVE) && !(c->flags & CLIENT_MONITOR))
         return CLIENT_TYPE_SLAVE;
     if (c->flags & CLIENT_PUBSUB) return CLIENT_TYPE_PUBSUB;
@@ -3251,6 +3367,7 @@ int processEventsWhileBlocked(int iel) {
     }
     
 
+    int aof_state = g_pserver->aof_state;
     aeReleaseLock();
     serverAssertDebug(!GlobalLocksAcquired());
     try
@@ -3258,7 +3375,7 @@ int processEventsWhileBlocked(int iel) {
         while (iterations--) {
             int events = 0;
             events += aeProcessEvents(g_pserver->rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
-            events += handleClientsWithPendingWrites(iel);
+            events += handleClientsWithPendingWrites(iel, aof_state);
             if (!events) break;
             count += events;
         }

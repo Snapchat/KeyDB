@@ -186,11 +186,15 @@ int dictMerge(dict *dst, dict *src)
     if (dictSize(dst) == 0)
     {
         std::swap(*dst, *src);
+        std::swap(dst->iterators, src->iterators);
         return DICT_OK;
     }
 
     if (dictSize(src) > dictSize(dst))
+    {
         std::swap(*dst, *src);
+        std::swap(dst->iterators, src->iterators);
+    }
 
     if (!dictIsRehashing(dst) && !dictIsRehashing(src))
     {

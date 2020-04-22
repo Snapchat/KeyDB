@@ -1530,6 +1530,7 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
     latencyAddSampleIfNeeded("fork",g_pserver->stat_fork_time/1000);
     serverLog(LL_NOTICE,"Background saving started");
     g_pserver->rdb_save_time_start = time(NULL);
+    serverAssert(!g_pserver->rdbThreadVars.fRdbThreadActive);
     g_pserver->rdbThreadVars.fRdbThreadActive = true;
     g_pserver->rdbThreadVars.rdb_child_thread = child;
     g_pserver->rdb_child_type = RDB_CHILD_TYPE_DISK;
@@ -2054,7 +2055,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
         }
     } else if (rdbtype == RDB_TYPE_MODULE || rdbtype == RDB_TYPE_MODULE_2) {
         uint64_t moduleid = rdbLoadLen(rdb,NULL);
-        if (rioGetReadError(rdb)) return NULL;
+        if (rioGetReadError(rdb)) {
+            rdbReportReadError("Short read module id");
+            return NULL;
+        }
         moduleType *mt = moduleTypeLookupModuleByID(moduleid);
         char name[10];
 
@@ -2422,7 +2426,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 io.ver = 2;
                 /* Call the rdb_load method of the module providing the 10 bit
                  * encoding version in the lower 10 bits of the module ID. */
-                if (mt->aux_load(&io,moduleid&1023, when) || io.error) {
+                if (mt->aux_load(&io,moduleid&1023, when) != REDISMODULE_OK || io.error) {
                     moduleTypeNameByID(name,moduleid);
                     serverLog(LL_WARNING,"The RDB file contains module AUX data for the module type '%s', that the responsible module is not able to load. Check for modules log above for additional clues.", name);
                     exit(1);
@@ -2466,7 +2470,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
          * received from the master. In the latter case, the master is
          * responsible for key expiry. If we would expire keys here, the
          * snapshot taken by the master may not be reflected on the replica. */
-        bool fExpiredKey = (listLength(g_pserver->masters) == 0 || g_pserver->fActiveReplica) && !(rdbflags&RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now;
+        bool fExpiredKey = iAmMaster() && !(rdbflags&RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now;
         if (fStaleMvccKey || fExpiredKey) {
             if (fStaleMvccKey && !fExpiredKey && rsi != nullptr && rsi->mi != nullptr && rsi->mi->staleKeyMap != nullptr && lookupKeyRead(db, key) == nullptr) {
                 // We have a key that we've already deleted and is not back in our database.
@@ -2482,13 +2486,13 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 do this every 16 keys to limit the perf impact */
             if (g_pserver->m_pstorageFactory && (ckeysLoaded % 16) == 0)
             {
-                if (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK)
+                if (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK || (ckeysLoaded % (1024)) == 0)
                 {
                     for (int idb = 0; idb < cserver.dbnum; ++idb)
                     {
                         g_pserver->db[idb]->processChanges();
                         g_pserver->db[idb]->commitChanges();
-                        g_pserver->db[idb]->trackChanges(true);
+                        g_pserver->db[idb]->trackChanges(false);
                     }
                     freeMemoryIfNeeded();
                 }
@@ -2697,7 +2701,7 @@ void killRDBChild(bool fSynchronous) {
         aeReleaseLock();
         serverAssert(!GlobalLocksAcquired());
         void *result;
-        pthread_join(g_pserver->rdbThreadVars.rdb_child_thread, &result);
+        int err = pthread_join(g_pserver->rdbThreadVars.rdb_child_thread, &result);
         g_pserver->rdbThreadVars.fRdbThreadCancel = false;
         aeAcquireLock();
     }
@@ -2823,6 +2827,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
 
     serverLog(LL_NOTICE,"Background RDB transfer started");
     g_pserver->rdb_save_time_start = time(NULL);
+    serverAssert(!g_pserver->rdbThreadVars.fRdbThreadActive);
     g_pserver->rdbThreadVars.rdb_child_thread = child;
     g_pserver->rdbThreadVars.fRdbThreadActive = true;
     g_pserver->rdb_child_type = RDB_CHILD_TYPE_SOCKET;

@@ -3,26 +3,37 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  build-ubuntu:
-    strategy:
-      matrix:
-        platform: [ubuntu-latest, ubuntu-16.04]
-    runs-on: ${{ matrix.platform }}
+  test-ubuntu-latest:
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v1
+    with:
+        submodules: true
     - name: make
-      run: make
+      run: |
+          sudo apt-get install uuid-dev libcurl4-openssl-dev
+          make
     - name: test
       run: |
         sudo apt-get install tcl8.5
-        make test
+        ./runtest --clients 2 --verbose
 
-  build-macos-latest:
-    strategy:
-      matrix:
-        platform: [macos-latest, macOS-10.14]
-    runs-on: ${{ matrix.platform }}
+  build-ubuntu-old:
+    runs-on: ubuntu-16.04
     steps:
     - uses: actions/checkout@v1
+    with:
+        submodules: true
+    - name: make
+      run: | 
+        sudo apt-get install uuid-dev libcurl4-openssl-dev
+        make
+
+  build-macos-latest:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v1
+    with:
+        submodules: true
     - name: make
       run: make

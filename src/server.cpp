@@ -5129,8 +5129,10 @@ void redisAsciiArt(void) {
 
     if (cserver.license_key == nullptr)
     {
+#ifndef NO_LICENSE_CHECK
         serverLog(LL_WARNING, "!!!! KeyDB Pro is being run in trial mode  !!!!");
         serverLog(LL_WARNING, "!!!! Execution will terminate in %d minutes !!!!", cserver.trial_timeout);
+#endif
     }
     zfree(buf);
 }

@@ -210,9 +210,19 @@ public:
         return m_ptr == other.m_ptr;
     }
 
+    bool operator==(const void *p) const
+    {
+        return m_ptr == p;
+    }
+
     bool operator!=(const robj_sharedptr &other) const
     {
         return m_ptr != other.m_ptr;
+    }
+
+    bool operator!=(const void *p) const
+    {
+        return m_ptr != p;
     }
 
     redisObject* operator->() const

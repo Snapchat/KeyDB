@@ -15,6 +15,7 @@ jobs:
       run: |
         sudo apt-get -y install tcl8.5
         ./runtest --clients 2 --verbose
+        ./runtest-cluster
         
   test-ubuntu-arm:
     runs-on: [self-hosted, linux, arm]
@@ -28,6 +29,7 @@ jobs:
       run: |
         sudo apt-get -y install tcl8.5
         ./runtest --clients 2 --verbose
+        ./runtest-cluster
 
   build-ubuntu-old:
     runs-on: ubuntu-16.04

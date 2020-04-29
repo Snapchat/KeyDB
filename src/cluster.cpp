@@ -739,7 +739,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  * However if the key contains the {...} pattern, only the part between
  * { and } is hashed. This may be useful in the future to force certain
  * keys to be in the same node (assuming no resharding is in progress). */
-unsigned int keyHashSlot(char *key, int keylen) {
+unsigned int keyHashSlot(const char *key, int keylen) {
     int s, e; /* start-end indexes of { and } */
 
     for (s = 0; s < keylen; s++)

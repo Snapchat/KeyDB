@@ -92,6 +92,7 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "uuid.h"
 #include "semiorderedset.h"
 #include "connection.h" /* Connection abstraction */
+#include "serverassert.h"
 
 #define REDISMODULE_CORE 1
 #include "redismodule.h"    /* Redis modules API defines. */
@@ -609,16 +610,6 @@ public:
  * specified period, specified in milliseconds.
  * The actual resolution depends on g_pserver->hz. */
 #define run_with_period(_ms_) if ((_ms_ <= 1000/g_pserver->hz) || !(g_pserver->cronloops%((_ms_)/(1000/g_pserver->hz))))
-
-/* We can print the stacktrace, so our assert is defined this way: */
-#define serverAssertWithInfo(_c,_o,_e) ((_e)?(void)0 : (_serverAssertWithInfo(_c,_o,#_e,__FILE__,__LINE__),_exit(1)))
-#define serverAssert(_e) ((_e)?(void)0 : (_serverAssert(#_e,__FILE__,__LINE__),_exit(1)))
-#ifdef _DEBUG
-#define serverAssertDebug(_e) serverAssert(_e)
-#else
-#define serverAssertDebug(_e)
-#endif
-#define serverPanic(...) _serverPanic(__FILE__,__LINE__,__VA_ARGS__),_exit(1)
 
 /*-----------------------------------------------------------------------------
  * Data types
@@ -2996,9 +2987,6 @@ void *realloc(void *ptr, size_t size);
 #endif
 
 /* Debugging stuff */
-void _serverAssertWithInfo(const client *c, robj_roptr o, const char *estr, const char *file, int line);
-extern "C" void _serverAssert(const char *estr, const char *file, int line);
-extern "C" void _serverPanic(const char *file, int line, const char *msg, ...);
 void bugReportStart(void);
 void serverLogObjectDebugInfo(robj_roptr o);
 void sigsegvHandler(int sig, siginfo_t *info, void *secret);

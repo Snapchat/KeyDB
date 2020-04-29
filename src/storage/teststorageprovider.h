@@ -4,7 +4,7 @@
 
 class TestStorageFactory : public IStorageFactory
 {
-    virtual class IStorage *create(int db) override;
+    virtual class IStorage *create(int db, key_load_iterator itr) override;
     virtual const char *name() const override;
 };
 

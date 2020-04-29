@@ -4,8 +4,10 @@
 class IStorageFactory
 {
 public:
+    typedef void (*key_load_iterator)(const char *rgchKey, size_t cchKey);
+
     virtual ~IStorageFactory() {}
-    virtual class IStorage *create(int db) = 0;
+    virtual class IStorage *create(int db, key_load_iterator itr) = 0;
     virtual const char *name() const = 0;
 };
 

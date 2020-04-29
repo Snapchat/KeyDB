@@ -3278,6 +3278,12 @@ void initServer(void) {
     scriptingInit(1);
     slowlogInit();
     latencyMonitorInit();
+
+    /* We have to initialize storage providers after the cluster has been initialized */
+    for (int idb = 0; idb < cserver.dbnum; ++idb)
+    {
+        g_pserver->db[idb]->storageProviderInitialize();
+    }
 }
 
 /* Some steps in server initialization need to be done last (after modules

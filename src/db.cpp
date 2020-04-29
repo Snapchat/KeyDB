@@ -2053,11 +2053,11 @@ int *xreadGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys)
  * a fast way a key that belongs to a specified hash slot. This is useful
  * while rehashing the cluster and in other conditions when we need to
  * understand if we have keys for a given hash slot. */
-void slotToKeyUpdateKey(robj *key, int add) {
+void slotToKeyUpdateKeyCore(const char *rgch, size_t keylen, int add)
+{
     serverAssert(GlobalLocksAcquired());
 
-    size_t keylen = sdslen(szFromObj(key));
-    unsigned int hashslot = keyHashSlot(szFromObj(key),keylen);
+    unsigned int hashslot = keyHashSlot(rgch,(int)keylen);
     unsigned char buf[64];
     unsigned char *indexed = buf;
 
@@ -2065,7 +2065,7 @@ void slotToKeyUpdateKey(robj *key, int add) {
     if (keylen+2 > 64) indexed = (unsigned char*)zmalloc(keylen+2, MALLOC_SHARED);
     indexed[0] = (hashslot >> 8) & 0xff;
     indexed[1] = hashslot & 0xff;
-    memcpy(indexed+2,ptrFromObj(key),keylen);
+    memcpy(indexed+2,rgch,keylen);
     int fModified = false;
     if (add) {
         fModified = raxInsert(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL,NULL);
@@ -2074,6 +2074,11 @@ void slotToKeyUpdateKey(robj *key, int add) {
     }
     serverAssert(fModified);
     if (indexed != buf) zfree(indexed);
+}
+
+void slotToKeyUpdateKey(robj *key, int add) {
+    size_t keylen = sdslen(szFromObj(key));
+    slotToKeyUpdateKeyCore(szFromObj(key), keylen, add);
 }
 
 void slotToKeyAdd(robj *key) {
@@ -2160,6 +2165,11 @@ void redisDbPersistentData::setStorageProvider(IStorage *pstorage)
     m_spstorage = std::unique_ptr<IStorage>(pstorage);
 }
 
+void clusterStorageLoadCallback(const char *rgchkey, size_t cch)
+{
+    slotToKeyUpdateKeyCore(rgchkey, cch, true /*add*/);
+}
+
 void redisDb::initialize(int id)
 {
     redisDbPersistentData::initialize();
@@ -2172,8 +2182,15 @@ void redisDb::initialize(int id)
     this->last_expire_set = 0;
     this->defrag_later = listCreate();
     listSetFreeMethod(this->defrag_later,(void (*)(const void*))sdsfree);
+}
+
+void redisDb::storageProviderInitialize()
+{
     if (g_pserver->m_pstorageFactory != nullptr)
-        this->setStorageProvider(g_pserver->m_pstorageFactory->create(id));
+    {
+        IStorageFactory::key_load_iterator itr = (g_pserver->cluster_enabled) ? clusterStorageLoadCallback : nullptr;
+        this->setStorageProvider(g_pserver->m_pstorageFactory->create(id, itr));
+    }
 }
 
 bool redisDbPersistentData::insert(char *key, robj *o, bool fAssumeNew)

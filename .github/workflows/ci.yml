@@ -11,7 +11,7 @@ jobs:
         submodules: true
     - name: make
       run: |
-          sudo apt-get install uuid-dev libcurl4-openssl-dev
+          sudo apt-get install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
           make
     - name: test
       run: |
@@ -26,6 +26,6 @@ jobs:
         submodules: true
     - name: make
       run: | 
-        sudo apt-get install uuid-dev libcurl4-openssl-dev
+        sudo apt-get install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
         make
 

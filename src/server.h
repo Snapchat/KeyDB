@@ -1434,10 +1434,10 @@ struct redisDb : public redisDbPersistentDataSnapshot
     {}
 
     void initialize(int id);
+    void storageProviderInitialize();
     virtual ~redisDb();
 
     void dbOverwriteCore(redisDb::iter itr, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire);
-
 
     bool FKeyExpires(const char *key);
     size_t clear(bool fAsync, void(callback)(void*));
@@ -3102,7 +3102,7 @@ int *memoryGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys
 /* Cluster */
 void clusterInit(void);
 extern "C" unsigned short crc16(const char *buf, int len);
-unsigned int keyHashSlot(char *key, int keylen);
+unsigned int keyHashSlot(const char *key, int keylen);
 void clusterCron(void);
 void clusterPropagatePublish(robj *channel, robj *message);
 void migrateCloseTimedoutSockets(void);

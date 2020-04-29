@@ -1,7 +1,7 @@
 #include "teststorageprovider.h"
 #include "../server.h"
 
-IStorage *TestStorageFactory::create(int)
+IStorage *TestStorageFactory::create(int, key_load_iterator)
 {
     return new (MALLOC_LOCAL) TestStorageProvider();
 }

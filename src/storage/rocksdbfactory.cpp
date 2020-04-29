@@ -13,7 +13,7 @@ public:
     RocksDBStorageFactory(const char *dbfile, int dbnum);
     ~RocksDBStorageFactory();
 
-    virtual IStorage *create(int db) override;
+    virtual IStorage *create(int db, key_load_iterator iter) override;
     virtual const char *name() const override;
 
 private:
@@ -102,11 +102,12 @@ void RocksDBStorageFactory::setVersion(rocksdb::ColumnFamilyHandle *handle)
         throw status.ToString();
 }
 
-IStorage *RocksDBStorageFactory::create(int db)
+IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter)
 {
     ++db;   // skip default col family
     std::shared_ptr<rocksdb::ColumnFamilyHandle> spcolfamily(m_vecspcols[db].release());
     size_t count = 0;
+    bool fUnclean = false;
     
     std::string value;
     auto status = m_spdb->Get(rocksdb::ReadOptions(), spcolfamily.get(), rocksdb::Slice(count_key, sizeof(count_key)), &value);
@@ -117,11 +118,22 @@ IStorage *RocksDBStorageFactory::create(int db)
     }
     else
     {
-        printf("\tDatabase was not shutdown cleanly, recomputing metrics\n");
-        std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(rocksdb::ReadOptions(), spcolfamily.get()));
+        fUnclean = true;
+    }
+    
+    if (fUnclean || iter != nullptr)
+    {
+        count = 0;
+        if (fUnclean)
+            printf("\tDatabase was not shutdown cleanly, recomputing metrics\n");
+        auto opts = rocksdb::ReadOptions();
+        opts.tailing = true;
+        std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(opts, spcolfamily.get()));
         for (it->SeekToFirst(); it->Valid(); it->Next()) {
             if (FInternalKey(it->key().data(), it->key().size()))
                 continue;
+            if (iter != nullptr)
+                iter(it->key().data(), it->key().size());
             ++count;
         }
     }

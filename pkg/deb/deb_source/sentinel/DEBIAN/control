@@ -1,0 +1,16 @@
+Package: keydb-sentinel
+Source: keydb
+Version: 5:0.0.0-1chl1~bionic1
+Architecture: amd64
+Maintainer: Ben Schermel <ben@eqalpha.com>
+Installed-Size: 52
+Depends: lsb-base (>= 3.2-14), keydb-tools (= 5:0.0.0-1chl1~bionic1)
+Section: database
+Priority: optional
+Homepage: https://docs.keydb.dev/
+Description: Persistent key-value database with network interface (monitoring)
+ keydb is a key-value database in a similar vein to memcache but the dataset
+ is non-volatile. keydb additionally provides native support for atomically
+ manipulating and querying data structures such as lists and sets.
+ .
+ This package contains the keydb Sentinel monitoring software.

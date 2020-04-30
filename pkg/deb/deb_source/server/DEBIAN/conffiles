@@ -1,0 +1,4 @@
+/etc/default/keydb-server
+/etc/init.d/keydb-server
+/etc/keydb/keydb.conf
+/etc/logrotate.d/keydb-server

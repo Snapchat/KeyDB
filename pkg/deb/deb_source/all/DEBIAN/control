@@ -1,0 +1,17 @@
+Package: keydb
+Version: 5:0.0.0-1chl1~bionic1
+Architecture: all
+Maintainer: Ben Schermel <ben@eqalpha.com>
+Installed-Size: 16
+Depends: keydb-server (<< 5:0.0.0-1chl1~bionic1.1~), keydb-server (>= 5:0.0.0-1chl1~bionic1)
+Section: database
+Priority: optional
+Homepage: https://docs.keydb.dev/
+Description: Persistent key-value database with network interface (metapackage)
+ keydb is a key-value database in a similar vein to memcache but the dataset
+ is non-volatile. keydb additionally provides native support for atomically
+ manipulating and querying data structures such as lists and sets.
+ .
+ The dataset is stored entirely in memory and periodically flushed to disk.
+ .
+ This package depends on the keydb-server package.

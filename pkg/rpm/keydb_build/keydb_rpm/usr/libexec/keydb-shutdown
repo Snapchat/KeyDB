@@ -1,0 +1,40 @@
+#!/bin/bash
+#
+# Wrapper to close properly keydb and sentinel
+test x"$KEYDB_DEBUG" != x && set -x
+
+KEYDB_CLI=/usr/bin/keydb-cli
+
+# Retrieve service name
+SERVICE_NAME="$1"
+if [ -z "$SERVICE_NAME" ]; then
+   SERVICE_NAME=keydb
+fi
+
+# Get the proper config file based on service name
+CONFIG_FILE="/etc/keydb/$SERVICE_NAME.conf"
+
+# Use awk to retrieve host, port from config file
+HOST=`awk '/^[[:blank:]]*bind/ { print $2 }' $CONFIG_FILE | tail -n1`
+PORT=`awk '/^[[:blank:]]*port/ { print $2 }' $CONFIG_FILE | tail -n1`
+PASS=`awk '/^[[:blank:]]*requirepass/ { print $2 }' $CONFIG_FILE | tail -n1`
+SOCK=`awk '/^[[:blank:]]*unixsocket\s/ { print $2 }' $CONFIG_FILE | tail -n1`
+
+# Just in case, use default host, port
+HOST=${HOST:-127.0.0.1}
+if [ "$SERVICE_NAME" = keydb ]; then
+    PORT=${PORT:-6379}
+else
+    PORT=${PORT:-26739}
+fi
+
+# Setup additional parameters
+# e.g password-protected keydb instances
+[ -z "$PASS"  ] || ADDITIONAL_PARAMS="-a $PASS"
+
+# shutdown the service properly
+if [ -e "$SOCK" ] ; then
+	$KEYDB_CLI -s $SOCK $ADDITIONAL_PARAMS shutdown
+else
+	$KEYDB_CLI -h $HOST -p $PORT $ADDITIONAL_PARAMS shutdown
+fi

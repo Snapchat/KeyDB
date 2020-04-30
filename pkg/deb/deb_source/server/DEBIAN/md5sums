@@ -1,0 +1,7 @@
+86743ab47224209eb79be4bbeb9d7945  lib/systemd/system/keydb-server.service
+291ecb74aaa46f085bb6a01edce4d57f  usr/share/doc/keydb-server/NEWS.Debian.gz
+787d0d6c891480f37b27ac6fd90ad3f6  usr/share/doc/keydb-server/README.md.gz
+ff20296c5421fd3c25e45470608b104a  usr/share/doc/keydb-server/changelog.Debian.gz
+1b5e9b283240a163084822adad00f64f  usr/share/doc/keydb-server/changelog.gz
+3b77eb20476366888f0802563ac78f3c  usr/share/doc/keydb-server/copyright
+c0ebbc5085f48753c08becccb5d1eadf  usr/share/man/man1/keydb-server.1.gz

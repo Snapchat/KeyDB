@@ -1,0 +1,4 @@
+/etc/default/keydb-sentinel
+/etc/init.d/keydb-sentinel
+/etc/keydb/sentinel.conf
+/etc/logrotate.d/keydb-sentinel

@@ -2,11 +2,10 @@
 e44a754f3c156b2bed90d3a46b514e08  usr/bin/keydb-check-aof
 e44a754f3c156b2bed90d3a46b514e08  usr/bin/keydb-check-rdb
 e44a754f3c156b2bed90d3a46b514e08  usr/bin/keydb-server
-  usr/bin/keydb-pro-server
 d92a545d57586321c7da748652b862d0  usr/bin/keydb-cli
 98cc3dc32bc1ecaecd80819e887f07d4  usr/share/bash-completion/completions/keydb-cli
 291ecb74aaa46f085bb6a01edce4d57f  usr/share/doc/keydb-tools/NEWS.Debian.gz
-ff20296c5421fd3c25e45470608b104a  usr/share/doc/keydb-tools/changelog.Debian.gz
+bb9dabe59e3c2df7a85fc0154c2ab0e1  usr/share/doc/keydb-tools/changelog.Debian.gz
 391f4b40dd5886c06bf59dc1264deb0f  usr/share/doc/keydb-tools/changelog.gz
 3b77eb20476366888f0802563ac78f3c  usr/share/doc/keydb-tools/copyright
 7568ef814e33ce3f8238008f1a0070e6  usr/share/doc/keydb-tools/examples/lru/README

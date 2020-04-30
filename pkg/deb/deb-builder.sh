@@ -103,7 +103,9 @@ echo $(echo $(md5sum $PWD/deb_source/tools/usr/bin/keydb-benchmark | cut -d' ' -
 echo $(echo $(md5sum $PWD/deb_source/tools/usr/bin/keydb-check-aof | cut -d' ' -f1))'  usr/bin/keydb-check-aof' >> $PWD/deb_source/tools/DEBIAN/md5sums
 echo $(echo $(md5sum $PWD/deb_source/tools/usr/bin/keydb-check-rdb | cut -d' ' -f1))'  usr/bin/keydb-check-rdb' >> $PWD/deb_source/tools/DEBIAN/md5sums
 echo $(echo $(md5sum $PWD/deb_source/tools/usr/bin/keydb-server | cut -d' ' -f1))'  usr/bin/keydb-server' >> $PWD/deb_source/tools/DEBIAN/md5sums
-echo $(echo $(md5sum $PWD/deb_source/tools/usr/bin/keydb-pro-server | cut -d' ' -f1))'  usr/bin/keydb-pro-server' >> $PWD/deb_source/tools/DEBIAN/md5sums
+if test -f "$PWD/deb_source/tools/usr/bin/keydb-pro-server"; then
+	echo $(echo $(md5sum $PWD/deb_source/tools/usr/bin/keydb-pro-server | cut -d' ' -f1))'  usr/bin/keydb-pro-server' >> $PWD/deb_source/tools/DEBIAN/md5sums
+fi
 echo $(echo $(md5sum $PWD/deb_source/tools/usr/bin/keydb-cli | cut -d' ' -f1))'  usr/bin/keydb-cli' >> $PWD/deb_source/tools/DEBIAN/md5sums
 echo $(echo $(md5sum $PWD/deb_source/tools/usr/share/bash-completion/completions/keydb-cli | cut -d' ' -f1))'  usr/share/bash-completion/completions/keydb-cli' >> $PWD/deb_source/tools/DEBIAN/md5sums
 echo $(echo $(md5sum $PWD/deb_source/tools/usr/share/doc/keydb-tools/NEWS.Debian.gz | cut -d' ' -f1))'  usr/share/doc/keydb-tools/NEWS.Debian.gz' >> $PWD/deb_source/tools/DEBIAN/md5sums

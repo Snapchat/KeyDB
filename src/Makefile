@@ -70,6 +70,7 @@ endif
 
 ifeq ($(COMPILER_NAME),clang)
 	CXXFLAGS+= -stdlib=libc++ 
+	LDFLAGS+= -latomic
 endif
 
 # To get ARM stack traces if Redis crashes we need a special C flag.

@@ -6,6 +6,15 @@ core
 *.d
 *.log
 dump.rdb
+src/keydb-server
+bin/keydb-server
+*.deb
+*.rpm
+keydb-pro-server
+src/keydb-cli
+bin/keydb-cli
+src/keydb-sentinel
+bin/keydb-sentinel
 redis-benchmark
 keydb-benchmark
 redis-check-aof

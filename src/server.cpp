@@ -180,7 +180,7 @@ volatile unsigned long lru_clock; /* Server global current LRU time. */
  *
  * @keyspace, @read, @write, @set, @sortedset, @list, @hash, @string, @bitmap,
  * @hyperloglog, @stream, @admin, @fast, @slow, @pubsub, @blocking, @dangerous,
- * @connection, @transaction, @scripting, @geo.
+ * @connection, @transaction, @scripting, @geo, @replication.
  *
  * Note that:
  *
@@ -673,7 +673,7 @@ struct redisCommand redisCommandTable[] = {
      * failure detection, and a loading server is considered to be
      * not available. */
     {"ping",pingCommand,-1,
-     "ok-stale fast @connection",
+     "ok-stale fast @connection @replication",
      0,NULL,0,0,0,0,0,0},
 
     {"echo",echoCommand,2,
@@ -717,15 +717,15 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"sync",syncCommand,1,
-     "admin no-script",
+     "admin no-script @replication",
      0,NULL,0,0,0,0,0,0},
 
     {"psync",syncCommand,3,
-     "admin no-script",
+     "admin no-script @replication",
      0,NULL,0,0,0,0,0,0},
 
     {"replconf",replconfCommand,-1,
-     "admin no-script ok-loading ok-stale",
+     "admin no-script ok-loading ok-stale @replication",
      0,NULL,0,0,0,0,0,0},
 
     {"flushdb",flushdbCommand,-1,

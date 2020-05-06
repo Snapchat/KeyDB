@@ -1,15 +1,14 @@
 ### KeyDB DEB Package Source Builds
 
-This directpry contains all information to build a deb package for any distribution.
+This directory contains scripts and components needed to generate debian packages on different distributions/architectures using source
 
 You will need to install pbuilder `sudo apt install pbuilder`
 
-You can now run the command:
+Generate deb packages with the following script command run from this directory:
 ```
 $ ./deb-buildsource.sh
 ```
-
-You will now generate a directory structure, .dsc file, original.tar.gz, .changes files and new changelog for the distribution and architecture installed.
+This generates a directory structure, .dsc file, original.tar.gz, .changes files and new changelog for the distribution and architecture installed.
 
 When complete the produced debian packages will be located in deb_files_generated directory.
 

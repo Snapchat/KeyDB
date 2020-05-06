@@ -1,0 +1,8 @@
+# keydb-sentinel configure options
+
+# ULIMIT: Call ulimit -n with this argument prior to invoking KeyDB Sentinel
+# itself.  This may be required for high-concurrency environments. KeyDB
+# Sentinel itself cannot alter its limits as it is not being run as root.
+# (default: 65536)
+#
+ULIMIT=65536

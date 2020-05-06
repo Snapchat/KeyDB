@@ -1,0 +1,23 @@
+.TH KEYDB-SENTINEL 1 "August 17, 2019"
+.SH NAME
+keydb-sentinel \- Persistent key-value database (cluster mode)
+.SH SYNOPSIS
+.B keydb-sentinel
+.RI configfile
+.SH DESCRIPTION
+KeyDB is a key-value database. It is similar to memcached but the dataset is
+not volatile and other datatypes (such as lists and sets) are natively
+supported.
+.PP
+.SH OPTIONS
+.IP "configfile"
+Read options from specified configuration file.
+.SH NOTES
+On Debian GNU/Linux systems, \fBkeydb-sentinel\fP is typically started via the
+\fB/etc/init.d/keydb-sentinel\fP initscript, not manually. This defaults to using
+\fB/etc/keydb/sentinel.conf\fP as a configuration file.
+.SH AUTHOR
+\fBkeydb-sentinel\fP was written by John Sully, originating as a fork of Redis. Redis was written by Salvatore Sanfilippo.
+.PP
+This manual page was written by Chris Lamb <lamby@debian.org> for the Debian
+project (but may be used by others). Modified by Ben Schermel <ben@eqalpha.com>

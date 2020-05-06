@@ -1,0 +1,81 @@
+Source: keydb
+Section: database
+Priority: optional
+Maintainer: Ben Schermel <ben@eqalpha.com>
+Build-Depends:
+ debhelper (>= 9~),
+ dpkg-dev (>= 1.17.5),
+ systemd,
+# libhiredis-dev (>= 0.14.0),
+# libjemalloc-dev [linux-any],
+# liblua5.1-dev,
+# lua-bitop-dev,
+# lua-cjson-dev,
+ procps <!nocheck>,
+ build-essential <!nocheck>,
+ tcl <!nocheck>,
+ tcl-dev <!nocheck>,
+ uuid-dev <!nocheck>,
+ libcurl4-openssl-dev <!nocheck>,
+ nasm <!nocheck>,
+ autotools-dev <!nocheck>,
+ autoconf <!nocheck>,
+ libjemalloc-dev <!nocheck>
+Standards-Version: 4.2.1
+Homepage: https://docs.keydb.dev/
+Vcs-Git: https://github.com/JohnSully/KeyDB.git
+Vcs-Browser: https://github.com/JohnSully/KeyDB
+
+Package: keydb
+Architecture: all
+Depends:
+ keydb-server (<< ${binary:Version}.1~),
+ keydb-server (>= ${binary:Version}),
+ ${misc:Depends},
+Description: Persistent key-value database with network interface (metapackage)
+ keydb is a key-value database in a similar vein to memcache but the dataset
+ is non-volatile. keydb additionally provides native support for atomically
+ manipulating and querying data structures such as lists and sets.
+ .
+ The dataset is stored entirely in memory and periodically flushed to disk.
+ .
+ This package depends on the keydb-server package.
+
+Package: keydb-sentinel
+Architecture: any
+Depends:
+ lsb-base (>= 3.2-14),
+ keydb-tools (= ${binary:Version}),
+ ${misc:Depends},
+Description: Persistent key-value database with network interface (monitoring)
+ keydb is a key-value database in a similar vein to memcache but the dataset
+ is non-volatile. keydb additionally provides native support for atomically
+ manipulating and querying data structures such as lists and sets.
+ .
+ This package contains the keydb Sentinel monitoring software.
+
+Package: keydb-server
+Architecture: any
+Depends:
+ lsb-base (>= 3.2-14),
+ keydb-tools (= ${binary:Version}),
+ ${misc:Depends},
+Description: Persistent key-value database with network interface
+ keydb is a key-value database in a similar vein to memcache but the dataset
+ is non-volatile. keydb additionally provides native support for atomically
+ manipulating and querying data structures such as lists and sets.
+ .
+ The dataset is stored entirely in memory and periodically flushed to disk.
+
+Package: keydb-tools
+Architecture: any
+Depends:
+ adduser,
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: Persistent key-value database with network interface (client)
+ keydb is a key-value database in a similar vein to memcache but the dataset
+ is non-volatile. keydb additionally provides native support for atomically
+ manipulating and querying data structures such as lists and sets.
+ .
+ This package contains the command line client and other tools.

@@ -1,0 +1,109 @@
+From: Chris Lamb <lamby@debian.org>
+Date: Tue, 10 Oct 2017 09:56:42 +0100
+Subject: Set Debian configuration defaults.
+
+---
+ keydb.conf    | 12 ++++++------
+ sentinel.conf |  9 +++++----
+ 2 files changed, 11 insertions(+), 10 deletions(-)
+
+diff --git a/keydb.conf b/keydb.conf
+index 93ab9a4..24e6c79 100644
+--- a/keydb.conf
++++ b/keydb.conf
+@@ -66,7 +66,7 @@
+ # IF YOU ARE SURE YOU WANT YOUR INSTANCE TO LISTEN TO ALL THE INTERFACES
+ # JUST COMMENT THE FOLLOWING LINE.
+ # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-bind 127.0.0.1
++bind 127.0.0.1 ::1
+ 
+ # Protected mode is a layer of security protection, in order to avoid that
+ # keydb instances left open on the internet are accessed and exploited.
+@@ -106,7 +106,7 @@ tcp-backlog 511
+ # incoming connections. There is no default, so keydb will not listen
+ # on a unix socket when not specified.
+ #
+-# unixsocket /tmp/keydb.sock
++# unixsocket /var/run/keydb/keydb-server.sock
+ # unixsocketperm 700
+ 
+ # Close the connection after a client is idle for N seconds (0 to disable)
+@@ -133,7 +133,7 @@ tcp-keepalive 300
+ 
+ # By default keydb does not run as a daemon. Use 'yes' if you need it.
+ # Note that keydb will write a pid file in /var/run/keydb.pid when daemonized.
+-daemonize no
++daemonize yes
+ 
+ # If you run keydb from upstart or systemd, keydb can interact with your
+ # supervision tree. Options:
+@@ -155,7 +155,7 @@ supervised no
+ #
+ # Creating a pid file is best effort: if keydb is not able to create it
+ # nothing bad happens, the server will start and run normally.
+-pidfile /var/run/keydb_6379.pid
++pidfile /var/run/keydb/keydb-server.pid
+ 
+ # Specify the server verbosity level.
+ # This can be one of:
+@@ -168,7 +168,7 @@ loglevel notice
+ # Specify the log file name. Also the empty string can be used to force
+ # keydb to log on the standard output. Note that if you use standard
+ # output for logging but daemonize, logs will be sent to /dev/null
+-logfile ""
++logfile /var/log/keydb/keydb-server.log
+ 
+ # To enable logging to the system logger, just set 'syslog-enabled' to yes,
+ # and optionally update the other syslog parameters to suit your needs.
+@@ -260,7 +260,7 @@ dbfilename dump.rdb
+ # The Append Only File will also be created inside this directory.
+ #
+ # Note that you must specify a directory here, not a file name.
+-dir ./
++dir /var/lib/keydb
+ 
+ ################################# REPLICATION #################################
+ 
+diff --git a/sentinel.conf b/sentinel.conf
+index bc9a705..58a4c84 100644
+--- a/sentinel.conf
++++ b/sentinel.conf
+@@ -13,6 +13,7 @@
+ # For example you may use one of the following:
+ #
+ # bind 127.0.0.1 192.168.1.1
++bind 127.0.0.1 ::1
+ #
+ # protected-mode no
+ 
+@@ -23,17 +24,17 @@ port 26379
+ # By default keydb Sentinel does not run as a daemon. Use 'yes' if you need it.
+ # Note that keydb will write a pid file in /var/run/keydb-sentinel.pid when
+ # daemonized.
+-daemonize no
++daemonize yes
+ 
+ # When running daemonized, keydb Sentinel writes a pid file in
+ # /var/run/keydb-sentinel.pid by default. You can specify a custom pid file
+ # location here.
+-pidfile /var/run/keydb-sentinel.pid
++pidfile /var/run/sentinel/keydb-sentinel.pid
+ 
+ # Specify the log file name. Also the empty string can be used to force
+ # Sentinel to log on the standard output. Note that if you use standard
+ # output for logging but daemonize, logs will be sent to /dev/null
+-logfile ""
++logfile /var/log/keydb/keydb-sentinel.log
+ 
+ # sentinel announce-ip <ip>
+ # sentinel announce-port <port>
+@@ -62,7 +63,7 @@ logfile ""
+ # For keydb Sentinel to chdir to /tmp at startup is the simplest thing
+ # for the process to don't interfere with administrative tasks such as
+ # unmounting filesystems.
+-dir /tmp
++dir /var/lib/keydb
+ 
+ # sentinel monitor <master-name> <ip> <keydb-port> <quorum>
+ #

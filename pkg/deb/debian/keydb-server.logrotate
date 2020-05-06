@@ -1,0 +1,7 @@
+/var/log/keydb/keydb-server*.log {
+        weekly
+        missingok
+        rotate 12
+        compress
+        notifempty
+}

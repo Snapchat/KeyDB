@@ -1,0 +1,8 @@
+Tests: 0001-keydb-cli
+
+Tests: 0002-benchmark
+
+Tests: 0003-keydb-check-aof
+
+Tests: 0004-keydb-check-rdb
+Restrictions: needs-root

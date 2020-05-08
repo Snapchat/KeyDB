@@ -1472,6 +1472,9 @@ void evalGenericCommand(client *c, int evalsha) {
     long long initial_server_dirty = g_pserver->dirty;
     int delhook = 0, err;
 
+    if (g_pserver->m_pstorageFactory != nullptr)
+        freeMemoryIfNeededAndSafe(true);
+
     /* When we replicate whole scripts, we want the same PRNG sequence at
      * every call so that our PRNG is not affected by external state. */
     redisSrand48(0);

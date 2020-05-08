@@ -1422,7 +1422,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
     friend void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e);
     friend int evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct evictionPoolEntry *pool);
     friend void activeDefragCycle(void);
-    friend int freeMemoryIfNeeded(void);
+    friend int freeMemoryIfNeeded(bool);
     friend void activeExpireCycle(int);
     friend void expireSlaveKeys(void);
 
@@ -2921,10 +2921,10 @@ int zslLexValueGteMin(sds value, zlexrangespec *spec);
 int zslLexValueLteMax(sds value, zlexrangespec *spec);
 
 /* Core functions */
-int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level);
+int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, bool fPreSnapshot=false);
 size_t freeMemoryGetNotCountedMemory();
-int freeMemoryIfNeeded(void);
-int freeMemoryIfNeededAndSafe(void);
+int freeMemoryIfNeeded(bool fPreSnapshot);
+int freeMemoryIfNeededAndSafe(bool fPreSnapshot);
 int processCommand(client *c, int callFlags);
 void setupSignalHandlers(void);
 struct redisCommand *lookupCommand(sds name);

@@ -3871,7 +3871,7 @@ int processCommand(client *c, int callFlags) {
      * propagation of DELs due to eviction. */
     if (g_pserver->maxmemory && !g_pserver->lua_timedout) {
         locker.arm(c);
-        int out_of_memory = freeMemoryIfNeededAndSafe() == C_ERR;
+        int out_of_memory = freeMemoryIfNeededAndSafe(false /*fPreSnapshot*/) == C_ERR;
         /* freeMemoryIfNeeded may flush replica output buffers. This may result
          * into a replica, that may be the active client, to be freed. */
         if (serverTL->current_client == NULL) return C_ERR;
@@ -4014,7 +4014,7 @@ int processCommand(client *c, int callFlags) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
-        if (cserver.cthreads >= 2 && listLength(g_pserver->monitors) == 0 && c->cmd->proc == getCommand)
+        if (cserver.cthreads >= 2 && g_pserver->m_pstorageFactory == nullptr && listLength(g_pserver->monitors) == 0 && c->cmd->proc == getCommand)
         {
             if (getCommandAsync(c))
                 return C_OK;

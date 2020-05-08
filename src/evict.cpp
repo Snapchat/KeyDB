@@ -422,7 +422,7 @@ size_t freeMemoryGetNotCountedMemory(void) {
  *              limit.
  *              (Populated both for C_ERR and C_OK)
  */
-int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level) {
+int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, bool fPreSnapshot) {
     size_t mem_reported, mem_used, mem_tofree;
 
     /* Check if we are over the memory usage limit. If we are not, no need
@@ -430,8 +430,10 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     mem_reported = zmalloc_used_memory();
     if (total) *total = mem_reported;
     size_t maxmemory = g_pserver->maxmemory;
+    if (fPreSnapshot)
+        maxmemory = static_cast<size_t>(maxmemory * 0.9);   // derate memory by 10% since we won't be able to free during snapshot
     if (g_pserver->FRdbSaveInProgress())
-        maxmemory *= 2;
+        maxmemory *= static_cast<size_t>(maxmemory*1.9);
 
     /* We may return ASAP if there is no need to compute the level. */
     int return_ok_asap = !maxmemory || mem_reported <= maxmemory;
@@ -479,12 +481,12 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
  * were over the limit, but the attempt to free memory was successful.
  * Otehrwise if we are over the memory limit, but not enough memory
  * was freed to return back under the limit, the function returns C_ERR. */
-int freeMemoryIfNeeded(void) {
+int freeMemoryIfNeeded(bool fPreSnapshot) {
     serverAssert(GlobalLocksAcquired());
 
     /* By default replicas should ignore maxmemory
      * and just be masters exact copies. */
-    if (listLength(g_pserver->masters) && g_pserver->repl_slave_ignore_maxmemory && !g_pserver->fActiveReplica) return C_OK;
+    if (g_pserver->m_pstorageFactory == nullptr && listLength(g_pserver->masters) && g_pserver->repl_slave_ignore_maxmemory && !g_pserver->fActiveReplica) return C_OK;
 
     size_t mem_reported, mem_tofree, mem_freed;
     mstime_t latency, eviction_latency;
@@ -497,7 +499,7 @@ int freeMemoryIfNeeded(void) {
      * POV of clients not being able to write, but also from the POV of
      * expires and evictions of keys not being performed. */
     if (clientsArePaused()) return C_OK;
-    if (getMaxmemoryState(&mem_reported,NULL,&mem_tofree,NULL) == C_OK)
+    if (getMaxmemoryState(&mem_reported,NULL,&mem_tofree,NULL,fPreSnapshot) == C_OK)
         return C_OK;
 
     mem_freed = 0;
@@ -714,7 +716,7 @@ cant_free:
  * - Nor we are loading data right now.
  *
  */
-int freeMemoryIfNeededAndSafe(void) {
+int freeMemoryIfNeededAndSafe(bool fPreSnapshot) {
     if (g_pserver->lua_timedout || g_pserver->loading) return C_OK;
-    return freeMemoryIfNeeded();
+    return freeMemoryIfNeeded(fPreSnapshot);
 }

@@ -2494,7 +2494,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                         g_pserver->db[idb]->commitChanges();
                         g_pserver->db[idb]->trackChanges(false);
                     }
-                    freeMemoryIfNeeded();
+                    freeMemoryIfNeeded(false /* fPreSnapshot*/);
                 }
             }
             

@@ -433,7 +433,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     if (fPreSnapshot)
         maxmemory = static_cast<size_t>(maxmemory * 0.9);   // derate memory by 10% since we won't be able to free during snapshot
     if (g_pserver->FRdbSaveInProgress())
-        maxmemory *= static_cast<size_t>(maxmemory*1.9);
+        maxmemory = static_cast<size_t>(maxmemory*1.5);
 
     /* We may return ASAP if there is no need to compute the level. */
     int return_ok_asap = !maxmemory || mem_reported <= maxmemory;

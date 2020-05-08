@@ -324,8 +324,8 @@ bool initializeStorageProvider(const char **err)
                 struct sysinfo sys;
                 if (sysinfo(&sys) == 0)
                 {
-                    // By default it's half the memory.  This gives sufficient room for background saving
-                    g_pserver->maxmemory = sys.totalram / 2;
+                    // By default it's a little under half the memory.  This gives sufficient room for background saving
+                    g_pserver->maxmemory = static_cast<unsigned long long>(sys.totalram / 2.2);
                     g_pserver->maxmemory_policy = MAXMEMORY_ALLKEYS_LRU;
                 }
             }
@@ -2176,7 +2176,7 @@ static int updateMaxmemory(long long val, long long prev, const char **err) {
         if ((unsigned long long)val < used) {
             serverLog(LL_WARNING,"WARNING: the new maxmemory value set via CONFIG SET (%llu) is smaller than the current memory usage (%zu). This will result in key eviction and/or the inability to accept new write commands depending on the maxmemory-policy.", g_pserver->maxmemory, used);
         }
-        freeMemoryIfNeededAndSafe();
+        freeMemoryIfNeededAndSafe(false /*fPreSnapshot*/);
     }
     return 1;
 }

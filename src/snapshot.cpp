@@ -8,6 +8,8 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     serverAssert(GlobalLocksAcquired());
     serverAssert(m_refCount == 0);  // do not call this on a snapshot
 
+    freeMemoryIfNeededAndSafe(true /*fPreSnapshot*/);
+
     int levels = 1;
     redisDbPersistentDataSnapshot *psnapshot = m_spdbSnapshotHOLDER.get();
     while (psnapshot != nullptr)
@@ -331,6 +333,8 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     serverAssert((m_refCount == 0 && m_pdict->iterators == 0) || (m_refCount != 0 && m_pdict->iterators == 1));
     serverAssert(m_spdbSnapshotHOLDER != nullptr || dictSize(m_pdictTombstone) == 0);
     serverAssert(sizeStart == size());
+
+    freeMemoryIfNeededAndSafe(false);
 }
 
 dict_iter redisDbPersistentDataSnapshot::random_cache_threadsafe(bool fPrimaryOnly) const

@@ -832,3 +832,33 @@ void hscanCommand(client *c) {
         checkType(c,o,OBJ_HASH)) return;
     scanGenericCommand(c,o,cursor);
 }
+
+void hrenameCommand(client *c) {
+    robj *o = nullptr;
+    const unsigned char *vstr;
+    unsigned int vlen;
+    long long ll;
+
+    if ((o = lookupKeyWriteOrReply(c,c->argv[1],shared.null[c->resp])) == nullptr ||
+        checkType(c,o,OBJ_HASH)) return;
+
+    if (hashTypeGetValue(o, szFromObj(c->argv[2]), &vstr, &vlen, &ll) != C_OK)
+    {
+        addReplyError(c, "hash key doesn't exist");
+        return;
+    }
+
+    sds sdsT = nullptr;
+    if (vstr != nullptr)
+    {
+        sdsT = sdsnewlen(vstr, vlen);
+    }
+    else
+    {
+        sdsT = sdsfromlonglong(ll);
+    }
+
+    hashTypeDelete(o, szFromObj(c->argv[2]));
+    hashTypeSet(o, szFromObj(c->argv[3]), sdsT, HASH_SET_TAKE_VALUE);
+    addReplyLongLong(c, 1);
+}

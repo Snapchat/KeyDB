@@ -1042,6 +1042,10 @@ struct redisCommand redisCommandTable[] = {
     {"keydb.cron",cronCommand,-5,
      "write use-memory",
      0,NULL,1,1,1,0,0,0},
+
+    {"keydb.hrename", hrenameCommand, 4,
+     "write fast @hash",
+     0,NULL,0,0,0,0,0,0}
 };
 
 /*============================ Utility functions ============================ */

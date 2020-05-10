@@ -2966,6 +2966,7 @@ void xdelCommand(client *c);
 void xtrimCommand(client *c);
 void aclCommand(client *c);
 void replicaReplayCommand(client *c);
+void hrenameCommand(client *c);
 
 int FBrokenLinkToMaster();
 int FActiveMaster(client *c);

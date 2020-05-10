@@ -18,6 +18,13 @@ jobs:
     - name: cluster-test
       run: |
         ./runtest-cluster
+    - name: sentinel test
+      run: |
+          ./runtest-sentinel
+    - name: module tests
+      run: |
+          ./runtest-moduleapi
+
         
   test-ubuntu-arm:
     runs-on: [self-hosted, linux, arm]
@@ -31,6 +38,9 @@ jobs:
       run: |
         sudo apt-get -y install tcl8.5
         ./runtest --clients 2 --verbose
+    - name: module tests
+      run: |
+          ./runtest-moduleapi
 
   build-ubuntu-old:
     runs-on: ubuntu-16.04

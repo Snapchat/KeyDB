@@ -324,7 +324,7 @@ typedef struct RedisModuleReplicationInfo {
                                from the module to the core right now. Here
                                for future compatibility. */
     int master;             /* true if master, false if replica */
-    char *masterhost;       /* master instance hostname for NOW_REPLICA */
+    const char *masterhost;       /* master instance hostname for NOW_REPLICA */
     int masterport;         /* master instance port for NOW_REPLICA */
     char *replid1;          /* Main replication ID */
     char *replid2;          /* Secondary replication ID */

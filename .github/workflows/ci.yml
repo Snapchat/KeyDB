@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 jobs:
   test-ubuntu-latest:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
     - uses: actions/checkout@v1
       with:
@@ -14,7 +14,7 @@ jobs:
           sudo apt-get -y remove libzstd || true
           sudo apt-get -y install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
           sudo apt-get -y install uuid-dev libcurl4-openssl-dev
-          make -j2
+          make -j$(nproc)
     - name: test
       run: |
         sudo apt-get -y install tcl8.5

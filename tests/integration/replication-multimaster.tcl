@@ -36,8 +36,13 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
     test "$topology replicates to all nodes" {
         $R(0) set testkey foo
         after 500
-        assert_equal foo [$R(1) get testkey] "replicates to 1"
-        assert_equal foo [$R(2) get testkey] "replicates to 2"
+        for {set n 0} {$n < 4} {incr n} {
+            wait_for_condition 50 1000 {
+                [$R($n) get testkey] == "foo"
+            } else {
+                fail "Failed to replicate to $n"
+            }
+        }
     }
 
     test "$topology replicates only once" {

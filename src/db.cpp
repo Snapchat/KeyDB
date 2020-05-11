@@ -284,7 +284,7 @@ void dbOverwrite(redisDb *db, robj *key, robj *val, bool fRemoveExpire) {
     auto itr = db->find(key);
 
     serverAssertWithInfo(NULL,key,itr != nullptr);
-    lookupKeyUpdateObj(val, LOOKUP_NONE);
+    lookupKeyUpdateObj(itr.val(), LOOKUP_NONE);
     db->dbOverwriteCore(itr, key, val, !!g_pserver->fActiveReplica, fRemoveExpire);
 }
 

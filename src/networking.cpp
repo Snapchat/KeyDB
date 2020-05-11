@@ -1590,6 +1590,8 @@ bool freeClient(client *c) {
     return true;
 }
 
+fastlock lockasyncfree {"async free lock"};
+
 /* Schedule a client to free it at a safe time in the serverCron() function.
  * This function is useful when we need to terminate a client but we are in
  * a context where calling freeClient() is not possible, because the client
@@ -1606,6 +1608,7 @@ void freeClientAsync(client *c) {
     lock.arm(c);
     if (c->flags & CLIENT_CLOSE_ASAP || c->flags & CLIENT_LUA) return;  // race condition after we acquire the lock
     c->flags |= CLIENT_CLOSE_ASAP;    
+    std::unique_lock<fastlock> ul(lockasyncfree);
     listAddNodeTail(g_pserver->clients_to_close,c);
 }
 
@@ -1617,6 +1620,7 @@ void freeClientsInAsyncFreeQueue(int iel) {
 
     // Store the clients in a temp vector since freeClient will modify this list
     std::vector<client*> vecclientsFree;
+    std::unique_lock<fastlock> ul(lockasyncfree);
     while((ln = listNext(&li))) 
     {
         client *c = (client*)listNodeValue(ln);
@@ -1626,6 +1630,7 @@ void freeClientsInAsyncFreeQueue(int iel) {
             listDelNode(g_pserver->clients_to_close, ln);
         }
     }
+    ul.unlock();
 
     for (client *c : vecclientsFree)
     {
@@ -2393,11 +2398,13 @@ void readQueryFromClient(connection *conn) {
             return;
         } else {
             serverLog(LL_VERBOSE, "Reading from client: %s",connGetLastError(c->conn));
+            aelock.arm(c);
             freeClientAsync(c);
             return;
         }
     } else if (nread == 0) {
         serverLog(LL_VERBOSE, "Client closed connection");
+        aelock.arm(c);
         freeClientAsync(c);
         return;
     } else if (c->flags & CLIENT_MASTER) {

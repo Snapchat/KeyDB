@@ -11,9 +11,7 @@ jobs:
         submodules: true
     - name: make
       run: |
-          git submodule init
-          git submodule update
-          sudo apt remove libzstd
+          sudo apt-get -y remove libzstd || true
           sudo apt-get -y install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
           sudo apt-get -y install uuid-dev libcurl4-openssl-dev
           make -j2

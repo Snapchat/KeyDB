@@ -50,9 +50,6 @@
 const double EARTH_RADIUS_IN_METERS = 6372797.560856;
 
 const double MERCATOR_MAX = 20037726.37;
-#if 0 //unused
-const double MERCATOR_MIN = -20037726.37;
-#endif
 
 static inline double deg_rad(double ang) { return ang * D_R; }
 static inline double rad_deg(double ang) { return ang / D_R; }

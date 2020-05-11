@@ -72,6 +72,7 @@ endif
 
 ifeq ($(COMPILER_NAME),clang)
 	CXXFLAGS+= -stdlib=libc++ 
+	LDFLAGS+= -latomic
 endif
 
 # To get ARM stack traces if Redis crashes we need a special C flag.
@@ -90,10 +91,6 @@ ifneq (,$(filter aarch64 armv,$(uname_M)))
 else
 	LICENSE_LIB_DIR=../deps/license/x64/
 endif
-
-ifneq (,$(findstring armv,$(uname_M)))
-	FINAL_LIBS+=-latomic
-endif	
 
 # Backwards compatibility for selecting an allocator
 ifeq ($(USE_TCMALLOC),yes)
@@ -123,17 +120,13 @@ endif
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
 FINAL_CXXFLAGS=$(CXX_STD) $(WARN) $(OPT) $(DEBUG) $(CXXFLAGS) $(REDIS_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
-FINAL_LIBS+=-lm -lcurl -lz -latomic -L$(LICENSE_LIB_DIR) -lkey -lcrypto
+FINAL_LIBS+=-lm -lcurl -lz -latomic -L$(LICENSE_LIB_DIR) -lkey -lcrypto -lbz2
 DEBUG=-g -ggdb
 
-# Linux ARM needs -latomic at linking time
-ifneq (,$(filter aarch64 armv,$(uname_M)))
-        FINAL_LIBS+=-latomic
-else
-ifneq (,$(findstring armv,$(uname_M)))
-        FINAL_LIBS+=-latomic
+ifneq ($(uname_S),Darwin)
+	FINAL_LIBS+=-latomic
 endif
-endif
+
 
 ifeq ($(uname_S),SunOS)
 	# SunOS

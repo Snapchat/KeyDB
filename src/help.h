@@ -1173,7 +1173,12 @@ struct commandHelp {
     "name [single/repeat] [optional: start] delay script numkeys [key N] [arg N]",
     "Run a specified script after start + delay, optionally repeating every delay interval.  The job may be cancelled by deleting the key associated with the job (name parameter)",
     10,
-    "6.5.2"
+    "6.5.2"},
+    { "KEYDB.HRENAME",
+    "key [src hash key] [dst hash key]",
+    "Rename a hash key, copying the value.",
+    4,
+    "6.5.3"
     }
 };
 

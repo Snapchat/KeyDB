@@ -14,24 +14,21 @@ jobs:
           git submodule init
           git submodule update
           sudo apt remove libzstd
-          sudo apt-get install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
+          sudo apt-get -y install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
+          sudo apt-get -y install uuid-dev libcurl4-openssl-dev
           make -j2
     - name: test
       run: |
-        sudo apt-get install tcl8.5
+        sudo apt-get -y install tcl8.5
         ./runtest --clients 2 --verbose
+    - name: cluster-test
+      run: |
+        ./runtest-cluster
+    - name: sentinel test
+      run: |
+          ./runtest-sentinel
+    - name: module tests
+      run: |
+          ./runtest-moduleapi
 
-  build-ubuntu-old:
-    runs-on: ubuntu-16.04
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        submodules: true
-    - name: make
-      run: | 
-        git submodule init
-        git submodule update
-        sudo apt remove libzstd
-        sudo apt-get install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
-        make -j2
-
+        

@@ -4701,13 +4701,14 @@ void moduleHandleBlockedClients(int iel) {
         if ((c != nullptr) && (iel != c->iel))
             continue;
         
+        std::unique_lock<fastlock> ul;
         listDelNode(moduleUnblockedClients,ln);
         pthread_mutex_unlock(&moduleUnblockedClientsMutex);
 
         if (c)
         {
             AssertCorrectThread(c);
-            fastlock_lock(&c->lock);
+            ul = std::unique_lock<fastlock>(c->lock);
         }
 
         /* Release the lock during the loop, as long as we don't
@@ -4773,7 +4774,6 @@ void moduleHandleBlockedClients(int iel) {
         /* Free 'bc' only after unblocking the client, since it is
          * referenced in the client blocking context, and must be valid
          * when calling unblockClient(). */
-        fastlock_unlock(&c->lock);
         bc->module->blocked_clients--;
         zfree(bc);
 

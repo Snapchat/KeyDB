@@ -1775,15 +1775,15 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
     memset(ri1,0,sizeof(*ri1));
     ri1->version = structver;
     ri1->master = listLength(g_pserver->masters) == 0;
-    if (ri1->master)
+    if (!ri1->master)
     {
-        redisMaster *mi = (redisMaster*)listFirst(g_pserver->masters);
+        redisMaster *mi = (redisMaster*)listNodeValue(listFirst(g_pserver->masters));
         ri1->masterhost = (char*)(mi->masterhost? mi->masterhost: "");
         ri1->masterport = mi->masterport;
     }
     else
     {
-        ri1->masterhost = nullptr;
+        ri1->masterhost = "";
         ri1->masterport = -1;
     }
     ri1->repl1_offset = g_pserver->master_repl_offset;
@@ -4701,13 +4701,14 @@ void moduleHandleBlockedClients(int iel) {
         if ((c != nullptr) && (iel != c->iel))
             continue;
         
+        std::unique_lock<fastlock> ul;
         listDelNode(moduleUnblockedClients,ln);
         pthread_mutex_unlock(&moduleUnblockedClientsMutex);
 
         if (c)
         {
             AssertCorrectThread(c);
-            fastlock_lock(&c->lock);
+            ul = std::unique_lock<fastlock>(c->lock);
         }
 
         /* Release the lock during the loop, as long as we don't
@@ -4773,7 +4774,6 @@ void moduleHandleBlockedClients(int iel) {
         /* Free 'bc' only after unblocking the client, since it is
          * referenced in the client blocking context, and must be valid
          * when calling unblockClient(). */
-        fastlock_unlock(&c->lock);
         bc->module->blocked_clients--;
         zfree(bc);
 
@@ -7765,8 +7765,12 @@ int RM_GetLFU(RedisModuleKey *key, long long *lfu_freq) {
     *lfu_freq = -1;
     if (!key->value)
         return REDISMODULE_ERR;
+    serverLog(LL_WARNING, "MAXMEMORY_POLICY: %X", g_pserver->maxmemory_policy);
     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU)
+    {
         *lfu_freq = LFUDecrAndReturn(key->value);
+        serverLog(LL_WARNING, "lfu_freq: %lld", lfu_freq);
+    }
     return REDISMODULE_OK;
 }
 

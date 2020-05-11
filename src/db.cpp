@@ -66,7 +66,6 @@ void updateExpire(redisDb *db, sds key, robj *valOld, robj *valNew)
     return;
 }
 
-
 static void lookupKeyUpdateObj(robj *val, int flags)
 {
     /* Update the access time for the ageing algorithm.
@@ -285,6 +284,7 @@ void dbOverwrite(redisDb *db, robj *key, robj *val, bool fRemoveExpire) {
     auto itr = db->find(key);
 
     serverAssertWithInfo(NULL,key,itr != nullptr);
+    lookupKeyUpdateObj(val, LOOKUP_NONE);
     db->dbOverwriteCore(itr, key, val, !!g_pserver->fActiveReplica, fRemoveExpire);
 }
 

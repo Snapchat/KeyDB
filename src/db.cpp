@@ -65,6 +65,22 @@ void updateExpire(redisDb *db, sds key, robj *valOld, robj *valNew)
     return;
 }
 
+void updateDbValAccess(dictEntry *de, int flags)
+{
+    robj *val = (robj*)dictGetVal(de);
+
+    /* Update the access time for the ageing algorithm.
+        * Don't do it if we have a saving child, as this will trigger
+        * a copy on write madness. */
+    if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)){
+        if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+            updateLFU(val);
+        } else {
+            val->lru = LRU_CLOCK();
+        }
+    }
+}
+
 
 /* Low level key lookup API, not actually called directly from commands
  * implementations that should instead rely on lookupKeyRead(),
@@ -74,16 +90,7 @@ static robj *lookupKey(redisDb *db, robj *key, int flags) {
     if (de) {
         robj *val = (robj*)dictGetVal(de);
 
-        /* Update the access time for the ageing algorithm.
-         * Don't do it if we have a saving child, as this will trigger
-         * a copy on write madness. */
-        if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)){
-            if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-                updateLFU(val);
-            } else {
-                val->lru = LRU_CLOCK();
-            }
-        }
+        updateDbValAccess(de, flags);
 
         if (flags & LOOKUP_UPDATEMVCC) {
             val->mvcc_tstamp = getMvccTstamp();
@@ -312,6 +319,7 @@ void genericSetKey(redisDb *db, robj *key, robj *val, int keepttl) {
     if (de == NULL) {
         dbAdd(db,key,val);
     } else {
+        updateDbValAccess(de, LOOKUP_NONE);
         dbOverwriteCore(db,de,key,val,!!g_pserver->fActiveReplica,!keepttl);
     }
     incrRefCount(val);

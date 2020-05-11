@@ -1082,7 +1082,7 @@ void copyClientOutputBuffer(client *dst, client *src) {
 /* Return true if the specified client has pending reply buffers to write to
  * the socket. */
 int clientHasPendingReplies(client *c) {
-    return (c->bufpos || listLength(c->reply)) && !(c->flags & CLIENT_CLOSE_ASAP);
+    return (c->bufpos || listLength(c->reply));
 }
 
 static std::atomic<int> rgacceptsInFlight[MAX_EVENT_LOOPS];

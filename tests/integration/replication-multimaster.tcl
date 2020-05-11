@@ -47,10 +47,13 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
         after 500
         $R(2) incr testkey
         after 500
-        assert_equal 3 [$R(0) get testkey]
-        assert_equal 3 [$R(1) get testkey]
-        assert_equal 3 [$R(2) get testkey]
-        assert_equal 3 [$R(3) get testkey]
+        for {set n 0} {$n < 4} {incr n} {
+            wait_for_condition 50 1000 {
+                [$R($n) get testkey] == 3
+            } else {
+                fail "node $n did not replicate"
+            }
+        }
     }
 
     test "$topology transaction replicates only once" {
@@ -60,11 +63,13 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
             $R(0) incr testkey
             $R(0) incr testkey
             $R(0) exec
-            after 1
-            assert_equal 3 [$R(0) get testkey] "node 0"
-            assert_equal 3 [$R(1) get testkey] "node 1"
-            assert_equal 3 [$R(2) get testkey] "node 2"
-            assert_equal 3 [$R(3) get testkey] "node 3"
+	    for {set n 0} {$n < 4} {incr n} {
+	        wait_for_condition 50 1000 {
+                    [$R($n) get testkey] == 3
+                } else {
+                    fail "node $n failed to replicate"
+                }
+            }
         }
     }
 }

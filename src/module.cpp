@@ -7222,6 +7222,8 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
      * cheap if there are no registered modules. */
     if (listLength(RedisModule_EventListeners) == 0) return;
 
+    aeAcquireLock();
+
     listIter li;
     listNode *ln;
     listRewind(RedisModule_EventListeners,&li);
@@ -7286,6 +7288,8 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
             moduleFreeContext(&ctx);
         }
     }
+
+    aeReleaseLock();
 }
 
 /* Remove all the listeners for this module: this is used before unloading

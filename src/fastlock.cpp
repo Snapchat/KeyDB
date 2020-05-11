@@ -45,6 +45,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include "config.h"
+#include "serverassert.h"
 
 #ifdef __APPLE__
 #include <TargetConditionals.h>
@@ -140,13 +141,11 @@ extern "C" void unlock_futex(struct fastlock *lock, uint16_t ifutex);
 
 #endif
 
-#pragma weak _serverPanic
 extern "C"  __attribute__((weak)) void _serverPanic(const char * /*file*/, int /*line*/, const char * /*msg*/, ...)
 {
     *((char*)-1) = 'x';
 }
 
-#pragma weak serverLog
 __attribute__((weak)) void serverLog(int , const char *fmt, ...)
 {
     va_list args;
@@ -166,7 +165,7 @@ extern "C" pid_t gettid()
 	if (pidCache == -1) {
 		uint64_t tidT;
 		pthread_threadid_np(nullptr, &tidT);
-		assert(tidT < UINT_MAX);
+		serverAssert(tidT < UINT_MAX);
 		pidCache = (int)tidT;
 	}
 #endif
@@ -395,7 +394,7 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
     {
         int pidT;
         __atomic_load(&lock->m_pidOwner, &pidT, __ATOMIC_RELAXED);
-        assert(pidT >= 0);  // unlock after free
+        serverAssert(pidT >= 0);  // unlock after free
         int t = -1;
         __atomic_store(&lock->m_pidOwner, &t, __ATOMIC_RELEASE);
         std::atomic_thread_fence(std::memory_order_release);
@@ -433,7 +432,7 @@ extern "C" void unlock_futex(struct fastlock *lock, uint16_t ifutex)
 extern "C" void fastlock_free(struct fastlock *lock)
 {
     // NOP
-    assert((lock->m_ticket.m_active == lock->m_ticket.m_avail)                                        // Asser the lock is unlocked
+    serverAssert((lock->m_ticket.m_active == lock->m_ticket.m_avail)                                        // Asser the lock is unlocked
         || (lock->m_pidOwner == gettid() && (lock->m_ticket.m_active == lock->m_ticket.m_avail-1)));  // OR we own the lock and nobody else is waiting
     lock->m_pidOwner = -2;  // sentinal value indicating free
     ANNOTATE_RWLOCK_DESTROY(lock);

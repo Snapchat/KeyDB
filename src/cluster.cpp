@@ -4246,7 +4246,7 @@ void clusterReplyMultiBulkSlots(client *c) {
         
         static_assert((CLUSTER_SLOTS % (sizeof(uint32_t)*8)) == 0, "code below assumes the bitfield is a multiple of sizeof(unsinged)");
 
-        for (unsigned iw = 0; iw < (CLUSTER_SLOTS/sizeof(uint32_t)/8); ++iw)
+        for (int iw = 0; iw < (CLUSTER_SLOTS/(int)sizeof(uint32_t)/8); ++iw)
         {
             uint32_t wordCur = reinterpret_cast<uint32_t*>(node->slots)[iw];
             if (iw != ((CLUSTER_SLOTS/sizeof(uint32_t)/8)-1))
@@ -4259,7 +4259,7 @@ void clusterReplyMultiBulkSlots(client *c) {
 
             unsigned ibitStartLoop = iw*sizeof(uint32_t)*8;
     
-            for (unsigned j = ibitStartLoop; j < (iw+1)*sizeof(uint32_t)*8; j++) {
+            for (int j = ibitStartLoop; j < (iw+1)*(int)sizeof(uint32_t)*8; j++) {
                 int i;
                 int bit = (int)(wordCur & 1);
                 wordCur >>= 1;

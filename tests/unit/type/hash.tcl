@@ -445,6 +445,38 @@ start_server {tags {"hash"}} {
         }
     }
 
+    test {KEYDB.HRENAME basic} {
+        r flushall
+        r hset testkey foo bar
+        r keydb.hrename testkey foo foo1
+        assert_equal [r hlen testkey] {1}
+        assert_equal [r hget testkey foo1] {bar}
+    }
+
+    test {KEYDB.HRENAME same name} {
+        r flushall
+        r hset testkey foo bar
+        r keydb.hrename testkey foo foo
+        assert_equal [r hlen testkey] {1}
+        assert_equal [r hget testkey foo] {bar}
+    }
+
+    test {KEYDB.HRENAME overwrite dest} {
+        r flushall
+        r hset testkey foo bar foo1 baz
+        r keydb.hrename testkey foo foo1
+        assert_equal [r hlen testkey] {1}
+        assert_equal [r hget testkey foo1] {bar}
+    }
+
+    test {KEYDB.HRENAME integer basic} {
+        r flushall
+        r hset testkey foo 1
+        r keydb.hrename testkey foo bar
+        assert_equal [r hlen testkey] {1}
+        assert_equal [r hget testkey bar] {1}
+    }
+
     test {Hash ziplist regression test for large keys} {
         r hset hash kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk a
         r hset hash kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk b

@@ -120,7 +120,7 @@ endif
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
 FINAL_CXXFLAGS=$(CXX_STD) $(WARN) $(OPT) $(DEBUG) $(CXXFLAGS) $(REDIS_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
-FINAL_LIBS+=-lm -lcurl -lz -latomic -L$(LICENSE_LIB_DIR) -lkey -lcrypto -lbz2
+FINAL_LIBS+=-lm -lcurl -lz -latomic -L$(LICENSE_LIB_DIR) -lkey -lcrypto -lbz2 -lzstd -llz4 -lsnappy
 DEBUG=-g -ggdb
 
 ifneq ($(uname_S),Darwin)

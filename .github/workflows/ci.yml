@@ -18,7 +18,7 @@ jobs:
     - name: test
       run: |
         sudo apt-get -y install tcl8.5
-        ./runtest --clients $(nproc) --verbose
+        ./runtest --clients $(nproc - 1) --verbose
     - name: cluster-test
       run: |
         ./runtest-cluster

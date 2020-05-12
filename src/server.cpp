@@ -2249,8 +2249,6 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
     int iel = ielFromEventLoop(eventLoop);
     serverAssert(iel != IDX_EVENT_LOOP_MAIN);
 
-    updateCachedTime(1);
-
     /* If another threads unblocked one of our clients, and this thread has been idle
         then beforeSleep won't have a chance to process the unblocking.  So we also
         process them here in the cron job to ensure they don't starve.

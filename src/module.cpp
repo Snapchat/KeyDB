@@ -7765,11 +7765,9 @@ int RM_GetLFU(RedisModuleKey *key, long long *lfu_freq) {
     *lfu_freq = -1;
     if (!key->value)
         return REDISMODULE_ERR;
-    serverLog(LL_WARNING, "MAXMEMORY_POLICY: %X", g_pserver->maxmemory_policy);
     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU)
     {
         *lfu_freq = LFUDecrAndReturn(key->value);
-        serverLog(LL_WARNING, "lfu_freq: %lld", lfu_freq);
     }
     return REDISMODULE_OK;
 }

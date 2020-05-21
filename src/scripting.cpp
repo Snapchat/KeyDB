@@ -671,12 +671,11 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
         !g_pserver->loading &&              /* Don't care about mem if loading. */
         !listLength(g_pserver->masters) &&           /* Slave must execute the script. */
         g_pserver->lua_write_dirty == 0 &&  /* Script had no side effects so far. */
+        g_pserver->lua_oom &&               /* Detected OOM when script started. */
         (cmd->flags & CMD_DENYOOM))
     {
-        if (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK) {
-            luaPushError(lua, (char*)ptrFromObj(shared.oomerr));
-            goto cleanup;
-        }
+        luaPushError(lua, (char*)ptrFromObj(shared.oomerr));
+        goto cleanup;
     }
 
     if (cmd->flags & CMD_RANDOM) g_pserver->lua_random_dirty = 1;

@@ -1045,7 +1045,11 @@ struct redisCommand redisCommandTable[] = {
 
     {"keydb.hrename", hrenameCommand, 4,
      "write fast @hash",
-     0,NULL,0,0,0,0,0,0}
+     0,NULL,0,0,0,0,0,0},
+    
+    {"lcs",lcsCommand,-4,
+     "write use-memory @string",
+     0,lcsGetKeys,0,0,0,0,0,0}
 };
 
 /*============================ Utility functions ============================ */

@@ -2691,6 +2691,7 @@ int *migrateGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkey
 int *georadiusGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);
 int *xreadGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);
 int *memoryGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);
+int *lcsGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);
 
 /* Cluster */
 void clusterInit(void);
@@ -2968,6 +2969,7 @@ void xtrimCommand(client *c);
 void aclCommand(client *c);
 void replicaReplayCommand(client *c);
 void hrenameCommand(client *c);
+void lcsCommand(client *c);
 
 int FBrokenLinkToMaster();
 int FActiveMaster(client *c);

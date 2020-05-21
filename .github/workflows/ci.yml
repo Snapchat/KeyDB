@@ -38,9 +38,14 @@ jobs:
       run: |
         sudo apt-get -y install tcl8.5
         ./runtest --clients 2 --verbose
+<<<<<<< HEAD
     - name: module tests
       run: |
           ./runtest-moduleapi
+=======
+    - name: module api test
+      run: ./runtest-moduleapi --clients 2 --verbose
+>>>>>>> 024c380b9da02bc4112822c0f5f9ac1388b4205b
 
   build-ubuntu-old:
     runs-on: ubuntu-16.04

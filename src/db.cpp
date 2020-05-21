@@ -314,7 +314,7 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
  *    unless 'keepttl' is true.
  *
  * All the new keys in the database should be created via this interface. */
-void genericSetKey(redisDb *db, robj *key, robj *val, int keepttl) {
+void genericSetKey(redisDb *db, robj *key, robj *val, int keepttl, int signal) {
     dictEntry *de = dictFind(db->pdict, ptrFromObj(key));
     if (de == NULL) {
         dbAdd(db,key,val);
@@ -323,12 +323,12 @@ void genericSetKey(redisDb *db, robj *key, robj *val, int keepttl) {
         dbOverwriteCore(db,de,key,val,!!g_pserver->fActiveReplica,!keepttl);
     }
     incrRefCount(val);
-    signalModifiedKey(db,key);
+    if (signal) signalModifiedKey(db,key);
 }
 
 /* Common case for genericSetKey() where the TTL is not retained. */
 void setKey(redisDb *db, robj *key, robj *val) {
-    genericSetKey(db,key,val,0);
+    genericSetKey(db,key,val,0,1);
 }
 
 /* Return true if the specified key exists in the specified database.

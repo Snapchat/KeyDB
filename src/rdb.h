@@ -151,7 +151,7 @@ int rdbSaveFp(FILE *pf, rdbSaveInfo *rsi);
 int rdbSaveS3(char *path, rdbSaveInfo *rsi);
 int rdbLoadS3(char *path, rdbSaveInfo *rsi, int rdbflags);
 ssize_t rdbSaveObject(rio *rdb, robj_roptr o, robj *key);
-size_t rdbSavedObjectLen(robj *o);
+size_t rdbSavedObjectLen(robj *o, robj *key);
 robj *rdbLoadObject(int type, rio *rdb, robj *key, uint64_t mvcc_tstamp);
 void backgroundSaveDoneHandler(int exitcode, int bysignal);
 int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime);

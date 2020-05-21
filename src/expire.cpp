@@ -704,6 +704,7 @@ void persistCommand(client *c) {
     if (lookupKeyWrite(c->db,c->argv[1])) {
         if (c->argc == 2) {
             if (removeExpire(c->db,c->argv[1])) {
+                notifyKeyspaceEvent(NOTIFY_GENERIC,"persist",c->argv[1],c->db->id);
                 addReply(c,shared.cone);
                 g_pserver->dirty++;
             } else {
@@ -711,6 +712,7 @@ void persistCommand(client *c) {
             }
         } else if (c->argc == 3) {
             if (removeSubkeyExpire(c->db, c->argv[1], c->argv[2])) {
+                notifyKeyspaceEvent(NOTIFY_GENERIC,"persist",c->argv[1],c->db->id);
                 addReply(c,shared.cone);
                 g_pserver->dirty++;
             } else {

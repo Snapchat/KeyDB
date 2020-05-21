@@ -5033,7 +5033,7 @@ void restoreCommand(client *c) {
 
     rioInitWithBuffer(&payload,szFromObj(c->argv[3]));
     if (((type = rdbLoadObjectType(&payload)) == -1) ||
-        ((obj = rdbLoadObject(type,&payload,c->argv[1], OBJ_MVCC_INVALID)) == NULL))
+        ((obj = rdbLoadObject(type,&payload,szFromObj(c->argv[1]), OBJ_MVCC_INVALID)) == NULL))
     {
         addReplyError(c,"Bad data format");
         return;

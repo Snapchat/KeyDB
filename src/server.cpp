@@ -1632,6 +1632,28 @@ int clientsCronTrackExpansiveClients(client *c) {
     return 0; /* This function never terminates the client. */
 }
 
+/* Iterating all the clients in getMemoryOverheadData() is too slow and
+ * in turn would make the INFO command too slow. So we perform this
+ * computation incrementally and track the (not instantaneous but updated
+ * to the second) total memory used by clients using clinetsCron() in
+ * a more incremental way (depending on server.hz). */
+int clientsCronTrackClientsMemUsage(client *c) {
+    size_t mem = 0;
+    int type = getClientType(c);
+    mem += getClientOutputBufferMemoryUsage(c);
+    mem += sdsAllocSize(c->querybuf);
+    mem += sizeof(client);
+    /* Now that we have the memory used by the client, remove the old
+     * value from the old categoty, and add it back. */
+    g_pserver->stat_clients_type_memory[c->client_cron_last_memory_type] -=
+        c->client_cron_last_memory_usage;
+    g_pserver->stat_clients_type_memory[type] += mem;
+    /* Remember what we added and where, to remove it next time. */
+    c->client_cron_last_memory_usage = mem;
+    c->client_cron_last_memory_type = type;
+    return 0;
+}
+
 /* Return the max samples in the memory usage of clients tracked by
  * the function clientsCronTrackExpansiveClients(). */
 void getExpansiveClientsInfo(size_t *in_usage, size_t *out_usage) {
@@ -1695,6 +1717,7 @@ void clientsCron(int iel) {
             if (clientsCronHandleTimeout(c,now)) continue;  // Client free'd so don't release the lock
             if (clientsCronResizeQueryBuffer(c)) goto LContinue;
             if (clientsCronTrackExpansiveClients(c)) goto LContinue;
+            if (clientsCronTrackClientsMemUsage(c)) goto LContinue;
         LContinue:
             fastlock_unlock(&c->lock);
         }        
@@ -3042,6 +3065,8 @@ void initServer(void) {
     g_pserver->stat_rdb_cow_bytes = 0;
     g_pserver->stat_aof_cow_bytes = 0;
     g_pserver->stat_module_cow_bytes = 0;
+    for (int j = 0; j < CLIENT_TYPE_COUNT; j++)
+        g_pserver->stat_clients_type_memory[j] = 0;
     g_pserver->cron_malloc_stats.zmalloc_used = 0;
     g_pserver->cron_malloc_stats.process_rss = 0;
     g_pserver->cron_malloc_stats.allocator_allocated = 0;

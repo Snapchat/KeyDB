@@ -178,6 +178,8 @@ client *createClient(connection *conn, int iel) {
     memset(c->uuid, 0, UUID_BINARY_LEN);
 
     c->client_tracking_prefixes = NULL;
+    c->client_cron_last_memory_usage = 0;
+    c->client_cron_last_memory_type = CLIENT_TYPE_NORMAL;
     c->auth_callback = NULL;
     c->auth_callback_privdata = NULL;
     c->auth_module = NULL;
@@ -1576,6 +1578,11 @@ bool freeClient(client *c) {
         serverAssert(ln != NULL);
         listDelNode(g_pserver->clients_to_close,ln);
     }
+
+    /* Remove the contribution that this client gave to our
+     * incrementally computed memory usage. */
+    g_pserver->stat_clients_type_memory[c->client_cron_last_memory_type] -=
+        c->client_cron_last_memory_usage;
 
     /* Release other dynamically allocated client structure fields,
      * and finally release the client structure itself. */

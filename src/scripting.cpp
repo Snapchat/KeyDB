@@ -972,6 +972,7 @@ int luaLogCommand(lua_State *lua) {
         lua_pushstring(lua, "Invalid debug level.");
         return lua_error(lua);
     }
+    if (level < cserver.verbosity) return 0;
 
     /* Glue together all the arguments */
     log = sdsempty();

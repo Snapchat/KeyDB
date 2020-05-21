@@ -1705,7 +1705,7 @@ void clientsCron(int iel) {
         /* Rotate the list, take the current head, process.
          * This way if the client must be removed from the list it's the
          * first element and we don't incur into O(N) computation. */
-        listRotate(g_pserver->clients);
+        listRotateTailToHead(g_pserver->clients);
         head = (listNode*)listFirst(g_pserver->clients);
         c = (client*)listNodeValue(head);
         if (c->iel == iel)

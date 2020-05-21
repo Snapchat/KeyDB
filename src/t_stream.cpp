@@ -1382,6 +1382,11 @@ void xreadCommand(client *c) {
         int moreargs = c->argc-i-1;
         char *o = szFromObj(c->argv[i]);
         if (!strcasecmp(o,"BLOCK") && moreargs) {
+            if (c->flags & CLIENT_LUA) {
+                /* There is no sense to use BLOCK option within LUA */
+                addReplyErrorFormat(c, "%s command is not allowed with BLOCK option from scripts", szFromObj(c->argv[0]));
+                return;
+            }
             i++;
             if (getTimeoutFromObjectOrReply(c,c->argv[i],&timeout,
                 UNIT_MILLISECONDS) != C_OK) return;

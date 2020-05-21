@@ -125,9 +125,10 @@
 #define RDB_LOAD_SDS    (1<<2)
 
 /* flags on the purpose of rdb save or load */
-#define RDBFLAGS_NONE 0
-#define RDBFLAGS_AOF_PREAMBLE (1<<0)
-#define RDBFLAGS_REPLICATION (1<<1)
+#define RDBFLAGS_NONE 0                 /* No special RDB loading. */
+#define RDBFLAGS_AOF_PREAMBLE (1<<0)    /* Load/save the RDB as AOF preamble. */
+#define RDBFLAGS_REPLICATION (1<<1)     /* Load/save for SYNC. */
+#define RDBFLAGS_ALLOW_DUP (1<<2)       /* Allow duplicated keys when loading.*/
 
 int rdbSaveType(rio *rdb, unsigned char type);
 int rdbLoadType(rio *rdb);
@@ -152,7 +153,7 @@ int rdbSaveS3(char *path, rdbSaveInfo *rsi);
 int rdbLoadS3(char *path, rdbSaveInfo *rsi, int rdbflags);
 ssize_t rdbSaveObject(rio *rdb, robj_roptr o, robj *key);
 size_t rdbSavedObjectLen(robj *o, robj *key);
-robj *rdbLoadObject(int type, rio *rdb, robj *key, uint64_t mvcc_tstamp);
+robj *rdbLoadObject(int type, rio *rdb, sds key, uint64_t mvcc_tstamp);
 void backgroundSaveDoneHandler(int exitcode, int bysignal);
 int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime);
 ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt);

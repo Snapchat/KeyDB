@@ -549,7 +549,10 @@ sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
     dst = sdscatlen(dst,buf,len);
 
     for (j = 0; j < argc; j++) {
-        o = getDecodedObject(argv[j]);
+        if (sdsEncodedObject(argv[j]))
+            o = argv[j];
+        else
+            o = getDecodedObject(argv[j]);
         buf[0] = '$';
         len = 1+ll2string(buf+1,sizeof(buf)-1,sdslen(szFromObj(o)));
         buf[len++] = '\r';
@@ -557,7 +560,8 @@ sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
         dst = sdscatlen(dst,buf,len);
         dst = sdscatlen(dst,ptrFromObj(o),sdslen(szFromObj(o)));
         dst = sdscatlen(dst,"\r\n",2);
-        decrRefCount(o);
+        if (o != argv[j])
+            decrRefCount(o);
     }
     return dst;
 }

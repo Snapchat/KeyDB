@@ -214,7 +214,7 @@ int dbAddCore(redisDb *db, robj *key, robj *val) {
             val->type == OBJ_ZSET ||
             val->type == OBJ_STREAM)
                 signalKeyAsReady(db, key);
-        if (g_pserver->cluster_enabled) slotToKeyAdd(key);
+        if (g_pserver->cluster_enabled) slotToKeyAdd(szFromObj(key));
     }
     else
     {
@@ -392,7 +392,7 @@ int dbSyncDelete(redisDb *db, robj *key) {
     if (de != nullptr && ((robj*)dictGetVal(de))->FExpires())
         removeExpireCore(db, key, de);
     if (dictDelete(db->pdict,ptrFromObj(key)) == DICT_OK) {
-        if (g_pserver->cluster_enabled) slotToKeyDel(key);
+        if (g_pserver->cluster_enabled) slotToKeyDel(szFromObj(key));
         return 1;
     } else {
         return 0;
@@ -1952,11 +1952,11 @@ int *xreadGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys)
  * a fast way a key that belongs to a specified hash slot. This is useful
  * while rehashing the cluster and in other conditions when we need to
  * understand if we have keys for a given hash slot. */
-void slotToKeyUpdateKey(robj *key, int add) {
+void slotToKeyUpdateKey(sds key, int add) {
     serverAssert(GlobalLocksAcquired());
 
-    size_t keylen = sdslen(szFromObj(key));
-    unsigned int hashslot = keyHashSlot(szFromObj(key),keylen);
+    size_t keylen = sdslen(key);
+    unsigned int hashslot = keyHashSlot(key,keylen);
     unsigned char buf[64];
     unsigned char *indexed = buf;
 
@@ -1964,7 +1964,7 @@ void slotToKeyUpdateKey(robj *key, int add) {
     if (keylen+2 > 64) indexed = (unsigned char*)zmalloc(keylen+2, MALLOC_SHARED);
     indexed[0] = (hashslot >> 8) & 0xff;
     indexed[1] = hashslot & 0xff;
-    memcpy(indexed+2,ptrFromObj(key),keylen);
+    memcpy(indexed+2,key,keylen);
     int fModified = false;
     if (add) {
         fModified = raxInsert(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL,NULL);
@@ -1975,11 +1975,11 @@ void slotToKeyUpdateKey(robj *key, int add) {
     if (indexed != buf) zfree(indexed);
 }
 
-void slotToKeyAdd(robj *key) {
+void slotToKeyAdd(sds key) {
     slotToKeyUpdateKey(key,1);
 }
 
-void slotToKeyDel(robj *key) {
+void slotToKeyDel(sds key) {
     slotToKeyUpdateKey(key,0);
 }
 

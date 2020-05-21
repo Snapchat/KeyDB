@@ -774,6 +774,8 @@ typedef struct RedisModuleDigest {
 #define LRU_CLOCK_RESOLUTION 1000 /* LRU clock resolution in ms */
 
 #define OBJ_SHARED_REFCOUNT (0x7FFFFFFF) 
+#define OBJ_STATIC_REFCOUNT (OBJ_SHARED_REFCOUNT-1)
+#define OBJ_FIRST_SPECIAL_REFCOUNT OBJ_STATIC_REFCOUNT
 #define OBJ_MVCC_INVALID (0xFFFFFFFFFFFFFFFFULL)
 
 #define MVCC_MS_SHIFT 20
@@ -1071,7 +1073,7 @@ const char *getObjectTypeName(robj_roptr o);
  * we'll update it when the structure is changed, to avoid bugs like
  * bug #85 introduced exactly in this way. */
 #define initStaticStringObject(_var,_ptr) do { \
-    _var.setrefcount(1); \
+    _var.setrefcount(OBJ_STATIC_REFCOUNT); \
     _var.type = OBJ_STRING; \
     _var.encoding = OBJ_ENCODING_RAW; \
     _var.m_ptr = _ptr; \
@@ -2655,6 +2657,7 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
 #define LOOKUP_NOTOUCH (1<<0)
 #define LOOKUP_UPDATEMVCC (1<<1)
 void dbAdd(redisDb *db, robj *key, robj *val);
+int dbAddRDBLoad(redisDb *db, sds key, robj *val);
 void dbOverwrite(redisDb *db, robj *key, robj *val);
 int dbMerge(redisDb *db, robj *key, robj *val, int fReplace);
 void genericSetKey(redisDb *db, robj *key, robj *val, int keepttl, int signal);
@@ -2682,8 +2685,8 @@ unsigned int delKeysInSlot(unsigned int hashslot);
 int verifyClusterConfigWithData(void);
 void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor);
 int parseScanCursorOrReply(client *c, robj *o, unsigned long *cursor);
-void slotToKeyAdd(robj *key);
-void slotToKeyDel(robj *key);
+void slotToKeyAdd(sds key);
+void slotToKeyDel(sds key);
 void slotToKeyFlush(void);
 int dbAsyncDelete(redisDb *db, robj *key);
 void emptyDbAsync(redisDb *db);

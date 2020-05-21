@@ -362,7 +362,16 @@ void freeStreamObject(robj_roptr o) {
 }
 
 void incrRefCount(robj_roptr o) {
-    if (o->getrefcount(std::memory_order_relaxed) != OBJ_SHARED_REFCOUNT) o->addref();
+    auto refcount = o->getrefcount(std::memory_order_relaxed);
+    if (refcount < OBJ_FIRST_SPECIAL_REFCOUNT) {
+        o->addref();
+    } else {
+        if (refcount == OBJ_SHARED_REFCOUNT) {
+            /* Nothing to do: this refcount is immutable. */
+        } else if (refcount == OBJ_STATIC_REFCOUNT) {
+            serverPanic("You tried to retain an object allocated in the stack");
+        }
+    }
 }
 
 void decrRefCount(robj_roptr o) {

@@ -705,15 +705,15 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"multi",multiCommand,1,
-     "no-script fast @transaction",
+     "no-script fast ok-loading ok-stale @transaction",
      0,NULL,0,0,0,0,0,0},
 
     {"exec",execCommand,1,
-     "no-script no-monitor no-slowlog @transaction",
+     "no-script no-monitor no-slowlog ok-loading ok-stale @transaction",
      0,NULL,0,0,0,0,0,0},
 
     {"discard",discardCommand,1,
-     "no-script fast @transaction",
+     "no-script fast ok-loading ok-stale @transaction",
      0,NULL,0,0,0,0,0,0},
 
     {"sync",syncCommand,1,
@@ -980,11 +980,11 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"xread",xreadCommand,-4,
-     "read-only no-script @stream @blocking",
+     "read-only @stream @blocking",
      0,xreadGetKeys,1,1,1,0,0,0},
 
     {"xreadgroup",xreadCommand,-7,
-     "write no-script @stream @blocking",
+     "write @stream @blocking",
      0,xreadGetKeys,1,1,1,0,0,0},
 
     {"xgroup",xgroupCommand,-2,
@@ -3691,6 +3691,13 @@ int processCommand(client *c, int callFlags) {
             flagTransaction(c);
             addReply(c, shared.oomerr);
             return C_OK;
+        }
+
+        /* Save out_of_memory result at script start, otherwise if we check OOM
+         * untill first write within script, memory used by lua stack and
+         * arguments might interfere. */
+        if (c->cmd->proc == evalCommand || c->cmd->proc == evalShaCommand) {
+            g_pserver->lua_oom = out_of_memory;
         }
     }
 

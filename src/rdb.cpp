@@ -1504,7 +1504,7 @@ robj *rdbLoadCheckModuleValue(rio *rdb, char *modulename) {
 
 /* Load a Redis object of the specified type from the specified file.
  * On success a newly allocated object is returned, otherwise NULL. */
-robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
+robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
     robj *o = NULL, *ele, *dec;
     uint64_t len;
     unsigned int i;
@@ -1990,7 +1990,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
             exit(1);
         }
         RedisModuleIO io;
-        moduleInitIOContext(io,mt,rdb,key);
+        robj keyobj;
+        initStaticStringObject(keyobj,key);
+        moduleInitIOContext(io,mt,rdb,&keyobj);
         io.ver = (rdbtype == RDB_TYPE_MODULE) ? 1 : 2;
         /* Call the rdb_load method of the module providing the 10 bit
          * encoding version in the lower 10 bits of the module ID. */
@@ -2153,7 +2155,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     long long lru_clock = 0;
     uint64_t mvcc_tstamp = OBJ_MVCC_INVALID;
     robj *subexpireKey = nullptr;
-    robj *key = nullptr;
+    sds key = nullptr;
 
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = g_pserver->loading_process_events_interval_bytes;
@@ -2290,10 +2292,12 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 incrRefCount(subexpireKey);
             } else if (!strcasecmp(szFromObj(auxkey), "keydb-subexpire-when")) {
                 if (key == nullptr || subexpireKey == nullptr) {
-                    serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping. key: %s subkey: %s", key != nullptr ? szFromObj(key) : "(null)", subexpireKey != nullptr ? szFromObj(subexpireKey) : "(null)");
+                    serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping. key: %s subkey: %s", key != nullptr ? key : "(null)", subexpireKey != nullptr ? szFromObj(subexpireKey) : "(null)");
                 }
                 else {
-                    setExpire(NULL, db, key, subexpireKey, strtoll(szFromObj(auxval), nullptr, 10));
+                    redisObject keyobj;
+                    initStaticStringObject(keyobj,key);
+                    setExpire(NULL, db, &keyobj, subexpireKey, strtoll(szFromObj(auxval), nullptr, 10));
                     decrRefCount(subexpireKey);
                     subexpireKey = nullptr;
                 }
@@ -2363,14 +2367,15 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         /* Read key */
         if (key != nullptr)
         {
-            decrRefCount(key);
+            sdsfree(key);
             key = nullptr;
         }
 
-        if ((key = rdbLoadStringObject(rdb)) == NULL) goto eoferr;
+        if ((key = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL)
+            goto eoferr;
         /* Read value */
-        if ((val = rdbLoadObject(type,rdb,key, mvcc_tstamp)) == NULL) {
-            decrRefCount(key);
+        if ((val = rdbLoadObject(type,rdb,key,mvcc_tstamp)) == NULL) {
+            sdsfree(key);
             key = nullptr;
             goto eoferr;
         }
@@ -2381,26 +2386,34 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
          * received from the master. In the latter case, the master is
          * responsible for key expiry. If we would expire keys here, the
          * snapshot taken by the master may not be reflected on the replica. */
+        robj keyobj;
+        initStaticStringObject(keyobj,key);
         bool fExpiredKey = iAmMaster() && !(rdbflags&RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now;
         if (fStaleMvccKey || fExpiredKey) {
-            if (fStaleMvccKey && !fExpiredKey && rsi != nullptr && rsi->mi != nullptr && rsi->mi->staleKeyMap != nullptr && lookupKeyRead(db, key) == nullptr) {
+            if (fStaleMvccKey && !fExpiredKey && rsi != nullptr && rsi->mi != nullptr && rsi->mi->staleKeyMap != nullptr && lookupKeyRead(db, &keyobj) == nullptr) {
                 // We have a key that we've already deleted and is not back in our database.
                 //  We'll need to inform the sending master of the delete if it is also a replica of us
-                rsi->mi->staleKeyMap->operator[](db - g_pserver->db).push_back(key);
+                robj *objKeyDup = createStringObject(key, sdslen(key));
+                rsi->mi->staleKeyMap->operator[](db - g_pserver->db).push_back(objKeyDup);
+                decrRefCount(objKeyDup);
             }
-            decrRefCount(key);
+            sdsfree(key);
             key = nullptr;
             decrRefCount(val);
             val = nullptr;
         } else {
+            
+
             /* Add the new object in the hash table */
-            int fInserted = dbMerge(db, key, val, rsi && rsi->fForceSetKey);   // Note: dbMerge will incrRef
+            int fInserted = dbMerge(db, &keyobj, val, (rsi && rsi->fForceSetKey) || (rdbflags & RDBFLAGS_ALLOW_DUP));   // Note: dbMerge will incrRef
 
             if (fInserted)
             {
                 /* Set the expire time if needed */
                 if (expiretime != -1)
-                    setExpire(NULL,db,key,nullptr,expiretime);
+                {
+                    setExpire(NULL,db,&keyobj,nullptr,expiretime);
+                }
 
                 /* Set usage information (for eviction). */
                 objectSetLRUOrLFU(val,lfu_freq,lru_idle,lru_clock,1000);
@@ -2423,7 +2436,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
     if (key != nullptr)
     {
-        decrRefCount(key);
+        sdsfree(key);
         key = nullptr;
     }
 
@@ -2458,7 +2471,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 eoferr:
     if (key != nullptr)
     {
-        decrRefCount(key);
+        sdsfree(key);
         key = nullptr;
     }
     if (subexpireKey != nullptr)

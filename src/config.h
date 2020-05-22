@@ -241,6 +241,9 @@ void setproctitle(const char *fmt, ...);
 #define redis_set_thread_title(name) pthread_set_name_np(pthread_self(), name)
 #else
 #if (defined __APPLE__ && defined(MAC_OS_X_VERSION_10_7))
+#ifdef __cplusplus
+extern "C" 
+#endif
 int pthread_setname_np(const char *name);
 #include <pthread.h>
 #define redis_set_thread_title(name) pthread_setname_np(name)

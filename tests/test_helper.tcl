@@ -87,6 +87,7 @@ set ::skiptests {}
 set ::allowtags {}
 set ::only_tests {}
 set ::single_tests {}
+set ::run_solo_tests {}
 set ::skip_till ""
 set ::external 0; # If "1" this means, we are running against external instance
 set ::file ""; # If set, runs only the tests in this comma separated list
@@ -110,10 +111,24 @@ set ::tlsdir "tests/tls"
 set ::client 0
 set ::numclients 16
 
-proc execute_tests name {
+# This function is called by one of the test clients when it receives
+# a "run" command from the server, with a filename as data.
+# It will run the specified test source file and signal it to the
+# test server when finished.
+proc execute_test_file name {
     set path "tests/$name.tcl"
     set ::curfile $path
     source $path
+    send_data_packet $::test_server_fd done "$name"
+}
+
+# This function is called by one of the test clients when it receives
+# a "run_code" command from the server, with a verbatim test source code
+# as argument, and an associated name.
+# It will run the specified code and signal it to the test server when
+# finished.
+proc execute_test_code {name code} {
+    eval $code
     send_data_packet $::test_server_fd done "$name"
 }
 
@@ -191,6 +206,18 @@ proc s {args} {
         set args [lrange $args 1 end]
     }
     status [srv $level "client"] [lindex $args 0]
+}
+
+# Test wrapped into run_solo are sent back from the client to the
+# test server, so that the test server will send them again to
+# clients once the clients are idle.
+proc run_solo {name code} {
+    if {$::numclients == 1 || $::loop || $::external} {
+        # run_solo is not supported in these scenarios, just run the code.
+        eval $code
+        return
+    }
+    send_data_packet $::test_server_fd run_solo [list $name $code]
 }
 
 proc cleanup {} {
@@ -342,6 +369,8 @@ proc read_from_test_client fd {
     } elseif {$status eq {server-killed}} {
         set ::active_servers [lsearch -all -inline -not -exact $::active_servers $data]
         set ::active_clients_task($fd) "(KILLED SERVER) pid:$data"
+    } elseif {$status eq {run_solo}} {
+        lappend ::run_solo_tests $data
     } else {
         if {!$::quiet} {
             puts "\[$status\]: $data"
@@ -374,6 +403,13 @@ proc force_kill_all_servers {} {
     }
 }
 
+proc lpop {listVar {count 1}} {
+    upvar 1 $listVar l
+    set ele [lindex $l 0]
+    set l [lrange $l 1 end]
+    set ele
+}
+
 # A new client is idle. Remove it from the list of active clients and
 # if there are still test units to run, launch them.
 proc signal_idle_client fd {
@@ -394,6 +430,14 @@ proc signal_idle_client fd {
         if {$::loop && $::next_test == [llength $::all_tests]} {
             set ::next_test 0
         }
+    } elseif {[llength $::run_solo_tests] != 0 && [llength $::active_clients] == 0} {
+        if {!$::quiet} {
+            puts [colorstr bold-white "Testing solo test"]
+            set ::active_clients_task($fd) "ASSIGNED: $fd solo test"
+        }
+        set ::clients_start_time($fd) [clock seconds]
+        send_data_packet $fd run_code [lpop ::run_solo_tests]
+        lappend ::active_clients $fd
     } else {
         lappend ::idle_clients $fd
         set ::active_clients_task($fd) "SLEEPING, no more units to assign"
@@ -437,7 +481,10 @@ proc test_client_main server_port {
         set payload [read $::test_server_fd $bytes]
         foreach {cmd data} $payload break
         if {$cmd eq {run}} {
-            execute_tests $data
+            execute_test_file $data
+        } elseif {$cmd eq {run_code}} {
+            foreach {name code} $data break
+            execute_test_code $name $code
         } else {
             error "Unknown test client command: $cmd"
         }

@@ -566,6 +566,36 @@ void addReplyStatusFormat(client *c, const char *fmt, ...) {
     sdsfree(s);
 }
 
+/* Sometimes we are forced to create a new reply node, and we can't append to
+ * the previous one, when that happens, we wanna try to trim the unused space
+ * at the end of the last reply node which we won't use anymore. */
+void trimReplyUnusedTailSpace(client *c) {
+    listNode *ln = listLast(c->reply);
+    clientReplyBlock *tail = ln? (clientReplyBlock*)listNodeValue(ln): nullptr;
+
+    /* Note that 'tail' may be NULL even if we have a tail node, becuase when
+     * addDeferredMultiBulkLength() is used */
+    if (!tail) return;
+
+    /* We only try to trim the space is relatively high (more than a 1/4 of the
+     * allocation), otherwise there's a high chance realloc will NOP.
+     * Also, to avoid large memmove which happens as part of realloc, we only do
+     * that if the used part is small.  */
+    if (tail->size - tail->used > tail->size / 4 &&
+        tail->used < PROTO_REPLY_CHUNK_BYTES)
+    {
+        size_t old_size = tail->size;
+        tail = (clientReplyBlock*)zrealloc(tail, tail->used + sizeof(clientReplyBlock));
+        /* If realloc was a NOP, we got the same value which has internal frag */
+        if (tail == listNodeValue(ln)) return;
+        /* take over the allocation's internal fragmentation (at least for
+         * memory usage tracking) */
+        tail->size = zmalloc_usable(tail) - sizeof(clientReplyBlock);
+        c->reply_bytes += tail->size - old_size;
+        listNodeValue(ln) = tail;
+    }
+}
+
 /* Adds an empty object to the reply list that will contain the multi bulk
  * length, which is not known when this function is called. */
 void *addReplyDeferredLen(client *c) {
@@ -573,6 +603,7 @@ void *addReplyDeferredLen(client *c) {
      * ready to be sent, since we are sure that before returning to the
      * event loop setDeferredAggregateLen() will be called. */
     if (prepareClientToWrite(c, false) != C_OK) return NULL;
+    trimReplyUnusedTailSpace(c);
     listAddNodeTail(c->reply,NULL); /* NULL is our placeholder. */
     return listLast(c->reply);
 }
@@ -2231,12 +2262,60 @@ int processMultibulkBuffer(client *c) {
     return C_ERR;
 }
 
+/* Perform necessary tasks after a command was executed:
+ *
+ * 1. The client is reset unless there are reasons to avoid doing it.
+ * 2. In the case of master clients, the replication offset is updated.
+ * 3. Propagate commands we got from our master to replicas down the line. */
+void commandProcessed(client *c) {
+    int cmd_is_ping = c->cmd && c->cmd->proc == pingCommand;
+    long long prev_offset = c->reploff;
+    if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
+        /* Update the applied replication offset of our master. */
+        c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
+    }
+
+    /* Don't reset the client structure for clients blocked in a
+     * module blocking command, so that the reply callback will
+     * still be able to access the client argv and argc field.
+     * The client will be reset in unblockClientFromModule(). */
+    if (!(c->flags & CLIENT_BLOCKED) ||
+        c->btype != BLOCKED_MODULE)
+    {
+        resetClient(c);
+    }
+
+    /* If the client is a master we need to compute the difference
+     * between the applied offset before and after processing the buffer,
+     * to understand how much of the replication stream was actually
+     * applied to the master state: this quantity, and its corresponding
+     * part of the replication stream, will be propagated to the
+     * sub-replicas and to the replication backlog. */
+    if (c->flags & CLIENT_MASTER) {
+        long long applied = c->reploff - prev_offset;
+        long long prev_master_repl_meaningful_offset = g_pserver->master_repl_meaningful_offset;
+        if (applied) {
+            if (!g_pserver->fActiveReplica)
+            {
+                AeLocker ae;
+                ae.arm(c);
+                replicationFeedSlavesFromMasterStream(g_pserver->slaves,
+                    c->pending_querybuf, applied);
+            }
+            sdsrange(c->pending_querybuf,applied,-1);
+        }
+        /* The g_pserver->master_repl_meaningful_offset variable represents
+         * the offset of the replication stream without the pending PINGs. */
+        if (cmd_is_ping)
+            g_pserver->master_repl_meaningful_offset = prev_master_repl_meaningful_offset;
+    }
+}
+
 /* This function calls processCommand(), but also performs a few sub tasks
- * that are useful in that context:
+ * for the client that are useful in that context:
  *
  * 1. It sets the current client to the client 'c'.
- * 2. In the case of master clients, the replication offset is updated.
- * 3. The client is reset unless there are reasons to avoid doing it.
+ * 2. calls commandProcessed() if the command was handled.
  *
  * The function returns C_ERR in case the client was freed as a side effect
  * of processing the command, otherwise C_OK is returned. */
@@ -2244,20 +2323,7 @@ int processCommandAndResetClient(client *c, int flags) {
     int deadclient = 0;
     serverTL->current_client = c;
     if (processCommand(c, flags) == C_OK) {
-        if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
-            /* Update the applied replication offset of our master. */
-            c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
-        }
-
-        /* Don't reset the client structure for clients blocked in a
-         * module blocking command, so that the reply callback will
-         * still be able to access the client argv and argc field.
-         * The client will be reset in unblockClientFromModule(). */
-        if (!(c->flags & CLIENT_BLOCKED) ||
-            c->btype != BLOCKED_MODULE)
-        {
-            resetClient(c);
-        }
+        commandProcessed(c);
     }
     if (serverTL->current_client == NULL) deadclient = 1;
     serverTL->current_client = NULL;
@@ -2330,36 +2396,6 @@ void processInputBuffer(client *c, int callFlags) {
     if (c->qb_pos) {
         sdsrange(c->querybuf,c->qb_pos,-1);
         c->qb_pos = 0;
-    }
-}
-
-/* This is a wrapper for processInputBuffer that also cares about handling
- * the replication forwarding to the sub-replicas, in case the client 'c'
- * is flagged as master. Usually you want to call this instead of the
- * raw processInputBuffer(). */
-void processInputBufferAndReplicate(client *c) {
-    if (!(c->flags & CLIENT_MASTER)) {
-        processInputBuffer(c, CMD_CALL_FULL);
-    } else {
-        /* If the client is a master we need to compute the difference
-         * between the applied offset before and after processing the buffer,
-         * to understand how much of the replication stream was actually
-         * applied to the master state: this quantity, and its corresponding
-         * part of the replication stream, will be propagated to the
-         * sub-replicas and to the replication backlog. */
-        size_t prev_offset = c->reploff;
-        processInputBuffer(c, CMD_CALL_FULL);
-        size_t applied = c->reploff - prev_offset;
-        if (applied) {
-            if (!g_pserver->fActiveReplica)
-            {
-                AeLocker ae;
-                ae.arm(c);
-                replicationFeedSlavesFromMasterStream(g_pserver->slaves,
-                        c->pending_querybuf, applied);
-            }
-            sdsrange(c->pending_querybuf,applied,-1);
-        }
     }
 }
 
@@ -2437,13 +2473,9 @@ void readQueryFromClient(connection *conn) {
         return;
     }
 
-    /* Time to process the buffer. If the client is a master we need to
-     * compute the difference between the applied offset before and after
-     * processing the buffer, to understand how much of the replication stream
-     * was actually applied to the master state: this quantity, and its
-     * corresponding part of the replication stream, will be propagated to
-     * the sub-slaves and to the replication backlog. */
-    processInputBufferAndReplicate(c);
+    /* There is more data in the client input buffer, continue parsing it
+     * in case to check if there is a full command to execute. */
+    processInputBuffer(c, CMD_CALL_FULL);
     if (listLength(serverTL->clients_pending_asyncwrite))
     {
         aelock.arm(c);
@@ -2628,6 +2660,7 @@ void clientCommand(client *c) {
 "KILL <option> <value> [option value ...] -- Kill connections. Options are:",
 "     ADDR <ip:port>                      -- Kill connection made from <ip:port>",
 "     TYPE (normal|master|replica|pubsub) -- Kill connections by type.",
+"     USER <username>   -- Kill connections authenticated with such user.",
 "     SKIPME (yes|no)   -- Skip killing current connection (default: yes).",
 "LIST [options ...]     -- Return information about client connections. Options:",
 "     TYPE (normal|master|replica|pubsub) -- Return clients of specified type.",
@@ -2678,6 +2711,7 @@ NULL
         /* CLIENT KILL <ip:port>
          * CLIENT KILL <option> [value] ... <option> [value] */
         char *addr = NULL;
+        user *user = NULL;
         int type = -1;
         uint64_t id = 0;
         int skipme = 1;
@@ -2707,10 +2741,18 @@ NULL
                             (char*) ptrFromObj(c->argv[i+1]));
                         return;
                     }
-                } else if (!strcasecmp((const char*)ptrFromObj(c->argv[i]),"addr") && moreargs) {
-                    addr = (char*)ptrFromObj(c->argv[i+1]);
-                } else if (!strcasecmp((const char*)ptrFromObj(c->argv[i]),"skipme") && moreargs) {
-                    if (!strcasecmp((const char*)ptrFromObj(c->argv[i+1]),"yes")) {
+                } else if (!strcasecmp(szFromObj(c->argv[i]),"addr") && moreargs) {
+                    addr = szFromObj(c->argv[i+1]);
+                } else if (!strcasecmp(szFromObj(c->argv[i]),"user") && moreargs) {
+                    user = ACLGetUserByName(szFromObj(c->argv[i+1]),
+                                            sdslen(szFromObj(c->argv[i+1])));
+                    if (user == NULL) {
+                        addReplyErrorFormat(c,"No such user '%s'",
+                            szFromObj(c->argv[i+1]));
+                        return;
+                    }
+                } else if (!strcasecmp(szFromObj(c->argv[i]),"skipme") && moreargs) {
+                    if (!strcasecmp(szFromObj(c->argv[i+1]),"yes")) {
                         skipme = 1;
                     } else if (!strcasecmp((const char*)ptrFromObj(c->argv[i+1]),"no")) {
                         skipme = 0;
@@ -2736,6 +2778,7 @@ NULL
             if (addr && strcmp(getClientPeerId(client),addr) != 0) continue;
             if (type != -1 && getClientType(client) != type) continue;
             if (id != 0 && client->id != id) continue;
+            if (user && client->puser != user) continue;
             if (c == client && skipme) continue;
 
             /* Kill it. */
@@ -2864,6 +2907,8 @@ NULL
                 options |= CLIENT_TRACKING_OPTIN;
             } else if (!strcasecmp(szFromObj(c->argv[j]),"optout")) {
                 options |= CLIENT_TRACKING_OPTOUT;
+            } else if (!strcasecmp(szFromObj(c->argv[j]),"noloop")) {
+                options |= CLIENT_TRACKING_NOLOOP;
             } else if (!strcasecmp(szFromObj(c->argv[j]),"prefix") && moreargs) {
                 j++;
                 prefix = (robj**)zrealloc(prefix,sizeof(robj*)*(numprefix+1), MALLOC_LOCAL);
@@ -3019,7 +3064,7 @@ void helloCommand(client *c) {
 
     /* Let's switch to the specified RESP mode. */
     c->resp = ver;
-    addReplyMapLen(c,7);
+    addReplyMapLen(c,6 + !g_pserver->sentinel_mode);
 
     addReplyBulkCString(c,"server");
     addReplyBulkCString(c,"redis");
@@ -3035,7 +3080,7 @@ void helloCommand(client *c) {
 
     addReplyBulkCString(c,"mode");
     if (g_pserver->sentinel_mode) addReplyBulkCString(c,"sentinel");
-    if (g_pserver->cluster_enabled) addReplyBulkCString(c,"cluster");
+    else if (g_pserver->cluster_enabled) addReplyBulkCString(c,"cluster");
     else addReplyBulkCString(c,"standalone");
 
     if (!g_pserver->sentinel_mode) {

@@ -1047,8 +1047,8 @@ struct redisCommand redisCommandTable[] = {
      "write fast @hash",
      0,NULL,0,0,0,0,0,0},
     
-    {"lcs",lcsCommand,-4,
-     "write use-memory @string",
+    {"stralgo",stralgoCommand,-2,
+     "read-only @string",
      0,lcsGetKeys,0,0,0,0,0,0}
 };
 
@@ -1264,11 +1264,15 @@ int dictEncObjKeyCompare(void *privdata, const void *key1,
         o2->encoding == OBJ_ENCODING_INT)
             return ptrFromObj(o1) == ptrFromObj(o2);
 
-    o1 = getDecodedObject(o1);
-    o2 = getDecodedObject(o2);
+    /* Due to OBJ_STATIC_REFCOUNT, we avoid calling getDecodedObject() without
+     * good reasons, because it would incrRefCount() the object, which
+     * is invalid. So we check to make sure dictFind() works with static
+     * objects as well. */
+    if (o1->getrefcount() != OBJ_STATIC_REFCOUNT) o1 = getDecodedObject(o1);
+    if (o2->getrefcount() != OBJ_STATIC_REFCOUNT) o2 = getDecodedObject(o2);
     cmp = dictSdsKeyCompare(privdata,ptrFromObj(o1),ptrFromObj(o2));
-    decrRefCount(o1);
-    decrRefCount(o2);
+    if (o1->getrefcount() != OBJ_STATIC_REFCOUNT) decrRefCount(o1);
+    if (o2->getrefcount() != OBJ_STATIC_REFCOUNT) decrRefCount(o2);
     return cmp;
 }
 
@@ -2190,21 +2194,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (g_pserver->active_expire_enabled && (listLength(g_pserver->masters) == 0 || g_pserver->fActiveReplica))
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
-    /* Send all the slaves an ACK request if at least one client blocked
-     * during the previous event loop iteration. */
-    if (g_pserver->get_ack_from_slaves) {
-        robj *argv[3];
-
-        argv[0] = createStringObject("REPLCONF",8);
-        argv[1] = createStringObject("GETACK",6);
-        argv[2] = createStringObject("*",1); /* Not used argument. */
-        replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb, argv, 3);
-        decrRefCount(argv[0]);
-        decrRefCount(argv[1]);
-        decrRefCount(argv[2]);
-        g_pserver->get_ack_from_slaves = 0;
-    }
-
     /* Unblock all the clients blocked for synchronous replication
      * in WAIT. */
     if (listLength(g_pserver->clients_waiting_acks))
@@ -2218,6 +2207,24 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (listLength(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].unblocked_clients))
     {
         processUnblockedClients(IDX_EVENT_LOOP_MAIN);
+    }
+
+    /* Send all the slaves an ACK request if at least one client blocked
+     * during the previous event loop iteration. Note that we do this after
+     * processUnblockedClients(), so if there are multiple pipelined WAITs
+     * and the just unblocked WAIT gets blocked again, we don't have to wait
+     * a server cron cycle in absence of other event loop events. See #6623. */
+    if (g_pserver->get_ack_from_slaves) {
+        robj *argv[3];
+
+        argv[0] = createStringObject("REPLCONF",8);
+        argv[1] = createStringObject("GETACK",6);
+        argv[2] = createStringObject("*",1); /* Not used argument. */
+        replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb, argv, 3);
+        decrRefCount(argv[0]);
+        decrRefCount(argv[1]);
+        decrRefCount(argv[2]);
+        g_pserver->get_ack_from_slaves = 0;
     }
 
     /* Send the invalidation messages to clients participating to the
@@ -3117,6 +3124,7 @@ void initServer(void) {
     scriptingInit(1);
     slowlogInit();
     latencyMonitorInit();
+    crc64_init();
 }
 
 /* Some steps in server initialization need to be done last (after modules
@@ -3308,8 +3316,13 @@ struct redisCommand *lookupCommandOrOriginal(sds name) {
  * + PROPAGATE_AOF (propagate into the AOF file if is enabled)
  * + PROPAGATE_REPL (propagate into the replication link)
  *
- * This should not be used inside commands implementation. Use instead
- * alsoPropagate(), preventCommandPropagation(), forceCommandPropagation().
+ * This should not be used inside commands implementation since it will not
+ * wrap the resulting commands in MULTI/EXEC. Use instead alsoPropagate(),
+ * preventCommandPropagation(), forceCommandPropagation().
+ *
+ * However for functions that need to (also) propagate out of the context of a
+ * command execution, for example when serving a blocked client, you
+ * want to use propagate().
  */
 void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                int flags)
@@ -4307,7 +4320,7 @@ sds genRedisInfoString(const char *section) {
         size_t zmalloc_used = zmalloc_used_memory();
         size_t total_system_mem = cserver.system_memory_size;
         const char *evict_policy = evictPolicyToString();
-        long long memory_lua = (long long)lua_gc(g_pserver->lua,LUA_GCCOUNT,0)*1024;
+        long long memory_lua = g_pserver->lua ? (long long)lua_gc(g_pserver->lua,LUA_GCCOUNT,0)*1024 : 0;
         struct redisMemOverhead *mh = getMemoryOverheadData();
 
         /* Peak memory is updated from time to time by serverCron() so it

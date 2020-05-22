@@ -285,7 +285,7 @@ void saddCommand(client *c) {
         if (setTypeAdd(set,szFromObj(c->argv[j]))) added++;
     }
     if (added) {
-        signalModifiedKey(c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_SET,"sadd",c->argv[1],c->db->id);
     }
     g_pserver->dirty += added;
@@ -310,7 +310,7 @@ void sremCommand(client *c) {
         }
     }
     if (deleted) {
-        signalModifiedKey(c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_SET,"srem",c->argv[1],c->db->id);
         if (keyremoved)
             notifyKeyspaceEvent(NOTIFY_GENERIC,"del",c->argv[1],
@@ -363,8 +363,8 @@ void smoveCommand(client *c) {
         dbAdd(c->db,c->argv[2],dstset);
     }
 
-    signalModifiedKey(c->db,c->argv[1]);
-    signalModifiedKey(c->db,c->argv[2]);
+    signalModifiedKey(c,c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[2]);
     g_pserver->dirty++;
 
     /* An extra key has changed when ele was successfully added to dstset */
@@ -449,7 +449,7 @@ void spopWithCountCommand(client *c) {
 
         /* Propagate this command as an DEL operation */
         rewriteClientCommandVector(c,2,shared.del,c->argv[1]);
-        signalModifiedKey(c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1]);
         g_pserver->dirty++;
         return;
     }
@@ -551,7 +551,7 @@ void spopWithCountCommand(client *c) {
      * the alsoPropagate() API. */
     decrRefCount(propargv[0]);
     preventCommandPropagation(c);
-    signalModifiedKey(c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1]);
     g_pserver->dirty++;
 }
 
@@ -604,7 +604,7 @@ void spopCommand(client *c) {
     }
 
     /* Set has been modified */
-    signalModifiedKey(c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1]);
     g_pserver->dirty++;
 }
 
@@ -813,7 +813,7 @@ void sinterGenericCommand(client *c, robj **setkeys,
             zfree(sets);
             if (dstkey) {
                 if (dbDelete(c->db,dstkey)) {
-                    signalModifiedKey(c->db,dstkey);
+                    signalModifiedKey(c,c->db,dstkey);
                     g_pserver->dirty++;
                 }
                 addReply(c,shared.czero);
@@ -913,7 +913,7 @@ void sinterGenericCommand(client *c, robj **setkeys,
                 notifyKeyspaceEvent(NOTIFY_GENERIC,"del",
                     dstkey,c->db->id);
         }
-        signalModifiedKey(c->db,dstkey);
+        signalModifiedKey(c,c->db,dstkey);
         g_pserver->dirty++;
     } else {
         setDeferredSetLen(c,replylen,cardinality);
@@ -1088,7 +1088,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum,
                 notifyKeyspaceEvent(NOTIFY_GENERIC,"del",
                     dstkey,c->db->id);
         }
-        signalModifiedKey(c->db,dstkey);
+        signalModifiedKey(c,c->db,dstkey);
         g_pserver->dirty++;
     }
     zfree(sets);

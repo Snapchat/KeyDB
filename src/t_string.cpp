@@ -84,7 +84,7 @@ void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire,
         addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         return;
     }
-    genericSetKey(c->db,key,val,flags & OBJ_SET_KEEPTTL,1);
+    genericSetKey(c,c->db,key,val,flags & OBJ_SET_KEEPTTL,1);
     g_pserver->dirty++;
     if (expire) setExpire(c,c->db,key,nullptr,mstime()+milliseconds);
     notifyKeyspaceEvent(NOTIFY_STRING,"set",key,c->db->id);
@@ -183,7 +183,7 @@ void getCommand(client *c) {
 void getsetCommand(client *c) {
     if (getGenericCommand(c) == C_ERR) return;
     c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setKey(c->db,c->argv[1],c->argv[2]);
+    setKey(c,c->db,c->argv[1],c->argv[2]);
     notifyKeyspaceEvent(NOTIFY_STRING,"set",c->argv[1],c->db->id);
     g_pserver->dirty++;
 }
@@ -240,7 +240,7 @@ void setrangeCommand(client *c) {
     if (sdslen(value) > 0) {
         o->m_ptr = sdsgrowzero((sds)ptrFromObj(o),offset+sdslen(value));
         memcpy((char*)ptrFromObj(o)+offset,value,sdslen(value));
-        signalModifiedKey(c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STRING,
             "setrange",c->argv[1],c->db->id);
         g_pserver->dirty++;
@@ -329,7 +329,7 @@ void msetGenericCommand(client *c, int nx) {
 
     for (j = 1; j < c->argc; j += 2) {
         c->argv[j+1] = tryObjectEncoding(c->argv[j+1]);
-        setKey(c->db,c->argv[j],c->argv[j+1]);
+        setKey(c,c->db,c->argv[j],c->argv[j+1]);
         notifyKeyspaceEvent(NOTIFY_STRING,"set",c->argv[j],c->db->id);
     }
     g_pserver->dirty += (c->argc-1)/2;
@@ -374,7 +374,7 @@ void incrDecrCommand(client *c, long long incr) {
             dbAdd(c->db,c->argv[1],newObj);
         }
     }
-    signalModifiedKey(c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING,"incrby",c->argv[1],c->db->id);
     g_pserver->dirty++;
     addReply(c,shared.colon);
@@ -424,7 +424,7 @@ void incrbyfloatCommand(client *c) {
         dbOverwrite(c->db,c->argv[1],newObj);
     else
         dbAdd(c->db,c->argv[1],newObj);
-    signalModifiedKey(c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING,"incrbyfloat",c->argv[1],c->db->id);
     g_pserver->dirty++;
     addReplyBulk(c,newObj);
@@ -468,7 +468,7 @@ void appendCommand(client *c) {
         o->m_ptr = sdscatlen((sds)ptrFromObj(o),ptrFromObj(append),sdslen((sds)ptrFromObj(append)));
         totlen = sdslen((sds)ptrFromObj(o));
     }
-    signalModifiedKey(c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING,"append",c->argv[1],c->db->id);
     g_pserver->dirty++;
     addReplyLongLong(c,totlen);
@@ -481,11 +481,24 @@ void strlenCommand(client *c) {
     addReplyLongLong(c,stringObjectLen(o));
 }
 
-/* LCS -- Longest common subsequence.
+
+/* STRALGO -- Implement complex algorithms on strings.
  *
- * LCS [IDX] [MINMATCHLEN <len>]
- *     STRINGS <string> <string> | KEYS <keya> <keyb> */
-void lcsCommand(client *c) {
+ * STRALGO <algorithm> ... arguments ... */
+void stralgoLCS(client *c);     /* This implements the LCS algorithm. */
+void stralgoCommand(client *c) {
+    /* Select the algorithm. */
+    if (!strcasecmp(szFromObj(c->argv[1]),"lcs")) {
+        stralgoLCS(c);
+    } else {
+        addReply(c,shared.syntaxerr);
+    }
+}
+
+/* STRALGO <algo> [IDX] [MINMATCHLEN <len>] [WITHMATCHLEN]
+ *     STRINGS <string> <string> | KEYS <keya> <keyb>
+ */
+void stralgoLCS(client *c) {
     uint32_t i, j;
     long long minmatchlen = 0;
     const char *a = NULL;
@@ -493,7 +506,7 @@ void lcsCommand(client *c) {
     int getlen = 0, getidx = 0, withmatchlen = 0;
     robj_roptr obja, objb;
 
-    for (j = 1; j < (uint32_t)c->argc; j++) {
+    for (j = 2; j < (uint32_t)c->argc; j++) {
         char *opt = szFromObj(c->argv[j]);
         int moreargs = (c->argc-1) - j;
 

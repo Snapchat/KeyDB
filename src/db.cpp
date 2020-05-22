@@ -313,8 +313,10 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
  * 3) The expire time of the key is reset (the key is made persistent),
  *    unless 'keepttl' is true.
  *
- * All the new keys in the database should be created via this interface. */
-void genericSetKey(redisDb *db, robj *key, robj *val, int keepttl, int signal) {
+ * All the new keys in the database should be created via this interface.
+ * The client 'c' argument may be set to NULL if the operation is performed
+ * in a context where there is no clear client performing the operation. */
+void genericSetKey(client *c, redisDb *db, robj *key, robj *val, int keepttl, int signal) {
     dictEntry *de = dictFind(db->pdict, ptrFromObj(key));
     if (de == NULL) {
         dbAdd(db,key,val);
@@ -323,12 +325,12 @@ void genericSetKey(redisDb *db, robj *key, robj *val, int keepttl, int signal) {
         dbOverwriteCore(db,de,key,val,!!g_pserver->fActiveReplica,!keepttl);
     }
     incrRefCount(val);
-    if (signal) signalModifiedKey(db,key);
+    if (signal) signalModifiedKey(c,db,key);
 }
 
 /* Common case for genericSetKey() where the TTL is not retained. */
-void setKey(redisDb *db, robj *key, robj *val) {
-    genericSetKey(db,key,val,0,1);
+void setKey(client *c, redisDb *db, robj *key, robj *val) {
+    genericSetKey(c,db,key,val,0,1);
 }
 
 /* Return true if the specified key exists in the specified database.
@@ -553,9 +555,11 @@ long long dbTotalServerKeyCount() {
  * Every time a DB is flushed the function signalFlushDb() is called.
  *----------------------------------------------------------------------------*/
 
-void signalModifiedKey(redisDb *db, robj *key) {
+/* Note that the 'c' argument may be NULL if the key was modified out of
+ * a context of a client. */
+void signalModifiedKey(client *c, redisDb *db, robj *key) {
     touchWatchedKey(db,key);
-    trackingInvalidateKey(key);
+    trackingInvalidateKey(c,key);
 }
 
 void signalFlushedDb(int dbid) {
@@ -649,7 +653,7 @@ void delGenericCommand(client *c, int lazy) {
         int deleted  = lazy ? dbAsyncDelete(c->db,c->argv[j]) :
                               dbSyncDelete(c->db,c->argv[j]);
         if (deleted) {
-            signalModifiedKey(c->db,c->argv[j]);
+            signalModifiedKey(c,c->db,c->argv[j]);
             notifyKeyspaceEvent(NOTIFY_GENERIC,
                 "del",c->argv[j],c->db->id);
             g_pserver->dirty++;
@@ -1096,8 +1100,8 @@ void renameGenericCommand(client *c, int nx) {
     dbAdd(c->db,c->argv[2],o);
     if (spexpire != nullptr) 
         setExpire(c,c->db,c->argv[2],std::move(*spexpire));
-    signalModifiedKey(c->db,c->argv[1]);
-    signalModifiedKey(c->db,c->argv[2]);
+    signalModifiedKey(c,c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[2]);
     notifyKeyspaceEvent(NOTIFY_GENERIC,"rename_from",
         c->argv[1],c->db->id);
     notifyKeyspaceEvent(NOTIFY_GENERIC,"rename_to",
@@ -1174,8 +1178,8 @@ void moveCommand(client *c) {
     dbAdd(dst,c->argv[1],o);
     if (spexpire != nullptr) setExpire(c,dst,c->argv[1],std::move(*spexpire));
 
-    signalModifiedKey(src,c->argv[1]);
-    signalModifiedKey(dst,c->argv[1]);
+    signalModifiedKey(c,src,c->argv[1]);
+    signalModifiedKey(c,dst,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_GENERIC,
                 "move_from",c->argv[1],src->id);
     notifyKeyspaceEvent(NOTIFY_GENERIC,
@@ -1604,7 +1608,7 @@ int expireIfNeeded(redisDb *db, robj *key) {
         "expired",key,db->id);
     int retval = g_pserver->lazyfree_lazy_expire ? dbAsyncDelete(db,key) :
                                                dbSyncDelete(db,key);
-    if (retval) signalModifiedKey(db,key);
+    if (retval) signalModifiedKey(NULL,db,key);
     return retval;
 }
 

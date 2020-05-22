@@ -1433,6 +1433,7 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
 
         /* Child */
         redisSetProcTitle("keydb-rdb-bgsave");
+        redisSetCpuAffinity(g_pserver->bgsave_cpulist);
         retval = rdbSave(rsi);
         if (retval == C_OK) {
             sendChildCOWInfo(CHILD_INFO_TYPE_RDB, "RDB");
@@ -2658,6 +2659,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
         rioInitWithFd(&rdb,g_pserver->rdb_pipe_write);
 
         redisSetProcTitle("keydb-rdb-to-slaves");
+        redisSetCpuAffinity(g_pserver->bgsave_cpulist);
 
         retval = rdbSaveRioWithEOFMark(&rdb,NULL,rsi);
         if (retval == C_OK && rioFlush(&rdb) == 0)

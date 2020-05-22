@@ -3124,7 +3124,6 @@ void initServer(void) {
     scriptingInit(1);
     slowlogInit();
     latencyMonitorInit();
-    crc64_init();
 }
 
 /* Some steps in server initialization need to be done last (after modules
@@ -3433,8 +3432,8 @@ void call(client *c, int flags) {
 
     serverTL->fixed_time_expire++;
 
-    /* Sent the command to clients in MONITOR mode, only if the commands are
-     * not generated from reading an AOF. */
+    /* Send the command to clients in MONITOR mode if applicable.
+     * Administrative commands are considered too dangerous to be shown. */
     if (listLength(g_pserver->monitors) &&
         !g_pserver->loading &&
         !(c->cmd->flags & (CMD_SKIP_MONITOR|CMD_ADMIN)))
@@ -4556,7 +4555,8 @@ sds genRedisInfoString(const char *section) {
             "active_defrag_key_misses:%lld\r\n"
             "tracking_total_keys:%lld\r\n"
             "tracking_total_items:%llu\r\n"
-             "unexpected_error_replies:%lld\r\n",
+            "tracking_total_prefixes:%lld\r\n"
+            "unexpected_error_replies:%lld\r\n",
             g_pserver->stat_numconnections,
             g_pserver->stat_numcommands,
             getInstantaneousMetric(STATS_METRIC_COMMAND),
@@ -4586,6 +4586,7 @@ sds genRedisInfoString(const char *section) {
             g_pserver->stat_active_defrag_key_misses,
             (unsigned long long) trackingGetTotalKeys(),
             (unsigned long long) trackingGetTotalItems(),
+            (unsigned long long) trackingGetTotalPrefixes(),
             g_pserver->stat_unexpected_error_replies);
     }
 
@@ -5167,6 +5168,14 @@ void redisSetProcTitle(const char *title) {
 #endif
 }
 
+void redisSetCpuAffinity(const char *cpulist) {
+#ifdef USE_SETCPUAFFINITY
+    setcpuaffinity(cpulist);
+#else
+    UNUSED(cpulist);
+#endif
+}
+
 /*
  * Check whether systemd or upstart have been used to start redis.
  */
@@ -5353,6 +5362,7 @@ int main(int argc, char **argv) {
     zmalloc_set_oom_handler(redisOutOfMemoryHandler);
     srand(time(NULL)^getpid());
     gettimeofday(&tv,NULL);
+    crc64_init();
 
     uint8_t hashseed[16];
     getRandomHexChars((char*)hashseed,sizeof(hashseed));
@@ -5567,6 +5577,7 @@ int main(int argc, char **argv) {
         serverLog(LL_WARNING,"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?", g_pserver->maxmemory);
     }
 
+    redisSetCpuAffinity(g_pserver->server_cpulist);
     aeReleaseLock();    //Finally we can dump the lock
     moduleReleaseGIL(true);
     

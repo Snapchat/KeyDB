@@ -526,6 +526,7 @@ extern "C" long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long millise
     te->clientData = clientData;
     te->prev = NULL;
     te->next = eventLoop->timeEventHead;
+    te->refcount = 0;
     if (te->next)
         te->next->prev = te;
     eventLoop->timeEventHead = te;
@@ -607,6 +608,13 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
         /* Remove events scheduled for deletion. */
         if (te->id == AE_DELETED_EVENT_ID) {
             aeTimeEvent *next = te->next;
+            /* If a reference exists for this timer event,
+             * don't free it. This is currently incremented
+             * for recursive timerProc calls */
+            if (te->refcount) {
+                te = next;
+                continue;
+            }
             if (te->prev)
                 te->prev->next = te->next;
             else
@@ -636,7 +644,9 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
             int retval;
 
             id = te->id;
+            te->refcount++;
             retval = te->timeProc(eventLoop, id, te->clientData);
+            te->refcount--;
             processed++;
             if (retval != AE_NOMORE) {
                 aeAddMillisecondsToNow(retval,&te->when_sec,&te->when_ms);
@@ -718,6 +728,7 @@ extern "C" void ProcessEventCore(aeEventLoop *eventLoop, aeFileEvent *fe, int ma
  * if flags has AE_DONT_WAIT set the function returns ASAP until all
  * the events that's possible to process without to wait are processed.
  * if flags has AE_CALL_AFTER_SLEEP set, the aftersleep callback is called.
+ * if flags has AE_CALL_BEFORE_SLEEP set, the beforesleep callback is called.
  *
  * The function returns the number of events processed. */
 int aeProcessEvents(aeEventLoop *eventLoop, int flags)
@@ -775,6 +786,13 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         if (eventLoop->flags & AE_DONT_WAIT) {
             tv.tv_sec = tv.tv_usec = 0;
             tvp = &tv;
+        }
+
+        if (eventLoop->beforesleep != NULL && flags & AE_CALL_BEFORE_SLEEP) {
+            std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
+            if (!(eventLoop->beforesleepFlags & AE_SLEEP_THREADSAFE))
+                ulock.lock();
+            eventLoop->beforesleep(eventLoop);
         }
 
         /* Call the multiplexing API, will return only on timeout or when

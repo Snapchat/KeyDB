@@ -2409,8 +2409,6 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             decrRefCount(val);
             val = nullptr;
         } else {
-            
-
             /* Add the new object in the hash table */
             int fInserted = dbMerge(db, &keyobj, val, (rsi && rsi->fForceSetKey) || (rdbflags & RDBFLAGS_ALLOW_DUP));   // Note: dbMerge will incrRef
 
@@ -2431,6 +2429,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 val = nullptr;
             }
         }
+        
         if (g_pserver->key_load_delay)
             usleep(g_pserver->key_load_delay);
 

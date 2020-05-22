@@ -1552,8 +1552,7 @@ bool freeClient(client *c) {
      * some unexpected state, by checking its flags. */
     if (FActiveMaster(c)) {
         serverLog(LL_WARNING,"Connection with master lost.");
-        if (!(c->flags & (CLIENT_CLOSE_AFTER_REPLY|
-                        CLIENT_CLOSE_ASAP|
+        if (!(c->flags & (CLIENT_PROTOCOL_ERROR|
                         CLIENT_BLOCKED)))
         {
             replicationCacheMaster(MasterInfoFromClient(c), c);
@@ -1671,7 +1670,7 @@ void freeClientAsync(client *c) {
     listAddNodeTail(g_pserver->clients_to_close,c);
 }
 
-void freeClientsInAsyncFreeQueue(int iel) {
+int freeClientsInAsyncFreeQueue(int iel) {
     serverAssert(GlobalLocksAcquired());
     listIter li;
     listNode *ln;
@@ -1696,6 +1695,7 @@ void freeClientsInAsyncFreeQueue(int iel) {
         c->flags &= ~CLIENT_CLOSE_ASAP;
         freeClient(c);
     }
+    return (int)vecclientsFree.size();
 }
 
 /* Return a client by ID, or NULL if the client ID is not in the set
@@ -2108,7 +2108,8 @@ int processInlineBuffer(client *c) {
 }
 
 /* Helper function. Record protocol erro details in server log,
- * and set the client as CLIENT_CLOSE_AFTER_REPLY. */
+ * and set the client as CLIENT_CLOSE_AFTER_REPLY and
+ * CLIENT_PROTOCOL_ERROR. */
 #define PROTO_DUMP_LEN 128
 static void setProtocolError(const char *errstr, client *c) {
     if (cserver.verbosity <= LL_VERBOSE) {
@@ -2134,7 +2135,7 @@ static void setProtocolError(const char *errstr, client *c) {
             "Protocol error (%s) from client: %s. %s", errstr, client, buf);
         sdsfree(client);
     }
-    c->flags |= CLIENT_CLOSE_AFTER_REPLY;
+    c->flags |= (CLIENT_CLOSE_AFTER_REPLY|CLIENT_PROTOCOL_ERROR);
 }
 
 /* Process the query buffer for client 'c', setting up the client argument
@@ -3436,10 +3437,9 @@ void unpauseClientsIfNecessary()
  * write, close sequence needed to serve a client.
  *
  * The function returns the total number of events processed. */
-int processEventsWhileBlocked(int iel) {
+void processEventsWhileBlocked(int iel) {
     serverAssert(GlobalLocksAcquired());
     int iterations = 4; /* See the function top-comment. */
-    int count = 0;
 
     std::vector<client*> vecclients;
     listIter li;
@@ -3465,11 +3465,15 @@ int processEventsWhileBlocked(int iel) {
     try
     {
         while (iterations--) {
-            int events = 0;
-            events += aeProcessEvents(g_pserver->rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
-            events += handleClientsWithPendingWrites(iel, aof_state);
+            long long startval = g_pserver->events_processed_while_blocked;
+            long long ae_events = aeProcessEvents(g_pserver->rgthreadvar[iel].el,
+                AE_FILE_EVENTS|AE_DONT_WAIT|
+                AE_CALL_BEFORE_SLEEP|AE_CALL_AFTER_SLEEP);
+            /* Note that server.events_processed_while_blocked will also get
+            * incremeted by callbacks called by the event loop handlers. */
+            g_pserver->events_processed_while_blocked += ae_events;
+            long long events = g_pserver->events_processed_while_blocked - startval;
             if (!events) break;
-            count += events;
         }
     }
     catch (...)
@@ -3488,6 +3492,5 @@ int processEventsWhileBlocked(int iel) {
     locker.release();
     for (client *c : vecclients)
         c->lock.lock();
-    return count;
 }
 

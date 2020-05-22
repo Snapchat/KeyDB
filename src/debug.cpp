@@ -602,7 +602,7 @@ NULL
                 memcpy(ptrFromObj(val), buf, valsize<=buflen? valsize: buflen);
             }
             dbAdd(c->db,key,val);
-            signalModifiedKey(c->db,key);
+            signalModifiedKey(c,c->db,key);
             decrRefCount(key);
         }
         addReply(c,shared.ok);

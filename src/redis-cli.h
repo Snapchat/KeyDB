@@ -66,6 +66,7 @@ extern "C" {
 #define CLUSTER_MANAGER_CMD_FLAG_COPY           1 << 7
 #define CLUSTER_MANAGER_CMD_FLAG_COLOR          1 << 8
 #define CLUSTER_MANAGER_CMD_FLAG_CHECK_OWNERS   1 << 9
+#define CLUSTER_MANAGER_CMD_FLAG_FIX_WITH_UNREACHABLE_MASTERS 1 << 10
 
 #define CLUSTER_MANAGER_OPT_GETFRIENDS  1 << 0
 #define CLUSTER_MANAGER_OPT_COLD        1 << 1
@@ -180,11 +181,12 @@ extern struct config {
     int resp3;
 } config;
 
-/* The Cluster Manager global structure */
-extern struct clusterManager {
+struct clusterManager {
     list *nodes;    /* List of nodes in the configuration. */
     list *errors;
-} cluster_manager;
+    int unreachable_masters;    /* Masters we are not able to reach. */
+};
+extern struct clusterManager cluster_manager;
 
 typedef struct clusterManagerNode {
     redisContext *context;
@@ -196,7 +198,7 @@ typedef struct clusterManagerNode {
     time_t ping_recv;
     int flags;
     list *flags_str; /* Flags string representations */
-    sds replicate;  /* Master ID if node is a replica */
+    sds replicate;  /* Master ID if node is a slave */
     int dirty;      /* Node has changes that can be flushed */
     uint8_t slots[CLUSTER_MANAGER_SLOTS];
     int slots_count;
@@ -225,6 +227,15 @@ typedef struct clusterManagerReshardTableItem {
     clusterManagerNode *source;
     int slot;
 } clusterManagerReshardTableItem;
+
+/* Info about a cluster internal link. */
+
+typedef struct clusterManagerLink {
+    sds node_name;
+    sds node_addr;
+    int connected;
+    int handshaking;
+} clusterManagerLink;
 
 typedef struct typeinfo {
     char *name;

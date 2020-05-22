@@ -217,7 +217,7 @@ void pushGenericCommand(client *c, int where) {
     if (pushed) {
         const char *event = (where == LIST_HEAD) ? "lpush" : "rpush";
 
-        signalModifiedKey(c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST,event,c->argv[1],c->db->id);
     }
     g_pserver->dirty += pushed;
@@ -247,7 +247,7 @@ void pushxGenericCommand(client *c, int where) {
 
     if (pushed) {
         const char *event = (where == LIST_HEAD) ? "lpush" : "rpush";
-        signalModifiedKey(c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST,event,c->argv[1],c->db->id);
     }
     g_pserver->dirty += pushed;
@@ -292,7 +292,7 @@ void linsertCommand(client *c) {
     listTypeReleaseIterator(iter);
 
     if (inserted) {
-        signalModifiedKey(c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST,"linsert",
                             c->argv[1],c->db->id);
         g_pserver->dirty++;
@@ -355,7 +355,7 @@ void lsetCommand(client *c) {
             addReply(c,shared.outofrangeerr);
         } else {
             addReply(c,shared.ok);
-            signalModifiedKey(c->db,c->argv[1]);
+            signalModifiedKey(c,c->db,c->argv[1]);
             notifyKeyspaceEvent(NOTIFY_LIST,"lset",c->argv[1],c->db->id);
             g_pserver->dirty++;
         }
@@ -382,7 +382,7 @@ void popGenericCommand(client *c, int where) {
                                 c->argv[1],c->db->id);
             dbDelete(c->db,c->argv[1]);
         }
-        signalModifiedKey(c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1]);
         g_pserver->dirty++;
     }
 }
@@ -482,7 +482,7 @@ void ltrimCommand(client *c) {
         dbDelete(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",c->argv[1],c->db->id);
     }
-    signalModifiedKey(c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1]);
     g_pserver->dirty++;
     addReply(c,shared.ok);
 }
@@ -519,7 +519,7 @@ void lremCommand(client *c) {
     listTypeReleaseIterator(li);
 
     if (removed) {
-        signalModifiedKey(c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST,"lrem",c->argv[1],c->db->id);
     }
 
@@ -555,7 +555,7 @@ static void rpoplpushHandlePush(client *c, robj *dstkey, robj *dstobj, robj *val
                             g_pserver->list_compress_depth);
         dbAdd(c->db,dstkey,dstobj);
     }
-    signalModifiedKey(c->db,dstkey);
+    signalModifiedKey(c,c->db,dstkey);
     listTypePush(dstobj,value,LIST_HEAD);
     notifyKeyspaceEvent(NOTIFY_LIST,"lpush",dstkey,c->db->id);
     /* Always send the pushed value to the client. */
@@ -593,7 +593,7 @@ void rpoplpushCommand(client *c) {
             notifyKeyspaceEvent(NOTIFY_GENERIC,"del",
                                 touchedkey,c->db->id);
         }
-        signalModifiedKey(c->db,touchedkey);
+        signalModifiedKey(c,c->db,touchedkey);
         decrRefCount(touchedkey);
         g_pserver->dirty++;
         if (c->cmd->proc == brpoplpushCommand) {
@@ -713,7 +713,7 @@ void blockingPopGenericCommand(client *c, int where) {
                         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",
                                             c->argv[j],c->db->id);
                     }
-                    signalModifiedKey(c->db,c->argv[j]);
+                    signalModifiedKey(c,c->db,c->argv[j]);
                     g_pserver->dirty++;
 
                     /* Replicate it as an [LR]POP instead of B[LR]POP. */

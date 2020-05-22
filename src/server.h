@@ -430,7 +430,8 @@ public:
 #define CLIENT_TRACKING_NOLOOP (1ULL<<37) /* Don't send invalidation messages
                                              about writes performed by myself.*/
 #define CLIENT_IN_TO_TABLE (1ULL<<38) /* This client is in the timeout table. */
-#define CLIENT_FORCE_REPLY (1ULL<<39) /* Should addReply be forced to write the text? */
+#define CLIENT_PROTOCOL_ERROR (1ULL<<39) /* Protocol error chatting with it. */
+#define CLIENT_FORCE_REPLY (1ULL<<40) /* Should addReply be forced to write the text? */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -1680,6 +1681,8 @@ struct redisServer {
     dict *migrate_cached_sockets;/* MIGRATE cached sockets */
     std::atomic<uint64_t> next_client_id; /* Next client unique ID. Incremental. */
     int protected_mode;         /* Don't accept external connections. */
+    long long events_processed_while_blocked; /* processEventsWhileBlocked() */
+    
     /* RDB / AOF loading information */
     std::atomic<int> loading;                /* We are loading data from disk if true */
     off_t loading_total_bytes;
@@ -2213,7 +2216,7 @@ void rewriteClientCommandVector(client *c, int argc, ...);
 void rewriteClientCommandArgument(client *c, int i, robj *newval);
 void replaceClientCommandVector(client *c, int argc, robj **argv);
 unsigned long getClientOutputBufferMemoryUsage(client *c);
-void freeClientsInAsyncFreeQueue(int iel);
+int freeClientsInAsyncFreeQueue(int iel);
 void asyncCloseClientOnOutputBufferLimitReached(client *c);
 int getClientType(client *c);
 int getClientTypeByName(const char *name);
@@ -2225,7 +2228,7 @@ int listenToPort(int port, int *fds, int *count, int fReusePort, int fFirstListe
 void pauseClients(mstime_t duration);
 int clientsArePaused(void);
 void unpauseClientsIfNecessary();
-int processEventsWhileBlocked(int iel);
+void processEventsWhileBlocked(int iel);
 int handleClientsWithPendingWrites(int iel, int aof_state);
 int clientHasPendingReplies(client *c);
 void unlinkClient(client *c);

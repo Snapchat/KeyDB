@@ -2112,6 +2112,12 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         migrateCloseTimedoutSockets();
     }
 
+    /* Resize tracking keys table if needed. This is also done at every
+     * command execution, but we want to be sure that if the last command
+     * executed changes the value via CONFIG SET, the server will perform
+     * the operation even if completely idle. */
+    if (g_pserver->tracking_clients) trackingLimitUsedSlots();
+
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
      * useful when we are forced to postpone a BGSAVE because an AOF
      * rewrite is in progress.
@@ -2168,9 +2174,22 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
     return 1000/g_pserver->hz;
 }
 
+extern int ProcessingEventsWhileBlocked;
+
 /* This function gets called every time Redis is entering the
  * main loop of the event driven library, that is, before to sleep
- * for ready file descriptors. */
+ * for ready file descriptors.
+ *
+ * Note: This function is (currently) called from two functions:
+ * 1. aeMain - The main server loop
+ * 2. processEventsWhileBlocked - Process clients during RDB/AOF load
+ *
+ * If it was called from processEventsWhileBlocked we don't want
+ * to perform all actions (For example, we don't want to expire
+ * keys), but we do need to perform some actions.
+ *
+ * The most important is freeClientsInAsyncFreeQueue but we also
+ * call some other low-risk functions. */
 void beforeSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
 
@@ -2448,6 +2467,7 @@ void initServerConfig(void) {
     g_pserver->slaves = listCreate();
     g_pserver->monitors = listCreate();
     g_pserver->clients_timeout_table = raxNew();
+    g_pserver->events_processed_while_blocked = 0;
     g_pserver->timezone = getTimeZone(); /* Initialized by tzset(). */
     cserver.configfile = NULL;
     cserver.executable = NULL;
@@ -2937,6 +2957,8 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     pvar->tlsfd_count = 0;
     pvar->cclients = 0;
     pvar->el = aeCreateEventLoop(g_pserver->maxclients+CONFIG_FDSET_INCR);
+    aeSetBeforeSleepProc(pvar->el, fMain ? beforeSleep : beforeSleepLite, fMain ? 0 : AE_SLEEP_THREADSAFE);
+    aeSetAfterSleepProc(pvar->el, afterSleep, AE_SLEEP_THREADSAFE);
     pvar->current_client = nullptr;
     pvar->clients_paused = 0;
     pvar->fRetrySetAofEvent = false;
@@ -5277,10 +5299,7 @@ void *workerThreadMain(void *parg)
     serverTL = g_pserver->rgthreadvar+iel;  // set the TLS threadsafe global
 
     moduleAcquireGIL(true); // Normally afterSleep acquires this, but that won't be called on the first run
-    int isMainThread = (iel == IDX_EVENT_LOOP_MAIN);
     aeEventLoop *el = g_pserver->rgthreadvar[iel].el;
-    aeSetBeforeSleepProc(el, isMainThread ? beforeSleep : beforeSleepLite, isMainThread ? 0 : AE_SLEEP_THREADSAFE);
-    aeSetAfterSleepProc(el, afterSleep, AE_SLEEP_THREADSAFE);
     try
     {
         aeMain(el);

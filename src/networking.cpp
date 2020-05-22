@@ -1545,6 +1545,16 @@ bool freeClient(client *c) {
     /* Notify module system that this client auth status changed. */
     moduleNotifyUserChanged(c);
 
+    /* If this client was scheduled for async freeing we need to remove it
+     * from the queue. Note that we need to do this here, because later
+     * we may call replicationCacheMaster() and the client should already
+     * be removed from the list of clients to free. */
+    if (c->flags & CLIENT_CLOSE_ASAP) {
+        ln = listSearchKey(g_pserver->clients_to_close,c);
+        serverAssert(ln != NULL);
+        listDelNode(g_pserver->clients_to_close,ln);
+    }
+
     /* If it is our master that's beging disconnected we should make sure
      * to cache the state to try a partial resynchronization later.
      *
@@ -1552,9 +1562,8 @@ bool freeClient(client *c) {
      * some unexpected state, by checking its flags. */
     if (FActiveMaster(c)) {
         serverLog(LL_WARNING,"Connection with master lost.");
-        if (!(c->flags & (CLIENT_PROTOCOL_ERROR|
-                        CLIENT_BLOCKED)))
-        {
+        if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED))) {
+            c->flags &= ~(CLIENT_CLOSE_ASAP|CLIENT_CLOSE_AFTER_REPLY);
             replicationCacheMaster(MasterInfoFromClient(c), c);
             return false;
         }
@@ -1622,15 +1631,7 @@ bool freeClient(client *c) {
      * we lost the connection with the master. */
     if (c->flags & CLIENT_MASTER) replicationHandleMasterDisconnection(MasterInfoFromClient(c));
 
-    /* If this client was scheduled for async freeing we need to remove it
-     * from the queue. */
-    if (c->flags & CLIENT_CLOSE_ASAP) {
-        ln = listSearchKey(g_pserver->clients_to_close,c);
-        serverAssert(ln != NULL);
-        listDelNode(g_pserver->clients_to_close,ln);
-    }
-
-    /* Remove the contribution that this client gave to our
+   /* Remove the contribution that this client gave to our
      * incrementally computed memory usage. */
     g_pserver->stat_clients_type_memory[c->client_cron_last_memory_type] -=
         c->client_cron_last_memory_usage;
@@ -3459,7 +3460,6 @@ void processEventsWhileBlocked(int iel) {
     }
     
 
-    int aof_state = g_pserver->aof_state;
     aeReleaseLock();
     serverAssertDebug(!GlobalLocksAcquired());
     try

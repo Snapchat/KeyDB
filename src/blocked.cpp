@@ -392,9 +392,10 @@ void serveClientsBlockedOnStreamKey(robj *o, readyList *rl) {
                 int noack = 0;
 
                 if (group) {
-                    consumer = streamLookupConsumer(group,
-                               szFromObj(receiver->bpop.xread_consumer),
-                               1);
+                    consumer =
+                        streamLookupConsumer(group,
+                                             szFromObj(receiver->bpop.xread_consumer),
+                                             SLC_NONE);
                     noack = receiver->bpop.xread_group_noack;
                 }
 

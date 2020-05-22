@@ -1711,6 +1711,7 @@ int rewriteAppendOnlyFileBackground(void) {
 
         /* Child */
         redisSetProcTitle("keydb-aof-rewrite");
+        redisSetCpuAffinity(g_pserver->aof_rewrite_cpulist);
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
         if (rewriteAppendOnlyFile(tmpfile) == C_OK) {
             sendChildCOWInfo(CHILD_INFO_TYPE_AOF, "AOF rewrite");

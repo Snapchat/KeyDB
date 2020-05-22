@@ -2232,6 +2232,10 @@ standardConfig configs[] = {
     createStringConfig("syslog-ident", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->syslog_ident, "redis", NULL, NULL),
     createStringConfig("dbfilename", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->rdb_filename, CONFIG_DEFAULT_RDB_FILENAME, isValidDBfilename, NULL),
     createStringConfig("appendfilename", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->aof_filename, "appendonly.aof", isValidAOFfilename, NULL),
+    createStringConfig("server_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->server_cpulist, NULL, NULL, NULL),
+    createStringConfig("bio_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->bio_cpulist, NULL, NULL, NULL),
+    createStringConfig("aof_rewrite_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->aof_rewrite_cpulist, NULL, NULL, NULL),
+    createStringConfig("bgsave_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->bgsave_cpulist, NULL, NULL, NULL),
 
     /* Enum Configs */
     createEnumConfig("supervised", NULL, IMMUTABLE_CONFIG, supervised_mode_enum, cserver.supervised_mode, SUPERVISED_NONE, NULL, NULL),

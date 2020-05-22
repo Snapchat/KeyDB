@@ -1200,7 +1200,7 @@ typedef struct readyList {
                                            no AUTH is needed, and every
                                            connection is immediately
                                            authenticated. */
-typedef struct user {
+typedef struct {
     sds name;       /* The username as an SDS string. */
     uint64_t flags; /* See USER_FLAG_* */
 
@@ -1984,6 +1984,11 @@ struct redisServer {
     int tls_replication;
     int tls_auth_clients;
     redisTLSContextConfig tls_ctx_config;
+    /* cpu affinity */
+    char *server_cpulist; /* cpu affinity list of redis server main/io thread. */
+    char *bio_cpulist; /* cpu affinity list of bio thread. */
+    char *aof_rewrite_cpulist; /* cpu affinity list of aof rewrite process. */
+    char *bgsave_cpulist; /* cpu affinity list of bgsave process. */
 };
 
 typedef struct pubsubPattern {
@@ -2140,6 +2145,7 @@ void exitFromChild(int retcode);
 size_t redisPopcount(const void *s, long count);
 void redisSetProcTitle(const char *title);
 int redisCommunicateSystemd(const char *sd_notify_msg);
+void redisSetCpuAffinity(const char *cpulist);
 
 /* networking.c -- Networking and Client related operations */
 client *createClient(connection *conn, int iel);
@@ -2267,6 +2273,7 @@ void trackingInvalidateKeysOnFlush(int dbid);
 void trackingLimitUsedSlots(void);
 uint64_t trackingGetTotalItems(void);
 uint64_t trackingGetTotalKeys(void);
+uint64_t trackingGetTotalPrefixes(void);
 void trackingBroadcastInvalidationMessages(void);
 
 /* List data type */

@@ -1523,7 +1523,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
 
         /* Load every single element of the list */
         while(len--) {
-            if ((ele = rdbLoadEncodedStringObject(rdb)) == NULL) return NULL;
+            if ((ele = rdbLoadEncodedStringObject(rdb)) == NULL) {
+                decrRefCount(o);
+                return NULL;
+            }
             dec = getDecodedObject(ele);
             size_t len = sdslen(szFromObj(dec));
             quicklistPushTail((quicklist*)ptrFromObj(o), ptrFromObj(dec), len);
@@ -1550,8 +1553,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
             long long llval;
             sds sdsele;
 
-            if ((sdsele = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL))
-                == NULL) return NULL;
+            if ((sdsele = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
+                decrRefCount(o);
+                return NULL;
+            }
 
             if (o->encoding == OBJ_ENCODING_INTSET) {
                 /* Fetch integer value from element. */
@@ -1590,16 +1595,20 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
             double score;
             zskiplistNode *znode;
 
-            if ((sdsele = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL))
-                == NULL) return NULL;
+            if ((sdsele = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
+                decrRefCount(o);
+                return NULL;
+            }
 
             if (rdbtype == RDB_TYPE_ZSET_2) {
                 if (rdbLoadBinaryDoubleValue(rdb,&score) == -1) {
+                    decrRefCount(o);
                     sdsfree(sdsele);
                     return NULL;
                 }
             } else {
                 if (rdbLoadDoubleValue(rdb,&score) == -1) {
+                    decrRefCount(o);
                     sdsfree(sdsele);
                     return NULL;
                 }
@@ -1634,15 +1643,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
         while (o->encoding == OBJ_ENCODING_ZIPLIST && len > 0) {
             len--;
             /* Load raw strings */
-            if ((field = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL))
-                == NULL) 
-            {
+            if ((field = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
                 decrRefCount(o);
                 return NULL;
             }
-            if ((value = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL))
-                == NULL)
-            {
+            if ((value = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
+                sdsfree(field);
                 decrRefCount(o);
                 return NULL;
             }
@@ -1673,15 +1679,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
         while (o->encoding == OBJ_ENCODING_HT && len > 0) {
             len--;
             /* Load encoded strings */
-            if ((field = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL))
-                == NULL)
-            {
+            if ((field = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
                 decrRefCount(o);
                 return NULL;
             }
-            if ((value = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL))
-                == NULL)
-            {
+            if ((value = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
+                sdsfree(field);
                 decrRefCount(o);
                 return NULL;
             }
@@ -1704,7 +1707,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
         while (len--) {
             unsigned char *zl = (unsigned char*)
                 rdbGenericLoadStringObject(rdb,RDB_LOAD_PLAIN,NULL);
-            if (zl == NULL) return NULL;
+            if (zl == NULL) {
+                decrRefCount(o);
+                return NULL;
+            }
             quicklistAppendZiplist((quicklist*)ptrFromObj(o), zl);
         }
     } else if (rdbtype == RDB_TYPE_HASH_ZIPMAP  ||

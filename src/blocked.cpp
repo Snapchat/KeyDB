@@ -119,7 +119,7 @@ void processUnblockedClients(int iel) {
          * the code is conceptually more correct this way. */
         if (!(c->flags & CLIENT_BLOCKED)) {
             if (c->querybuf && sdslen(c->querybuf) > 0) {
-                processInputBufferAndReplicate(c);
+                processInputBuffer(c, CMD_CALL_FULL);
             }
         }
         fastlock_unlock(&c->lock);

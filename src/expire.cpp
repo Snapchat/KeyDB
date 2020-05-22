@@ -33,6 +33,17 @@
 #include "server.h"
 #include "cron.h"
 
+/* Helper function for the activeExpireCycle() function.
+ * This function will try to expire the key that is stored in the hash table
+ * entry 'de' of the 'expires' hash table of a Redis database.
+ *
+ * If the key is found to be expired, it is removed from the database and
+ * 1 is returned. Otherwise no operation is performed and 0 is returned.
+ *
+ * When a key is expired, g_pserver->stat_expiredkeys is incremented.
+ *
+ * The parameter 'now' is the current time in milliseconds as is passed
+ * to the function to avoid too many gettimeofday() syscalls. */
 void activeExpireCycleExpireFullKey(redisDb *db, const char *key) {
     robj *keyobj = createStringObject(key,sdslen(key));
 
@@ -43,7 +54,7 @@ void activeExpireCycleExpireFullKey(redisDb *db, const char *key) {
         dbSyncDelete(db,keyobj);
     notifyKeyspaceEvent(NOTIFY_EXPIRED,
         "expired",keyobj,db->id);
-    if (g_pserver->tracking_clients) trackingInvalidateKey(keyobj);
+    trackingInvalidateKey(NULL, keyobj);
     decrRefCount(keyobj);
     g_pserver->stat_expiredkeys++;
 }
@@ -56,17 +67,7 @@ void activeExpireCycleExpireFullKey(redisDb *db, const char *key) {
  * if no access is performed on them.
  *----------------------------------------------------------------------------*/
 
-/* Helper function for the activeExpireCycle() function.
- * This function will try to expire the key that is stored in the hash table
- * entry 'de' of the 'expires' hash table of a Redis database.
- *
- * If the key is found to be expired, it is removed from the database and
- * 1 is returned. Otherwise no operation is performed and 0 is returned.
- *
- * When a key is expired, g_pserver->stat_expiredkeys is incremented.
- *
- * The parameter 'now' is the current time in milliseconds as is passed
- * to the function to avoid too many gettimeofday() syscalls. */
+
 void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
     if (!e.FFat())
     {
@@ -156,7 +157,7 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
         switch (val->type)
         {
         case OBJ_SET:
-            signalModifiedKey(db,&objKey);
+            signalModifiedKey(nullptr, db,&objKey);
             notifyKeyspaceEvent(NOTIFY_SET,"srem",&objKey,db->id);
             break;
         }
@@ -229,7 +230,7 @@ void expireMemberCore(client *c, robj *key, robj *subkey, long long basetime, lo
     }
 
     setExpire(c, c->db, key, subkey, when);
-    signalModifiedKey(c->db, key);
+    signalModifiedKey(c, c->db, key);
     g_pserver->dirty++;
     addReply(c, shared.cone);
 }
@@ -608,14 +609,14 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         /* Replicate/AOF this as an explicit DEL or UNLINK. */
         aux = g_pserver->lazyfree_lazy_expire ? shared.unlink : shared.del;
         rewriteClientCommandVector(c,2,aux,key);
-        signalModifiedKey(c->db,key);
+        signalModifiedKey(c,c->db,key);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",key,c->db->id);
         addReply(c, shared.cone);
         return;
     } else {
         setExpire(c,c->db,key,nullptr,when);
         addReply(c,shared.cone);
-        signalModifiedKey(c->db,key);
+        signalModifiedKey(c,c->db,key);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"expire",key,c->db->id);
         g_pserver->dirty++;
         return;

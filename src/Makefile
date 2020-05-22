@@ -160,11 +160,21 @@ ifeq ($(uname_S),DragonFly)
 	# FreeBSD
 	FINAL_LIBS+= -lpthread -lexecinfo
 else
+ifeq ($(uname_S),OpenBSD)
+	# OpenBSD
+	FINAL_LIBS+= -lpthread -lexecinfo
+else
+ifeq ($(uname_S),NetBSD)
+	# NetBSD
+	FINAL_LIBS+= -lpthread -lexecinfo
+else
 	# All the other OSes (notably Linux)
 	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+=-ldl -pthread -lrt -luuid
 	FINAL_CFLAGS += -DMOTD
 	FINAL_CXXFLAGS += -DMOTD
+endif
+endif
 endif
 endif
 endif

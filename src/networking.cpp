@@ -508,12 +508,35 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
         serverLog(LL_WARNING,"== CRITICAL == This %s is sending an error "
                              "to its %s: '%s' after processing the command "
                              "'%s'", from, to, s, cmdname);
+        if (ctype == CLIENT_TYPE_MASTER && g_pserver->repl_backlog &&
+            g_pserver->repl_backlog_histlen > 0)
+        {
+            long long dumplen = 256;
+            if (g_pserver->repl_backlog_histlen < dumplen)
+                dumplen = g_pserver->repl_backlog_histlen;
 
-        if (c->querybuf && sdslen(c->querybuf)) {
-            std::string str = escapeString(c->querybuf);
-            printf("\tquerybuf: %s\n", str.c_str());
+            /* Identify the first byte to dump. */
+            long long idx =
+              (g_pserver->repl_backlog_idx + (g_pserver->repl_backlog_size - dumplen)) %
+               g_pserver->repl_backlog_size;
+
+            /* Scan the circular buffer to collect 'dumplen' bytes. */
+            sds dump = sdsempty();
+            while(dumplen) {
+                long long thislen =
+                    ((g_pserver->repl_backlog_size - idx) < dumplen) ?
+                    (g_pserver->repl_backlog_size - idx) : dumplen;
+
+                dump = sdscatrepr(dump,g_pserver->repl_backlog+idx,thislen);
+                dumplen -= thislen;
+                idx = 0;
+            }
+
+            /* Finally log such bytes: this is vital debugging info to
+             * understand what happened. */
+            serverLog(LL_WARNING,"Latest backlog is: '%s'", dump);
+            sdsfree(dump);
         }
-
         g_pserver->stat_unexpected_error_replies++;
     }
 }
@@ -1633,7 +1656,7 @@ fastlock lockasyncfree {"async free lock"};
  * a context where calling freeClient() is not possible, because the client
  * should be valid for the continuation of the flow of the program. */
 void freeClientAsync(client *c) {
-    /* We need to handle concurrent access to the server.clients_to_close list
+    /* We need to handle concurrent access to the g_pserver->clients_to_close list
      * only in the freeClientAsync() function, since it's the only function that
      * may access the list while Redis uses I/O threads. All the other accesses
      * are in the context of the main thread while the other threads are

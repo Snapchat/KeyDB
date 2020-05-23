@@ -18,14 +18,13 @@ endif
 
 override_dh_auto_install:
 	debian/bin/generate-systemd-service-files
-	dh_installsystemd --restart-after-upgrade
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	# Avoid race conditions in upstream testsuite.
-	./runtest || true
-	./runtest-cluster || true
-	./runtest-sentinel || true
+#	./runtest --clients 1 || true
+#	./runtest-cluster || true
+#	./runtest-sentinel || true
 endif
 
 override_dh_auto_clean:

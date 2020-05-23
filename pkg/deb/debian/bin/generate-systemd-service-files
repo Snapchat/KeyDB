@@ -9,7 +9,6 @@ else
     SYSTEMD_EXTRA=$(cat <<EOF
 
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-#MemoryDenyWriteExecute=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
@@ -26,9 +25,13 @@ do
 		case "${BINARY}" in
 		keydb-server)
 			NAME="keydb"
+			BINARY_EXEC="keydb-server"
+			BINARY_NAME="keydb-pro-server"
 			;;
 		keydb-sentinel)
 			NAME="sentinel"
+			BINARY_EXEC="keydb-sentinel"
+			BINARY_NAME="keydb-sentinel"
 			;;
 		esac
 
@@ -78,6 +81,8 @@ do
 #
 #   $ systemctl start ${BINARY}@myname.service
 #   $ keydb-cli -s /var/run/${NAME}-myname/${BINARY}.sock info | grep config_file
+#
+#  -- Chris Lamb <lamby@debian.org>  Mon, 09 Oct 2017 22:17:24 +0100
 EOF
 		fi
 
@@ -89,7 +94,7 @@ Documentation=https://docs.keydb.dev, man:${BINARY}(1)
 
 [Service]
 Type=forking
-ExecStart=/usr/bin/${BINARY} /etc/keydb/${NAMESPACED}.conf
+ExecStart=/usr/bin/${BINARY_NAME} /etc/keydb/${NAMESPACED}.conf
 ExecStop=/bin/kill -s TERM \$MAINPID
 PIDFile=/var/run/${NAMESPACED}/${BINARY}.pid
 TimeoutStopSec=0

@@ -15,6 +15,7 @@ RUN set -eux; \
 		gnupg \
 		wget \
 	; \
+#	rm -rf /var/lib/apt/lists/*; \
 	\
 	dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')"; \
 	wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$dpkgArch"; \
@@ -38,14 +39,13 @@ RUN set -eux; \
 	gosu nobody true
 
 # Load pre-generated equivalent binaries to image (reduces deployment build times)
-RUN \
-  mkdir -p /etc/keydb
-ADD ./app/keydb-* /usr/local/bin/
-ADD ./app/docker-entrypoint.sh /usr/local/bin/
-ADD ./app/*.conf /etc/keydb/
+ADD ./app/* /usr/local/bin/
+
 # Set up config and binaries
 RUN \
   cd /usr/local/bin && \
+  mkdir -p /etc/keydb && \
+  mv -f *.conf /etc/keydb && \
   sed -i 's/^\(bind .*\)$/# \1/' /etc/keydb/keydb.conf && \
   sed -i 's/^\(daemonize .*\)$/# \1/' /etc/keydb/keydb.conf && \
   sed -i 's/^\(dir .*\)$/# \1\ndir \/data/' /etc/keydb/keydb.conf && \
@@ -55,7 +55,8 @@ RUN \
   cd /etc/keydb && \
   ln -s keydb.conf redis.conf
 
-# Ensure deps installed for binaries
+# Ensure deps installed for binaries (including Pro)
+# libc6 (>= 2.17), libcurl4 (>= 7.16.2), libgcc1 (>= 1:3.0), libstdc++6 (>= 4.8.1), libuuid1 (>= 2.16), libssl1.1 (>= 1.1.1)
 RUN set -eux; \
 	\
 	savedAptMark="$(apt-mark showmanual)"; \
@@ -67,12 +68,20 @@ RUN set -eux; \
 		libstdc++6 \
 		libgcc1 \
 		zlib1g \
-		libbz2-1.0 \
-		liblz4-1 \
-		libsnappy1v5 \		
-		libzstd1 \
 	; \
-	rm -rf /var/lib/apt/lists/*
+	rm -rf /var/lib/apt/lists/*; \
+	\
+	apt-mark auto '.*' > /dev/null; \
+	[ -z "$savedAptMark" ] || apt-mark manual $savedAptMark > /dev/null; \
+	find /usr/local -type f -executable -exec ldd '{}' ';' \
+		| awk '/=>/ { print $(NF-1) }' \
+		| sort -u \
+		| xargs -r dpkg-query --search \
+		| cut -d: -f1 \
+		| sort -u \
+		| xargs -r apt-mark manual \
+	; \
+	apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false
 
 # create working directories
 RUN \
@@ -88,4 +97,4 @@ ENTRYPOINT ["docker-entrypoint.sh"]
 
 # Expose container port and start KeyDB by default on running container
 EXPOSE 6379
-CMD ["keydb-server", "/etc/keydb/keydb.conf"]
+CMD ["keydb-pro-server", "/etc/keydb/keydb.conf"]

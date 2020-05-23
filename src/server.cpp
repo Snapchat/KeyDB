@@ -2923,9 +2923,9 @@ static void initNetworkingThread(int iel, int fReusePort)
 
 static void initNetworking(int fReusePort)
 {
-    int celListen = (fReusePort) ? cserver.cthreads : 1;
-    for (int iel = 0; iel < celListen; ++iel)
-        initNetworkingThread(iel, fReusePort);
+    // We only initialize the main thread here, since RDB load is a special case that processes
+    //  clients before our server threads are launched.
+    initNetworkingThread(IDX_EVENT_LOOP_MAIN, fReusePort);
 
     /* Open the listening Unix domain socket. */
     if (g_pserver->unixsocket != NULL) {
@@ -5297,6 +5297,13 @@ void *workerThreadMain(void *parg)
     int iel = (int)((int64_t)parg);
     serverLog(LOG_INFO, "Thread %d alive.", iel);
     serverTL = g_pserver->rgthreadvar+iel;  // set the TLS threadsafe global
+
+    if (iel != IDX_EVENT_LOOP_MAIN)
+    {
+        aeAcquireLock();
+        initNetworkingThread(iel, cserver.cthreads > 1);
+        aeReleaseLock();
+    }
 
     moduleAcquireGIL(true); // Normally afterSleep acquires this, but that won't be called on the first run
     aeEventLoop *el = g_pserver->rgthreadvar[iel].el;

@@ -1345,9 +1345,11 @@ void rdbPipeWriteHandlerConnRemoved(struct connection *conn) {
     g_pserver->rdb_pipe_numconns_writing--;
     /* if there are no more writes for now for this conn, or write error: */
     if (g_pserver->rdb_pipe_numconns_writing == 0) {
-        if (aeCreateFileEvent(serverTL->el, g_pserver->rdb_pipe_read, AE_READABLE, rdbPipeReadHandler,NULL) == AE_ERR) {
-            serverPanic("Unrecoverable error creating g_pserver->rdb_pipe_read file event.");
-        }
+        aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, []{
+            if (aeCreateFileEvent(serverTL->el, g_pserver->rdb_pipe_read, AE_READABLE, rdbPipeReadHandler,NULL) == AE_ERR) {
+                serverPanic("Unrecoverable error creating g_pserver->rdb_pipe_read file event.");
+            }
+        });
     }
 }
 
@@ -1398,11 +1400,11 @@ void RdbPipeCleanup() {
 void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask) {
     UNUSED(mask);
     UNUSED(clientData);
-    UNUSED(eventLoop);
     int i;
     if (!g_pserver->rdb_pipe_buff)
         g_pserver->rdb_pipe_buff = (char*)zmalloc(PROTO_IOBUF_LEN);
     serverAssert(g_pserver->rdb_pipe_numconns_writing==0);
+    serverAssert(eventLoop == g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el);
 
     while (1) {
         g_pserver->rdb_pipe_bufflen = read(fd, g_pserver->rdb_pipe_buff, PROTO_IOBUF_LEN);

@@ -44,7 +44,12 @@ debuild -S -sa
 cd ../
 
 # create pbuilder chrooted environment and build the deb package
-sudo pbuilder create --distribution $codename
+if [ "$codename" == "xenial" ]; then
+        sudo pbuilder create --distribution $codename --othermirror "deb http://archive.ubuntu.com/ubuntu $codename universe multiverse"
+else
+        sudo pbuilder create --distribution $codename
+fi
+
 sudo pbuilder --update
 sudo pbuilder --build *.dsc  --logfile /mnt/pbuilderlog.log
 

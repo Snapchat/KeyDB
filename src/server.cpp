@@ -3621,8 +3621,7 @@ void call(client *c, int flags) {
  * If C_OK is returned the client is still alive and valid and
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
-int processCommand(client *c, int callFlags) {
-    AeLocker locker;
+int processCommand(client *c, int callFlags, AeLocker &locker) {
     AssertCorrectThread(c);
 
     if (moduleHasCommandFilters())

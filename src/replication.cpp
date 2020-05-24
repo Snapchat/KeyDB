@@ -1478,7 +1478,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
              * setup write handler (and disable pipe read handler, below) */
             if (nwritten != g_pserver->rdb_pipe_bufflen) {
                 g_pserver->rdb_pipe_numconns_writing++;
-                aePostFunction(g_pserver->rgthreadvar[slave->iel].el, [conn] {
+                slave->postFunction([conn](client *) {
                     connSetWriteHandler(conn, rdbPipeWriteHandler);
                 });
             }
@@ -1607,21 +1607,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
                 }
                 else
                 {
-                    aePostFunction(g_pserver->rgthreadvar[replica->iel].el, [replica] {
-                        // Because the client could have been closed while the lambda waited to run we need to
-			            // verify the replica is still connected
-                        listIter li;
-                        listNode *ln;
-                        listRewind(g_pserver->slaves,&li);
-                        bool fFound = false;
-                        while ((ln = listNext(&li))) {
-                            if (listNodeValue(ln) == replica) {
-                                fFound = true;
-                                break;
-                            }
-                        }
-                        if (!fFound)
-                            return;
+                    replica->postFunction([](client *replica) {
                         connSetWriteHandler(replica->conn,NULL);
                         if (connSetWriteHandler(replica->conn,sendBulkToSlave) == C_ERR) {
                             freeClient(replica);

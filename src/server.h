@@ -1335,6 +1335,9 @@ typedef struct client {
     int iel; /* the event loop index we're registered with */
     struct fastlock lock;
     int master_error;
+
+    // post a function from a non-client thread to run on its client thread
+    bool postFunction(std::function<void(client *)> fn);
 } client;
 
 struct saveparam {

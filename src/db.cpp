@@ -41,6 +41,7 @@
 
 int keyIsExpired(redisDb *db, robj *key);
 int expireIfNeeded(redisDb *db, robj *key, robj *o);
+void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add);
 
 std::unique_ptr<expireEntry> deserializeExpire(sds key, const char *str, size_t cch, size_t *poffset);
 sds serializeStoredObjectAndExpire(redisDbPersistentData *db, const char *key, robj_roptr o);
@@ -223,7 +224,7 @@ bool dbAddCore(redisDb *db, robj *key, robj *val, bool fAssumeNew = false) {
             val->type == OBJ_ZSET ||
             val->type == OBJ_STREAM)
                 signalKeyAsReady(db, key);
-        if (g_pserver->cluster_enabled) slotToKeyAdd(key);
+        if (g_pserver->cluster_enabled) slotToKeyAdd(szFromObj(key));
     }
     else
     {
@@ -320,18 +321,20 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
  * 3) The expire time of the key is reset (the key is made persistent),
  *    unless 'keepttl' is true.
  *
- * All the new keys in the database should be created via this interface. */
-void genericSetKey(redisDb *db, robj *key, robj *val, int keepttl) {
+ * All the new keys in the database should be created via this interface.
+ * The client 'c' argument may be set to NULL if the operation is performed
+ * in a context where there is no clear client performing the operation. */
+void genericSetKey(client *c, redisDb *db, robj *key, robj *val, int keepttl, int signal) {
     if (!dbAddCore(db, key, val)) {
         dbOverwrite(db, key, val, !keepttl);
     }
     incrRefCount(val);
-    signalModifiedKey(db,key);
+    if (signal) signalModifiedKey(c,db,key);
 }
 
 /* Common case for genericSetKey() where the TTL is not retained. */
-void setKey(redisDb *db, robj *key, robj *val) {
-    genericSetKey(db,key,val,0);
+void setKey(client *c, redisDb *db, robj *key, robj *val) {
+    genericSetKey(c,db,key,val,0,1);
 }
 
 /* Return true if the specified key exists in the specified database.
@@ -418,7 +421,7 @@ bool redisDbPersistentData::syncDelete(robj *key)
                     sdsfree(keyTombstone);
             }
         }
-        if (g_pserver->cluster_enabled) slotToKeyDel(key);
+        if (g_pserver->cluster_enabled) slotToKeyDel(szFromObj(key));
         return 1;
     } else {
         return 0;
@@ -578,9 +581,11 @@ long long dbTotalServerKeyCount() {
  * Every time a DB is flushed the function signalFlushDb() is called.
  *----------------------------------------------------------------------------*/
 
-void signalModifiedKey(redisDb *db, robj *key) {
+/* Note that the 'c' argument may be NULL if the key was modified out of
+ * a context of a client. */
+void signalModifiedKey(client *c, redisDb *db, robj *key) {
     touchWatchedKey(db,key);
-    trackingInvalidateKey(key);
+    trackingInvalidateKey(c,key);
 }
 
 void signalFlushedDb(int dbid) {
@@ -706,7 +711,7 @@ void delGenericCommand(client *c, int lazy) {
         int deleted  = lazy ? dbAsyncDelete(c->db,c->argv[j]) :
                               dbSyncDelete(c->db,c->argv[j]);
         if (deleted) {
-            signalModifiedKey(c->db,c->argv[j]);
+            signalModifiedKey(c,c->db,c->argv[j]);
             notifyKeyspaceEvent(NOTIFY_GENERIC,
                 "del",c->argv[j],c->db->id);
             g_pserver->dirty++;
@@ -717,7 +722,7 @@ void delGenericCommand(client *c, int lazy) {
 }
 
 void delCommand(client *c) {
-    delGenericCommand(c,0);
+    delGenericCommand(c,g_pserver->lazyfree_lazy_user_del);
 }
 
 void unlinkCommand(client *c) {
@@ -1255,8 +1260,8 @@ void renameGenericCommand(client *c, int nx) {
     dbAdd(c->db,c->argv[2],o);
     if (spexpire != nullptr) 
         setExpire(c,c->db,c->argv[2],std::move(*spexpire));
-    signalModifiedKey(c->db,c->argv[1]);
-    signalModifiedKey(c->db,c->argv[2]);
+    signalModifiedKey(c,c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[2]);
     notifyKeyspaceEvent(NOTIFY_GENERIC,"rename_from",
         c->argv[1],c->db->id);
     notifyKeyspaceEvent(NOTIFY_GENERIC,"rename_to",
@@ -1333,8 +1338,8 @@ void moveCommand(client *c) {
     dbAdd(dst,c->argv[1],o);
     if (spexpire != nullptr) setExpire(c,dst,c->argv[1],std::move(*spexpire));
 
-    signalModifiedKey(src,c->argv[1]);
-    signalModifiedKey(dst,c->argv[1]);
+    signalModifiedKey(c,src,c->argv[1]);
+    signalModifiedKey(c,dst,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_GENERIC,
                 "move_from",c->argv[1],src->id);
     notifyKeyspaceEvent(NOTIFY_GENERIC,
@@ -1731,7 +1736,7 @@ int expireIfNeeded(redisDb *db, robj *key) {
         "expired",key,db->id);
     int retval = g_pserver->lazyfree_lazy_expire ? dbAsyncDelete(db,key) :
                                                dbSyncDelete(db,key);
-    if (retval) signalModifiedKey(db,key);
+    if (retval) signalModifiedKey(NULL,db,key);
     return retval;
 }
 
@@ -1986,6 +1991,32 @@ int *georadiusGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numk
     return keys;
 }
 
+/* LCS ... [KEYS <key1> <key2>] ... */
+int *lcsGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys)
+{
+    int i;
+    int *keys = getKeysTempBuffer;
+    UNUSED(cmd);
+
+    /* We need to parse the options of the command in order to check for the
+     * "KEYS" argument before the "STRINGS" argument. */
+    for (i = 1; i < argc; i++) {
+        char *arg = szFromObj(argv[i]);
+        int moreargs = (argc-1) - i;
+
+        if (!strcasecmp(arg, "strings")) {
+            break;
+        } else if (!strcasecmp(arg, "keys") && moreargs >= 2) {
+            keys[0] = i+1;
+            keys[1] = i+2;
+            *numkeys = 2;
+            return keys;
+        }
+    }
+    *numkeys = 0;
+    return keys;
+}
+
 /* Helper function to extract keys from memory command.
  * MEMORY USAGE <key> */
 int *memoryGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys) {
@@ -2053,11 +2084,14 @@ int *xreadGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys)
  * a fast way a key that belongs to a specified hash slot. This is useful
  * while rehashing the cluster and in other conditions when we need to
  * understand if we have keys for a given hash slot. */
-void slotToKeyUpdateKeyCore(const char *rgch, size_t keylen, int add)
-{
+void slotToKeyUpdateKey(sds key, int add) {
+    slotToKeyUpdateKeyCore(key, sdslen(key), add);
+}
+
+void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add) {
     serverAssert(GlobalLocksAcquired());
 
-    unsigned int hashslot = keyHashSlot(rgch,(int)keylen);
+    unsigned int hashslot = keyHashSlot(key,keylen);
     unsigned char buf[64];
     unsigned char *indexed = buf;
 
@@ -2065,7 +2099,7 @@ void slotToKeyUpdateKeyCore(const char *rgch, size_t keylen, int add)
     if (keylen+2 > 64) indexed = (unsigned char*)zmalloc(keylen+2, MALLOC_SHARED);
     indexed[0] = (hashslot >> 8) & 0xff;
     indexed[1] = hashslot & 0xff;
-    memcpy(indexed+2,rgch,keylen);
+    memcpy(indexed+2,key,keylen);
     int fModified = false;
     if (add) {
         fModified = raxInsert(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL,NULL);
@@ -2076,16 +2110,11 @@ void slotToKeyUpdateKeyCore(const char *rgch, size_t keylen, int add)
     if (indexed != buf) zfree(indexed);
 }
 
-void slotToKeyUpdateKey(robj *key, int add) {
-    size_t keylen = sdslen(szFromObj(key));
-    slotToKeyUpdateKeyCore(szFromObj(key), keylen, add);
-}
-
-void slotToKeyAdd(robj *key) {
+void slotToKeyAdd(sds key) {
     slotToKeyUpdateKey(key,1);
 }
 
-void slotToKeyDel(robj *key) {
+void slotToKeyDel(sds key) {
     slotToKeyUpdateKey(key,0);
 }
 

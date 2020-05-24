@@ -93,6 +93,18 @@ start_server {
         assert {[r XACK mystream mygroup $id1 $id2] eq 1}
     }
 
+    test {XACK should fail if got at least one invalid ID} {
+        r del mystream
+        r xgroup create s g $ MKSTREAM
+        r xadd s * f1 v1
+        set c [llength [lindex [r xreadgroup group g c streams s >] 0 1]]
+        assert {$c == 1}
+        set pending [r xpending s g - + 10 c]
+        set id1 [lindex $pending 0 0]
+        assert_error "*Invalid stream ID specified*" {r xack s g $id1 invalid-id}
+        assert {[r xack s g $id1] eq 1}
+    }
+
     test {PEL NACK reassignment after XGROUP SETID event} {
         r del events
         r xadd events * f1 v1
@@ -280,6 +292,40 @@ start_server {
         ]
         assert {[llength [lindex $reply 0]] == 4}
         assert {[lindex $reply 0 3] == 2}
+    }
+
+    test {XINFO FULL output} {
+        r del x
+        r XADD x 100 a 1
+        r XADD x 101 b 1
+        r XADD x 102 c 1
+        r XADD x 103 e 1
+        r XADD x 104 f 1
+        r XGROUP CREATE x g1 0
+        r XGROUP CREATE x g2 0
+        r XREADGROUP GROUP g1 Alice COUNT 1 STREAMS x >
+        r XREADGROUP GROUP g1 Bob COUNT 1 STREAMS x >
+        r XREADGROUP GROUP g1 Bob NOACK COUNT 1 STREAMS x >
+        r XREADGROUP GROUP g2 Charlie COUNT 4 STREAMS x >
+        r XDEL x 103
+
+        set reply [r XINFO STREAM x FULL]
+        assert_equal [llength $reply] 12
+        assert_equal [lindex $reply 1] 4 ;# stream length
+        assert_equal [lindex $reply 9] "{100-0 {a 1}} {101-0 {b 1}} {102-0 {c 1}} {104-0 {f 1}}" ;# entries
+        assert_equal [lindex $reply 11 0 1] "g1" ;# first group name
+        assert_equal [lindex $reply 11 0 7 0 0] "100-0" ;# first entry in group's PEL
+        assert_equal [lindex $reply 11 0 9 0 1] "Alice" ;# first consumer
+        assert_equal [lindex $reply 11 0 9 0 7 0 0] "100-0" ;# first entry in first consumer's PEL
+        assert_equal [lindex $reply 11 1 1] "g2" ;# second group name
+        assert_equal [lindex $reply 11 1 9 0 1] "Charlie" ;# first consumer
+        assert_equal [lindex $reply 11 1 9 0 7 0 0] "100-0" ;# first entry in first consumer's PEL
+        assert_equal [lindex $reply 11 1 9 0 7 1 0] "101-0" ;# second entry in first consumer's PEL
+
+        set reply [r XINFO STREAM x FULL COUNT 1]
+        assert_equal [llength $reply] 12
+        assert_equal [lindex $reply 1] 4
+        assert_equal [lindex $reply 9] "{100-0 {a 1}}"
     }
 
     start_server {} {

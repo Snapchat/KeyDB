@@ -28,6 +28,10 @@ extern "C" {
 #include "redis-cli.h"
 
 static dict *clusterManagerGetLinkStatus(void);
+static clusterManagerNode *clusterManagerNodeMasterRandom();
+
+/* Used by clusterManagerFixSlotsCoverage */
+struct dict *clusterManagerUncoveredSlots = NULL;
 
 /* The Cluster Manager global structure */
 struct clusterManager cluster_manager;
@@ -59,18 +63,6 @@ extern "C" void dictListDestructor(void *privdata, void *val)
     DICT_NOTUSED(privdata);
     listRelease((list*)val);
 }
-
-/* Used by clusterManagerFixSlotsCoverage */
-dict *clusterManagerUncoveredSlots = NULL;
-
-/* Info about a cluster internal link. */
-
-typedef struct clusterManagerLink {
-    sds node_name;
-    sds node_addr;
-    int connected;
-    int handshaking;
-} clusterManagerLink;
 
 static dictType clusterManagerDictType = {
     dictSdsHash,               /* hash function */
@@ -114,6 +106,201 @@ extern "C" void freeClusterManager(void) {
     }
     if (clusterManagerUncoveredSlots != NULL)
         dictRelease(clusterManagerUncoveredSlots);
+}
+
+static int clusterManagerFixSlotsCoverage(char *all_slots) {
+    dictIterator *iter = nullptr;
+    int force_fix = config.cluster_manager_command.flags &
+                    CLUSTER_MANAGER_CMD_FLAG_FIX_WITH_UNREACHABLE_MASTERS;
+
+    if (cluster_manager.unreachable_masters > 0 && !force_fix) {
+        clusterManagerLogWarn("*** Fixing slots coverage with %d unreachable masters is dangerous: redis-cli will assume that slots about masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the --cluster-fix-with-unreachable-masters option.\n", cluster_manager.unreachable_masters);
+        exit(1);
+    }
+
+    int i, fixed = 0;
+    list *none = NULL, *single = NULL, *multi = NULL;
+    clusterManagerLogInfo(">>> Fixing slots coverage...\n");
+    for (i = 0; i < CLUSTER_MANAGER_SLOTS; i++) {
+        int covered = all_slots[i];
+        if (!covered) {
+            sds slot = sdsfromlonglong((long long) i);
+            list *slot_nodes = listCreate();
+            sds slot_nodes_str = sdsempty();
+            listIter li;
+            listNode *ln;
+            listRewind(cluster_manager.nodes, &li);
+            while ((ln = listNext(&li)) != NULL) {
+                clusterManagerNode *n = (clusterManagerNode*) ln->value;
+                if (n->flags & CLUSTER_MANAGER_FLAG_SLAVE || n->replicate)
+                    continue;
+                redisReply *reply = (redisReply*)CLUSTER_MANAGER_COMMAND(n,
+                    "CLUSTER GETKEYSINSLOT %d %d", i, 1);
+                if (!clusterManagerCheckRedisReply(n, reply, NULL)) {
+                    fixed = -1;
+                    if (reply) freeReplyObject(reply);
+                    goto cleanup;
+                }
+                assert(reply->type == REDIS_REPLY_ARRAY);
+                if (reply->elements > 0) {
+                    listAddNodeTail(slot_nodes, n);
+                    if (listLength(slot_nodes) > 1)
+                        slot_nodes_str = sdscat(slot_nodes_str, ", ");
+                    slot_nodes_str = sdscatfmt(slot_nodes_str,
+                                               "%s:%u", n->ip, n->port);
+                }
+                freeReplyObject(reply);
+            }
+            sdsfree(slot_nodes_str);
+            dictAdd(clusterManagerUncoveredSlots, slot, slot_nodes);
+        }
+    }
+
+    /* For every slot, take action depending on the actual condition:
+     * 1) No node has keys for this slot.
+     * 2) A single node has keys for this slot.
+     * 3) Multiple nodes have keys for this slot. */
+    none = listCreate();
+    single = listCreate();
+    multi = listCreate();
+    iter = dictGetIterator(clusterManagerUncoveredSlots);
+    dictEntry *entry;
+    while ((entry = dictNext(iter)) != NULL) {
+        sds slot = (sds) dictGetKey(entry);
+        list *nodes = (list *) dictGetVal(entry);
+        switch (listLength(nodes)){
+        case 0: listAddNodeTail(none, slot); break;
+        case 1: listAddNodeTail(single, slot); break;
+        default: listAddNodeTail(multi, slot); break;
+        }
+    }
+    dictReleaseIterator(iter);
+
+    /*  Handle case "1": keys in no node. */
+    if (listLength(none) > 0) {
+        printf("The following uncovered slots have no keys "
+               "across the cluster:\n");
+        clusterManagerPrintSlotsList(none);
+        if (confirmWithYes("Fix these slots by covering with a random node?")){
+            listIter li;
+            listNode *ln;
+            listRewind(none, &li);
+            while ((ln = listNext(&li)) != NULL) {
+                sds slot = (sds)ln->value;
+                int s = atoi(slot);
+                clusterManagerNode *n = clusterManagerNodeMasterRandom();
+                clusterManagerLogInfo(">>> Covering slot %s with %s:%d\n",
+                                      slot, n->ip, n->port);
+                if (!clusterManagerSetSlotOwner(n, s, 0)) {
+                    fixed = -1;
+                    goto cleanup;
+                }
+                /* Since CLUSTER ADDSLOTS succeeded, we also update the slot
+                 * info into the node struct, in order to keep it synced */
+                n->slots[s] = 1;
+                fixed++;
+            }
+        }
+    }
+
+    /*  Handle case "2": keys only in one node. */
+    if (listLength(single) > 0) {
+        printf("The following uncovered slots have keys in just one node:\n");
+        clusterManagerPrintSlotsList(single);
+        if (confirmWithYes("Fix these slots by covering with those nodes?")){
+            listIter li;
+            listNode *ln;
+            listRewind(single, &li);
+            while ((ln = listNext(&li)) != NULL) {
+                sds slot = (sds)ln->value;
+                int s = atoi(slot);
+                dictEntry *entry = dictFind(clusterManagerUncoveredSlots, slot);
+                assert(entry != NULL);
+                list *nodes = (list *) dictGetVal(entry);
+                listNode *fn = listFirst(nodes);
+                assert(fn != NULL);
+                clusterManagerNode *n = (clusterManagerNode*) fn->value;
+                clusterManagerLogInfo(">>> Covering slot %s with %s:%d\n",
+                                      slot, n->ip, n->port);
+                if (!clusterManagerSetSlotOwner(n, s, 0)) {
+                    fixed = -1;
+                    goto cleanup;
+                }
+                /* Since CLUSTER ADDSLOTS succeeded, we also update the slot
+                 * info into the node struct, in order to keep it synced */
+                n->slots[atoi(slot)] = 1;
+                fixed++;
+            }
+        }
+    }
+
+    /* Handle case "3": keys in multiple nodes. */
+    if (listLength(multi) > 0) {
+        printf("The following uncovered slots have keys in multiple nodes:\n");
+        clusterManagerPrintSlotsList(multi);
+        if (confirmWithYes("Fix these slots by moving keys "
+                           "into a single node?")) {
+            listIter li;
+            listNode *ln;
+            listRewind(multi, &li);
+            while ((ln = listNext(&li)) != NULL) {
+                sds slot = (sds)ln->value;
+                dictEntry *entry = dictFind(clusterManagerUncoveredSlots, slot);
+                assert(entry != NULL);
+                list *nodes = (list *) dictGetVal(entry);
+                int s = atoi(slot);
+                clusterManagerNode *target =
+                    clusterManagerGetNodeWithMostKeysInSlot(nodes, s, NULL);
+                if (target == NULL) {
+                    fixed = -1;
+                    goto cleanup;
+                }
+                clusterManagerLogInfo(">>> Covering slot %s moving keys "
+                                      "to %s:%d\n", slot,
+                                      target->ip, target->port);
+                if (!clusterManagerSetSlotOwner(target, s, 1)) {
+                    fixed = -1;
+                    goto cleanup;
+                }
+                /* Since CLUSTER ADDSLOTS succeeded, we also update the slot
+                 * info into the node struct, in order to keep it synced */
+                target->slots[atoi(slot)] = 1;
+                listIter nli;
+                listNode *nln;
+                listRewind(nodes, &nli);
+                while ((nln = listNext(&nli)) != NULL) {
+                    clusterManagerNode *src = (clusterManagerNode*) nln->value;
+                    if (src == target) continue;
+                    /* Assign the slot to target node in the source node. */
+                    if (!clusterManagerSetSlot(src, target, s, "NODE", NULL))
+                        fixed = -1;
+                    if (fixed < 0) goto cleanup;
+                    /* Set the source node in 'importing' state
+                     * (even if we will actually migrate keys away)
+                     * in order to avoid receiving redirections
+                     * for MIGRATE. */
+                    if (!clusterManagerSetSlot(src, target, s,
+                                               "IMPORTING", NULL)) fixed = -1;
+                    if (fixed < 0) goto cleanup;
+                    int opts = CLUSTER_MANAGER_OPT_VERBOSE |
+                               CLUSTER_MANAGER_OPT_COLD;
+                    if (!clusterManagerMoveSlot(src, target, s, opts, NULL)) {
+                        fixed = -1;
+                        goto cleanup;
+                    }
+                    if (!clusterManagerClearSlotStatus(src, s))
+                        fixed = -1;
+                    if (fixed < 0) goto cleanup;
+                }
+                fixed++;
+            }
+        }
+    }
+cleanup:
+    if (none) listRelease(none);
+    if (single) listRelease(single);
+    if (multi) listRelease(multi);
+    return fixed;
 }
 
 /* Return the anti-affinity score, which is a measure of the amount of
@@ -362,7 +549,7 @@ static clusterManagerNode *clusterManagerNodeMasterRandom() {
     listNode *ln;
     listRewind(cluster_manager.nodes, &li);
     while ((ln = listNext(&li)) != NULL) {
-        clusterManagerNode *n = (clusterManagerNode*)ln->value;
+        clusterManagerNode *n = (clusterManagerNode*) ln->value;
         if (n->flags & CLUSTER_MANAGER_FLAG_SLAVE) continue;
         master_count++;
     }
@@ -371,7 +558,7 @@ static clusterManagerNode *clusterManagerNodeMasterRandom() {
     idx = rand() % master_count;
     listRewind(cluster_manager.nodes, &li);
     while ((ln = listNext(&li)) != NULL) {
-        clusterManagerNode *n = (clusterManagerNode*)ln->value;
+        clusterManagerNode *n = (clusterManagerNode*) ln->value;
         if (n->flags & CLUSTER_MANAGER_FLAG_SLAVE) continue;
         if (!idx--) {
             return n;
@@ -380,202 +567,6 @@ static clusterManagerNode *clusterManagerNodeMasterRandom() {
     /* Can not be reached */
     return NULL;
 }
-
-static int clusterManagerFixSlotsCoverage(char *all_slots) {
-    int i, fixed = 0;
-    dictIterator *iter = nullptr;
-    dictEntry *entry = nullptr;
-    list *none = NULL, *single = NULL, *multi = NULL;
-    clusterManagerLogInfo(">>> Fixing slots coverage...\n");
-    printf("List of not covered slots: \n");
-    int uncovered_count = 0;
-    sds log = sdsempty();
-    for (i = 0; i < CLUSTER_MANAGER_SLOTS; i++) {
-        int covered = all_slots[i];
-        if (!covered) {
-            sds key = sdsfromlonglong((long long) i);
-            if (uncovered_count++ > 0) printf(",");
-            printf("%s", (char *) key);
-            list *slot_nodes = listCreate();
-            sds slot_nodes_str = sdsempty();
-            listIter li;
-            listNode *ln;
-            listRewind(cluster_manager.nodes, &li);
-            while ((ln = listNext(&li)) != NULL) {
-                clusterManagerNode *n = (clusterManagerNode*)ln->value;
-                if (n->flags & CLUSTER_MANAGER_FLAG_SLAVE || n->replicate)
-                    continue;
-                redisReply *reply = (redisReply*)CLUSTER_MANAGER_COMMAND(n,
-                    "CLUSTER GETKEYSINSLOT %d %d", i, 1);
-                if (!clusterManagerCheckRedisReply(n, reply, NULL)) {
-                    fixed = -1;
-                    if (reply) freeReplyObject(reply);
-                    goto cleanup;
-                }
-                assert(reply->type == REDIS_REPLY_ARRAY);
-                if (reply->elements > 0) {
-                    listAddNodeTail(slot_nodes, n);
-                    if (listLength(slot_nodes) > 1)
-                        slot_nodes_str = sdscat(slot_nodes_str, ", ");
-                    slot_nodes_str = sdscatfmt(slot_nodes_str,
-                                               "%s:%u", n->ip, n->port);
-                }
-                freeReplyObject(reply);
-            }
-            log = sdscatfmt(log, "\nSlot %S has keys in %u nodes: %S",
-                            key, listLength(slot_nodes), slot_nodes_str);
-            sdsfree(slot_nodes_str);
-            dictAdd(clusterManagerUncoveredSlots, key, slot_nodes);
-        }
-    }
-    printf("\n%s\n", log);
-    /* For every slot, take action depending on the actual condition:
-     * 1) No node has keys for this slot.
-     * 2) A single node has keys for this slot.
-     * 3) Multiple nodes have keys for this slot. */
-    none = listCreate();
-    single = listCreate();
-    multi = listCreate();
-    iter = dictGetIterator(clusterManagerUncoveredSlots);
-    while ((entry = dictNext(iter)) != NULL) {
-        sds slot = (sds) dictGetKey(entry);
-        list *nodes = (list *) dictGetVal(entry);
-        switch (listLength(nodes)){
-        case 0: listAddNodeTail(none, slot); break;
-        case 1: listAddNodeTail(single, slot); break;
-        default: listAddNodeTail(multi, slot); break;
-        }
-    }
-    dictReleaseIterator(iter);
-
-    /*  Handle case "1": keys in no node. */
-    if (listLength(none) > 0) {
-        printf("The following uncovered slots have no keys "
-               "across the cluster:\n");
-        clusterManagerPrintSlotsList(none);
-        if (confirmWithYes("Fix these slots by covering with a random node?")){
-            listIter li;
-            listNode *ln;
-            listRewind(none, &li);
-            while ((ln = listNext(&li)) != NULL) {
-                sds slot = (sds)ln->value;
-                int s = atoi(slot);
-                clusterManagerNode *n = clusterManagerNodeMasterRandom();
-                clusterManagerLogInfo(">>> Covering slot %s with %s:%d\n",
-                                      slot, n->ip, n->port);
-                if (!clusterManagerSetSlotOwner(n, s, 0)) {
-                    fixed = -1;
-                    goto cleanup;
-                }
-                /* Since CLUSTER ADDSLOTS succeeded, we also update the slot
-                 * info into the node struct, in order to keep it synced */
-                n->slots[s] = 1;
-                fixed++;
-            }
-        }
-    }
-
-    /*  Handle case "2": keys only in one node. */
-    if (listLength(single) > 0) {
-        printf("The following uncovered slots have keys in just one node:\n");
-        clusterManagerPrintSlotsList(single);
-        if (confirmWithYes("Fix these slots by covering with those nodes?")){
-            listIter li;
-            listNode *ln;
-            listRewind(single, &li);
-            while ((ln = listNext(&li)) != NULL) {
-                sds slot = (sds)ln->value;
-                int s = atoi(slot);
-                dictEntry *entry = dictFind(clusterManagerUncoveredSlots, slot);
-                assert(entry != NULL);
-                list *nodes = (list *) dictGetVal(entry);
-                listNode *fn = listFirst(nodes);
-                assert(fn != NULL);
-                clusterManagerNode *n = (clusterManagerNode*)fn->value;
-                clusterManagerLogInfo(">>> Covering slot %s with %s:%d\n",
-                                      slot, n->ip, n->port);
-                if (!clusterManagerSetSlotOwner(n, s, 0)) {
-                    fixed = -1;
-                    goto cleanup;
-                }
-                /* Since CLUSTER ADDSLOTS succeeded, we also update the slot
-                 * info into the node struct, in order to keep it synced */
-                n->slots[atoi(slot)] = 1;
-                fixed++;
-            }
-        }
-    }
-
-    /* Handle case "3": keys in multiple nodes. */
-    if (listLength(multi) > 0) {
-        printf("The following uncovered slots have keys in multiple nodes:\n");
-        clusterManagerPrintSlotsList(multi);
-        if (confirmWithYes("Fix these slots by moving keys "
-                           "into a single node?")) {
-            listIter li;
-            listNode *ln;
-            listRewind(multi, &li);
-            while ((ln = listNext(&li)) != NULL) {
-                sds slot = (sds)ln->value;
-                dictEntry *entry = dictFind(clusterManagerUncoveredSlots, slot);
-                assert(entry != NULL);
-                list *nodes = (list *) dictGetVal(entry);
-                int s = atoi(slot);
-                clusterManagerNode *target =
-                    clusterManagerGetNodeWithMostKeysInSlot(nodes, s, NULL);
-                if (target == NULL) {
-                    fixed = -1;
-                    goto cleanup;
-                }
-                clusterManagerLogInfo(">>> Covering slot %s moving keys "
-                                      "to %s:%d\n", slot,
-                                      target->ip, target->port);
-                if (!clusterManagerSetSlotOwner(target, s, 1)) {
-                    fixed = -1;
-                    goto cleanup;
-                }
-                /* Since CLUSTER ADDSLOTS succeeded, we also update the slot
-                 * info into the node struct, in order to keep it synced */
-                target->slots[atoi(slot)] = 1;
-                listIter nli;
-                listNode *nln;
-                listRewind(nodes, &nli);
-                while ((nln = listNext(&nli)) != NULL) {
-                    clusterManagerNode *src = (clusterManagerNode*)nln->value;
-                    if (src == target) continue;
-                    /* Assign the slot to target node in the source node. */
-                    if (!clusterManagerSetSlot(src, target, s, "NODE", NULL))
-                        fixed = -1;
-                    if (fixed < 0) goto cleanup;
-                    /* Set the source node in 'importing' state
-                     * (even if we will actually migrate keys away)
-                     * in order to avoid receiving redirections
-                     * for MIGRATE. */
-                    if (!clusterManagerSetSlot(src, target, s,
-                                               "IMPORTING", NULL)) fixed = -1;
-                    if (fixed < 0) goto cleanup;
-                    int opts = CLUSTER_MANAGER_OPT_VERBOSE |
-                               CLUSTER_MANAGER_OPT_COLD;
-                    if (!clusterManagerMoveSlot(src, target, s, opts, NULL)) {
-                        fixed = -1;
-                        goto cleanup;
-                    }
-                    if (!clusterManagerClearSlotStatus(src, s))
-                        fixed = -1;
-                    if (fixed < 0) goto cleanup;
-                }
-                fixed++;
-            }
-        }
-    }
-cleanup:
-    sdsfree(log);
-    if (none) listRelease(none);
-    if (single) listRelease(single);
-    if (multi) listRelease(multi);
-    return fixed;
-}
-
 
 extern "C" int clusterManagerCheckCluster(int quiet) {
     listNode *ln = listFirst(cluster_manager.nodes);

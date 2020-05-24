@@ -1219,7 +1219,7 @@ void pfaddCommand(client *c) {
     }
     hdr = (hllhdr*)ptrFromObj(o);
     if (updated) {
-        signalModifiedKey(c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STRING,"pfadd",c->argv[1],c->db->id);
         g_pserver->dirty++;
         HLL_INVALIDATE_CACHE(hdr);
@@ -1310,7 +1310,7 @@ void pfcountCommand(client *c) {
              * data structure is not modified, since the cached value
              * may be modified and given that the HLL is a Redis string
              * we need to propagate the change. */
-            signalModifiedKey(c->db,c->argv[1]);
+            signalModifiedKey(c,c->db,c->argv[1]);
             g_pserver->dirty++;
         }
         addReplyLongLong(c,card);
@@ -1383,7 +1383,7 @@ void pfmergeCommand(client *c) {
                      last hllSparseSet() call. */
     HLL_INVALIDATE_CACHE(hdr);
 
-    signalModifiedKey(c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1]);
     /* We generate a PFADD event for PFMERGE for semantical simplicity
      * since in theory this is a mass-add of elements. */
     notifyKeyspaceEvent(NOTIFY_STRING,"pfadd",c->argv[1],c->db->id);

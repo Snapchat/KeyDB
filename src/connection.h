@@ -31,6 +31,8 @@
 #ifndef __REDIS_CONNECTION_H
 #define __REDIS_CONNECTION_H
 
+#include <atomic>
+
 #define CONN_INFO_LEN   32
 
 struct aeEventLoop;
@@ -70,7 +72,7 @@ typedef struct ConnectionType {
 
 struct connection {
     ConnectionType *type;
-    ConnectionState state;
+    std::atomic<ConnectionState> state;
     short int flags;
     short int refs;
     int last_errno;

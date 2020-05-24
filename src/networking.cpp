@@ -3473,7 +3473,12 @@ void processEventsWhileBlocked(int iel) {
     AeLocker locker;
     locker.arm(nullptr);
     locker.release();
+
     for (client *c : vecclients)
         c->lock.lock();
+
+    // If a different thread processed the shutdown we need to abort the lua command or we will hang
+    if (serverTL->el->stop)
+        throw ShutdownException();
 }
 

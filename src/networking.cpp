@@ -2326,7 +2326,8 @@ void commandProcessed(client *c) {
 int processCommandAndResetClient(client *c, int flags) {
     int deadclient = 0;
     serverTL->current_client = c;
-    if (processCommand(c, flags) == C_OK) {
+    AeLocker locker;
+    if (processCommand(c, flags, locker) == C_OK) {
         commandProcessed(c);
     }
     if (serverTL->current_client == NULL) deadclient = 1;

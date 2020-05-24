@@ -33,6 +33,7 @@
 #include "server.h"
 #include "cluster.h"
 #include "bio.h"
+#include "aelocker.h"
 
 #include <sys/time.h>
 #include <unistd.h>
@@ -46,6 +47,7 @@
 #include <unordered_map>
 #include <string>
 
+long long adjustMeaningfulReplOffset();
 void replicationDiscardCachedMaster(redisMaster *mi);
 void replicationResurrectCachedMaster(redisMaster *mi, connection *conn);
 void replicationSendAck(redisMaster *mi);
@@ -1301,6 +1303,7 @@ void sendBulkToSlave(connection *conn) {
     serverAssert(FCorrectThread(replica));
     char buf[PROTO_IOBUF_LEN];
     ssize_t nwritten, buflen;
+    AeLocker aeLock;
     std::unique_lock<fastlock> ul(replica->lock);
 
     /* Before sending the RDB file, we send the preamble as configured by the
@@ -1312,6 +1315,8 @@ void sendBulkToSlave(connection *conn) {
             serverLog(LL_VERBOSE,
                 "Write error sending RDB preamble to replica: %s",
                 connGetLastError(conn));
+            ul.unlock();
+            aeLock.arm(nullptr);
             freeClient(replica);
             return;
         }
@@ -1332,6 +1337,8 @@ void sendBulkToSlave(connection *conn) {
     if (buflen <= 0) {
         serverLog(LL_WARNING,"Read error sending DB to replica: %s",
             (buflen == 0) ? "premature EOF" : strerror(errno));
+        ul.unlock();
+        aeLock.arm(nullptr);
         freeClient(replica);
         return;
     }
@@ -1339,6 +1346,8 @@ void sendBulkToSlave(connection *conn) {
         if (connGetState(conn) != CONN_STATE_CONNECTED) {
             serverLog(LL_WARNING,"Write error sending DB to replica: %s",
                 connGetLastError(conn));
+            ul.unlock();
+            aeLock.arm(nullptr);
             freeClient(replica);
         }
         return;
@@ -1362,9 +1371,11 @@ void rdbPipeWriteHandlerConnRemoved(struct connection *conn) {
     g_pserver->rdb_pipe_numconns_writing--;
     /* if there are no more writes for now for this conn, or write error: */
     if (g_pserver->rdb_pipe_numconns_writing == 0) {
-        if (aeCreateFileEvent(serverTL->el, g_pserver->rdb_pipe_read, AE_READABLE, rdbPipeReadHandler,NULL) == AE_ERR) {
-            serverPanic("Unrecoverable error creating g_pserver->rdb_pipe_read file event.");
-        }
+        aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, []{
+            if (aeCreateFileEvent(serverTL->el, g_pserver->rdb_pipe_read, AE_READABLE, rdbPipeReadHandler,NULL) == AE_ERR) {
+                serverPanic("Unrecoverable error creating g_pserver->rdb_pipe_read file event.");
+            }
+        });
     }
 }
 
@@ -1421,12 +1432,12 @@ void RdbPipeCleanup() {
 void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask) {
     UNUSED(mask);
     UNUSED(clientData);
-    UNUSED(eventLoop);
 
     int i;
     if (!g_pserver->rdb_pipe_buff)
         g_pserver->rdb_pipe_buff = (char*)zmalloc(PROTO_IOBUF_LEN);
     serverAssert(g_pserver->rdb_pipe_numconns_writing==0);
+    serverAssert(eventLoop == g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el);
 
     while (1) {
         g_pserver->rdb_pipe_bufflen = read(fd, g_pserver->rdb_pipe_buff, PROTO_IOBUF_LEN);
@@ -1471,9 +1482,10 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                 continue;
 
             client *slave = (client*)connGetPrivateData(conn);
+            std::unique_lock<fastlock> ul(slave->lock);
             serverAssert(slave->conn == conn);
-            if (slave->flags & CLIENT_CLOSE_ASAP)
-                continue;
+            if(slave->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_ASAP)
+                continue;   // if we asked to free the client don't send any more data
             
             // Normally it would be bug to talk a client conn from a different thread, but here we know nobody else will
             //  be sending anything while in this replication state so it is OK
@@ -1495,12 +1507,8 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
              * setup write handler (and disable pipe read handler, below) */
             if (nwritten != g_pserver->rdb_pipe_bufflen) {
                 g_pserver->rdb_pipe_numconns_writing++;
-                slave->casyncOpsPending++;
-                aePostFunction(g_pserver->rgthreadvar[slave->iel].el, [slave] {
-                    slave->casyncOpsPending--;
-                    if (slave->flags & CLIENT_CLOSE_ASAP)
-                        return;
-                    connSetWriteHandler(slave->conn, rdbPipeWriteHandler);
+                slave->postFunction([conn](client *) {
+                    connSetWriteHandler(conn, rdbPipeWriteHandler);
                 });
             }
             stillAlive++;
@@ -1544,6 +1552,8 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
     listRewind(g_pserver->slaves,&li);
     while((ln = listNext(&li))) {
         client *replica = (client*)ln->value;
+
+        std::unique_lock<fastlock> ul(replica->lock);
 
         if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
             startbgsave = 1;
@@ -1591,6 +1601,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
                 replica->repl_ack_time = g_pserver->unixtime; /* Timeout otherwise. */
             } else {
                 if (bgsaveerr != C_OK) {
+                    ul.unlock();
                     if (FCorrectThread(replica))
                         freeClient(replica);
                     else
@@ -1600,6 +1611,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
                 }
                 if ((replica->repldbfd = open(g_pserver->rdb_filename,O_RDONLY)) == -1 ||
                     redis_fstat(replica->repldbfd,&buf) == -1) {
+                    ul.unlock();
                     if (FCorrectThread(replica))
                         freeClient(replica);
                     else
@@ -1617,27 +1629,14 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
                 {
                     connSetWriteHandler(replica->conn,NULL);
                     if (connSetWriteHandler(replica->conn,sendBulkToSlave) == C_ERR) {
+                        ul.unlock();
                         freeClient(replica);
                         continue;
                     }
                 }
                 else
                 {
-                    aePostFunction(g_pserver->rgthreadvar[replica->iel].el, [replica] {
-                        // Because the client could have been closed while the lambda waited to run we need to
-			            // verify the replica is still connected
-                        listIter li;
-                        listNode *ln;
-                        listRewind(g_pserver->slaves,&li);
-                        bool fFound = false;
-                        while ((ln = listNext(&li))) {
-                            if (listNodeValue(ln) == replica) {
-                                fFound = true;
-                                break;
-                            }
-                        }
-                        if (!fFound)
-                            return;
+                    replica->postFunction([](client *replica) {
                         connSetWriteHandler(replica->conn,NULL);
                         if (connSetWriteHandler(replica->conn,sendBulkToSlave) == C_ERR) {
                             freeClient(replica);
@@ -3306,6 +3305,10 @@ void replicationCacheMaster(redisMaster *mi, client *c) {
      * pending outputs to the master. */
     sdsclear(mi->master->querybuf);
     sdsclear(mi->master->pending_querybuf);
+    
+    /* Adjust reploff and read_reploff to the last meaningful offset we executed.
+     * this is the offset the replica will use for future PSYNC. */
+    mi->master->reploff = adjustMeaningfulReplOffset();
     mi->master->read_reploff = mi->master->reploff;
     if (c->flags & CLIENT_MULTI) discardTransaction(c);
     listEmpty(c->reply);
@@ -3331,9 +3334,41 @@ void replicationCacheMaster(redisMaster *mi, client *c) {
     replicationHandleMasterDisconnection(mi);
 }
 
-/* This function is called when a master is turend into a replica, in order to
+/* If the "meaningful" offset, that is the offset without the final PINGs
+ * in the stream, is different than the last offset, use it instead:
+ * often when the master is no longer reachable, replicas will never
+ * receive the PINGs, however the master will end with an incremented
+ * offset because of the PINGs and will not be able to incrementally
+ * PSYNC with the new master.
+ * This function trims the replication backlog when needed, and returns
+ * the offset to be used for future partial sync. */
+long long adjustMeaningfulReplOffset() {
+    if (g_pserver->master_repl_offset > g_pserver->master_repl_meaningful_offset) {
+        long long delta = g_pserver->master_repl_offset -
+                          g_pserver->master_repl_meaningful_offset;
+        serverLog(LL_NOTICE,
+            "Using the meaningful offset %lld instead of %lld to exclude "
+            "the final PINGs (%lld bytes difference)",
+                g_pserver->master_repl_meaningful_offset,
+                g_pserver->master_repl_offset,
+                delta);
+        g_pserver->master_repl_offset = g_pserver->master_repl_meaningful_offset;
+        if (g_pserver->repl_backlog_histlen <= delta) {
+            g_pserver->repl_backlog_histlen = 0;
+            g_pserver->repl_backlog_idx = 0;
+        } else {
+            g_pserver->repl_backlog_histlen -= delta;
+            g_pserver->repl_backlog_idx =
+                (g_pserver->repl_backlog_idx + (g_pserver->repl_backlog_size - delta)) %
+                g_pserver->repl_backlog_size;
+        }
+    }
+    return g_pserver->master_repl_offset;
+}
+
+/* This function is called when a master is turend into a slave, in order to
  * create from scratch a cached master for the new client, that will allow
- * to PSYNC with the replica that was promoted as the new master after a
+ * to PSYNC with the slave that was promoted as the new master after a
  * failover.
  *
  * Assuming this instance was previously the master instance of the new master,
@@ -3356,35 +3391,7 @@ void replicationCacheMasterUsingMyself(redisMaster *mi) {
      * by replicationCreateMasterClient(). We'll later set the created
      * master as server.cached_master, so the replica will use such
      * offset for PSYNC. */
-    mi->master_initial_offset = g_pserver->master_repl_offset;
-
-    /* However if the "meaningful" offset, that is the offset without
-     * the final PINGs in the stream, is different, use this instead:
-     * often when the master is no longer reachable, replicas will never
-     * receive the PINGs, however the master will end with an incremented
-     * offset because of the PINGs and will not be able to incrementally
-     * PSYNC with the new master. */
-    if (g_pserver->master_repl_offset > g_pserver->master_repl_meaningful_offset) {
-        long long delta = g_pserver->master_repl_offset -
-                          g_pserver->master_repl_meaningful_offset;
-        serverLog(LL_NOTICE,
-            "Using the meaningful offset %lld instead of %lld to exclude "
-            "the final PINGs (%lld bytes difference)",
-                g_pserver->master_repl_meaningful_offset,
-                g_pserver->master_repl_offset,
-                delta);
-        mi->master_initial_offset = g_pserver->master_repl_meaningful_offset;
-        g_pserver->master_repl_offset = g_pserver->master_repl_meaningful_offset;
-        if (g_pserver->repl_backlog_histlen <= delta) {
-            g_pserver->repl_backlog_histlen = 0;
-            g_pserver->repl_backlog_idx = 0;
-        } else {
-            g_pserver->repl_backlog_histlen -= delta;
-            g_pserver->repl_backlog_idx =
-                (g_pserver->repl_backlog_idx + (g_pserver->repl_backlog_size - delta)) %
-                g_pserver->repl_backlog_size;
-        }
-    }
+    mi->master_initial_offset = adjustMeaningfulReplOffset();
 
     /* The master client we create can be set to any DBID, because
      * the new master will start its replication stream with SELECT. */
@@ -3853,6 +3860,7 @@ void replicationCron(void) {
         listRewind(g_pserver->slaves,&li);
         while((ln = listNext(&li))) {
             client *replica = (client*)ln->value;
+            std::unique_lock<fastlock> ul(replica->lock);
 
             if (replica->replstate != SLAVE_STATE_ONLINE) continue;
             if (replica->flags & CLIENT_PRE_PSYNC) continue;
@@ -3861,9 +3869,15 @@ void replicationCron(void) {
                 serverLog(LL_WARNING, "Disconnecting timedout replica: %s",
                     replicationGetSlaveName(replica));
                 if (FCorrectThread(replica))
-                    freeClient(replica);
+                {
+                    ul.release();
+                    if (!freeClient(replica))
+                        replica->lock.unlock(); // we didn't free so we have undo the lock we just released
+                }
                 else
+                {
                     freeClientAsync(replica);
+                }
             }
         }
     }

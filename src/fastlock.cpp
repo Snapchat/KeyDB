@@ -194,8 +194,9 @@ static int futex(volatile unsigned *uaddr, int futex_op, int val,
 
 class DeadlockDetector
 {
+    fastlock m_lock { "deadlock detector" };    // destruct this first
     std::map<pid_t, fastlock *> m_mapwait;
-    fastlock m_lock { "deadlock detector" };
+
 public:
     void registerwait(fastlock *lock, pid_t thispid)
     {

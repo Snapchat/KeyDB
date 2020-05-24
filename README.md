@@ -3,6 +3,8 @@
 [![Join the chat at https://gitter.im/KeyDB/community](https://badges.gitter.im/KeyDB/community.svg)](https://gitter.im/KeyDB/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 [![StackShare](http://img.shields.io/badge/tech-stack-0690fa.svg?style=flat)](https://stackshare.io/eq-alpha-technology-inc/eq-alpha-technology-inc)
 
+##### New! Want to extend KeyDB with Javascript?  Try [ModJS](https://github.com/JohnSully/ModJS)
+
 ##### Need Help? Check out our extensive [documentation](https://docs.keydb.dev).
 
 ##### Have feedback?  Take our quick survey: https://www.surveymonkey.com/r/Y9XNS93

@@ -721,6 +721,6 @@ cant_free:
  *
  */
 int freeMemoryIfNeededAndSafe(bool fPreSnapshot) {
-    if (g_pserver->lua_timedout || g_pserver->loading) return C_OK;
+    if (g_pserver->shutdown_asap || g_pserver->lua_timedout || g_pserver->loading) return C_OK;
     return freeMemoryIfNeeded(fPreSnapshot);
 }

@@ -11,7 +11,9 @@ jobs:
     steps:
     - uses: actions/checkout@v1
     - name: make
-      run: make
+      run: |
+          sudo apt-get -y install uuid-dev libcurl4-openssl-dev
+          make
     - name: test
       run: |
         sudo apt-get install tcl8.5
@@ -25,7 +27,9 @@ jobs:
     steps:
     - uses: actions/checkout@v1
     - name: make
-      run: make MALLOC=libc
+      run: |
+          sudo apt-get -y install uuid-dev libcurl4-openssl-dev
+          make MALLOC=libc
     - name: test
       run: |
         sudo apt-get install tcl8.5
@@ -39,7 +43,9 @@ jobs:
     steps:
     - uses: actions/checkout@v1
     - name: make
-      run: make valgrind
+      run: |
+          sudo apt-get -y install uuid-dev libcurl4-openssl-dev
+          make valgrind
     - name: test
       run: |
         sudo apt-get install tcl8.5 valgrind -y

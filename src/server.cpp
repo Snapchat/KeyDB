@@ -706,15 +706,15 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"multi",multiCommand,1,
-     "no-script fast @transaction",
+     "no-script fast ok-loading ok-stale @transaction",
      0,NULL,0,0,0,0,0,0},
 
     {"exec",execCommand,1,
-     "no-script no-monitor no-slowlog @transaction",
+     "no-script no-monitor no-slowlog ok-loading ok-stale @transaction",
      0,NULL,0,0,0,0,0,0},
 
     {"discard",discardCommand,1,
-     "no-script fast @transaction",
+     "no-script fast ok-loading ok-stale @transaction",
      0,NULL,0,0,0,0,0,0},
 
     {"sync",syncCommand,1,
@@ -981,11 +981,11 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"xread",xreadCommand,-4,
-     "read-only no-script @stream @blocking",
+     "read-only @stream @blocking",
      0,xreadGetKeys,1,1,1,0,0,0},
 
     {"xreadgroup",xreadCommand,-7,
-     "write no-script @stream @blocking",
+     "write @stream @blocking",
      0,xreadGetKeys,1,1,1,0,0,0},
 
     {"xgroup",xgroupCommand,-2,
@@ -1043,6 +1043,14 @@ struct redisCommand redisCommandTable[] = {
     {"keydb.cron",cronCommand,-5,
      "write use-memory",
      0,NULL,1,1,1,0,0,0},
+
+    {"keydb.hrename", hrenameCommand, 4,
+     "write fast @hash",
+     0,NULL,0,0,0,0,0,0},
+    
+    {"stralgo",stralgoCommand,-2,
+     "read-only @string",
+     0,lcsGetKeys,0,0,0,0,0,0}
 };
 
 /*============================ Utility functions ============================ */
@@ -1286,11 +1294,15 @@ int dictEncObjKeyCompare(void *privdata, const void *key1,
         o2->encoding == OBJ_ENCODING_INT)
             return ptrFromObj(o1) == ptrFromObj(o2);
 
-    o1 = getDecodedObject(o1);
-    o2 = getDecodedObject(o2);
+    /* Due to OBJ_STATIC_REFCOUNT, we avoid calling getDecodedObject() without
+     * good reasons, because it would incrRefCount() the object, which
+     * is invalid. So we check to make sure dictFind() works with static
+     * objects as well. */
+    if (o1->getrefcount() != OBJ_STATIC_REFCOUNT) o1 = getDecodedObject(o1);
+    if (o2->getrefcount() != OBJ_STATIC_REFCOUNT) o2 = getDecodedObject(o2);
     cmp = dictSdsKeyCompare(privdata,ptrFromObj(o1),ptrFromObj(o2));
-    decrRefCount(o1);
-    decrRefCount(o2);
+    if (o1->getrefcount() != OBJ_STATIC_REFCOUNT) decrRefCount(o1);
+    if (o2->getrefcount() != OBJ_STATIC_REFCOUNT) decrRefCount(o2);
     return cmp;
 }
 
@@ -1733,6 +1745,28 @@ int clientsCronTrackExpansiveClients(client *c) {
     return 0; /* This function never terminates the client. */
 }
 
+/* Iterating all the clients in getMemoryOverheadData() is too slow and
+ * in turn would make the INFO command too slow. So we perform this
+ * computation incrementally and track the (not instantaneous but updated
+ * to the second) total memory used by clients using clinetsCron() in
+ * a more incremental way (depending on server.hz). */
+int clientsCronTrackClientsMemUsage(client *c) {
+    size_t mem = 0;
+    int type = getClientType(c);
+    mem += getClientOutputBufferMemoryUsage(c);
+    mem += sdsAllocSize(c->querybuf);
+    mem += sizeof(client);
+    /* Now that we have the memory used by the client, remove the old
+     * value from the old categoty, and add it back. */
+    g_pserver->stat_clients_type_memory[c->client_cron_last_memory_type] -=
+        c->client_cron_last_memory_usage;
+    g_pserver->stat_clients_type_memory[type] += mem;
+    /* Remember what we added and where, to remove it next time. */
+    c->client_cron_last_memory_usage = mem;
+    c->client_cron_last_memory_type = type;
+    return 0;
+}
+
 /* Return the max samples in the memory usage of clients tracked by
  * the function clientsCronTrackExpansiveClients(). */
 void getExpansiveClientsInfo(size_t *in_usage, size_t *out_usage) {
@@ -1784,7 +1818,7 @@ void clientsCron(int iel) {
         /* Rotate the list, take the current head, process.
          * This way if the client must be removed from the list it's the
          * first element and we don't incur into O(N) computation. */
-        listRotate(g_pserver->clients);
+        listRotateTailToHead(g_pserver->clients);
         head = (listNode*)listFirst(g_pserver->clients);
         c = (client*)listNodeValue(head);
         if (c->iel == iel)
@@ -1796,6 +1830,7 @@ void clientsCron(int iel) {
             if (clientsCronHandleTimeout(c,now)) continue;  // Client free'd so don't release the lock
             if (clientsCronResizeQueryBuffer(c)) goto LContinue;
             if (clientsCronTrackExpansiveClients(c)) goto LContinue;
+            if (clientsCronTrackClientsMemUsage(c)) goto LContinue;
         LContinue:
             fastlock_unlock(&c->lock);
         }        
@@ -2203,6 +2238,12 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         checkTrialTimeout();
     }
 
+    /* Resize tracking keys table if needed. This is also done at every
+     * command execution, but we want to be sure that if the last command
+     * executed changes the value via CONFIG SET, the server will perform
+     * the operation even if completely idle. */
+    if (g_pserver->tracking_clients) trackingLimitUsedSlots();
+
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
      * useful when we are forced to postpone a BGSAVE because an AOF
      * rewrite is in progress.
@@ -2245,8 +2286,6 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
     int iel = ielFromEventLoop(eventLoop);
     serverAssert(iel != IDX_EVENT_LOOP_MAIN);
 
-    updateCachedTime(1);
-
     /* If another threads unblocked one of our clients, and this thread has been idle
         then beforeSleep won't have a chance to process the unblocking.  So we also
         process them here in the cron job to ensure they don't starve.
@@ -2265,9 +2304,22 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
     return 1000/g_pserver->hz;
 }
 
+extern int ProcessingEventsWhileBlocked;
+
 /* This function gets called every time Redis is entering the
  * main loop of the event driven library, that is, before to sleep
- * for ready file descriptors. */
+ * for ready file descriptors.
+ *
+ * Note: This function is (currently) called from two functions:
+ * 1. aeMain - The main server loop
+ * 2. processEventsWhileBlocked - Process clients during RDB/AOF load
+ *
+ * If it was called from processEventsWhileBlocked we don't want
+ * to perform all actions (For example, we don't want to expire
+ * keys), but we do need to perform some actions.
+ *
+ * The most important is freeClientsInAsyncFreeQueue but we also
+ * call some other low-risk functions. */
 void beforeSleep(struct aeEventLoop *eventLoop) {
     int iel = ielFromEventLoop(eventLoop);
 
@@ -2293,21 +2345,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (g_pserver->active_expire_enabled && (listLength(g_pserver->masters) == 0 || g_pserver->fActiveReplica))
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
-    /* Send all the slaves an ACK request if at least one client blocked
-     * during the previous event loop iteration. */
-    if (g_pserver->get_ack_from_slaves) {
-        robj *argv[3];
-
-        argv[0] = createStringObject("REPLCONF",8);
-        argv[1] = createStringObject("GETACK",6);
-        argv[2] = createStringObject("*",1); /* Not used argument. */
-        replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb, argv, 3);
-        decrRefCount(argv[0]);
-        decrRefCount(argv[1]);
-        decrRefCount(argv[2]);
-        g_pserver->get_ack_from_slaves = 0;
-    }
-
     /* Unblock all the clients blocked for synchronous replication
      * in WAIT. */
     if (listLength(g_pserver->clients_waiting_acks))
@@ -2321,6 +2358,24 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (listLength(g_pserver->rgthreadvar[iel].unblocked_clients))
     {
         processUnblockedClients(iel);
+    }
+
+    /* Send all the slaves an ACK request if at least one client blocked
+     * during the previous event loop iteration. Note that we do this after
+     * processUnblockedClients(), so if there are multiple pipelined WAITs
+     * and the just unblocked WAIT gets blocked again, we don't have to wait
+     * a server cron cycle in absence of other event loop events. See #6623. */
+    if (g_pserver->get_ack_from_slaves) {
+        robj *argv[3];
+
+        argv[0] = createStringObject("REPLCONF",8);
+        argv[1] = createStringObject("GETACK",6);
+        argv[2] = createStringObject("*",1); /* Not used argument. */
+        replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb, argv, 3);
+        decrRefCount(argv[0]);
+        decrRefCount(argv[1]);
+        decrRefCount(argv[2]);
+        g_pserver->get_ack_from_slaves = 0;
     }
 
     /* Send the invalidation messages to clients participating to the
@@ -2545,6 +2600,7 @@ void initServerConfig(void) {
     g_pserver->slaves = listCreate();
     g_pserver->monitors = listCreate();
     g_pserver->clients_timeout_table = raxNew();
+    g_pserver->events_processed_while_blocked = 0;
     g_pserver->timezone = getTimeZone(); /* Initialized by tzset(). */
     cserver.configfile = NULL;
     cserver.executable = NULL;
@@ -3060,9 +3116,9 @@ static void initNetworkingThread(int iel, int fReusePort)
 
 static void initNetworking(int fReusePort)
 {
-    int celListen = (fReusePort) ? cserver.cthreads : 1;
-    for (int iel = 0; iel < celListen; ++iel)
-        initNetworkingThread(iel, fReusePort);
+    // We only initialize the main thread here, since RDB load is a special case that processes
+    //  clients before our server threads are launched.
+    initNetworkingThread(IDX_EVENT_LOOP_MAIN, fReusePort);
 
     /* Open the listening Unix domain socket. */
     if (g_pserver->unixsocket != NULL) {
@@ -3094,6 +3150,8 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     pvar->tlsfd_count = 0;
     pvar->cclients = 0;
     pvar->el = aeCreateEventLoop(g_pserver->maxclients+CONFIG_FDSET_INCR);
+    aeSetBeforeSleepProc(pvar->el, beforeSleep, AE_SLEEP_THREADSAFE);
+    aeSetAfterSleepProc(pvar->el, afterSleep, AE_SLEEP_THREADSAFE);
     pvar->current_client = nullptr;
     pvar->clients_paused = 0;
     pvar->fRetrySetAofEvent = false;
@@ -3228,6 +3286,8 @@ void initServer(void) {
     g_pserver->stat_rdb_cow_bytes = 0;
     g_pserver->stat_aof_cow_bytes = 0;
     g_pserver->stat_module_cow_bytes = 0;
+    for (int j = 0; j < CLIENT_TYPE_COUNT; j++)
+        g_pserver->stat_clients_type_memory[j] = 0;
     g_pserver->cron_malloc_stats.zmalloc_used = 0;
     g_pserver->cron_malloc_stats.process_rss = 0;
     g_pserver->cron_malloc_stats.allocator_allocated = 0;
@@ -3477,8 +3537,13 @@ struct redisCommand *lookupCommandOrOriginal(sds name) {
  * + PROPAGATE_AOF (propagate into the AOF file if is enabled)
  * + PROPAGATE_REPL (propagate into the replication link)
  *
- * This should not be used inside commands implementation. Use instead
- * alsoPropagate(), preventCommandPropagation(), forceCommandPropagation().
+ * This should not be used inside commands implementation since it will not
+ * wrap the resulting commands in MULTI/EXEC. Use instead alsoPropagate(),
+ * preventCommandPropagation(), forceCommandPropagation().
+ *
+ * However for functions that need to (also) propagate out of the context of a
+ * command execution, for example when serving a blocked client, you
+ * want to use propagate().
  */
 void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                int flags)
@@ -3589,8 +3654,8 @@ void call(client *c, int flags) {
 
     serverTL->fixed_time_expire++;
 
-    /* Sent the command to clients in MONITOR mode, only if the commands are
-     * not generated from reading an AOF. */
+    /* Send the command to clients in MONITOR mode if applicable.
+     * Administrative commands are considered too dangerous to be shown. */
     if (listLength(g_pserver->monitors) &&
         !g_pserver->loading &&
         !(c->cmd->flags & (CMD_SKIP_MONITOR|CMD_ADMIN)))
@@ -3759,8 +3824,7 @@ void call(client *c, int flags) {
  * If C_OK is returned the client is still alive and valid and
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
-int processCommand(client *c, int callFlags) {
-    AeLocker locker;
+int processCommand(client *c, int callFlags, AeLocker &locker) {
     AssertCorrectThread(c);
 
     if (moduleHasCommandFilters())
@@ -3889,6 +3953,13 @@ int processCommand(client *c, int callFlags) {
             addReply(c, shared.oomerr);
             return C_OK;
         }
+
+        /* Save out_of_memory result at script start, otherwise if we check OOM
+         * untill first write within script, memory used by lua stack and
+         * arguments might interfere. */
+        if (c->cmd->proc == evalCommand || c->cmd->proc == evalShaCommand) {
+            g_pserver->lua_oom = out_of_memory;
+        }
     }
 
     /* Make sure to use a reasonable amount of memory for client side
@@ -4014,7 +4085,7 @@ int processCommand(client *c, int callFlags) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
-        if (cserver.cthreads >= 2 && g_pserver->m_pstorageFactory == nullptr && listLength(g_pserver->monitors) == 0 && c->cmd->proc == getCommand)
+        if (cserver.cthreads >= 2 && !g_fTestMode && g_pserver->m_pstorageFactory == nullptr && listLength(g_pserver->monitors) == 0 && c->cmd->proc == getCommand)
         {
             if (getCommandAsync(c))
                 return C_OK;
@@ -4027,6 +4098,15 @@ int processCommand(client *c, int callFlags) {
             handleClientsBlockedOnKeys();
     }
     return C_OK;
+}
+
+bool client::postFunction(std::function<void(client *)> fn) {
+    this->casyncOpsPending++;
+    return aePostFunction(g_pserver->rgthreadvar[this->iel].el, [this, fn]{
+        std::lock_guard<decltype(this->lock)> lock(this->lock);
+        --casyncOpsPending;
+        fn(this);
+    }) == AE_OK;
 }
 
 /*================================== Shutdown =============================== */
@@ -4483,7 +4563,7 @@ sds genRedisInfoString(const char *section) {
         size_t zmalloc_used = zmalloc_used_memory();
         size_t total_system_mem = cserver.system_memory_size;
         const char *evict_policy = evictPolicyToString();
-        long long memory_lua = (long long)lua_gc(g_pserver->lua,LUA_GCCOUNT,0)*1024;
+        long long memory_lua = g_pserver->lua ? (long long)lua_gc(g_pserver->lua,LUA_GCCOUNT,0)*1024 : 0;
         struct redisMemOverhead *mh = getMemoryOverheadData();
 
         /* Peak memory is updated from time to time by serverCron() so it
@@ -4721,7 +4801,8 @@ sds genRedisInfoString(const char *section) {
             "active_defrag_key_misses:%lld\r\n"
             "tracking_total_keys:%lld\r\n"
             "tracking_total_items:%llu\r\n"
-             "unexpected_error_replies:%lld\r\n",
+            "tracking_total_prefixes:%lld\r\n"
+            "unexpected_error_replies:%lld\r\n",
             g_pserver->stat_numconnections,
             g_pserver->stat_numcommands,
             getInstantaneousMetric(STATS_METRIC_COMMAND),
@@ -4751,6 +4832,7 @@ sds genRedisInfoString(const char *section) {
             g_pserver->stat_active_defrag_key_misses,
             (unsigned long long) trackingGetTotalKeys(),
             (unsigned long long) trackingGetTotalItems(),
+            (unsigned long long) trackingGetTotalPrefixes(),
             g_pserver->stat_unexpected_error_replies);
     }
 
@@ -5358,6 +5440,14 @@ void redisSetProcTitle(const char *title) {
 #endif
 }
 
+void redisSetCpuAffinity(const char *cpulist) {
+#ifdef USE_SETCPUAFFINITY
+    setcpuaffinity(cpulist);
+#else
+    UNUSED(cpulist);
+#endif
+}
+
 /*
  * Check whether systemd or upstart have been used to start redis.
  */
@@ -5480,10 +5570,15 @@ void *workerThreadMain(void *parg)
     serverTL = g_pserver->rgthreadvar+iel;  // set the TLS threadsafe global
     tlsInitThread();
 
+    if (iel != IDX_EVENT_LOOP_MAIN)
+    {
+        aeAcquireLock();
+        initNetworkingThread(iel, cserver.cthreads > 1);
+        aeReleaseLock();
+    }
+
     moduleAcquireGIL(true); // Normally afterSleep acquires this, but that won't be called on the first run
     aeEventLoop *el = g_pserver->rgthreadvar[iel].el;
-    aeSetBeforeSleepProc(el, beforeSleep, AE_SLEEP_THREADSAFE);
-    aeSetAfterSleepProc(el, afterSleep, AE_SLEEP_THREADSAFE);
     try
     {
         aeMain(el);
@@ -5579,6 +5674,7 @@ int main(int argc, char **argv) {
     zmalloc_set_oom_handler(redisOutOfMemoryHandler);
     srand(time(NULL)^getpid());
     gettimeofday(&tv,NULL);
+    crc64_init();
 
     uint8_t hashseed[16];
     getRandomHexChars((char*)hashseed,sizeof(hashseed));
@@ -5792,6 +5888,7 @@ int main(int argc, char **argv) {
         serverLog(LL_WARNING,"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?", g_pserver->maxmemory);
     }
 
+    redisSetCpuAffinity(g_pserver->server_cpulist);
     aeReleaseLock();    //Finally we can dump the lock
     moduleReleaseGIL(true);
     
@@ -5829,10 +5926,16 @@ int main(int argc, char **argv) {
         pthread_join(rgthread[iel], &pvRet);
 
     /* free our databases */
+    bool fLockAcquired = aeTryAcquireLock(false);
+    g_pserver->shutdown_asap = true;    // flag that we're in shutdown
+    if (!fLockAcquired)
+        g_fInCrash = true;  // We don't actually crash right away, because we want to sync any storage providers
     for (int idb = 0; idb < cserver.dbnum; ++idb) {
         delete g_pserver->db[idb];
         g_pserver->db[idb] = nullptr;
     }
+    // If we couldn't acquire the global lock it means something wasn't shutdown and we'll probably deadlock
+    serverAssert(fLockAcquired);
 
     g_pserver->garbageCollector.shutdown();
     delete g_pserver->m_pstorageFactory;

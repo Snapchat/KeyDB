@@ -95,6 +95,10 @@ start_server {tags {"introspection"}} {
             bind
             requirepass
             multi-master
+            server_cpulist
+            bio_cpulist
+            aof_rewrite_cpulist
+            bgsave_cpulist
         }
 
         set configs {}

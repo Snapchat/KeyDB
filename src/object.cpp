@@ -127,9 +127,10 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
  * OBJ_ENCODING_EMBSTR_SIZE_LIMIT, otherwise the RAW encoding is
  * used.
  *
- * The current limit of 44 is chosen so that the biggest string object
+ * The current limit of 52 is chosen so that the biggest string object
  * we allocate as EMBSTR will still fit into the 64 byte arena of jemalloc. */
-#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 44
+#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 48
+static_assert((sizeof(redisObject)+OBJ_ENCODING_EMBSTR_SIZE_LIMIT-8) == 64, "Max EMBSTR obj should be 64 bytes total");
 robj *createStringObject(const char *ptr, size_t len) {
     if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT)
         return createEmbeddedStringObject(ptr,len);
@@ -361,7 +362,16 @@ void freeStreamObject(robj_roptr o) {
 }
 
 void incrRefCount(robj_roptr o) {
-    if (o->getrefcount(std::memory_order_relaxed) != OBJ_SHARED_REFCOUNT) o->addref();
+    auto refcount = o->getrefcount(std::memory_order_relaxed);
+    if (refcount < OBJ_FIRST_SPECIAL_REFCOUNT) {
+        o->addref();
+    } else {
+        if (refcount == OBJ_SHARED_REFCOUNT) {
+            /* Nothing to do: this refcount is immutable. */
+        } else if (refcount == OBJ_STATIC_REFCOUNT) {
+            serverPanic("You tried to retain an object allocated in the stack");
+        }
+    }
 }
 
 void decrRefCount(robj_roptr o) {
@@ -1024,32 +1034,15 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
     mh->repl_backlog = mem;
     mem_total += mem;
 
-    mem = 0;
-    if (listLength(g_pserver->clients)) {
-        listIter li;
-        listNode *ln;
-        size_t mem_normal = 0, mem_slaves = 0;
-
-        listRewind(g_pserver->clients,&li);
-        while((ln = listNext(&li))) {
-            size_t mem_curr = 0;
-            client *c = (client*)listNodeValue(ln);
-            std::unique_lock<fastlock> ul(c->lock);
-            
-            int type = getClientType(c);
-            mem_curr += getClientOutputBufferMemoryUsage(c);
-            mem_curr += sdsAllocSize(c->querybuf);
-            mem_curr += sizeof(client);
-            if (type == CLIENT_TYPE_SLAVE)
-                mem_slaves += mem_curr;
-            else
-                mem_normal += mem_curr;
-        }
-        mh->clients_slaves = mem_slaves;
-        mh->clients_normal = mem_normal;
-        mem = mem_slaves + mem_normal;
-    }
-    mem_total+=mem;
+    /* Computing the memory used by the clients would be O(N) if done
+     * here online. We use our values computed incrementally by
+     * clientsCronTrackClientsMemUsage(). */
+    mh->clients_slaves = g_pserver->stat_clients_type_memory[CLIENT_TYPE_SLAVE];
+    mh->clients_normal = g_pserver->stat_clients_type_memory[CLIENT_TYPE_MASTER]+
+                         g_pserver->stat_clients_type_memory[CLIENT_TYPE_PUBSUB]+
+                         g_pserver->stat_clients_type_memory[CLIENT_TYPE_NORMAL];
+    mem_total += mh->clients_slaves;
+    mem_total += mh->clients_normal;
 
     mem = 0;
     if (g_pserver->aof_state != AOF_OFF) {

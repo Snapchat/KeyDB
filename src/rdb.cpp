@@ -1050,8 +1050,8 @@ ssize_t rdbSaveAuxFieldStrInt(rio *rdb, const char *key, long long val) {
  * the rdbSaveObject() function. Currently we use a trick to get
  * this length with very little changes to the code. In the future
  * we could switch to a faster solution. */
-size_t rdbSavedObjectLen(robj *o) {
-    ssize_t len = rdbSaveObject(NULL,o,NULL);
+size_t rdbSavedObjectLen(robj *o, robj *key) {
+    ssize_t len = rdbSaveObject(NULL,o,key);
     serverAssertWithInfo(NULL,o,len != -1);
     return len;
 }
@@ -1101,8 +1101,8 @@ int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEn
     if (rdbSaveObject(rdb,val,key) == -1) return -1;
 
     /* Delay return if required (for testing) */
-    if (g_pserver->rdb_key_save_delay)
-        usleep(g_pserver->rdb_key_save_delay);
+    if (serverTL->getRdbKeySaveDelay())
+        usleep(serverTL->getRdbKeySaveDelay());
 
     /* Save expire entry after as it will apply to the previously loaded key */
     /*  This is because we update the expire datastructure directly without buffering */
@@ -1238,10 +1238,7 @@ int rdbSaveRio(rio *rdb, const redisDbPersistentDataSnapshot **rgpdb, int *error
         if (rdbSaveType(rdb,RDB_OPCODE_SELECTDB) == -1) goto werr;
         if (rdbSaveLen(rdb,j) == -1) goto werr;
 
-        /* Write the RESIZE DB opcode. We trim the size to UINT32_MAX, which
-         * is currently the largest type we are able to represent in RDB sizes.
-         * However this does not limit the actual size of the DB to load since
-         * these sizes are just hints to resize the hash tables. */
+        /* Write the RESIZE DB opcode. */
         uint64_t db_size, expires_size;
         db_size = db->size();
         expires_size = db->expireSize();
@@ -1587,7 +1584,7 @@ robj *rdbLoadCheckModuleValue(rio *rdb, char *modulename) {
 
 /* Load a Redis object of the specified type from the specified file.
  * On success a newly allocated object is returned, otherwise NULL. */
-robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
+robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
     robj *o = NULL, *ele, *dec;
     uint64_t len;
     unsigned int i;
@@ -1606,7 +1603,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
 
         /* Load every single element of the list */
         while(len--) {
-            if ((ele = rdbLoadEncodedStringObject(rdb)) == NULL) return NULL;
+            if ((ele = rdbLoadEncodedStringObject(rdb)) == NULL) {
+                decrRefCount(o);
+                return NULL;
+            }
             dec = getDecodedObject(ele);
             size_t len = sdslen(szFromObj(dec));
             quicklistPushTail((quicklist*)ptrFromObj(o), ptrFromObj(dec), len);
@@ -1633,8 +1633,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
             long long llval;
             sds sdsele;
 
-            if ((sdsele = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL))
-                == NULL) return NULL;
+            if ((sdsele = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
+                decrRefCount(o);
+                return NULL;
+            }
 
             if (o->encoding == OBJ_ENCODING_INTSET) {
                 /* Fetch integer value from element. */
@@ -1673,16 +1675,20 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
             double score;
             zskiplistNode *znode;
 
-            if ((sdsele = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL))
-                == NULL) return NULL;
+            if ((sdsele = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
+                decrRefCount(o);
+                return NULL;
+            }
 
             if (rdbtype == RDB_TYPE_ZSET_2) {
                 if (rdbLoadBinaryDoubleValue(rdb,&score) == -1) {
+                    decrRefCount(o);
                     sdsfree(sdsele);
                     return NULL;
                 }
             } else {
                 if (rdbLoadDoubleValue(rdb,&score) == -1) {
+                    decrRefCount(o);
                     sdsfree(sdsele);
                     return NULL;
                 }
@@ -1717,15 +1723,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
         while (o->encoding == OBJ_ENCODING_ZIPLIST && len > 0) {
             len--;
             /* Load raw strings */
-            if ((field = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL))
-                == NULL) 
-            {
+            if ((field = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
                 decrRefCount(o);
                 return NULL;
             }
-            if ((value = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL))
-                == NULL)
-            {
+            if ((value = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
+                sdsfree(field);
                 decrRefCount(o);
                 return NULL;
             }
@@ -1756,15 +1759,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
         while (o->encoding == OBJ_ENCODING_HT && len > 0) {
             len--;
             /* Load encoded strings */
-            if ((field = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL))
-                == NULL)
-            {
+            if ((field = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
                 decrRefCount(o);
                 return NULL;
             }
-            if ((value = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL))
-                == NULL)
-            {
+            if ((value = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
+                sdsfree(field);
                 decrRefCount(o);
                 return NULL;
             }
@@ -1787,7 +1787,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
         while (len--) {
             unsigned char *zl = (unsigned char*)
                 rdbGenericLoadStringObject(rdb,RDB_LOAD_PLAIN,NULL);
-            if (zl == NULL) return NULL;
+            if (zl == NULL) {
+                decrRefCount(o);
+                return NULL;
+            }
             quicklistAppendZiplist((quicklist*)ptrFromObj(o), zl);
         }
     } else if (rdbtype == RDB_TYPE_HASH_ZIPMAP  ||
@@ -2010,8 +2013,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
                     decrRefCount(o);
                     return NULL;
                 }
-                streamConsumer *consumer = streamLookupConsumer(cgroup,cname,
-                                           1);
+                streamConsumer *consumer =
+                    streamLookupConsumer(cgroup,cname,SLC_NONE);
                 sdsfree(cname);
                 consumer->seen_time = rdbLoadMillisecondTime(rdb,RDB_VERSION);
                 if (rioGetReadError(rdb)) {
@@ -2073,7 +2076,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, robj *key, uint64_t mvcc_tstamp) {
             exit(1);
         }
         RedisModuleIO io;
-        moduleInitIOContext(io,mt,rdb,key);
+        robj keyobj;
+        initStaticStringObject(keyobj,key);
+        moduleInitIOContext(io,mt,rdb,&keyobj);
         io.ver = (rdbtype == RDB_TYPE_MODULE) ? 1 : 2;
         /* Call the rdb_load method of the module providing the 10 bit
          * encoding version in the lower 10 bits of the module ID. */
@@ -2237,7 +2242,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     uint64_t mvcc_tstamp = OBJ_MVCC_INVALID;
     size_t ckeysLoaded = 0;
     robj *subexpireKey = nullptr;
-    robj *key = nullptr;
+    sds key = nullptr;
 
     for (int idb = 0; idb < cserver.dbnum; ++idb)
     {
@@ -2379,10 +2384,12 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 incrRefCount(subexpireKey);
             } else if (!strcasecmp(szFromObj(auxkey), "keydb-subexpire-when")) {
                 if (key == nullptr || subexpireKey == nullptr) {
-                    serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping. key: %s subkey: %s", key != nullptr ? szFromObj(key) : "(null)", subexpireKey != nullptr ? szFromObj(subexpireKey) : "(null)");
+                    serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping. key: %s subkey: %s", key != nullptr ? key : "(null)", subexpireKey != nullptr ? szFromObj(subexpireKey) : "(null)");
                 }
                 else {
-                    setExpire(NULL, db, key, subexpireKey, strtoll(szFromObj(auxval), nullptr, 10));
+                    redisObject keyobj;
+                    initStaticStringObject(keyobj,key);
+                    setExpire(NULL, db, &keyobj, subexpireKey, strtoll(szFromObj(auxval), nullptr, 10));
                     decrRefCount(subexpireKey);
                     subexpireKey = nullptr;
                 }
@@ -2452,14 +2459,15 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         /* Read key */
         if (key != nullptr)
         {
-            decrRefCount(key);
+            sdsfree(key);
             key = nullptr;
         }
 
-        if ((key = rdbLoadStringObject(rdb)) == NULL) goto eoferr;
+        if ((key = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL)
+            goto eoferr;
         /* Read value */
-        if ((val = rdbLoadObject(type,rdb,key, mvcc_tstamp)) == NULL) {
-            decrRefCount(key);
+        if ((val = rdbLoadObject(type,rdb,key,mvcc_tstamp)) == NULL) {
+            sdsfree(key);
             key = nullptr;
             goto eoferr;
         }
@@ -2470,14 +2478,18 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
          * received from the master. In the latter case, the master is
          * responsible for key expiry. If we would expire keys here, the
          * snapshot taken by the master may not be reflected on the replica. */
+        robj keyobj;
+        initStaticStringObject(keyobj,key);
         bool fExpiredKey = iAmMaster() && !(rdbflags&RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now;
         if (fStaleMvccKey || fExpiredKey) {
-            if (fStaleMvccKey && !fExpiredKey && rsi != nullptr && rsi->mi != nullptr && rsi->mi->staleKeyMap != nullptr && lookupKeyRead(db, key) == nullptr) {
+            if (fStaleMvccKey && !fExpiredKey && rsi != nullptr && rsi->mi != nullptr && rsi->mi->staleKeyMap != nullptr && lookupKeyRead(db, &keyobj) == nullptr) {
                 // We have a key that we've already deleted and is not back in our database.
                 //  We'll need to inform the sending master of the delete if it is also a replica of us
-                rsi->mi->staleKeyMap->operator[](dbid).push_back(key);
+                robj *objKeyDup = createStringObject(key, sdslen(key));
+                rsi->mi->staleKeyMap->operator[](dbid).push_back(objKeyDup);
+                decrRefCount(objKeyDup);
             }
-            decrRefCount(key);
+            sdsfree(key);
             key = nullptr;
             decrRefCount(val);
             val = nullptr;
@@ -2499,7 +2511,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             }
             
             /* Add the new object in the hash table */
-            int fInserted = dbMerge(db, key, val, rsi && rsi->fForceSetKey);   // Note: dbMerge will incrRef
+            int fInserted = dbMerge(db, &keyobj, val, (rsi && rsi->fForceSetKey) || (rdbflags & RDBFLAGS_ALLOW_DUP));   // Note: dbMerge will incrRef
 
             if (fInserted)
             {
@@ -2507,7 +2519,9 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
                 /* Set the expire time if needed */
                 if (expiretime != -1)
-                    setExpire(NULL,db,key,nullptr,expiretime);
+                {
+                    setExpire(NULL,db,&keyobj,nullptr,expiretime);
+                }
 
                 /* Set usage information (for eviction). */
                 objectSetLRUOrLFU(val,lfu_freq,lru_idle,lru_clock,1000);
@@ -2518,6 +2532,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 val = nullptr;
             }
         }
+
         if (g_pserver->key_load_delay)
             usleep(g_pserver->key_load_delay);
 
@@ -2530,7 +2545,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
     if (key != nullptr)
     {
-        decrRefCount(key);
+        sdsfree(key);
         key = nullptr;
     }
 
@@ -2551,7 +2566,10 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             if (cksum == 0) {
                 serverLog(LL_WARNING,"RDB file was saved with checksum disabled: no check performed.");
             } else if (cksum != expected) {
-                serverLog(LL_WARNING,"Wrong RDB checksum. Aborting now.");
+                serverLog(LL_WARNING,"Wrong RDB checksum expected: (%llx) but "
+                    "got (%llx). Aborting now.",
+                        (unsigned long long)expected,
+                        (unsigned long long)cksum);
                 rdbExitReportCorruptRDB("RDB CRC error");
             }
         }
@@ -2571,7 +2589,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 eoferr:
     if (key != nullptr)
     {
-        decrRefCount(key);
+        sdsfree(key);
         key = nullptr;
     }
     if (subexpireKey != nullptr)

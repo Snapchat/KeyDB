@@ -269,7 +269,7 @@ int64_t getSignedBitfield(unsigned char *p, uint64_t offset, uint64_t bits) {
  * then zero is returned, otherwise in case of overflow, 1 is returned,
  * otherwise in case of underflow, -1 is returned.
  *
- * When non-zero is returned (oferflow or underflow), if not NULL, *limit is
+ * When non-zero is returned (overflow or underflow), if not NULL, *limit is
  * set to the value the operation should result when an overflow happens,
  * depending on the specified overflow semantics:
  *
@@ -556,7 +556,7 @@ void setbitCommand(client *c) {
     byteval &= ~(1 << bit);
     byteval |= ((on & 0x1) << bit);
     ((uint8_t*)ptrFromObj(o))[byte] = byteval;
-    signalModifiedKey(c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING,"setbit",c->argv[1],c->db->id);
     g_pserver->dirty++;
     addReply(c, bitval ? shared.cone : shared.czero);
@@ -828,11 +828,11 @@ void bitopCommand(client *c) {
     /* Store the computed value into the target key */
     if (maxlen) {
         robj *o = createObject(OBJ_STRING,res);
-        setKey(c->db,targetkey,o);
+        setKey(c,c->db,targetkey,o);
         notifyKeyspaceEvent(NOTIFY_STRING,"set",targetkey,c->db->id);
         decrRefCount(o);
     } else if (dbDelete(c->db,targetkey)) {
-        signalModifiedKey(c->db,targetkey);
+        signalModifiedKey(c,c->db,targetkey);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"del",targetkey,c->db->id);
     }
     g_pserver->dirty++;
@@ -1209,7 +1209,7 @@ void bitfieldGeneric(client *c, int flags) {
     }
 
     if (changes) {
-        signalModifiedKey(c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STRING,"setbit",c->argv[1],c->db->id);
         g_pserver->dirty += changes;
     }

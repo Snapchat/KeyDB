@@ -80,6 +80,7 @@ int listMatchObjects(void *a, void *b) {
 /* This function links the client to the global linked list of clients.
  * unlinkClient() does the opposite, among other things. */
 void linkClient(client *c) {
+    serverAssert(GlobalLocksAcquired());
     listAddNodeTail(g_pserver->clients,c);
     /* Note that we remember the linked list node where the client is stored,
      * this way removing the client in unlinkClient() will not require
@@ -179,6 +180,8 @@ client *createClient(connection *conn, int iel) {
     memset(c->uuid, 0, UUID_BINARY_LEN);
 
     c->client_tracking_prefixes = NULL;
+    c->client_cron_last_memory_usage = 0;
+    c->client_cron_last_memory_type = CLIENT_TYPE_NORMAL;
     c->auth_callback = NULL;
     c->auth_callback_privdata = NULL;
     c->auth_module = NULL;
@@ -507,12 +510,35 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
         serverLog(LL_WARNING,"== CRITICAL == This %s is sending an error "
                              "to its %s: '%s' after processing the command "
                              "'%s'", from, to, s, cmdname);
+        if (ctype == CLIENT_TYPE_MASTER && g_pserver->repl_backlog &&
+            g_pserver->repl_backlog_histlen > 0)
+        {
+            long long dumplen = 256;
+            if (g_pserver->repl_backlog_histlen < dumplen)
+                dumplen = g_pserver->repl_backlog_histlen;
 
-        if (c->querybuf && sdslen(c->querybuf)) {
-            std::string str = escapeString(c->querybuf);
-            printf("\tquerybuf: %s\n", str.c_str());
+            /* Identify the first byte to dump. */
+            long long idx =
+              (g_pserver->repl_backlog_idx + (g_pserver->repl_backlog_size - dumplen)) %
+               g_pserver->repl_backlog_size;
+
+            /* Scan the circular buffer to collect 'dumplen' bytes. */
+            sds dump = sdsempty();
+            while(dumplen) {
+                long long thislen =
+                    ((g_pserver->repl_backlog_size - idx) < dumplen) ?
+                    (g_pserver->repl_backlog_size - idx) : dumplen;
+
+                dump = sdscatrepr(dump,g_pserver->repl_backlog+idx,thislen);
+                dumplen -= thislen;
+                idx = 0;
+            }
+
+            /* Finally log such bytes: this is vital debugging info to
+             * understand what happened. */
+            serverLog(LL_WARNING,"Latest backlog is: '%s'", dump);
+            sdsfree(dump);
         }
-
         g_pserver->stat_unexpected_error_replies++;
     }
 }
@@ -565,6 +591,34 @@ void addReplyStatusFormat(client *c, const char *fmt, ...) {
     sdsfree(s);
 }
 
+/* Sometimes we are forced to create a new reply node, and we can't append to
+ * the previous one, when that happens, we wanna try to trim the unused space
+ * at the end of the last reply node which we won't use anymore. */
+void trimReplyUnusedTailSpace(client *c) {
+    listNode *ln = listLast(c->reply);
+    clientReplyBlock *tail = ln? (clientReplyBlock*)listNodeValue(ln): NULL;
+
+    /* Note that 'tail' may be NULL even if we have a tail node, becuase when
+     * addDeferredMultiBulkLength() is used */
+    if (!tail) return;
+
+    /* We only try to trim the space is relatively high (more than a 1/4 of the
+     * allocation), otherwise there's a high chance realloc will NOP.
+     * Also, to avoid large memmove which happens as part of realloc, we only do
+     * that if the used part is small.  */
+    if (tail->size - tail->used > tail->size / 4 &&
+        tail->used < PROTO_REPLY_CHUNK_BYTES)
+    {
+        size_t old_size = tail->size;
+        tail = (clientReplyBlock*)zrealloc(tail, tail->used + sizeof(clientReplyBlock));
+        /* take over the allocation's internal fragmentation (at least for
+         * memory usage tracking) */
+        tail->size = zmalloc_usable(tail) - sizeof(clientReplyBlock);
+        c->reply_bytes = c->reply_bytes + tail->size - old_size;
+        listNodeValue(ln) = tail;
+    }
+}
+
 /* Adds an empty object to the reply list that will contain the multi bulk
  * length, which is not known when this function is called. */
 void *addReplyDeferredLen(client *c) {
@@ -572,6 +626,7 @@ void *addReplyDeferredLen(client *c) {
      * ready to be sent, since we are sure that before returning to the
      * event loop setDeferredAggregateLen() will be called. */
     if (prepareClientToWrite(c, false) != C_OK) return NULL;
+    trimReplyUnusedTailSpace(c);
     listAddNodeTail(c->reply,NULL); /* NULL is our placeholder. */
     return listLast(c->reply);
 }
@@ -1231,11 +1286,60 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) 
     }
 }
 
+void acceptOnThread(connection *conn, int flags, char *cip)
+{
+    int ielCur = ielFromEventLoop(serverTL->el);
+
+    int ielTarget = 0;
+    if (g_pserver->loading)
+    {
+        ielTarget = IDX_EVENT_LOOP_MAIN;    // During load only the main thread is active
+    }
+    else if (g_fTestMode)
+    {
+        // On test mode we don't want any bunching of clients
+        while (cserver.cthreads > 1 && ielTarget == IDX_EVENT_LOOP_MAIN)
+            ielTarget = rand() % cserver.cthreads;
+    }
+    else
+    {
+        ielTarget = chooseBestThreadForAccept();
+    }
+
+    rgacceptsInFlight[ielTarget].fetch_add(1, std::memory_order_relaxed);
+    if (ielTarget != ielCur)
+    {
+        char *szT = nullptr;
+        if (cip != nullptr)
+        {
+            szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
+            memcpy(szT, cip, NET_IP_STR_LEN);
+        }
+        int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [conn, flags, ielTarget, szT]{
+            acceptCommonHandler(conn,flags,szT,ielTarget);
+            if (!g_fTestMode && !g_pserver->loading)
+                rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
+            zfree(szT);
+        });
+
+        if (res == AE_OK)
+            return;
+        // If res != AE_OK we can still try to accept on the local thread
+    }
+    if (!g_fTestMode && !g_pserver->loading)
+        rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
+
+    aeAcquireLock();
+    acceptCommonHandler(conn,flags,cip,ielCur);
+    aeReleaseLock();
+}
+
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd, max = MAX_ACCEPTS_PER_CALL;
     char cip[NET_IP_STR_LEN];
     UNUSED(mask);
     UNUSED(privdata);
+    UNUSED(el);
 
     while(max--) {
         cfd = anetTcpAccept(serverTL->neterr, fd, cip, sizeof(cip), &cport);
@@ -1246,55 +1350,8 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
-        int ielCur = ielFromEventLoop(el);
 
-        if (!g_fTestMode)
-        {
-            {
-            int ielTarget = chooseBestThreadForAccept();
-            rgacceptsInFlight[ielTarget].fetch_add(1, std::memory_order_relaxed);
-            if (ielTarget != ielCur)
-            {
-                char *szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
-                memcpy(szT, cip, NET_IP_STR_LEN);
-                int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [cfd, ielTarget, szT]{
-                    acceptCommonHandler(connCreateAcceptedSocket(cfd),0,szT,ielTarget);
-                    rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
-                    zfree(szT);
-                });
-
-                if (res == AE_OK)
-                    continue;
-            }
-            rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
-            }
-
-        LLocalThread:
-            aeAcquireLock();
-            acceptCommonHandler(connCreateAcceptedSocket(cfd),0,cip,ielCur);
-            aeReleaseLock();
-        }
-        else
-        {
-            // In test mode we want a good distribution among threads and avoid the main thread
-            //  since the main thread is most likely to work
-            int iel = IDX_EVENT_LOOP_MAIN;
-            while (cserver.cthreads > 1 && iel == IDX_EVENT_LOOP_MAIN)
-                iel = rand() % cserver.cthreads;
-            if (iel == ielFromEventLoop(el))
-                goto LLocalThread;
-            char *szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
-            memcpy(szT, cip, NET_IP_STR_LEN);
-            int res = aePostFunction(g_pserver->rgthreadvar[iel].el, [cfd, iel, szT]{
-                acceptCommonHandler(connCreateAcceptedSocket(cfd),0,szT,iel);
-                zfree(szT);
-            });
-            if (res != AE_OK)
-            {
-                zfree(szT);
-                goto LLocalThread;
-            }
-        }
+        acceptOnThread(connCreateAcceptedSocket(cfd), 0, cip);
     }
 }
 
@@ -1305,7 +1362,6 @@ void acceptTLSHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(mask);
     UNUSED(privdata);
 
-    int ielCur = ielFromEventLoop(el);
     while(max--) {
         cfd = anetTcpAccept(serverTL->neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
@@ -1315,9 +1371,8 @@ void acceptTLSHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
-        aeAcquireLock();
-        acceptCommonHandler(connCreateAcceptedTLS(cfd, g_pserver->tls_auth_clients),0,cip,ielCur);
-        aeReleaseLock();
+
+        acceptOnThread(connCreateAcceptedTLS(cfd, g_pserver->tls_auth_clients), 0, cip);
     }
 }
 
@@ -1327,7 +1382,6 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(mask);
     UNUSED(privdata);
 
-    int iel = ielFromEventLoop(el);
     while(max--) {
         cfd = anetUnixAccept(serverTL->neterr, fd);
         if (cfd == ANET_ERR) {
@@ -1338,23 +1392,7 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
         serverLog(LL_VERBOSE,"Accepted connection to %s", g_pserver->unixsocket);
 
-        aeAcquireLock();
-        int ielTarget = rand() % cserver.cthreads;
-        if (ielTarget == iel)
-        {
-        LLocalThread:
-            acceptCommonHandler(connCreateAcceptedSocket(cfd),CLIENT_UNIX_SOCKET,NULL,iel);
-        }
-        else
-        {
-            int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [cfd, ielTarget]{
-                acceptCommonHandler(connCreateAcceptedSocket(cfd),CLIENT_UNIX_SOCKET,NULL,ielTarget);
-            });
-            if (res != AE_OK)
-                goto LLocalThread;
-        }
-        aeReleaseLock();
-        
+        acceptOnThread(connCreateAcceptedSocket(cfd),CLIENT_UNIX_SOCKET,NULL);
     }
 }
 
@@ -1494,6 +1532,16 @@ bool freeClient(client *c) {
     /* Notify module system that this client auth status changed. */
     moduleNotifyUserChanged(c);
 
+    /* If this client was scheduled for async freeing we need to remove it
+     * from the queue. Note that we need to do this here, because later
+     * we may call replicationCacheMaster() and the client should already
+     * be removed from the list of clients to free. */
+    if (c->flags & CLIENT_CLOSE_ASAP) {
+        ln = listSearchKey(g_pserver->clients_to_close,c);
+        serverAssert(ln != NULL);
+        listDelNode(g_pserver->clients_to_close,ln);
+    }
+
     /* If it is our master that's beging disconnected we should make sure
      * to cache the state to try a partial resynchronization later.
      *
@@ -1501,10 +1549,8 @@ bool freeClient(client *c) {
      * some unexpected state, by checking its flags. */
     if (FActiveMaster(c)) {
         serverLog(LL_WARNING,"Connection with master lost.");
-        if (!(c->flags & (CLIENT_CLOSE_AFTER_REPLY|
-                        CLIENT_CLOSE_ASAP|
-                        CLIENT_BLOCKED)))
-        {
+        if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED))) {
+            c->flags &= ~(CLIENT_CLOSE_ASAP|CLIENT_CLOSE_AFTER_REPLY);
             replicationCacheMaster(MasterInfoFromClient(c), c);
             return false;
         }
@@ -1576,13 +1622,10 @@ bool freeClient(client *c) {
      * we lost the connection with the master. */
     if (c->flags & CLIENT_MASTER) replicationHandleMasterDisconnection(MasterInfoFromClient(c));
 
-    /* If this client was scheduled for async freeing we need to remove it
-     * from the queue. */
-    if (c->flags & CLIENT_CLOSE_ASAP) {
-        ln = listSearchKey(g_pserver->clients_to_close,c);
-        serverAssert(ln != NULL);
-        listDelNode(g_pserver->clients_to_close,ln);
-    }
+   /* Remove the contribution that this client gave to our
+     * incrementally computed memory usage. */
+    g_pserver->stat_clients_type_memory[c->client_cron_last_memory_type] -=
+        c->client_cron_last_memory_usage;
 
     /* Release other dynamically allocated client structure fields,
      * and finally release the client structure itself. */
@@ -1604,7 +1647,7 @@ fastlock lockasyncfree {"async free lock"};
  * a context where calling freeClient() is not possible, because the client
  * should be valid for the continuation of the flow of the program. */
 void freeClientAsync(client *c) {
-    /* We need to handle concurrent access to the server.clients_to_close list
+    /* We need to handle concurrent access to the g_pserver->clients_to_close list
      * only in the freeClientAsync() function, since it's the only function that
      * may access the list while Redis uses I/O threads. All the other accesses
      * are in the context of the main thread while the other threads are
@@ -1619,7 +1662,7 @@ void freeClientAsync(client *c) {
     listAddNodeTail(g_pserver->clients_to_close,c);
 }
 
-void freeClientsInAsyncFreeQueue(int iel) {
+int freeClientsInAsyncFreeQueue(int iel) {
     serverAssert(GlobalLocksAcquired());
     listIter li;
     listNode *ln;
@@ -1644,6 +1687,7 @@ void freeClientsInAsyncFreeQueue(int iel) {
         c->flags &= ~CLIENT_CLOSE_ASAP;
         freeClient(c);
     }
+    return (int)vecclientsFree.size();
 }
 
 /* Return a client by ID, or NULL if the client ID is not in the set
@@ -1921,12 +1965,9 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
         }
     }
 
-    if (listLength(serverTL->clients_pending_asyncwrite))
-    {
-        AeLocker locker;
-        locker.arm(nullptr);
-        ProcessPendingAsyncWrites();
-    }
+    AeLocker locker;
+    locker.arm(nullptr);
+    ProcessPendingAsyncWrites();
 
     return processed;
 }
@@ -2056,7 +2097,8 @@ int processInlineBuffer(client *c) {
 }
 
 /* Helper function. Record protocol erro details in server log,
- * and set the client as CLIENT_CLOSE_AFTER_REPLY. */
+ * and set the client as CLIENT_CLOSE_AFTER_REPLY and
+ * CLIENT_PROTOCOL_ERROR. */
 #define PROTO_DUMP_LEN 128
 static void setProtocolError(const char *errstr, client *c) {
     if (cserver.verbosity <= LL_VERBOSE) {
@@ -2082,7 +2124,7 @@ static void setProtocolError(const char *errstr, client *c) {
             "Protocol error (%s) from client: %s. %s", errstr, client, buf);
         sdsfree(client);
     }
-    c->flags |= CLIENT_CLOSE_AFTER_REPLY;
+    c->flags |= (CLIENT_CLOSE_AFTER_REPLY|CLIENT_PROTOCOL_ERROR);
 }
 
 /* Process the query buffer for client 'c', setting up the client argument
@@ -2231,33 +2273,69 @@ int processMultibulkBuffer(client *c) {
     return C_ERR;
 }
 
+/* Perform necessary tasks after a command was executed:
+ *
+ * 1. The client is reset unless there are reasons to avoid doing it.
+ * 2. In the case of master clients, the replication offset is updated.
+ * 3. Propagate commands we got from our master to replicas down the line. */
+void commandProcessed(client *c) {
+    int cmd_is_ping = c->cmd && c->cmd->proc == pingCommand;
+    long long prev_offset = c->reploff;
+    if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
+        /* Update the applied replication offset of our master. */
+        c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
+    }
+
+    /* Don't reset the client structure for clients blocked in a
+     * module blocking command, so that the reply callback will
+     * still be able to access the client argv and argc field.
+     * The client will be reset in unblockClientFromModule(). */
+    if (!(c->flags & CLIENT_BLOCKED) ||
+        c->btype != BLOCKED_MODULE)
+    {
+        resetClient(c);
+    }
+
+    /* If the client is a master we need to compute the difference
+     * between the applied offset before and after processing the buffer,
+     * to understand how much of the replication stream was actually
+     * applied to the master state: this quantity, and its corresponding
+     * part of the replication stream, will be propagated to the
+     * sub-replicas and to the replication backlog. */
+    if (c->flags & CLIENT_MASTER) {
+        AeLocker ae;
+            ae.arm(c);
+        long long applied = c->reploff - prev_offset;
+        long long prev_master_repl_meaningful_offset = g_pserver->master_repl_meaningful_offset;
+        if (applied) {
+            if (!g_pserver->fActiveReplica)
+            {
+                replicationFeedSlavesFromMasterStream(g_pserver->slaves,
+                    c->pending_querybuf, applied);
+            }
+            sdsrange(c->pending_querybuf,applied,-1);
+        }
+        /* The g_pserver->master_repl_meaningful_offset variable represents
+         * the offset of the replication stream without the pending PINGs. */
+        if (cmd_is_ping)
+            g_pserver->master_repl_meaningful_offset = prev_master_repl_meaningful_offset;
+    }
+}
+
 /* This function calls processCommand(), but also performs a few sub tasks
- * that are useful in that context:
+ * for the client that are useful in that context:
  *
  * 1. It sets the current client to the client 'c'.
- * 2. In the case of master clients, the replication offset is updated.
- * 3. The client is reset unless there are reasons to avoid doing it.
+ * 2. calls commandProcessed() if the command was handled.
  *
  * The function returns C_ERR in case the client was freed as a side effect
  * of processing the command, otherwise C_OK is returned. */
 int processCommandAndResetClient(client *c, int flags) {
     int deadclient = 0;
     serverTL->current_client = c;
-    if (processCommand(c, flags) == C_OK) {
-        if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
-            /* Update the applied replication offset of our master. */
-            c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
-        }
-
-        /* Don't reset the client structure for clients blocked in a
-         * module blocking command, so that the reply callback will
-         * still be able to access the client argv and argc field.
-         * The client will be reset in unblockClientFromModule(). */
-        if (!(c->flags & CLIENT_BLOCKED) ||
-            c->btype != BLOCKED_MODULE)
-        {
-            resetClient(c);
-        }
+    AeLocker locker;
+    if (processCommand(c, flags, locker) == C_OK) {
+        commandProcessed(c);
     }
     if (serverTL->current_client == NULL) deadclient = 1;
     serverTL->current_client = NULL;
@@ -2330,36 +2408,6 @@ void processInputBuffer(client *c, int callFlags) {
     if (c->qb_pos) {
         sdsrange(c->querybuf,c->qb_pos,-1);
         c->qb_pos = 0;
-    }
-}
-
-/* This is a wrapper for processInputBuffer that also cares about handling
- * the replication forwarding to the sub-replicas, in case the client 'c'
- * is flagged as master. Usually you want to call this instead of the
- * raw processInputBuffer(). */
-void processInputBufferAndReplicate(client *c) {
-    if (!(c->flags & CLIENT_MASTER)) {
-        processInputBuffer(c, CMD_CALL_FULL);
-    } else {
-        /* If the client is a master we need to compute the difference
-         * between the applied offset before and after processing the buffer,
-         * to understand how much of the replication stream was actually
-         * applied to the master state: this quantity, and its corresponding
-         * part of the replication stream, will be propagated to the
-         * sub-replicas and to the replication backlog. */
-        size_t prev_offset = c->reploff;
-        processInputBuffer(c, CMD_CALL_FULL);
-        size_t applied = c->reploff - prev_offset;
-        if (applied) {
-            if (!g_pserver->fActiveReplica)
-            {
-                AeLocker ae;
-                ae.arm(c);
-                replicationFeedSlavesFromMasterStream(g_pserver->slaves,
-                        c->pending_querybuf, applied);
-            }
-            sdsrange(c->pending_querybuf,applied,-1);
-        }
     }
 }
 
@@ -2438,13 +2486,9 @@ void readQueryFromClient(connection *conn) {
         return;
     }
 
-    /* Time to process the buffer. If the client is a master we need to
-     * compute the difference between the applied offset before and after
-     * processing the buffer, to understand how much of the replication stream
-     * was actually applied to the master state: this quantity, and its
-     * corresponding part of the replication stream, will be propagated to
-     * the sub-slaves and to the replication backlog. */
-    processInputBufferAndReplicate(c);
+    /* There is more data in the client input buffer, continue parsing it
+     * in case to check if there is a full command to execute. */
+    processInputBuffer(c, CMD_CALL_FULL);
     if (listLength(serverTL->clients_pending_asyncwrite))
     {
         aelock.arm(c);
@@ -2629,6 +2673,7 @@ void clientCommand(client *c) {
 "KILL <option> <value> [option value ...] -- Kill connections. Options are:",
 "     ADDR <ip:port>                      -- Kill connection made from <ip:port>",
 "     TYPE (normal|master|replica|pubsub) -- Kill connections by type.",
+"     USER <username>   -- Kill connections authenticated with such user.",
 "     SKIPME (yes|no)   -- Skip killing current connection (default: yes).",
 "LIST [options ...]     -- Return information about client connections. Options:",
 "     TYPE (normal|master|replica|pubsub) -- Return clients of specified type.",
@@ -2679,6 +2724,7 @@ NULL
         /* CLIENT KILL <ip:port>
          * CLIENT KILL <option> [value] ... <option> [value] */
         char *addr = NULL;
+        user *user = NULL;
         int type = -1;
         uint64_t id = 0;
         int skipme = 1;
@@ -2708,10 +2754,18 @@ NULL
                             (char*) ptrFromObj(c->argv[i+1]));
                         return;
                     }
-                } else if (!strcasecmp((const char*)ptrFromObj(c->argv[i]),"addr") && moreargs) {
-                    addr = (char*)ptrFromObj(c->argv[i+1]);
-                } else if (!strcasecmp((const char*)ptrFromObj(c->argv[i]),"skipme") && moreargs) {
-                    if (!strcasecmp((const char*)ptrFromObj(c->argv[i+1]),"yes")) {
+                } else if (!strcasecmp(szFromObj(c->argv[i]),"addr") && moreargs) {
+                    addr = szFromObj(c->argv[i+1]);
+                } else if (!strcasecmp(szFromObj(c->argv[i]),"user") && moreargs) {
+                    user = ACLGetUserByName(szFromObj(c->argv[i+1]),
+                                            sdslen(szFromObj(c->argv[i+1])));
+                    if (user == NULL) {
+                        addReplyErrorFormat(c,"No such user '%s'",
+                            szFromObj(c->argv[i+1]));
+                        return;
+                    }
+                } else if (!strcasecmp(szFromObj(c->argv[i]),"skipme") && moreargs) {
+                    if (!strcasecmp(szFromObj(c->argv[i+1]),"yes")) {
                         skipme = 1;
                     } else if (!strcasecmp((const char*)ptrFromObj(c->argv[i+1]),"no")) {
                         skipme = 0;
@@ -2737,6 +2791,7 @@ NULL
             if (addr && strcmp(getClientPeerId(client),addr) != 0) continue;
             if (type != -1 && getClientType(client) != type) continue;
             if (id != 0 && client->id != id) continue;
+            if (user && client->puser != user) continue;
             if (c == client && skipme) continue;
 
             /* Kill it. */
@@ -2865,6 +2920,8 @@ NULL
                 options |= CLIENT_TRACKING_OPTIN;
             } else if (!strcasecmp(szFromObj(c->argv[j]),"optout")) {
                 options |= CLIENT_TRACKING_OPTOUT;
+            } else if (!strcasecmp(szFromObj(c->argv[j]),"noloop")) {
+                options |= CLIENT_TRACKING_NOLOOP;
             } else if (!strcasecmp(szFromObj(c->argv[j]),"prefix") && moreargs) {
                 j++;
                 prefix = (robj**)zrealloc(prefix,sizeof(robj*)*(numprefix+1), MALLOC_LOCAL);
@@ -2905,6 +2962,25 @@ NULL
             {
                 addReplyError(c,
                 "OPTIN and OPTOUT are not compatible with BCAST");
+                zfree(prefix);
+                return;
+            }
+
+            if (options & CLIENT_TRACKING_OPTIN && options & CLIENT_TRACKING_OPTOUT)
+            {
+                addReplyError(c,
+                "You can't specify both OPTIN mode and OPTOUT mode");
+                zfree(prefix);
+                return;
+            }
+
+            if ((options & CLIENT_TRACKING_OPTIN && c->flags & CLIENT_TRACKING_OPTOUT) ||
+                (options & CLIENT_TRACKING_OPTOUT && c->flags & CLIENT_TRACKING_OPTIN))
+            {
+                addReplyError(c,
+                "You can't switch OPTIN/OPTOUT mode before disabling "
+                "tracking for this client, and then re-enabling it with "
+                "a different mode.");
                 zfree(prefix);
                 return;
             }
@@ -3001,7 +3077,7 @@ void helloCommand(client *c) {
 
     /* Let's switch to the specified RESP mode. */
     c->resp = ver;
-    addReplyMapLen(c,7);
+    addReplyMapLen(c,6 + !g_pserver->sentinel_mode);
 
     addReplyBulkCString(c,"server");
     addReplyBulkCString(c,"redis");
@@ -3017,7 +3093,7 @@ void helloCommand(client *c) {
 
     addReplyBulkCString(c,"mode");
     if (g_pserver->sentinel_mode) addReplyBulkCString(c,"sentinel");
-    if (g_pserver->cluster_enabled) addReplyBulkCString(c,"cluster");
+    else if (g_pserver->cluster_enabled) addReplyBulkCString(c,"cluster");
     else addReplyBulkCString(c,"standalone");
 
     if (!g_pserver->sentinel_mode) {
@@ -3352,10 +3428,9 @@ void unpauseClientsIfNecessary()
  * write, close sequence needed to serve a client.
  *
  * The function returns the total number of events processed. */
-int processEventsWhileBlocked(int iel) {
+void processEventsWhileBlocked(int iel) {
     serverAssert(GlobalLocksAcquired());
     int iterations = 4; /* See the function top-comment. */
-    int count = 0;
 
     std::vector<client*> vecclients;
     listIter li;
@@ -3375,17 +3450,20 @@ int processEventsWhileBlocked(int iel) {
     }
     
 
-    int aof_state = g_pserver->aof_state;
     aeReleaseLock();
     serverAssertDebug(!GlobalLocksAcquired());
     try
     {
         while (iterations--) {
-            int events = 0;
-            events += aeProcessEvents(g_pserver->rgthreadvar[iel].el, AE_FILE_EVENTS|AE_DONT_WAIT);
-            events += handleClientsWithPendingWrites(iel, aof_state);
+            long long startval = g_pserver->events_processed_while_blocked;
+            long long ae_events = aeProcessEvents(g_pserver->rgthreadvar[iel].el,
+                AE_FILE_EVENTS|AE_DONT_WAIT|
+                AE_CALL_BEFORE_SLEEP|AE_CALL_AFTER_SLEEP);
+            /* Note that server.events_processed_while_blocked will also get
+            * incremeted by callbacks called by the event loop handlers. */
+            g_pserver->events_processed_while_blocked += ae_events;
+            long long events = g_pserver->events_processed_while_blocked - startval;
             if (!events) break;
-            count += events;
         }
     }
     catch (...)
@@ -3402,8 +3480,12 @@ int processEventsWhileBlocked(int iel) {
     AeLocker locker;
     locker.arm(nullptr);
     locker.release();
+
     for (client *c : vecclients)
         c->lock.lock();
-    return count;
+
+    // If a different thread processed the shutdown we need to abort the lua command or we will hang
+    if (serverTL->el->stop)
+        throw ShutdownException();
 }
 

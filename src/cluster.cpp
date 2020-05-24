@@ -787,6 +787,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->slaves = NULL;
     node->slaveof = NULL;
     node->ping_sent = node->pong_received = 0;
+    node->data_received = 0;
     node->fail_time = 0;
     node->link = NULL;
     memset(node->ip,0,sizeof(node->ip));
@@ -971,7 +972,7 @@ int clusterAddNode(clusterNode *node) {
     return (retval == DICT_OK) ? C_OK : C_ERR;
 }
 
-/* Remove a node from the cluster. The functio performs the high level
+/* Remove a node from the cluster. The function performs the high level
  * cleanup, calling freeClusterNode() for the low level cleanup.
  * Here we do the following:
  *
@@ -1720,6 +1721,7 @@ int clusterProcessPacket(clusterLink *link) {
     clusterMsg *hdr = (clusterMsg*) link->rcvbuf;
     uint32_t totlen = ntohl(hdr->totlen);
     uint16_t type = ntohs(hdr->type);
+    mstime_t now = mstime();
 
     if (type < CLUSTERMSG_TYPE_COUNT)
         g_pserver->cluster->stats_bus_messages_received[type]++;
@@ -1781,8 +1783,17 @@ int clusterProcessPacket(clusterLink *link) {
         if (totlen != explen) return 1;
     }
 
-    /* Check if the sender is a known node. */
+    /* Check if the sender is a known node. Note that for incoming connections
+     * we don't store link->node information, but resolve the node by the
+     * ID in the header each time in the current implementation. */
     sender = clusterLookupNode(hdr->sender);
+
+    /* Update the last time we saw any data from this node. We
+     * use this in order to avoid detecting a timeout from a node that
+     * is just sending a lot of data in the cluster bus, for instance
+     * because of Pub/Sub. */
+    if (sender) sender->data_received = now;
+
     if (sender && !nodeInHandshake(sender)) {
         /* Update our curretEpoch if we see a newer epoch in the cluster. */
         senderCurrentEpoch = ntohu64(hdr->currentEpoch);
@@ -1797,7 +1808,7 @@ int clusterProcessPacket(clusterLink *link) {
         }
         /* Update the replication offset info for this node. */
         sender->repl_offset = ntohu64(hdr->offset);
-        sender->repl_offset_time = mstime();
+        sender->repl_offset_time = now;
         /* If we are a slave performing a manual failover and our master
          * sent its offset while already paused, populate the MF state. */
         if (g_pserver->cluster->mf_end &&
@@ -1911,7 +1922,7 @@ int clusterProcessPacket(clusterLink *link) {
                  * address. */
                 serverLog(LL_DEBUG,"PONG contains mismatching sender ID. About node %.40s added %d ms ago, having flags %d",
                     link->node->name,
-                    (int)(mstime()-(link->node->ctime)),
+                    (int)(now-(link->node->ctime)),
                     link->node->flags);
                 link->node->flags |= CLUSTER_NODE_NOADDR;
                 link->node->ip[0] = '\0';
@@ -1946,7 +1957,7 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* Update our info about the node */
         if (link->node && type == CLUSTERMSG_TYPE_PONG) {
-            link->node->pong_received = mstime();
+            link->node->pong_received = now;
             link->node->ping_sent = 0;
 
             /* The PFAIL condition can be reversed without external
@@ -2093,7 +2104,7 @@ int clusterProcessPacket(clusterLink *link) {
                     "FAIL message received from %.40s about %.40s",
                     hdr->sender, hdr->data.fail.about.nodename);
                 failing->flags |= CLUSTER_NODE_FAIL;
-                failing->fail_time = mstime();
+                failing->fail_time = now;
                 failing->flags &= ~CLUSTER_NODE_PFAIL;
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG|
                                      CLUSTER_TODO_UPDATE_STATE);
@@ -2146,9 +2157,9 @@ int clusterProcessPacket(clusterLink *link) {
         /* Manual failover requested from slaves. Initialize the state
          * accordingly. */
         resetManualFailover();
-        g_pserver->cluster->mf_end = mstime() + CLUSTER_MF_TIMEOUT;
+        g_pserver->cluster->mf_end = now + CLUSTER_MF_TIMEOUT;
         g_pserver->cluster->mf_slave = sender;
-        pauseClients(mstime()+(CLUSTER_MF_TIMEOUT*2));
+        pauseClients(now+(CLUSTER_MF_TIMEOUT*CLUSTER_MF_PAUSE_MULT));
         serverLog(LL_WARNING,"Manual failover requested by replica %.40s.",
             sender->name);
     } else if (type == CLUSTERMSG_TYPE_UPDATE) {
@@ -3577,7 +3588,6 @@ void clusterCron(void) {
     while((de = dictNext(di)) != NULL) {
         clusterNode *node = (clusterNode*)dictGetVal(de);
         now = mstime(); /* Use an updated time at every iteration. */
-        mstime_t delay;
 
         if (node->flags &
             (CLUSTER_NODE_MYSELF|CLUSTER_NODE_NOADDR|CLUSTER_NODE_HANDSHAKE))
@@ -3601,16 +3611,20 @@ void clusterCron(void) {
                 this_slaves = okslaves;
         }
 
-        /* If we are waiting for the PONG more than half the cluster
+        /* If we are not receiving any data for more than half the cluster
          * timeout, reconnect the link: maybe there is a connection
          * issue even if the node is alive. */
+        mstime_t ping_delay = now - node->ping_sent;
+        mstime_t data_delay = now - node->data_received;
         if (node->link && /* is connected */
             now - node->link->ctime >
             g_pserver->cluster_node_timeout && /* was not already reconnected */
             node->ping_sent && /* we already sent a ping */
             node->pong_received < node->ping_sent && /* still waiting pong */
             /* and we are waiting for the pong more than timeout/2 */
-            now - node->ping_sent > g_pserver->cluster_node_timeout/2)
+            ping_delay > g_pserver->cluster_node_timeout/2 &&
+            /* and in such interval we are not seeing any traffic at all. */
+            data_delay > g_pserver->cluster_node_timeout/2)
         {
             /* Disconnect the link, it will be reconnected automatically. */
             freeClusterLink(node->link);
@@ -3642,12 +3656,18 @@ void clusterCron(void) {
         /* Check only if we have an active ping for this instance. */
         if (node->ping_sent == 0) continue;
 
-        /* Compute the delay of the PONG. Note that if we already received
-         * the PONG, then node->ping_sent is zero, so can't reach this
-         * code at all. */
-        delay = now - node->ping_sent;
+        /* Check if this node looks unreachable.
+         * Note that if we already received the PONG, then node->ping_sent
+         * is zero, so can't reach this code at all, so we don't risk of
+         * checking for a PONG delay if we didn't sent the PING.
+         *
+         * We also consider every incoming data as proof of liveness, since
+         * our cluster bus link is also used for data: under heavy data
+         * load pong delays are possible. */
+        mstime_t node_delay = (ping_delay < data_delay) ? ping_delay :
+                                                          data_delay;
 
-        if (delay > g_pserver->cluster_node_timeout) {
+        if (node_delay > g_pserver->cluster_node_timeout) {
             /* Timeout reached. Set the node as possibly failing if it is
              * not already in this state. */
             if (!(node->flags & (CLUSTER_NODE_PFAIL|CLUSTER_NODE_FAIL))) {
@@ -4238,76 +4258,60 @@ void clusterReplyMultiBulkSlots(client *c) {
     dictIterator *di = dictGetSafeIterator(g_pserver->cluster->nodes);
     while((de = dictNext(di)) != NULL) {
         clusterNode *node = (clusterNode*)dictGetVal(de);
-        int start = -1;
+        int j = 0, start = -1;
+        int i, nested_elements = 0;
 
         /* Skip slaves (that are iterated when producing the output of their
          * master) and  masters not serving any slot. */
         if (!nodeIsMaster(node) || node->numslots == 0) continue;
-        
-        static_assert((CLUSTER_SLOTS % (sizeof(uint32_t)*8)) == 0, "code below assumes the bitfield is a multiple of sizeof(unsinged)");
 
-        for (int iw = 0; iw < (CLUSTER_SLOTS/(int)sizeof(uint32_t)/8); ++iw)
-        {
-            uint32_t wordCur = reinterpret_cast<uint32_t*>(node->slots)[iw];
-            if (iw != ((CLUSTER_SLOTS/sizeof(uint32_t)/8)-1))
-            {
-                if (start == -1 && wordCur == 0)
-                    continue;
-                if (start != -1 && (wordCur+1)==0)
-                    continue;
+        for(i = 0; i < node->numslaves; i++) {
+            if (nodeFailed(node->slaves[i])) continue;
+            nested_elements++;
+        }
+
+        for (j = 0; j < CLUSTER_SLOTS; j++) {
+            int bit, i;
+
+            if ((bit = clusterNodeGetSlotBit(node,j)) != 0) {
+                if (start == -1) start = j;
             }
+            if (start != -1 && (!bit || j == CLUSTER_SLOTS-1)) {
+                addReplyArrayLen(c, nested_elements + 3); /* slots (2) + master addr (1). */
 
-            unsigned ibitStartLoop = iw*sizeof(uint32_t)*8;
-    
-            for (int j = ibitStartLoop; j < (iw+1)*(int)sizeof(uint32_t)*8; j++) {
-                int i;
-                int bit = (int)(wordCur & 1);
-                wordCur >>= 1;
-                if (bit != 0) {
-                    if (start == -1) start = j;
+                if (bit && j == CLUSTER_SLOTS-1) j++;
+
+                /* If slot exists in output map, add to it's list.
+                 * else, create a new output map for this slot */
+                if (start == j-1) {
+                    addReplyLongLong(c, start); /* only one slot; low==high */
+                    addReplyLongLong(c, start);
+                } else {
+                    addReplyLongLong(c, start); /* low */
+                    addReplyLongLong(c, j-1);   /* high */
                 }
-                if (start != -1 && (!bit || j == CLUSTER_SLOTS-1)) {
-                    int nested_elements = 3; /* slots (2) + master addr (1). */
-                    void *nested_replylen = addReplyDeferredLen(c);
+                start = -1;
 
-                    if (bit && j == CLUSTER_SLOTS-1) j++;
+                /* First node reply position is always the master */
+                addReplyArrayLen(c, 3);
+                addReplyBulkCString(c, node->ip);
+                addReplyLongLong(c, node->port);
+                addReplyBulkCBuffer(c, node->name, CLUSTER_NAMELEN);
 
-                    /* If slot exists in output map, add to it's list.
-                    * else, create a new output map for this slot */
-                    if (start == (int)j-1) {
-                        addReplyLongLong(c, start); /* only one slot; low==high */
-                        addReplyLongLong(c, start);
-                    } else {
-                        addReplyLongLong(c, start); /* low */
-                        addReplyLongLong(c, j-1);   /* high */
-                    }
-                    start = -1;
-
-                    /* First node reply position is always the master */
+                /* Remaining nodes in reply are replicas for slot range */
+                for (i = 0; i < node->numslaves; i++) {
+                    /* This loop is copy/pasted from clusterGenNodeDescription()
+                     * with modifications for per-slot node aggregation */
+                    if (nodeFailed(node->slaves[i])) continue;
                     addReplyArrayLen(c, 3);
-                    addReplyBulkCString(c, node->ip);
-                    addReplyLongLong(c, node->port);
-                    addReplyBulkCBuffer(c, node->name, CLUSTER_NAMELEN);
-
-                    /* Remaining nodes in reply are replicas for slot range */
-                    for (i = 0; i < node->numslaves; i++) {
-                        /* This loop is copy/pasted from clusterGenNodeDescription()
-                        * with modifications for per-slot node aggregation */
-                        if (nodeFailed(node->slaves[i])) continue;
-                        addReplyArrayLen(c, 3);
-                        addReplyBulkCString(c, node->slaves[i]->ip);
-                        addReplyLongLong(c, node->slaves[i]->port);
-                        addReplyBulkCBuffer(c, node->slaves[i]->name, CLUSTER_NAMELEN);
-                        nested_elements++;
-                    }
-                    setDeferredArrayLen(c, nested_replylen, nested_elements);
-                    num_masters++;
+                    addReplyBulkCString(c, node->slaves[i]->ip);
+                    addReplyLongLong(c, node->slaves[i]->port);
+                    addReplyBulkCBuffer(c, node->slaves[i]->name, CLUSTER_NAMELEN);
                 }
+                num_masters++;
             }
         }
-        serverAssert(start == -1);
     }
-    
     dictReleaseIterator(di);
     setDeferredArrayLen(c, slot_replylen, num_masters);
 }
@@ -5037,7 +5041,7 @@ void restoreCommand(client *c) {
 
     rioInitWithBuffer(&payload,szFromObj(c->argv[3]));
     if (((type = rdbLoadObjectType(&payload)) == -1) ||
-        ((obj = rdbLoadObject(type,&payload,c->argv[1], OBJ_MVCC_INVALID)) == NULL))
+        ((obj = rdbLoadObject(type,&payload,szFromObj(c->argv[1]), OBJ_MVCC_INVALID)) == NULL))
     {
         addReplyError(c,"Bad data format");
         return;
@@ -5068,7 +5072,7 @@ eoferr:
         setExpire(c,c->db,c->argv[1],nullptr,ttl);
     }
     objectSetLRUOrLFU(obj,lfu_freq,lru_idle,lru_clock,1000);
-    signalModifiedKey(c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_GENERIC,"restore",c->argv[1],c->db->id);
     addReply(c,shared.ok);
     g_pserver->dirty++;
@@ -5183,15 +5187,17 @@ void migrateCloseTimedoutSockets(void) {
     dictReleaseIterator(di);
 }
 
-/* MIGRATE host port key dbid timeout [COPY | REPLACE | AUTH password]
+/* MIGRATE host port key dbid timeout [COPY | REPLACE | AUTH password |
+ *         AUTH2 username password]
  *
  * On in the multiple keys form:
  *
- * MIGRATE host port "" dbid timeout [COPY | REPLACE | AUTH password] KEYS key1
- * key2 ... keyN */
+ * MIGRATE host port "" dbid timeout [COPY | REPLACE | AUTH password |
+ *         AUTH2 username password] KEYS key1 key2 ... keyN */
 void migrateCommand(client *c) {
     migrateCachedSocket *cs;
     int copy = 0, replace = 0, j;
+    char *username = NULL;
     char *password = NULL;
     long timeout;
     long dbid;
@@ -5209,7 +5215,7 @@ void migrateCommand(client *c) {
 
     /* Parse additional options */
     for (j = 6; j < c->argc; j++) {
-        int moreargs = j < c->argc-1;
+        int moreargs = (c->argc-1) - j;
         if (!strcasecmp(szFromObj(c->argv[j]),"copy")) {
             copy = 1;
         } else if (!strcasecmp(szFromObj(c->argv[j]),"replace")) {
@@ -5221,6 +5227,13 @@ void migrateCommand(client *c) {
             }
             j++;
             password = szFromObj(c->argv[j]);
+        } else if (!strcasecmp(szFromObj(c->argv[j]),"auth2")) {
+            if (moreargs < 2) {
+                addReply(c,shared.syntaxerr);
+                return;
+            }
+            username = szFromObj(c->argv[++j]);
+            password = szFromObj(c->argv[++j]);
         } else if (!strcasecmp(szFromObj(c->argv[j]),"keys")) {
             if (sdslen(szFromObj(c->argv[3])) != 0) {
                 addReplyError(c,
@@ -5281,8 +5294,13 @@ try_again:
 
     /* Authentication */
     if (password) {
-        serverAssertWithInfo(c,NULL,rioWriteBulkCount(&cmd,'*',2));
+        int arity = username ? 3 : 2;
+        serverAssertWithInfo(c,NULL,rioWriteBulkCount(&cmd,'*',arity));
         serverAssertWithInfo(c,NULL,rioWriteBulkString(&cmd,"AUTH",4));
+        if (username) {
+            serverAssertWithInfo(c,NULL,rioWriteBulkString(&cmd,username,
+                                 sdslen(username)));
+        }
         serverAssertWithInfo(c,NULL,rioWriteBulkString(&cmd,password,
             sdslen(password)));
     }
@@ -5417,7 +5435,7 @@ try_again:
             if (!copy) {
                 /* No COPY option: remove the local key, signal the change. */
                 dbDelete(c->db,kv[j]);
-                signalModifiedKey(c->db,kv[j]);
+                signalModifiedKey(c,c->db,kv[j]);
                 notifyKeyspaceEvent(NOTIFY_GENERIC,"del",kv[j],c->db->id);
                 g_pserver->dirty++;
 

@@ -801,7 +801,7 @@ public:
     void setrefcount(unsigned ref);
     unsigned getrefcount(std::memory_order order = std::memory_order_relaxed) const { return (refcount.load(order) & ~(1U << 31)); }
     void addref() const { refcount.fetch_add(1, std::memory_order_relaxed); }
-    unsigned release() const { return refcount.fetch_sub(1, std::memory_order_relaxed) & ~(1U << 31); }
+    unsigned release() const { return refcount.fetch_sub(1, std::memory_order_seq_cst) & ~(1U << 31); }
 } robj;
 static_assert(sizeof(redisObject) == 24, "object size is critical, don't increase");
 
@@ -1682,7 +1682,7 @@ struct redisServer {
     std::atomic<uint64_t> next_client_id; /* Next client unique ID. Incremental. */
     int protected_mode;         /* Don't accept external connections. */
     long long events_processed_while_blocked; /* processEventsWhileBlocked() */
-    
+
     /* RDB / AOF loading information */
     std::atomic<int> loading;                /* We are loading data from disk if true */
     off_t loading_total_bytes;

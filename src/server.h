@@ -111,6 +111,7 @@ typedef long long ustime_t; /* microsecond time type. */
 #define FImplies(x, y) (!(x) || (y))
 
 extern int g_fTestMode;
+extern struct redisServer *g_pserver;
 
 struct redisObject;
 class robj_roptr
@@ -1936,6 +1937,10 @@ struct redisServerThreadVars {
     uint64_t gcEpoch = 0;
     const redisDbPersistentDataSnapshot **rgdbSnapshot = nullptr;
     bool fRetrySetAofEvent = false;
+
+    int getRdbKeySaveDelay();
+private:
+    int rdb_key_save_delay = -1; // thread local cache
 };
 
 struct redisMaster {
@@ -2400,6 +2405,15 @@ struct redisServer {
     bool FRdbSaveInProgress() const { return rdbThreadVars.fRdbThreadActive; }
 };
 
+inline int redisServerThreadVars::getRdbKeySaveDelay() {
+    if (rdb_key_save_delay < 0) {
+        aeAcquireLock();
+        rdb_key_save_delay = g_pserver->rdb_key_save_delay;
+        aeReleaseLock();
+    }
+    return rdb_key_save_delay;
+}
+
 typedef struct pubsubPattern {
     client *pclient;
     robj *pattern;
@@ -2492,7 +2506,6 @@ typedef struct {
  *----------------------------------------------------------------------------*/
 
 //extern struct redisServer server;
-extern redisServer *g_pserver;
 extern struct redisServerConst cserver;
 extern thread_local struct redisServerThreadVars *serverTL;   // thread local server vars
 extern struct sharedObjectsStruct shared;

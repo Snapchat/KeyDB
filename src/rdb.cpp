@@ -1101,8 +1101,8 @@ int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEn
     if (rdbSaveObject(rdb,val,key) == -1) return -1;
 
     /* Delay return if required (for testing) */
-    if (g_pserver->rdb_key_save_delay)
-        usleep(g_pserver->rdb_key_save_delay);
+    if (serverTL->getRdbKeySaveDelay())
+        usleep(serverTL->getRdbKeySaveDelay());
 
     /* Save expire entry after as it will apply to the previously loaded key */
     /*  This is because we update the expire datastructure directly without buffering */

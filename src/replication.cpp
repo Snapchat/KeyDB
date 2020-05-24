@@ -1458,6 +1458,9 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
 
             client *slave = (client*)connGetPrivateData(conn);
             std::unique_lock<fastlock> ul(slave->lock);
+            if(slave->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_ASAP)
+                continue;   // if we asked to free the client don't send any more data
+            
             // Normally it would be bug to talk a client conn from a different thread, but here we know nobody else will
             //  be sending anything while in this replication state so it is OK
             if ((nwritten = connWrite(conn, g_pserver->rdb_pipe_buff, g_pserver->rdb_pipe_bufflen)) == -1) {

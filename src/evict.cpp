@@ -33,6 +33,7 @@
 #include "server.h"
 #include "bio.h"
 #include "atomicvar.h"
+#include <mutex>
 
 /* ----------------------------------------------------------------------------
  * Data structures
@@ -375,6 +376,7 @@ size_t freeMemoryGetNotCountedMemory(void) {
         listRewind(g_pserver->slaves,&li);
         while((ln = listNext(&li))) {
             client *replica = (client*)listNodeValue(ln);
+            std::unique_lock<fastlock>(replica->lock);
             overhead += getClientOutputBufferMemoryUsage(replica);
         }
     }

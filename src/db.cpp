@@ -2463,8 +2463,8 @@ void redisDbPersistentData::commitChanges()
 
 redisDbPersistentData::~redisDbPersistentData()
 {
-    if (m_pdbSnapshotASYNC)
-        endSnapshot(m_pdbSnapshotASYNC);
+    if (m_spdbSnapshotHOLDER != nullptr)
+        endSnapshot(m_spdbSnapshotHOLDER.get());
     
     //serverAssert(m_pdbSnapshot == nullptr);
     serverAssert(m_refCount == 0);

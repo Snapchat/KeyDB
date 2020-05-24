@@ -5926,10 +5926,16 @@ int main(int argc, char **argv) {
         pthread_join(rgthread[iel], &pvRet);
 
     /* free our databases */
+    bool fLockAcquired = aeTryAcquireLock(false);
+    g_pserver->shutdown_asap = true;    // flag that we're in shutdown
+    if (!fLockAcquired)
+        g_fInCrash = true;  // We don't actually crash right away, because we want to sync any storage providers
     for (int idb = 0; idb < cserver.dbnum; ++idb) {
         delete g_pserver->db[idb];
         g_pserver->db[idb] = nullptr;
     }
+    // If we couldn't acquire the global lock it means something wasn't shutdown and we'll probably deadlock
+    serverAssert(fLockAcquired);
 
     g_pserver->garbageCollector.shutdown();
     delete g_pserver->m_pstorageFactory;

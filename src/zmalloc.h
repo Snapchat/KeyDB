@@ -88,11 +88,13 @@ extern "C" {
 
 #ifdef __cplusplus
 void *zmalloc(size_t size, enum MALLOC_CLASS mclass = MALLOC_LOCAL);
+void *zcalloc(size_t size, enum MALLOC_CLASS mclass = MALLOC_LOCAL);
+void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS mclass = MALLOC_LOCAL);
 #else
 void *zmalloc(size_t size, enum MALLOC_CLASS mclass);
-#endif
 void *zcalloc(size_t size, enum MALLOC_CLASS mclass);
 void *zrealloc(void *ptr, size_t size, enum MALLOC_CLASS mclass);
+#endif
 void zfree(const void *ptr);
 char *zstrdup(const char *s);
 size_t zmalloc_used_memory(void);

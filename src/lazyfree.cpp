@@ -92,7 +92,7 @@ bool redisDbPersistentData::asyncDelete(robj *key) {
      * field to NULL in order to lazy free it later. */
     if (de) {
         dictFreeUnlinkedEntry(m_pdict,de);
-        if (g_pserver->cluster_enabled) slotToKeyDel(key);
+        if (g_pserver->cluster_enabled) slotToKeyDel(szFromObj(key));
         return true;
     } else {
         return false;

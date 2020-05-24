@@ -31,6 +31,8 @@
 #ifndef __REDIS_CONNECTION_H
 #define __REDIS_CONNECTION_H
 
+#include <atomic>
+
 #define CONN_INFO_LEN   32
 
 struct aeEventLoop;
@@ -70,7 +72,7 @@ typedef struct ConnectionType {
 
 struct connection {
     ConnectionType *type;
-    ConnectionState state;
+    std::atomic<ConnectionState> state;
     short int flags;
     short int refs;
     int last_errno;
@@ -225,6 +227,6 @@ const char *connGetInfo(connection *conn, char *buf, size_t buf_len);
 
 /* Helpers for tls special considerations */
 int tlsHasPendingData();
-void tlsProcessPendingData();
+int tlsProcessPendingData();
 
 #endif  /* __REDIS_CONNECTION_H */

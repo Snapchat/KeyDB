@@ -3887,6 +3887,15 @@ int processCommand(client *c, int callFlags) {
     return C_OK;
 }
 
+bool client::postFunction(std::function<void(client *)> fn) {
+    this->casyncOpsPending++;
+    return aePostFunction(g_pserver->rgthreadvar[this->iel].el, [this, fn]{
+        std::lock_guard<decltype(this->lock)> lock(this->lock);
+        --casyncOpsPending;
+        fn(this);
+    }) == AE_OK;
+}
+
 /*================================== Shutdown =============================== */
 
 /* Close listening sockets. Also unlink the unix domain socket if

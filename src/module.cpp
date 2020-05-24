@@ -910,7 +910,7 @@ void RM_SetModuleOptions(RedisModuleCtx *ctx, int options) {
 /* Signals that the key is modified from user's perspective (i.e. invalidate WATCH
  * and client side caching). */
 int RM_SignalModifiedKey(RedisModuleCtx *ctx, RedisModuleString *keyname) {
-    signalModifiedKey(ctx->client->db,keyname);
+    signalModifiedKey(ctx->client,ctx->client->db,keyname);
     return REDISMODULE_OK;
 }
 
@@ -1775,15 +1775,15 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
     memset(ri1,0,sizeof(*ri1));
     ri1->version = structver;
     ri1->master = listLength(g_pserver->masters) == 0;
-    if (ri1->master)
+    if (!ri1->master)
     {
-        redisMaster *mi = (redisMaster*)listFirst(g_pserver->masters);
+        redisMaster *mi = (redisMaster*)listNodeValue(listFirst(g_pserver->masters));
         ri1->masterhost = (char*)(mi->masterhost? mi->masterhost: "");
         ri1->masterport = mi->masterport;
     }
     else
     {
-        ri1->masterhost = nullptr;
+        ri1->masterhost = "";
         ri1->masterport = -1;
     }
     ri1->repl1_offset = g_pserver->master_repl_offset;
@@ -2086,7 +2086,7 @@ void *RM_OpenKey(RedisModuleCtx *ctx, robj *keyname, int mode) {
 static void moduleCloseKey(RedisModuleKey *key) {
     int signal = SHOULD_SIGNAL_MODIFIED_KEYS(key->ctx);
     if ((key->mode & REDISMODULE_WRITE) && signal)
-        signalModifiedKey(key->db,key->key);
+        signalModifiedKey(key->ctx->client,key->db,key->key);
     /* TODO: if (key->iter) RM_KeyIteratorStop(kp); */
     RM_ZsetRangeStop(key);
     decrRefCount(key->key);
@@ -2231,7 +2231,7 @@ RedisModuleString *RM_RandomKey(RedisModuleCtx *ctx) {
 int RM_StringSet(RedisModuleKey *key, RedisModuleString *str) {
     if (!(key->mode & REDISMODULE_WRITE) || key->iter) return REDISMODULE_ERR;
     RM_DeleteKey(key);
-    setKey(key->db,key->key,str);
+    genericSetKey(key->ctx->client,key->db,key->key,str,0,0);
     key->value = str;
     return REDISMODULE_OK;
 }
@@ -2311,7 +2311,7 @@ int RM_StringTruncate(RedisModuleKey *key, size_t newlen) {
     if (key->value == NULL) {
         /* Empty key: create it with the new size. */
         robj *o = createObject(OBJ_STRING,sdsnewlen(NULL, newlen));
-        setKey(key->db,key->key,o);
+        genericSetKey(key->ctx->client,key->db,key->key,o,0,0);
         key->value = o;
         decrRefCount(o);
     } else {
@@ -3701,7 +3701,7 @@ int RM_ModuleTypeSetValue(RedisModuleKey *key, moduleType *mt, void *value) {
     if (!(key->mode & REDISMODULE_WRITE) || key->iter) return REDISMODULE_ERR;
     RM_DeleteKey(key);
     robj *o = createModuleObject(mt,value);
-    setKey(key->db,key->key,o);
+    genericSetKey(key->ctx->client,key->db,key->key,o,0,0);
     decrRefCount(o);
     key->value = o;
     return REDISMODULE_OK;
@@ -4473,14 +4473,17 @@ RedisModuleBlockedClient *moduleBlockClient(RedisModuleCtx *ctx, RedisModuleCmdF
  * can really be unblocked, since the module was able to serve the client.
  * If the callback returns REDISMODULE_OK, then the client can be unblocked,
  * otherwise the client remains blocked and we'll retry again when one of
- * the keys it blocked for becomes "ready" again. */
+ * the keys it blocked for becomes "ready" again.
+ * This function returns 1 if client was served (and should be unblocked) */
 int moduleTryServeClientBlockedOnKey(client *c, robj *key) {
     int served = 0;
     RedisModuleBlockedClient *bc = (RedisModuleBlockedClient*)c->bpop.module_blocked_handle;
+    
     /* Protect against re-processing: don't serve clients that are already
      * in the unblocking list for any reason (including RM_UnblockClient()
-     * explicit call). */
-    if (bc->unblocked) return REDISMODULE_ERR;
+     * explicit call). See #6798. */
+    if (bc->unblocked) return 0;
+
     RedisModuleCtx ctx = REDISMODULE_CTX_INIT;
     ctx.flags |= REDISMODULE_CTX_BLOCKED_REPLY;
     ctx.blocked_ready_key = key;
@@ -4701,13 +4704,14 @@ void moduleHandleBlockedClients(int iel) {
         if ((c != nullptr) && (iel != c->iel))
             continue;
         
+        std::unique_lock<fastlock> ul;
         listDelNode(moduleUnblockedClients,ln);
         pthread_mutex_unlock(&moduleUnblockedClientsMutex);
 
         if (c)
         {
             AssertCorrectThread(c);
-            fastlock_lock(&c->lock);
+            ul = std::unique_lock<fastlock>(c->lock);
         }
 
         /* Release the lock during the loop, as long as we don't
@@ -4773,7 +4777,6 @@ void moduleHandleBlockedClients(int iel) {
         /* Free 'bc' only after unblocking the client, since it is
          * referenced in the client blocking context, and must be valid
          * when calling unblockClient(). */
-        fastlock_unlock(&c->lock);
         bc->module->blocked_clients--;
         zfree(bc);
 
@@ -6104,7 +6107,7 @@ sds modulesCollectInfo(sds info, const char *section, int for_crash_report, int 
         struct RedisModule *module = (RedisModule*)dictGetVal(de);
         if (!module->info_cb)
             continue;
-        RedisModuleInfoCtx info_ctx = {module, section, info, sections, 0};
+        RedisModuleInfoCtx info_ctx = {module, section, info, sections, 0, 0};
         module->info_cb(&info_ctx, for_crash_report);
         /* Implicitly end dicts (no way to handle errors, and we must add the newline). */
         if (info_ctx.in_dict_field)
@@ -7222,6 +7225,8 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
      * cheap if there are no registered modules. */
     if (listLength(RedisModule_EventListeners) == 0) return;
 
+    aeAcquireLock();
+
     listIter li;
     listNode *ln;
     listRewind(RedisModule_EventListeners,&li);
@@ -7286,6 +7291,8 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
             moduleFreeContext(&ctx);
         }
     }
+
+    aeReleaseLock();
 }
 
 /* Remove all the listeners for this module: this is used before unloading
@@ -7766,7 +7773,9 @@ int RM_GetLFU(RedisModuleKey *key, long long *lfu_freq) {
     if (!key->value)
         return REDISMODULE_ERR;
     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU)
+    {
         *lfu_freq = LFUDecrAndReturn(key->value);
+    }
     return REDISMODULE_OK;
 }
 

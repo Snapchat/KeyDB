@@ -80,6 +80,7 @@ int listMatchObjects(void *a, void *b) {
 /* This function links the client to the global linked list of clients.
  * unlinkClient() does the opposite, among other things. */
 void linkClient(client *c) {
+    serverAssert(GlobalLocksAcquired());
     listAddNodeTail(g_pserver->clients,c);
     /* Note that we remember the linked list node where the client is stored,
      * this way removing the client in unlinkClient() will not require
@@ -1957,12 +1958,9 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
         }
     }
 
-    if (listLength(serverTL->clients_pending_asyncwrite))
-    {
-        AeLocker locker;
-        locker.arm(nullptr);
-        ProcessPendingAsyncWrites();
-    }
+    AeLocker locker;
+    locker.arm(nullptr);
+    ProcessPendingAsyncWrites();
 
     return processed;
 }
@@ -2298,13 +2296,13 @@ void commandProcessed(client *c) {
      * part of the replication stream, will be propagated to the
      * sub-replicas and to the replication backlog. */
     if (c->flags & CLIENT_MASTER) {
+        AeLocker ae;
+            ae.arm(c);
         long long applied = c->reploff - prev_offset;
         long long prev_master_repl_meaningful_offset = g_pserver->master_repl_meaningful_offset;
         if (applied) {
             if (!g_pserver->fActiveReplica)
             {
-                AeLocker ae;
-                ae.arm(c);
                 replicationFeedSlavesFromMasterStream(g_pserver->slaves,
                     c->pending_querybuf, applied);
             }

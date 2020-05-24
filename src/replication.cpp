@@ -2068,15 +2068,14 @@ void readSyncBulkPayload(connection *conn) {
                 "from socket");
             cancelReplicationHandshake(mi);
             rioFreeConn(&rdb, NULL);
-            if (!fUpdate) {
-                if (g_pserver->repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
-                    /* Restore the backed up databases. */
-                    disklessLoadRestoreBackups(diskless_load_backup,1);
-                } else {
-                    /* Remove the half-loaded data in case we started with
-                    * an empty replica. */
-                    emptyDb(-1,empty_db_flags,replicationEmptyDbCallback);
-                }
+            if (g_pserver->repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
+                /* Restore the backed up databases. */
+                disklessLoadRestoreBackups(diskless_load_backup,1);
+            }
+            else if (!fUpdate) {
+                /* Remove the half-loaded data in case we started with
+                * an empty replica. */
+                emptyDb(-1,empty_db_flags,replicationEmptyDbCallback);
             }
 
             /* Note that there's no point in restarting the AOF on SYNC
@@ -2086,14 +2085,12 @@ void readSyncBulkPayload(connection *conn) {
         }
         stopLoading(1);
 
-        if (!fUpdate) {
-            /* RDB loading succeeded if we reach this point. */
-            if (g_pserver->repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
-                /* Delete the backup databases we created before starting to load
-                * the new RDB. Now the RDB was loaded with success so the old
-                * data is useless. */
-                disklessLoadRestoreBackups(diskless_load_backup,0);
-            }
+        /* RDB loading succeeded if we reach this point. */
+        if (g_pserver->repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
+            /* Delete the backup databases we created before starting to load
+            * the new RDB. Now the RDB was loaded with success so the old
+            * data is useless. */
+            disklessLoadRestoreBackups(diskless_load_backup,0);
         }
 
         /* Verify the end mark is correct. */

@@ -521,7 +521,7 @@ void hsetnxCommand(client *c) {
     } else {
         hashTypeSet(o,szFromObj(c->argv[2]),szFromObj(c->argv[3]),HASH_SET_COPY);
         addReply(c, shared.cone);
-        signalModifiedKey(c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_HASH,"hset",c->argv[1],c->db->id);
         g_pserver->dirty++;
     }
@@ -551,7 +551,7 @@ void hsetCommand(client *c) {
         /* HMSET */
         addReply(c, shared.ok);
     }
-    signalModifiedKey(c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH,"hset",c->argv[1],c->db->id);
     g_pserver->dirty++;
 }
@@ -586,7 +586,7 @@ void hincrbyCommand(client *c) {
     newstr = sdsfromlonglong(value);
     hashTypeSet(o,szFromObj(c->argv[2]),newstr,HASH_SET_TAKE_VALUE);
     addReplyLongLong(c,value);
-    signalModifiedKey(c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH,"hincrby",c->argv[1],c->db->id);
     g_pserver->dirty++;
 }
@@ -625,7 +625,7 @@ void hincrbyfloatCommand(client *c) {
     newstr = sdsnewlen(buf,len);
     hashTypeSet(o,szFromObj(c->argv[2]),newstr,HASH_SET_TAKE_VALUE);
     addReplyBulkCBuffer(c,buf,len);
-    signalModifiedKey(c->db,c->argv[1]);
+    signalModifiedKey(c,c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH,"hincrbyfloat",c->argv[1],c->db->id);
     g_pserver->dirty++;
 
@@ -721,7 +721,7 @@ void hdelCommand(client *c) {
         }
     }
     if (deleted) {
-        signalModifiedKey(c->db,c->argv[1]);
+        signalModifiedKey(c,c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_HASH,"hdel",c->argv[1],c->db->id);
         if (keyremoved)
             notifyKeyspaceEvent(NOTIFY_GENERIC,"del",c->argv[1],
@@ -831,4 +831,34 @@ void hscanCommand(client *c) {
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptyscan)) == nullptr ||
         checkType(c,o,OBJ_HASH)) return;
     scanGenericCommand(c,o,cursor);
+}
+
+void hrenameCommand(client *c) {
+    robj *o = nullptr;
+    const unsigned char *vstr;
+    unsigned int vlen;
+    long long ll;
+
+    if ((o = lookupKeyWriteOrReply(c,c->argv[1],shared.null[c->resp])) == nullptr ||
+        checkType(c,o,OBJ_HASH)) return;
+
+    if (hashTypeGetValue(o, szFromObj(c->argv[2]), &vstr, &vlen, &ll) != C_OK)
+    {
+        addReplyError(c, "hash key doesn't exist");
+        return;
+    }
+
+    sds sdsT = nullptr;
+    if (vstr != nullptr)
+    {
+        sdsT = sdsnewlen(vstr, vlen);
+    }
+    else
+    {
+        sdsT = sdsfromlonglong(ll);
+    }
+
+    hashTypeDelete(o, szFromObj(c->argv[2]));
+    hashTypeSet(o, szFromObj(c->argv[3]), sdsT, HASH_SET_TAKE_VALUE);
+    addReplyLongLong(c, 1);
 }

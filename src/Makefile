@@ -236,7 +236,8 @@ ifeq ($(MALLOC),memkind)
 endif
 
 ifeq ($(BUILD_TLS),yes)
-    FINAL_CFLAGS+=-DUSE_OPENSSL $(OPENSSL_CFLAGS)
+    FINAL_CFLAGS+=-DUSE_OPENSSL $(OPENSSL_CXXFLAGS)
+    FINAL_CXXFLAGS+=-DUSE_OPENSSL $(OPENSSL_CXXFLAGS)
     FINAL_LDFLAGS+=$(OPENSSL_LDFLAGS)
     FINAL_LIBS += ../deps/hiredis/libhiredis_ssl.a -lssl -lcrypto
 endif

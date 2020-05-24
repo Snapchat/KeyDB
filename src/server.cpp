@@ -2940,7 +2940,7 @@ static void initNetworking(int fReusePort)
     }
 
     /* Abort if there are no listening sockets at all. */
-    if (g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].ipfd_count == 0 && g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].tlsfd_count && g_pserver->sofd < 0) {
+    if (g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].ipfd_count == 0 && g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].tlsfd_count == 0 && g_pserver->sofd < 0) {
         serverLog(LL_WARNING, "Configured to not listen anywhere, exiting.");
         exit(1);
     }
@@ -5305,6 +5305,7 @@ void *workerThreadMain(void *parg)
     int iel = (int)((int64_t)parg);
     serverLog(LOG_INFO, "Thread %d alive.", iel);
     serverTL = g_pserver->rgthreadvar+iel;  // set the TLS threadsafe global
+    tlsInitThread();
 
     if (iel != IDX_EVENT_LOOP_MAIN)
     {

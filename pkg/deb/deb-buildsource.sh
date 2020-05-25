@@ -9,7 +9,7 @@ else
 fi
 echo $changelog_comments
 build=1 #change if updated build number required. Default is 1 as convention for keydb is to update minor version
-version=$(grep KEYDB_REAL_VERSION ../../../src/version.h | awk '{ printf $3 }' | tr -d \")
+version=$(grep KEYDB_REAL_VERSION ../../src/version.h | awk '{ printf $3 }' | tr -d \")
 majorv="${version:0:1}"
 distributor=$(lsb_release --id --short)
 if [ "$distributor" == "Debian" ]; then
@@ -50,6 +50,6 @@ sudo pbuilder --build *.dsc
 
 # move new packages to deb_files_generated and clean up
 cp /var/cache/pbuilder/result/*$version*.deb ../deb_files_generated
-sudo pbuilder --autocleanaptcache
+sudo pbuilder clean
 cd ../
 rm -rf $pkg_name

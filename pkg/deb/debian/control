@@ -20,7 +20,8 @@ Build-Depends:
  nasm <!nocheck>,
  autotools-dev <!nocheck>,
  autoconf <!nocheck>,
- libjemalloc-dev <!nocheck>
+ libjemalloc-dev <!nocheck>,
+ libssl-dev <!nocheck>
 Standards-Version: 4.2.1
 Homepage: https://docs.keydb.dev/
 Vcs-Git: https://github.com/JohnSully/KeyDB.git

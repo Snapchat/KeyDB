@@ -2,7 +2,7 @@
 
 ### usage sudo ./generate_rpms
 
-version=$(grep KEYDB_REAL_VERSION ../../../src/version.h | awk '{ printf $3 }' | tr -d \")
+version=$(grep KEYDB_REAL_VERSION ../../src/version.h | awk '{ printf $3 }' | tr -d \")
 release=1 # by default this will always be 1 for keydb version structure. If build release version needs to be update you can modify here
 arch=$(uname -m)
 dist=el$(rpm -q --queryformat '%{VERSION}' centos-release | cut -d. -f1)

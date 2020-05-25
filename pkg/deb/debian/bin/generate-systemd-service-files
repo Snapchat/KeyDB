@@ -87,7 +87,7 @@ EOF
 [Unit]
 Description=${DESCRIPTION}
 After=network.target
-Documentation=http://keydb.io/documentation, man:${BINARY}(1)
+Documentation=https://docs.keydb.dev, man:${BINARY}(1)
 
 [Service]
 Type=forking

@@ -15,7 +15,6 @@ RUN set -eux; \
 		gnupg \
 		wget \
 	; \
-#	rm -rf /var/lib/apt/lists/*; \
 	\
 	dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')"; \
 	wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$dpkgArch"; \
@@ -39,13 +38,14 @@ RUN set -eux; \
 	gosu nobody true
 
 # Load pre-generated equivalent binaries to image (reduces deployment build times)
-ADD ./app/* /usr/local/bin/
-
+RUN \
+  mkdir -p /etc/keydb
+ADD ./app/keydb-* /usr/local/bin/
+ADD ./app/docker-entrypoint.sh /usr/local/bin/
+ADD ./app/*.conf /etc/keydb/
 # Set up config and binaries
 RUN \
   cd /usr/local/bin && \
-  mkdir -p /etc/keydb && \
-  mv -f *.conf /etc/keydb && \
   sed -i 's/^\(bind .*\)$/# \1/' /etc/keydb/keydb.conf && \
   sed -i 's/^\(daemonize .*\)$/# \1/' /etc/keydb/keydb.conf && \
   sed -i 's/^\(dir .*\)$/# \1\ndir \/data/' /etc/keydb/keydb.conf && \
@@ -55,7 +55,7 @@ RUN \
   cd /etc/keydb && \
   ln -s keydb.conf redis.conf
 
-# Ensure deps installed for binaries (including Pro)
+# Ensure deps installed for binaries
 # libc6 (>= 2.17), libcurl4 (>= 7.16.2), libgcc1 (>= 1:3.0), libstdc++6 (>= 4.8.1), libuuid1 (>= 2.16), libssl1.1 (>= 1.1.1)
 RUN set -eux; \
 	\
@@ -69,19 +69,7 @@ RUN set -eux; \
 		libgcc1 \
 		zlib1g \
 	; \
-	rm -rf /var/lib/apt/lists/*; \
-	\
-	apt-mark auto '.*' > /dev/null; \
-	[ -z "$savedAptMark" ] || apt-mark manual $savedAptMark > /dev/null; \
-	find /usr/local -type f -executable -exec ldd '{}' ';' \
-		| awk '/=>/ { print $(NF-1) }' \
-		| sort -u \
-		| xargs -r dpkg-query --search \
-		| cut -d: -f1 \
-		| sort -u \
-		| xargs -r apt-mark manual \
-	; \
-	apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false
+	rm -rf /var/lib/apt/lists/*
 
 # create working directories
 RUN \

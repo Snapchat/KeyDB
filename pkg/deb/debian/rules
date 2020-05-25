@@ -2,12 +2,7 @@
 
 include /usr/share/dpkg/buildflags.mk
 
-#LUA_LIBS_DEBIAN = cjson bitop
-#LUA_LIBS_BUNDLED = struct cmsgpack
-#
-#LUA_OBJECTS = $(addprefix lua_,$(addsuffix .o,$(LUA_LIBS_BUNDLED)))
-#LUA_LDFLAGS = $(addprefix -llua5.1-,$(LUA_LIBS_DEBIAN)) $(addprefix ../deps/lua/src/,$(LUA_OBJECTS))
-
+export BUILD_TLS=yes
 export CFLAGS CPPFLAGS LDFLAGS
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 export DEB_LDFLAGS_MAINT_APPEND = -ldl -latomic $(LUA_LDFLAGS)
@@ -23,10 +18,6 @@ endif
 
 override_dh_auto_install:
 	debian/bin/generate-systemd-service-files
-
-#override_dh_auto_build:
-#	make -C deps/lua/src $(LUA_OBJECTS)
-#	dh_auto_build --parallel -- V=1 USE_SYSTEM_JEMALLOC=yes USE_SYSTEM_LUA=yes USE_SYSTEM_HIREDIS=yes
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))

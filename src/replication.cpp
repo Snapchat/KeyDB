@@ -4150,21 +4150,27 @@ void replicaReplayCommand(client *c)
     cFake->lock.unlock();
     if (cFake->master_error)
     {
+        selectDb(c, cFake->db->id);
+        freeClient(cFake);
+        remoteState.cFake = cFake = nullptr;
         addReplyError(c, "Error in rreplay command, please check logs.");
     }
-    if (fExec || cFake->flags & CLIENT_MULTI)
+    if (cFake != nullptr)
     {
-        addReply(c, shared.ok);
-        selectDb(c, cFake->db->id);
-        if (mvcc > remoteState.mvcc)
-            remoteState.mvcc = mvcc;
+        if (fExec || cFake->flags & CLIENT_MULTI)
+        {
+            addReply(c, shared.ok);
+            selectDb(c, cFake->db->id);
+            if (mvcc > remoteState.mvcc)
+                remoteState.mvcc = mvcc;
+        }
+        else
+        {
+            serverLog(LL_WARNING, "Command didn't execute: %s", cFake->buf);
+            addReplyError(c, "command did not execute");
+        }
+        serverAssert(sdslen(cFake->querybuf) == 0);
     }
-    else
-    {
-        serverLog(LL_WARNING, "Command didn't execute: %s", cFake->buf);
-        addReplyError(c, "command did not execute");
-    }
-    serverAssert(sdslen(cFake->querybuf) == 0);
     serverTL->current_client = current_clientSave;
 
     // call() will not propogate this for us, so we do so here

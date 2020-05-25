@@ -11,4 +11,6 @@ fi
 
 #DEBHELPER#
 
+systemctl daemon-reload
+
 exit 0

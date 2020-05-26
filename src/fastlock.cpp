@@ -433,8 +433,9 @@ extern "C" void unlock_futex(struct fastlock *lock, uint16_t ifutex)
 extern "C" void fastlock_free(struct fastlock *lock)
 {
     // NOP
-    serverAssert((lock->m_ticket.m_active == lock->m_ticket.m_avail)                                        // Asser the lock is unlocked
-        || (lock->m_pidOwner == gettid() && (lock->m_ticket.m_active == lock->m_ticket.m_avail-1)));  // OR we own the lock and nobody else is waiting
+    serverAssert((lock->m_ticket.m_active == lock->m_ticket.m_avail)                             // Assert the lock is unlocked
+        || (lock->m_pidOwner == gettid() 
+            && (lock->m_ticket.m_active == static_cast<uint16_t>(lock->m_ticket.m_avail-1U))));  // OR we own the lock and nobody else is waiting
     lock->m_pidOwner = -2;  // sentinal value indicating free
     ANNOTATE_RWLOCK_DESTROY(lock);
 }

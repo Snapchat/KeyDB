@@ -1,2 +1,1 @@
-debian/keydb-server.service /lib/systemd/system/
 pkg/deb/conf/keydb.conf	/etc/keydb

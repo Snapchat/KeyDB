@@ -19,7 +19,7 @@ elif [ "$distributor" == "Ubuntu" ]; then
 fi
 codename=$(lsb_release --codename --short)
 date=$(date +%a," "%d" "%b" "%Y" "%T)
-pkg_name=keydb-$version$distname
+pkg_name=keydb-$majorv:$version$distname
 
 # create build tree
 cd ../../../
@@ -30,7 +30,7 @@ cp -r debian $pkg_name/tmp
 cp master_changelog $pkg_name/tmp/debian/changelog
 mv ../../../keydb_$version.orig.tar.gz ./$pkg_name
 cd $pkg_name/tmp
-changelog_str="keydb ($version-$build$distname) $codename; urgency=medium\n\n  * $version $changelog_comments \n\n -- Ben Schermel <ben@eqalpha.com>  $date +0000\n\n"
+changelog_str="keydb ($majorv:$version-$build$distname) $codename; urgency=medium\n\n  * $version $changelog_comments \n\n -- Ben Schermel <ben@eqalpha.com>  $date +0000\n\n"
 if [ $# -eq 0 ]; then
         sed -i "1s/^/$changelog_str\n/" debian/changelog
 elif [ $# -eq 1 ] && [ "$1" != "None" ]; then
@@ -44,7 +44,11 @@ debuild -S -sa
 cd ../
 
 # create pbuilder chrooted environment and build the deb package
-sudo pbuilder create --distribution $codename
+if [ "$codename" == "xenial" ]; then
+        sudo pbuilder create --distribution $codename --othermirror "deb http://archive.ubuntu.com/ubuntu $codename universe multiverse"
+else
+        sudo pbuilder create --distribution $codename
+fi
 sudo pbuilder --update
 sudo pbuilder --build *.dsc
 

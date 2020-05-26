@@ -58,6 +58,7 @@
 #include <set>
 #include <map>
 #include <string>
+#include <mutex>
 #ifdef __cplusplus
 extern "C" {
 #include <lua.h>
@@ -436,7 +437,8 @@ public:
 #define CMD_CATEGORY_CONNECTION (1ULL<<36)
 #define CMD_CATEGORY_TRANSACTION (1ULL<<37)
 #define CMD_CATEGORY_SCRIPTING (1ULL<<38)
-#define CMD_SKIP_PROPOGATE (1ULL<<39)  /* "noprop" flag */
+#define CMD_CATEGORY_REPLICATION (1ULL<<39)
+#define CMD_SKIP_PROPOGATE (1ULL<<40)  /* "noprop" flag */
 
 /* AOF states */
 #define AOF_OFF 0             /* AOF is off */

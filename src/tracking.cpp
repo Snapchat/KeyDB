@@ -202,6 +202,9 @@ void trackingRememberKeys(client *c) {
  * to the client as value of the invalidation. This is used in BCAST mode
  * in order to optimized the implementation to use less CPU time. */
 void sendTrackingMessage(client *c, const char *keyname, size_t keylen, int proto) {
+    std::unique_lock<fastlock> ul(c->lock);
+    serverAssert(c->lock.fOwnLock());
+
     int using_redirection = 0;
     if (c->client_tracking_redirection) {
         client *redir = lookupClientByID(c->client_tracking_redirection);
@@ -210,12 +213,14 @@ void sendTrackingMessage(client *c, const char *keyname, size_t keylen, int prot
              * are unable to send invalidation messages to the redirected
              * connection, because the client no longer exist. */
             if (c->resp > 2) {
-                addReplyPushLen(c,3);
-                addReplyBulkCBuffer(c,"tracking-redir-broken",21);
-                addReplyLongLong(c,c->client_tracking_redirection);
+                addReplyPushLenAsync(c,3);
+                addReplyBulkCBufferAsync(c,"tracking-redir-broken",21);
+                addReplyLongLongAsync(c,c->client_tracking_redirection);
             }
             return;
         }
+        ul.unlock();
+        ul = std::unique_lock<fastlock>(redir->lock);
         c = redir;
         using_redirection = 1;
     }
@@ -225,8 +230,8 @@ void sendTrackingMessage(client *c, const char *keyname, size_t keylen, int prot
      * in Pub/Sub mode, we can support the feature with RESP 2 as well,
      * by sending Pub/Sub messages in the __redis__:invalidate channel. */
     if (c->resp > 2) {
-        addReplyPushLen(c,2);
-        addReplyBulkCBuffer(c,"invalidate",10);
+        addReplyPushLenAsync(c,2);
+        addReplyBulkCBufferAsync(c,"invalidate",10);
     } else if (using_redirection && c->flags & CLIENT_PUBSUB) {
         /* We use a static object to speedup things, however we assume
          * that addReplyPubsubMessage() will not take a reference. */
@@ -241,10 +246,10 @@ void sendTrackingMessage(client *c, const char *keyname, size_t keylen, int prot
 
     /* Send the "value" part, which is the array of keys. */
     if (proto) {
-        addReplyProto(c,keyname,keylen);
+        addReplyProtoAsync(c,keyname,keylen);
     } else {
-        addReplyArrayLen(c,1);
-        addReplyBulkCBuffer(c,keyname,keylen);
+        addReplyArrayLenAsync(c,1);
+        addReplyBulkCBufferAsync(c,keyname,keylen);
     }
 }
 

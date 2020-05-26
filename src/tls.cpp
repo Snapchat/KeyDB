@@ -898,10 +898,7 @@ ConnectionType CT_TLS = {
     connTLSSyncWrite,
     connTLSSyncRead,
     connTLSSyncReadLine,
-<<<<<<< HEAD
-=======
     connTLSMarshalThread,
->>>>>>> unstable
 };
 
 int tlsHasPendingData() {

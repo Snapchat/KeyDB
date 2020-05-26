@@ -1,6 +1,6 @@
-keydb (6.0.7-1distribution_placeholder) codename_placeholder; urgency=medium
+keydb (6.0.8-1distribution_placeholder) codename_placeholder; urgency=medium
 
-  * 6.0.7 Updating builds from deb source package
+  * 6.0.8 Updating builds from deb source package
   * Naming conventions are now updated
   * Builds now genrated accross different distributions/architectures automatically. 
   * Same changelog used for all distribitions/architectures and will be updated on each release 

@@ -7,14 +7,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v1
-    - name: make
+    - name: make BUILD_TLS=yes
       run: |
           sudo apt-get -y install uuid-dev libcurl4-openssl-dev
           make -j2
     - name: test
       run: |
         sudo apt-get -y install tcl8.5
-        ./runtest --clients 2 --verbose
+        ./runtest --clients 2 --verbose --tls
     - name: cluster-test
       run: |
         ./runtest-cluster

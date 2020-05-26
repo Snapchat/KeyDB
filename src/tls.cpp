@@ -347,6 +347,11 @@ connection *connCreateTLS(void) {
     return (connection *) conn;
 }
 
+void connTLSMarshalThread(connection *c) {
+    tls_connection *conn = (tls_connection*)c;
+    conn->el = serverTL->el;
+}
+
 connection *connCreateAcceptedTLS(int fd, int require_auth) {
     tls_connection *conn = (tls_connection *) connCreateTLS();
     conn->c.fd = fd;
@@ -893,6 +898,10 @@ ConnectionType CT_TLS = {
     connTLSSyncWrite,
     connTLSSyncRead,
     connTLSSyncReadLine,
+<<<<<<< HEAD
+=======
+    connTLSMarshalThread,
+>>>>>>> unstable
 };
 
 int tlsHasPendingData() {

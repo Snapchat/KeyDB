@@ -68,6 +68,7 @@ typedef struct ConnectionType {
     ssize_t (*sync_write)(struct connection *conn, const char *ptr, ssize_t size, long long timeout);
     ssize_t (*sync_read)(struct connection *conn, char *ptr, ssize_t size, long long timeout);
     ssize_t (*sync_readline)(struct connection *conn, char *ptr, ssize_t size, long long timeout);
+    void (*marshal_thread)(struct connection *conn);
 } ConnectionType;
 
 struct connection {
@@ -196,6 +197,11 @@ static inline ssize_t connSyncRead(connection *conn, char *ptr, ssize_t size, lo
 
 static inline ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size, long long timeout) {
     return conn->type->sync_readline(conn, ptr, size, timeout);
+}
+
+static inline void connMarshalThread(connection *conn) {
+    if (conn->type->marshal_thread != nullptr)
+        conn->type->marshal_thread(conn);
 }
 
 connection *connCreateSocket();

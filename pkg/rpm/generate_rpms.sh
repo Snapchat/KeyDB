@@ -2,7 +2,7 @@
 
 ### usage sudo ./generate_rpms
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-version=$(grep KEYDB_REAL_VERSION ../../src/version.h | awk '{ printf $3 }' | tr -d \")
+version=$(grep KEYDB_REAL_VERSION $DIR/../../src/version.h | awk '{ printf $3 }' | tr -d \")
 release=1 # by default this will always be 1 for keydb version structure. If build release version needs to be update you can modify here
 arch=$(uname -m)
 dist=el$(rpm -q --queryformat '%{VERSION}' centos-release | cut -d. -f1)
@@ -30,10 +30,9 @@ sed -i -E "1a\Version     : $version" $DIR/keydb_build/keydb.spec
 sed -i '3d' $DIR/keydb_build/keydb.spec
 sed -i -E "2a\Release     : $release%{?dist}" $DIR/keydb_build/keydb.spec
 
-# yum install -y scl-utils centos-release-scl rpm-build
 mkdir -p /root/rpmbuild/BUILDROOT/keydb-$version-$release.$dist.$arch
-cp -r ./keydb_build/keydb_rpm/* /root/rpmbuild/BUILDROOT/keydb-$version-$release.$dist.$arch/
-rpmbuild -bb /keydb_build/keydb.spec
+cp -r $DIR/keydb_build/keydb_rpm/* /root/rpmbuild/BUILDROOT/keydb-$version-$release.$dist.$arch/
+rpmbuild -bb $DIR/keydb_build/keydb.spec
 mv /root/rpmbuild/RPMS/$arch/* $DIR/rpm_files_generated
 
 exit

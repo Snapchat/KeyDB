@@ -34,6 +34,6 @@ sed -i -E "2a\Release     : $release%{?dist}" $DIR/keydb_build/keydb.spec
 mkdir -p /root/rpmbuild/BUILDROOT/keydb-pro-$version-$release.$dist.$arch
 cp -r ./keydb_build/keydb_rpm/* /root/rpmbuild/BUILDROOT/keydb-pro-$version-$release.$dist.$arch/
 rpmbuild -bb $DIR/keydb_build/keydb.spec
-mv /root/rpmbuild/RPMS/$arch/* .$DIR/rpm_files_generated
+mv /root/rpmbuild/RPMS/$arch/* $DIR/rpm_files_generated
 
 exit

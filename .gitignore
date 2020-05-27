@@ -5,6 +5,9 @@ core
 *.so
 *.d
 !**/bash_completion.d
+!**/logrotate.d
+!**/keydb.service.d
+!**/keydb-sentinel.service.d
 *.log
 dump.rdb
 src/keydb-pro-server

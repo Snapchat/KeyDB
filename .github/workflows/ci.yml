@@ -11,10 +11,11 @@ jobs:
       run: |
           sudo apt-get -y install uuid-dev libcurl4-openssl-dev
           make -j2
+    - name: gen-cert
+      run: ./utils/gen-test-certs.sh
     - name: test-tls
       run: |
         sudo apt-get -y install tcl8.5 tcl-tls
-        ./utils/gen-test-certs.sh
         ./runtest --clients 2 --verbose --tls
     - name: test
       run: |

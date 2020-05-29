@@ -52,7 +52,7 @@ jobs:
     - name: make -j2
       run: | 
         sudo apt-get -y install uuid-dev libcurl4-openssl-dev
-        make
+        make -j2
 
   build-macos-latest:
     runs-on: macos-latest
@@ -61,19 +61,12 @@ jobs:
     - name: make
       run: make -j2
 
-  biuld-32bit:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v1
-    - name: make
-      run: |
-        sudo apt-get update && sudo apt-get install libc6-dev-i386
-        make 32bit
-
   build-libc-malloc:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v1
     - name: make
-      run: make MALLOC=libc
+      run: |
+          sudo apt-get -y install uuid-dev libcurl4-openssl-dev
+          make MALLOC=libc -j2
 

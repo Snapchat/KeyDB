@@ -1907,8 +1907,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     {
         processUnblockedClients(IDX_EVENT_LOOP_MAIN);
     }
-
-    ProcessPendingAsyncWrites();    // This is really a bug, but for now catch any laggards that didn't clean up
         
     /* Software watchdog: deliver the SIGALRM that will reach the signal
      * handler if we don't return here fast enough. */
@@ -2143,6 +2141,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                           &ei);
 
 
+    /* CRON functions may trigger async writes, so do this last */
+    ProcessPendingAsyncWrites();
+
     g_pserver->cronloops++;
     return 1000/g_pserver->hz;
 }
@@ -2192,6 +2193,7 @@ extern int ProcessingEventsWhileBlocked;
  * call some other low-risk functions. */
 void beforeSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
+    int iel = ielFromEventLoop(eventLoop);
 
     /* Handle precise timeouts of blocked clients. */
     handleBlockedClientsTimeout();
@@ -2225,9 +2227,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (moduleCount()) moduleHandleBlockedClients(ielFromEventLoop(eventLoop));
 
     /* Try to process pending commands for clients that were just unblocked. */
-    if (listLength(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].unblocked_clients))
+    if (listLength(g_pserver->rgthreadvar[iel].unblocked_clients))
     {
-        processUnblockedClients(IDX_EVENT_LOOP_MAIN);
+        processUnblockedClients(iel);
     }
 
     /* Send all the slaves an ACK request if at least one client blocked
@@ -2258,11 +2260,11 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Handle writes with pending output buffers. */
     int aof_state = g_pserver->aof_state;
     aeReleaseLock();
-    handleClientsWithPendingWrites(IDX_EVENT_LOOP_MAIN, aof_state);
+    handleClientsWithPendingWrites(iel, aof_state);
     aeAcquireLock();
 
     /* Close clients that need to be closed asynchronous */
-    freeClientsInAsyncFreeQueue(IDX_EVENT_LOOP_MAIN);
+    freeClientsInAsyncFreeQueue(iel);
 
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
@@ -2958,7 +2960,7 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     pvar->tlsfd_count = 0;
     pvar->cclients = 0;
     pvar->el = aeCreateEventLoop(g_pserver->maxclients+CONFIG_FDSET_INCR);
-    aeSetBeforeSleepProc(pvar->el, fMain ? beforeSleep : beforeSleepLite, fMain ? 0 : AE_SLEEP_THREADSAFE);
+    aeSetBeforeSleepProc(pvar->el, beforeSleep, 0);
     aeSetAfterSleepProc(pvar->el, afterSleep, AE_SLEEP_THREADSAFE);
     pvar->current_client = nullptr;
     pvar->clients_paused = 0;

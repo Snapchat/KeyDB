@@ -135,6 +135,7 @@ client *createClient(connection *conn, int iel) {
     c->sentlenAsync = 0;
     c->flags = 0;
     c->fPendingAsyncWrite = FALSE;
+    c->fPendingAsyncWriteHandler = FALSE;
     c->ctime = c->lastinteraction = g_pserver->unixtime;
     /* If the default user does not require authentication, the user is
      * directly authenticated. */
@@ -1850,29 +1851,21 @@ void ProcessPendingAsyncWrites()
         
         std::atomic_thread_fence(std::memory_order_seq_cst);
         
-        if (c->casyncOpsPending == 0)
+        if (FCorrectThread(c))
         {
-            if (FCorrectThread(c))
-            {
-                prepareClientToWrite(c, false); // queue an event
-            }
-            else
-            {
-                // We need to start the write on the client's thread
-                if (aePostFunction(g_pserver->rgthreadvar[c->iel].el, [c]{
-                        // Install a write handler.  Don't do the actual write here since we don't want
-                        //  to duplicate the throttling and safety mechanisms of the normal write code
-                        std::lock_guard<decltype(c->lock)> lock(c->lock);
-                        serverAssert(c->casyncOpsPending > 0);
-                        c->casyncOpsPending--;
-                        connSetWriteHandler(c->conn, sendReplyToClient, true);
-                    }, false) == AE_ERR
-                )
-                {
-                    // Posting the function failed
-                    continue;   // We can retry later in the cron
-                }
-                ++c->casyncOpsPending; // race is handled by the client lock in the lambda
+            prepareClientToWrite(c, false); // queue an event
+        }
+        else
+        {
+            if (!c->fPendingAsyncWriteHandler) {
+                c->fPendingAsyncWriteHandler = true;
+                bool fResult = c->postFunction([](client *c) {
+                    c->fPendingAsyncWriteHandler = false;
+                    connSetWriteHandler(c->conn, sendReplyToClient, true);
+                });
+
+                if (!fResult)
+                    c->fPendingAsyncWriteHandler = false;   // if we failed to set the handler then prevent this from never being reset
             }
         }
     }

@@ -5,6 +5,7 @@ on:
     - cron: '0 7 * * *'
 
 jobs:
+
   test-jemalloc:
     runs-on: ubuntu-latest
     timeout-minutes: 1200
@@ -36,6 +37,38 @@ jobs:
         ./runtest --accurate --verbose
     - name: module api test
       run: ./runtest-moduleapi --verbose
+
+  test-32bit:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - name: make
+      run: |
+        sudo apt-get update && sudo apt-get install libc6-dev-i386
+        make 32bit
+    - name: test
+      run: |
+        sudo apt-get install tcl8.5
+        ./runtest --accurate --verbose
+    - name: module api test
+      run: |
+        make -C tests/modules 32bit # the script below doesn't have an argument, we must build manually ahead of time
+        ./runtest-moduleapi --verbose
+
+  test-tls:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - name: make
+      run: |
+        make BUILD_TLS=yes
+    - name: test
+      run: |
+        sudo apt-get install tcl8.5 tcl-tls
+        ./utils/gen-test-certs.sh
+        ./runtest --accurate --verbose --tls
+    - name: module api test
+      run: ./runtest-moduleapi --verbose --tls
 
   test-valgrind:
     runs-on: ubuntu-latest

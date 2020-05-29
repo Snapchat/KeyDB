@@ -2197,7 +2197,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     handleBlockedClientsTimeout();
 
     /* Handle TLS pending data. (must be done before flushAppendOnlyFile) */
+    aeReleaseLock();
     tlsProcessPendingData();
+    aeAcquireLock();
 
     /* If tls still has pending unread data don't sleep at all. */
     aeSetDontWait(eventLoop, tlsHasPendingData());

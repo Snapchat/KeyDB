@@ -17,6 +17,7 @@ jobs:
         ./utils/gen-test-certs.sh
         ./runtest --clients 2 --verbose --tls
     - name: test
+      run: |
         ./runtest --clients 2 --verbose
     - name: cluster-test
       run: |

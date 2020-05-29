@@ -2525,7 +2525,6 @@ void initServerConfig(void) {
     g_pserver->enable_multimaster = CONFIG_DEFAULT_ENABLE_MULTIMASTER;
     g_pserver->repl_syncio_timeout = CONFIG_REPL_SYNCIO_TIMEOUT;
     g_pserver->master_repl_offset = 0;
-    g_pserver->master_repl_meaningful_offset = 0;
 
     /* Replication partial resync backlog */
     g_pserver->repl_backlog = NULL;
@@ -4747,7 +4746,6 @@ sds genRedisInfoString(const char *section) {
             "master_replid:%s\r\n"
             "master_replid2:%s\r\n"
             "master_repl_offset:%lld\r\n"
-            "master_repl_meaningful_offset:%lld\r\n"
             "second_repl_offset:%lld\r\n"
             "repl_backlog_active:%d\r\n"
             "repl_backlog_size:%lld\r\n"
@@ -4756,7 +4754,6 @@ sds genRedisInfoString(const char *section) {
             g_pserver->replid,
             g_pserver->replid2,
             g_pserver->master_repl_offset,
-            g_pserver->master_repl_meaningful_offset,
             g_pserver->second_replid_offset,
             g_pserver->repl_backlog != NULL,
             g_pserver->repl_backlog_size,
@@ -5150,7 +5147,6 @@ void loadDataFromDisk(void) {
             {
                 memcpy(g_pserver->replid,rsi.repl_id,sizeof(g_pserver->replid));
                 g_pserver->master_repl_offset = rsi.repl_offset;
-                g_pserver->master_repl_meaningful_offset = rsi.repl_offset;
                 listIter li;
                 listNode *ln;
                 

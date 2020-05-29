@@ -428,6 +428,7 @@ proc signal_idle_client fd {
         lappend ::active_clients $fd
         incr ::next_test
         if {$::loop && $::next_test == [llength $::all_tests]} {
+            incr ::loop -1
             set ::next_test 0
         }
     } elseif {[llength $::run_solo_tests] != 0 && [llength $::active_clients] == 0} {
@@ -612,7 +613,10 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--stop}} {
         set ::stop_on_failure 1
     } elseif {$opt eq {--loop}} {
-        set ::loop 1
+        set ::loop 1000
+    } elseif {$opt eq {--loopn}} {
+        set ::loop [expr $arg - 1]
+        incr j
     } elseif {$opt eq {--timeout}} {
         set ::timeout $arg
         incr j

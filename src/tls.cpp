@@ -458,7 +458,6 @@ void updateSSLEvent(tls_connection *conn) {
 
 void tlsHandleEvent(tls_connection *conn, int mask) {
     int ret;
-    serverAssert(!GlobalLocksAcquired());
     serverAssert(conn->el == serverTL->el);
 
     TLSCONN_DEBUG("tlsEventHandler(): fd=%d, state=%d, mask=%d, r=%d, w=%d, flags=%d",
@@ -910,6 +909,7 @@ int tlsHasPendingData() {
 int tlsProcessPendingData() {
     listIter li;
     listNode *ln;
+    serverAssert(!GlobalLocksAcquired());
 
     int processed = listLength(pending_list);
     listRewind(pending_list,&li);

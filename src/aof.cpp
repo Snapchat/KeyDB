@@ -751,6 +751,7 @@ struct client *createAOFClient(void) {
     c->bufpos = 0;
     c->flags = 0;
     c->fPendingAsyncWrite = FALSE;
+    c->fPendingAsyncWriteHandler = FALSE;
     c->btype = BLOCKED_NONE;
     /* We set the fake client as a replica waiting for the synchronization
      * so that Redis will not try to send replies to this client. */

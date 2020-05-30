@@ -19,7 +19,7 @@ jobs:
       run: |
         sudo apt-get install tcl8.5
         ./runtest --loopn 3 --config server-threads 3 --clients 2
-    - name: 'test 20x'
+    - name: 'test 10x'
       run: |
-        ./runtest --loopn 20 --clients 10
+        ./runtest --loopn 10 --clients 10
 

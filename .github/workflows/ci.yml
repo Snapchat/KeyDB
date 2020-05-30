@@ -27,24 +27,7 @@ jobs:
     - name: module tests
       run: |
           ./runtest-moduleapi
-
         
-  test-ubuntu-arm:
-    runs-on: [self-hosted, linux, arm]
-    steps:
-    - uses: actions/checkout@v1
-    - name: make
-      run: |
-          sudo apt-get -y install uuid-dev libcurl4-openssl-dev
-          make -j4
-    - name: test
-      run: |
-        sudo apt-get -y install tcl8.5
-        ./runtest --clients 2 --verbose
-    - name: module tests
-      run: |
-          ./runtest-moduleapi
-
   build-ubuntu-old:
     runs-on: ubuntu-16.04
     steps:

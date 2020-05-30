@@ -144,7 +144,11 @@ start_server {tags {"maxmemory"}} {
 }
 
 proc test_slave_buffers {test_name cmd_count payload_len limit_memory pipeline} {
-    start_server {tags {"maxmemory"}} {
+    # This is a single thread only test because there is a race in getMaxMemoryState
+    #  between zmalloc_used_memory and getting the client outbut buffer memory usage.
+    #  The cure would be worse than the disease, we do not want lock every replica 
+    #  simultaneously just to get more accurate memory usage.
+    start_server {tags {"maxmemory"} overrides { server-threads 1 }} {
         start_server {} {
         set slave_pid [s process_id]
         test "$test_name" {

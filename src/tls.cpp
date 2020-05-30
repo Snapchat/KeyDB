@@ -349,6 +349,7 @@ connection *connCreateTLS(void) {
 
 void connTLSMarshalThread(connection *c) {
     tls_connection *conn = (tls_connection*)c;
+    serverAssert(conn->pending_list_node == nullptr);
     conn->el = serverTL->el;
 }
 

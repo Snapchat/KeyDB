@@ -15,8 +15,11 @@ jobs:
       run: |
           sudo apt-get -y install uuid-dev libcurl4-openssl-dev
           make -j8
-    - name: 'test 20x'
+    - name: test-multithread
       run: |
         sudo apt-get install tcl8.5
+        ./runtest --loopn 3 --config server-threads 3 --clients 2
+    - name: 'test 20x'
+      run: |
         ./runtest --loopn 20 --clients 10
 

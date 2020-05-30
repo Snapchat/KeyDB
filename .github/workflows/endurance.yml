@@ -18,7 +18,7 @@ jobs:
     - name: test-multithread
       run: |
         sudo apt-get install tcl8.5
-        ./runtest --loopn 3 --config server-threads 3 --clients 2
+        ./runtest --loopn 3 --config server-threads 3 --clients 4
     - name: 'test 10x'
       run: |
         ./runtest --loopn 10 --clients 10

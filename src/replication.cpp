@@ -3747,6 +3747,18 @@ void replicationCron(void) {
     listIter liMaster;
     listNode *lnMaster;
     listRewind(g_pserver->masters, &liMaster);
+
+    bool fInMasterConnection = false;
+    while ((lnMaster = listNext(&liMaster)) && !fInMasterConnection)
+    {
+        redisMaster *mi = (redisMaster*)listNodeValue(lnMaster);
+        if (mi->repl_state != REPL_STATE_NONE && mi->repl_state != REPL_STATE_CONNECTED && mi->repl_state != REPL_STATE_CONNECT) {
+            fInMasterConnection = true;
+        }
+    }
+
+    bool fConnectionStarted = false;
+    listRewind(g_pserver->masters, &liMaster);
     while ((lnMaster = listNext(&liMaster)))
     {
         redisMaster *mi = (redisMaster*)listNodeValue(lnMaster);
@@ -3785,12 +3797,14 @@ void replicationCron(void) {
         }
 
         /* Check if we should connect to a MASTER */
-        if (mi->repl_state == REPL_STATE_CONNECT) {
+        if (mi->repl_state == REPL_STATE_CONNECT && !fInMasterConnection) {
             serverLog(LL_NOTICE,"Connecting to MASTER %s:%d",
                 mi->masterhost, mi->masterport);
             if (connectWithMaster(mi) == C_OK) {
                 serverLog(LL_NOTICE,"MASTER <-> REPLICA sync started");
             }
+            fInMasterConnection = true;
+            fConnectionStarted = true;
         }
 
         /* Send ACK to master from time to time.
@@ -3799,6 +3813,11 @@ void replicationCron(void) {
         if (mi->masterhost && mi->master &&
             !(mi->master->flags & CLIENT_PRE_PSYNC))
             replicationSendAck(mi);
+    }
+
+    if (fConnectionStarted) {
+        // If we cancel this handshake we want the next attempt to be a different master
+        listRotateHeadToTail(g_pserver->masters);
     }
 
     /* If we have attached slaves, PING them from time to time.

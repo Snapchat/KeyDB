@@ -69,6 +69,8 @@
 redisContext *context;
 struct config config;
 
+int g_fTestMode = 0;
+
 /* User preferences. */
 static struct pref {
     int hints;

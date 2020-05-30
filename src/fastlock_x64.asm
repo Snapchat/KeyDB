@@ -3,6 +3,7 @@
 
 .extern gettid
 .extern fastlock_sleep
+.extern g_fHighCpuPressure
 
 #	This is the first use of assembly in this codebase, a valid question is WHY?
 #	The spinlock we implement here is performance critical, and simply put GCC
@@ -33,6 +34,13 @@ fastlock_lock:
 	cmp [rdi], esi          # Is the TID we got back the owner of the lock?
 	je .LLocked             # Don't spin in that case
 
+	mov r9d, 0x1000         #	1000h is set so we overflow on the 1024*1024'th iteration (like the C code)
+	mov eax, [rip+g_fHighCpuPressure]
+	test eax, eax
+	jz .LNoTestMode
+	mov r9d, 0x10000
+.LNoTestMode:
+
 	xor eax, eax            # eliminate partial register dependency
 	inc eax                 # we want to add one
 	lock xadd [rdi+66], ax  # do the xadd, ax contains the value before the addition
@@ -45,8 +53,7 @@ fastlock_lock:
 	cmp dx, ax              # is our ticket up?
 	je .LLocked             # leave the loop
 	pause
-	add ecx, 0x1000         # Have we been waiting a long time? (oflow if we have)
-	                        #	1000h is set so we overflow on the 1024*1024'th iteration (like the C code)
+	add ecx, r9d            # Have we been waiting a long time? (oflow if we have)
 	jnc .LLoop              # If so, give up our timeslice to someone who's doing real work
 	# Like the compiler, you're probably thinking: "Hey! I should take these pushs out of the loop"
 	#	But the compiler doesn't know that we rarely hit this, and when we do we know the lock is

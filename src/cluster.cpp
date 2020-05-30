@@ -5272,6 +5272,7 @@ try_again:
         zfree(ov); zfree(kv);
         return; /* error sent to the client by migrateGetSocket() */
     }
+    connMarshalThread(cs->conn);
 
     rioInitWithBuffer(&cmd,sdsempty());
 

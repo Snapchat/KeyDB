@@ -2,7 +2,7 @@ name: Endurance
 
 on:
   schedule:
-    - cron: '*/60 * * * *'
+    - cron: '0 * * * *'
 
 jobs:
 

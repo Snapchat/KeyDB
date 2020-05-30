@@ -40,6 +40,7 @@
 #include <map>
 #ifdef __linux__
 #include <linux/futex.h>
+#include <sys/sysinfo.h>
 #endif
 #include <string.h>
 #include <stdarg.h>
@@ -69,6 +70,8 @@ __attribute__((weak)) void logStackTrace(ucontext_t *) {}
 #endif
 
 extern int g_fInCrash;
+extern int g_fTestMode;
+int g_fHighCpuPressure = false;
 
 /****************************************************
  *
@@ -332,6 +335,7 @@ extern "C" void fastlock_lock(struct fastlock *lock)
     unsigned mask = (1U << (myticket % 32));
     unsigned cloops = 0;
     ticket ticketT;
+    unsigned loopLimit = g_fHighCpuPressure ? 0x10000 : 0x100000;
 
     for (;;)
     {
@@ -344,7 +348,7 @@ extern "C" void fastlock_lock(struct fastlock *lock)
 #elif defined(__aarch64__)
         __asm__ __volatile__ ("yield");
 #endif
-        if ((++cloops % 0x100000) == 0)
+        if ((++cloops % loopLimit) == 0)
         {
             fastlock_sleep(lock, tid, ticketT.u, mask);
         }
@@ -460,4 +464,25 @@ void fastlock_lock_recursive(struct fastlock *lock, int nesting)
 {
     fastlock_lock(lock);
     lock->m_depth = nesting;
+}
+
+void fastlock_auto_adjust_waits()
+{
+#ifdef __linux__
+    struct sysinfo sysinf;
+    auto fHighPressurePrev = g_fHighCpuPressure;
+    memset(&sysinf, 0, sizeof sysinf);
+    if (!sysinfo(&sysinf)) {
+        auto avgCoreLoad = sysinf.loads[0] / get_nprocs();
+        g_fHighCpuPressure = (avgCoreLoad > ((1 << SI_LOAD_SHIFT) * 0.9));
+        if (g_fHighCpuPressure)
+            serverLog(!fHighPressurePrev ?  3 /*LL_WARNING*/ : 1 /* LL_VERBOSE */, "NOTICE: Detuning locks due to high load per core: %.2f%%", avgCoreLoad / (double)(1 << SI_LOAD_SHIFT)*100.0);
+    }
+
+    if (!g_fHighCpuPressure && fHighPressurePrev) {
+        serverLog(3 /*LL_WARNING*/, "NOTICE: CPU pressure reduced");
+    }
+#else
+    g_fHighCpuPressure = g_fTestMode;
+#endif
 }

@@ -6,7 +6,7 @@ on:
 
 jobs:
 
-  test:
+  test-endurance:
     runs-on: quadcore
     timeout-minutes: 60
     steps:
@@ -18,5 +18,5 @@ jobs:
     - name: 'test 20x'
       run: |
         sudo apt-get install tcl8.5
-        ./runtest --loopn 20
+        ./runtest --loopn 20 --clients 10
 

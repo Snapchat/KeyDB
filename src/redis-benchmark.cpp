@@ -66,6 +66,8 @@ struct benchmarkThread;
 struct clusterNode;
 struct redisConfig;
 
+int g_fTestMode = false;
+
 static struct config {
     aeEventLoop *el;
     const char *hostip;

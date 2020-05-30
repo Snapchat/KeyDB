@@ -129,7 +129,7 @@ static void initCryptoLocks(void) {
         return;
     }
     nlocks = CRYPTO_num_locks();
-    openssl_locks = zmalloc(sizeof(*openssl_locks) * nlocks);
+    openssl_locks = (pthread_mutex_t*)zmalloc(sizeof(*openssl_locks) * nlocks);
     for (i = 0; i < nlocks; i++) {
         pthread_mutex_init(openssl_locks + i, NULL);
     }

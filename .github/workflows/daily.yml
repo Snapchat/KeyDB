@@ -45,13 +45,15 @@ jobs:
     - name: make
       run: |
         sudo apt-get -y install uuid-dev libcurl4-openssl-dev
-        make -j2
-    - name: test
+        make BUILD_TLS=yes -j2
+    - name: "test (tls)"
       run: |
         sudo apt-get install tcl8.5 tcl-tls
         ./utils/gen-test-certs.sh
         ./runtest --accurate --verbose --tls
-    - name: module api test
+    - name: test
+      run: ./runtest --accurate --verbose
+    - name: module api test (tls)
       run: ./runtest-moduleapi --verbose --tls
 
   test-ubuntu-arm:

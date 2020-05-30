@@ -1386,13 +1386,15 @@ void sendBulkToSlave(connection *conn) {
      * fallback to normal read+write otherwise. */
     nwritten = 0;
 #if HAVE_SENDFILE
-    if (!g_pserver->tls_replication) {
+    if (!g_pserver->tls_replication && !g_pserver->fActiveReplica) { // sendfile blocks too long for active replication
         if ((nwritten = redis_sendfile(conn->fd,replica->repldbfd,
             replica->repldboff,PROTO_IOBUF_LEN)) == -1)
         {
             if (errno != EAGAIN) {
                 serverLog(LL_WARNING,"Sendfile error sending DB to replica: %s",
                     strerror(errno));
+                ul.unlock();
+                aeLock.arm(nullptr);
                 freeClient(replica);
             }
             return;
@@ -1408,6 +1410,8 @@ void sendBulkToSlave(connection *conn) {
         if (buflen <= 0) {
             serverLog(LL_WARNING,"Read error sending DB to replica: %s",
                 (buflen == 0) ? "premature EOF" : strerror(errno));
+            ul.unlock();
+            aeLock.arm(nullptr);
             freeClient(replica);
             return;
         }
@@ -1415,6 +1419,8 @@ void sendBulkToSlave(connection *conn) {
             if (connGetState(conn) != CONN_STATE_CONNECTED) {
                 serverLog(LL_WARNING,"Write error sending DB to replica: %s",
                     connGetLastError(conn));
+                ul.unlock();
+                aeLock.arm(nullptr);
                 freeClient(replica);
             }
             return;

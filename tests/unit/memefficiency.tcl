@@ -37,7 +37,7 @@ start_server {tags {"memefficiency"}} {
 }
 
 run_solo {defrag} {
-start_server {tags {"defrag"}} {
+start_server {tags {"defrag"} overrides {server-threads 1} } {
     if {[string match {*jemalloc*} [s mem_allocator]]} {
         test "Active defrag" {
             r config set save "" ;# prevent bgsave from interfereing with save below
@@ -351,7 +351,7 @@ start_server {tags {"defrag"}} {
             # if the current slab is lower in utilization the defragger would have ended up in stagnation,
             # keept running and not move any allocation.
             # this test is more consistent on a fresh server with no history
-            start_server {tags {"defrag"}} {
+            start_server {tags {"defrag"} overrides {server-threads 1}} {
                 r flushdb
                 r config resetstat
                 r config set save "" ;# prevent bgsave from interfereing with save below

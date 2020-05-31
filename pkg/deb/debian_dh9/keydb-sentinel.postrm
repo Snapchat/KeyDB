@@ -1,0 +1,14 @@
+#!/bin/sh
+
+set -eu
+
+CONFFILE="/etc/keydb/sentinel.conf"
+
+if [ "$1" = "purge" ]
+then
+	dpkg-statoverride --remove ${CONFFILE} || test $? -eq 2
+fi
+
+#DEBHELPER#
+
+exit 0

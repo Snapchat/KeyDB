@@ -1,0 +1,32 @@
+keydb (5:5.3.3-1~bionic1) bionic; urgency=medium
+
+  * 5.3.3 Updating deb source package and naming convention.
+
+ -- Ben Schermel <ben@eqalpha.com>  Fri, 25 Oct 2019 8:00:37 +0000
+
+keydb (5:5.1.12-1chl1~bionic1) bionic; urgency=medium
+
+  * 5.1.1 update. This update fixes several rare deadlock scenarios. Deadlock detection is also added.  
+
+ -- Ben Schermel <ben@eqalpha.com>  Fri, 25 Oct 2019 8:00:37 +0000
+
+
+keydb (5:5.1.11-1chl1~bionic1) bionic; urgency=medium
+
+  * 5.1 release. This release includes subkey expires (EXPIREMEMBER/EXPIREMEMBERAT), with updates to PTTL/TTL accordingly. New OBJECT LASTMODIFIED, BITIOP LSHIFT & BITOP RSHIFT commands. See https://docs.keydb.dev/blog/2019/10/20/blog-post/ for detailed review of release.
+
+ -- Ben Schermel <ben@eqalpha.com>  Mon, 21 Oct 2019 8:00:37 +0000
+
+
+keydb (5:5.0.1-1chl1~bionic1) bionic; urgency=medium
+
+  * Arm build now included for bionic package
+
+ -- Ben Schermel <ben@eqalpha.com>  Wed, 21 Aug 2019 22:58:37 +0000
+
+
+keydb (5:5.0.0-1chl1~bionic1) bionic; urgency=medium
+
+  * Initial release of KeyDB PPA. This PPA was originally derived from https://launchpad.net/~chris-lea/+archive/ubuntu/redis-server
+
+ -- Ben Schermel <ben@eqalpha.com>  Wed, 21 Aug 2019 2:58:37 +0000

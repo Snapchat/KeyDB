@@ -1,0 +1,47 @@
+#!/bin/sh
+
+set -eu
+
+USER="keydb"
+
+Setup_dir () {
+	DIR="${1}"
+	MODE="${2}"
+	GROUP="${3}"
+
+	mkdir -p ${DIR}
+
+	case "${DIR}" in
+	/var/log/keydb)
+		MODE="02750"
+		GROUP="adm"
+		;;
+	*)
+		MODE="750"
+		GROUP="${USER}"
+		;;
+	esac
+
+	if ! dpkg-statoverride --list ${DIR} >/dev/null 2>&1
+	then
+		chown ${USER}:${GROUP} ${DIR}
+		chmod ${MODE} ${DIR}
+	fi
+}
+
+if [ "$1" = "configure" ]
+then
+	adduser \
+		--system \
+		--home /var/lib/keydb \
+		--quiet \
+		--group \
+		${USER} || true
+
+	Setup_dir /var/log/keydb ${USER}:adm 2750
+	Setup_dir /var/lib/keydb ${USER}:${USER} 750
+fi
+
+#DEBHELPER#
+
+exit 0

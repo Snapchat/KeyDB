@@ -69,7 +69,7 @@ fastlock_lock:
                             # rdi ARG1 futex (already in rdi)
 	                        # rsi ARG2 tid (already in esi)
                             # rdx ARG3 ticketT.u (already in edx)
-	bts ecx, eax            # rcx ARG4 mask
+	mov ecx, eax            # rcx ARG4 myticket
 	call fastlock_sleep
 	# cleanup and continue
 	pop rax

@@ -293,12 +293,21 @@ uint64_t fastlock_getlongwaitcount()
     return rval;
 }
 
-extern "C" void fastlock_sleep(fastlock *lock, pid_t pid, unsigned wake, unsigned mask)
+extern "C" void fastlock_sleep(fastlock *lock, pid_t pid, unsigned wake, unsigned myticket)
 {
 #ifdef __linux__
     g_dlock.registerwait(lock, pid);
+    unsigned mask = (1U << (myticket % 32));
     __atomic_fetch_or(&lock->futex, mask, __ATOMIC_ACQUIRE);
-    futex(&lock->m_ticket.u, FUTEX_WAIT_BITSET_PRIVATE, wake, nullptr, mask);
+
+    // double check the lock wasn't release between the last check and us setting the futex mask
+    uint32_t u;
+    __atomic_load(&lock->m_ticket.u, &u, __ATOMIC_ACQUIRE);
+    if ((u & 0xffff) != myticket)
+    {
+        futex(&lock->m_ticket.u, FUTEX_WAIT_BITSET_PRIVATE, wake, nullptr, mask);
+    }
+    
     __atomic_fetch_and(&lock->futex, ~mask, __ATOMIC_RELEASE);
     g_dlock.clearwait(lock, pid);
 #endif
@@ -332,7 +341,6 @@ extern "C" void fastlock_lock(struct fastlock *lock)
 
     int tid = gettid();
     unsigned myticket = __atomic_fetch_add(&lock->m_ticket.m_avail, 1, __ATOMIC_RELEASE);
-    unsigned mask = (1U << (myticket % 32));
     unsigned cloops = 0;
     ticket ticketT;
     unsigned loopLimit = g_fHighCpuPressure ? 0x10000 : 0x100000;
@@ -350,7 +358,7 @@ extern "C" void fastlock_lock(struct fastlock *lock)
 #endif
         if ((++cloops % loopLimit) == 0)
         {
-            fastlock_sleep(lock, tid, ticketT.u, mask);
+            fastlock_sleep(lock, tid, ticketT.u, myticket);
         }
     }
 

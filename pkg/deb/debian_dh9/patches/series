@@ -1,0 +1,8 @@
+0001-fix-ftbfs-on-kfreebsd.patch
+#debian-packaging/0003-dpkg-buildflags.patch
+#debian-packaging/0007-Set-Debian-configuration-defaults.patch
+#0010-Use-get_current_dir_name-over-PATHMAX-etc.patch
+#0010-Add-support-for-USE_SYSTEM_JEMALLOC-flag.patch
+#0011-Add-support-for-a-USE_SYSTEM_LUA-flag.patch
+#0007-Add-support-for-a-USE_SYSTEM_HIREDIS-flag.patch
+#test

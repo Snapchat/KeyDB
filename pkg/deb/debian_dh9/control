@@ -21,7 +21,12 @@ Build-Depends:
  autotools-dev <!nocheck>,
  autoconf <!nocheck>,
  libjemalloc-dev <!nocheck>,
- libssl-dev <!nocheck>
+ libssl-dev <!nocheck>,
+ libsnappy-dev <!nocheck>,
+ zlib1g-dev <!nocheck>,
+ libbz2-dev <!nocheck>,
+ liblz4-dev <!nocheck>,
+ libzstd-dev <!nocheck>
 Standards-Version: 4.2.1
 Homepage: https://docs.keydb.dev/
 Vcs-Git: https://github.com/JohnSully/KeyDB-Pro.git

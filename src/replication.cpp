@@ -1121,6 +1121,25 @@ void processReplconfUuid(client *c, robj *arg)
     if (uuid_parse(remoteUUID, c->uuid) != 0)
         goto LError;
 
+    listIter liMi;
+    listNode *lnMi;
+    listRewind(g_pserver->masters, &liMi);
+
+    // Enforce a fair ordering for connection, if they attempt to connect before us close them out
+    // This must be consistent so that both make the same decision of who should proceed first
+    while ((lnMi = listNext(&liMi))) {
+        redisMaster *mi = (redisMaster*)listNodeValue(lnMi);
+        if (mi->repl_state == REPL_STATE_CONNECTED)
+            continue;
+        if (FSameUuidNoNil(mi->master_uuid, c->uuid)) {
+            // Decide based on UUID so both clients make the same decision of which host loses 
+            //  otherwise we may entere a loop where neither client can proceed
+            if (memcmp(mi->master_uuid, c->uuid, UUID_BINARY_LEN) < 0) {
+                freeClientAsync(c);
+            }
+        }
+    }
+
     char szServerUUID[36 + 2]; // 1 for the '+', another for '\0'
     szServerUUID[0] = '+';
     uuid_unparse(cserver.uuid, szServerUUID+1);

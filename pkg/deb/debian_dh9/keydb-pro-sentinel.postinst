@@ -21,6 +21,6 @@ then
 	find /etc/keydb -maxdepth 1 -type d -name 'keydb-sentinel.*.d' -empty -delete
 fi
 
-sytemctl daemon-reload
+systemctl daemon-reload
 
 exit 0

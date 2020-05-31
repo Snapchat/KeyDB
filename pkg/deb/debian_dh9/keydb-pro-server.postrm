@@ -1,0 +1,16 @@
+#!/bin/sh
+
+set -eu
+
+CONFFILE="/etc/keydb/keydb.conf"
+
+if [ "${1}" = "purge" ]
+then
+	dpkg-statoverride --remove ${CONFFILE} || test $? -eq 2
+fi
+
+#DEBHELPER#
+
+sytemctl daemon-reload
+
+exit 0

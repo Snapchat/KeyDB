@@ -1,14 +1,11 @@
 keydb (6.0.8-1distribution_placeholder) codename_placeholder; urgency=medium
 
-  * 6.0.8 Updating builds from deb source package
-  * Naming conventions are now updated
-  * Builds now genrated accross different distributions/architectures automatically. 
-  * Same changelog used for all distribitions/architectures and will be updated on each release 
-  * init.d has been phased out and scripts updated to use systemd only
-  * keydb-pro=server binary is no longer inluded in the open source package
-  * see github pkg directory for debian code and build scripts used in distributions
+  * 6.0.8 
+  * Updating deb package builds to build from source and phasing out init.d. dh_installsystemd from deb helper 11 used where applicable
+  * Naming conventions are now updated [ keydbpackage_version-build~distribution_architecture] and master changelog included and maintained
+  * keydb-pro-server binary is no longer inluded in the open source package
 
- -- Ben Schermel <ben@eqalpha.com>  Wed, 06 May 2020 8:00:37 +0000
+ -- Ben Schermel <ben@eqalpha.com>  Sun, 31 May 2020 8:00:37 +0000
 
 keydb (5:5.1.12-1chl1distribution_placeholder) codename_placeholder; urgency=medium
 

@@ -1,3 +1,3 @@
-version=4
+version=6
 opts=uversionmangle=s/-?(alpha|beta|rc)/~$1/ \
-	https://github.com/JohnSully/KeyDB/releases .*/archive/(.*).tar.gz
+	https://github.com/JohnSully/KeyDB-Pro/releases .*/archive/(.*).tar.gz

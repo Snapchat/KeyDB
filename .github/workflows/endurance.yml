@@ -7,7 +7,7 @@ on:
 jobs:
 
   test-endurance:
-    runs-on: quadcore
+    runs-on: octocore
     timeout-minutes: 60
     steps:
     - uses: actions/checkout@v1

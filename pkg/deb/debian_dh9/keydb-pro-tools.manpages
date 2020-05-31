@@ -1,0 +1,4 @@
+debian/keydb-benchmark.1
+debian/keydb-check-aof.1
+debian/keydb-check-rdb.1
+debian/keydb-cli.1

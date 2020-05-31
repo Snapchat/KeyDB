@@ -26,7 +26,11 @@ cd ../../../
 tar -czvf keydb-pro_$version.orig.tar.gz --force-local KeyDB-Pro
 cd KeyDB-Pro/pkg/deb/
 mkdir -p $pkg_name/tmp
-cp -r debian $pkg_name/tmp
+if [ "$codename" == "xenial" ]; then
+	cp -r debian_dh9 $pkg_name/tmp/debian
+else
+	cp -r debian $pkg_name/tmp
+fi
 cp master_changelog $pkg_name/tmp/debian/changelog
 mv ../../../keydb-pro_$version.orig.tar.gz ./$pkg_name
 cd $pkg_name/tmp

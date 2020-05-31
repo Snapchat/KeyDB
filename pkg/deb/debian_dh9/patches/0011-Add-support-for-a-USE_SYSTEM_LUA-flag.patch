@@ -1,0 +1,71 @@
+From: Chris Lamb <lamby@debian.org>
+Date: Sun, 26 Aug 2018 12:57:32 +0200
+Subject: Add support for a USE_SYSTEM_LUA flag.
+
+https://github.com/antirez/redis/pull/5280
+---
+ deps/Makefile |  2 ++
+ src/Makefile  | 15 ++++++++++++---
+ 2 files changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/deps/Makefile b/deps/Makefile
+index 1342fac..2ed7736 100644
+--- a/deps/Makefile
++++ b/deps/Makefile
+@@ -35,7 +35,9 @@ endif
+ distclean:
+ 	-(cd hiredis && $(MAKE) clean) > /dev/null || true
+ 	-(cd linenoise && $(MAKE) clean) > /dev/null || true
++ifneq ($(USE_SYSTEM_LUA),yes)
+ 	-(cd lua && $(MAKE) clean) > /dev/null || true
++endif
+ ifneq ($(USE_SYSTEM_JEMALLOC),yes)
+ 	-(cd jemalloc && [ -f Makefile ] && $(MAKE) distclean) > /dev/null || true
+ endif
+diff --git a/src/Makefile b/src/Makefile
+index 51363fe..49085f2 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -16,7 +16,7 @@ release_hdr := $(shell sh -c './mkreleasehdr.sh')
+ uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
+ uname_M := $(shell sh -c 'uname -m 2>/dev/null || echo not')
+ OPTIMIZATION?=-O2
+-DEPENDENCY_TARGETS=hiredis linenoise lua
++DEPENDENCY_TARGETS=hiredis linenoise
+ NODEPS:=clean distclean
+ 
+ # Default settings
+@@ -107,7 +107,7 @@ endif
+ endif
+ endif
+ # Include paths to dependencies
+-FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src
++FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise
+ 
+ ifeq ($(MALLOC),tcmalloc)
+ 	FINAL_CFLAGS+= -DUSE_TCMALLOC
+@@ -130,6 +130,15 @@ else
+ endif
+ endif
+ 
++ifeq ($(USE_SYSTEM_LUA),yes)
++	FINAL_CFLAGS+= -I/usr/include/lua5.1
++	FINAL_LIBS := -llua5.1 $(FINAL_LIBS)
++else
++	FINAL_CFLAGS+= -I../deps/lua/src
++	DEPENDENCY_TARGETS+= lua
++	FINAL_LIBS := ../deps/lua/src/liblua.a $(FINAL_LIBS)
++endif
++
+ REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS) $(CPPFLAGS)
+ REDIS_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
+ REDIS_INSTALL=$(QUIET_INSTALL)$(INSTALL)
+@@ -201,7 +210,7 @@ endif
+ 
+ # redis-server
+ $(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ)
+-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a $(FINAL_LIBS)
++	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a $(FINAL_LIBS)
+ 
+ # redis-sentinel
+ $(REDIS_SENTINEL_NAME): $(REDIS_SERVER_NAME)

@@ -25,10 +25,12 @@ proc show_cluster_status {} {
         array set log {}
         for {set j 0} {$j < 5} {incr j} {
             set fd [open $R_log($j)]
-            while {[gets $fd l] >= 0} {
+            set found 0
+            while {[gets $fd l] >= 0 || !$found} {
                 if {[regexp $log_regexp $l] &&
                     [regexp -nocase $repl_regexp $l]} {
                     lappend log($j) $l
+                    set found 1
                 }
             }
             close $fd

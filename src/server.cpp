@@ -4646,7 +4646,7 @@ sds genRedisInfoString(const char *section) {
                 fAllUp = fAllUp && mi->repl_state == REPL_STATE_CONNECTED;
             }
 
-            sdscatprintf(info, "all_master_link_status:%s\r\n",
+            info = sdscatprintf(info, "master_global_link_status:%s\r\n",
                 fAllUp ? "up" : "down");
 
             int cmasters = 0;

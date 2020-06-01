@@ -1,10 +1,3 @@
-proc log_file_matches {log pattern} {
-    set fp [open $log r]
-    set content [read $fp]
-    close $fp
-    string match $pattern $content
-}
-
 start_server {tags {"repl"} overrides {hz 100}} {
     set slave [srv 0 client]
     set slave_host [srv 0 host]

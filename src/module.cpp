@@ -5439,7 +5439,9 @@ RedisModuleTimerID RM_CreateTimer(RedisModuleCtx *ctx, mstime_t period, RedisMod
         if (memcmp(ri.key,&key,sizeof(key)) == 0) {
             /* This is the first key, we need to re-install the timer according
              * to the just added event. */
-            aeDeleteTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,aeTimer);
+            aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [&]{
+                aeDeleteTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,aeTimer);
+            }, true /* synchronous */, false /* fLock */);
             aeTimer = -1;
         }
         raxStop(&ri);
@@ -5447,8 +5449,11 @@ RedisModuleTimerID RM_CreateTimer(RedisModuleCtx *ctx, mstime_t period, RedisMod
 
     /* If we have no main timer (the old one was invalidated, or this is the
      * first module timer we have), install one. */
-    if (aeTimer == -1)
-        aeTimer = aeCreateTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,period,moduleTimerHandler,NULL,NULL);
+    if (aeTimer == -1) {
+        aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [&]{
+            aeTimer = aeCreateTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,period,moduleTimerHandler,NULL,NULL);
+        }, true /* synchronous */, false /* fLock */);
+    }
 
     return key;
 }

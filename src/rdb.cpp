@@ -2416,7 +2416,6 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 rsi->mi->staleKeyMap->operator[](db - g_pserver->db).push_back(objKeyDup);
                 decrRefCount(objKeyDup);
             }
-            serverLog(LL_WARNING, "Loaded expired key");
             fLastKeyExpired = true;
             sdsfree(key);
             key = nullptr;
@@ -2425,7 +2424,6 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         } else {
             /* Add the new object in the hash table */
             int fInserted = dbMerge(db, &keyobj, val, (rsi && rsi->fForceSetKey) || (rdbflags & RDBFLAGS_ALLOW_DUP));   // Note: dbMerge will incrRef
-            serverLog(LL_WARNING, "Loaded: %s", key);
             fLastKeyExpired = false;
 
             if (fInserted)

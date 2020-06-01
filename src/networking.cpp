@@ -135,6 +135,7 @@ client *createClient(connection *conn, int iel) {
     c->sentlenAsync = 0;
     c->flags = 0;
     c->fPendingAsyncWrite = FALSE;
+    c->fPendingAsyncWriteHandler = FALSE;
     c->ctime = c->lastinteraction = g_pserver->unixtime;
     /* If the default user does not require authentication, the user is
      * directly authenticated. */
@@ -333,7 +334,7 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
     clientReplyBlock *tail = (clientReplyBlock*) (ln? listNodeValue(ln): NULL);
 
     /* Note that 'tail' may be NULL even if we have a tail node, becuase when
-     * addDeferredMultiBulkLength() is used, it sets a dummy node to NULL just
+     * addReplyDeferredLen() is used, it sets a dummy node to NULL just
      * fo fill it later, when the size of the bulk length is set. */
 
     /* Append to tail string when possible. */
@@ -513,31 +514,7 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
         if (ctype == CLIENT_TYPE_MASTER && g_pserver->repl_backlog &&
             g_pserver->repl_backlog_histlen > 0)
         {
-            long long dumplen = 256;
-            if (g_pserver->repl_backlog_histlen < dumplen)
-                dumplen = g_pserver->repl_backlog_histlen;
-
-            /* Identify the first byte to dump. */
-            long long idx =
-              (g_pserver->repl_backlog_idx + (g_pserver->repl_backlog_size - dumplen)) %
-               g_pserver->repl_backlog_size;
-
-            /* Scan the circular buffer to collect 'dumplen' bytes. */
-            sds dump = sdsempty();
-            while(dumplen) {
-                long long thislen =
-                    ((g_pserver->repl_backlog_size - idx) < dumplen) ?
-                    (g_pserver->repl_backlog_size - idx) : dumplen;
-
-                dump = sdscatrepr(dump,g_pserver->repl_backlog+idx,thislen);
-                dumplen -= thislen;
-                idx = 0;
-            }
-
-            /* Finally log such bytes: this is vital debugging info to
-             * understand what happened. */
-            serverLog(LL_WARNING,"Latest backlog is: '%s'", dump);
-            sdsfree(dump);
+            showLatestBacklog();
         }
         g_pserver->stat_unexpected_error_replies++;
     }
@@ -599,7 +576,7 @@ void trimReplyUnusedTailSpace(client *c) {
     clientReplyBlock *tail = ln? (clientReplyBlock*)listNodeValue(ln): NULL;
 
     /* Note that 'tail' may be NULL even if we have a tail node, becuase when
-     * addDeferredMultiBulkLength() is used */
+     * addReplyDeferredLen() is used */
     if (!tail) return;
 
     /* We only try to trim the space is relatively high (more than a 1/4 of the
@@ -1881,29 +1858,21 @@ void ProcessPendingAsyncWrites()
         
         std::atomic_thread_fence(std::memory_order_seq_cst);
         
-        if (c->casyncOpsPending == 0 || c->btype == BLOCKED_ASYNC)  // It's ok to send data if we're in a bgthread op
+        if (FCorrectThread(c))
         {
-            if (FCorrectThread(c))
-            {
-                prepareClientToWrite(c, false); // queue an event
-            }
-            else
-            {
-                // We need to start the write on the client's thread
-                if (aePostFunction(g_pserver->rgthreadvar[c->iel].el, [c]{
-                        // Install a write handler.  Don't do the actual write here since we don't want
-                        //  to duplicate the throttling and safety mechanisms of the normal write code
-                        std::lock_guard<decltype(c->lock)> lock(c->lock);
-                        serverAssert(c->casyncOpsPending > 0);
-                        c->casyncOpsPending--;
-                        connSetWriteHandler(c->conn, sendReplyToClient, true);
-                    }, false) == AE_ERR
-                )
-                {
-                    // Posting the function failed
-                    continue;   // We can retry later in the cron
-                }
-                ++c->casyncOpsPending; // race is handled by the client lock in the lambda
+            prepareClientToWrite(c, false); // queue an event
+        }
+        else
+        {
+            if (!c->fPendingAsyncWriteHandler) {
+                c->fPendingAsyncWriteHandler = true;
+                bool fResult = c->postFunction([](client *c) {
+                    c->fPendingAsyncWriteHandler = false;
+                    connSetWriteHandler(c->conn, sendReplyToClient, true);
+                });
+
+                if (!fResult)
+                    c->fPendingAsyncWriteHandler = false;   // if we failed to set the handler then prevent this from never being reset
             }
         }
     }
@@ -2079,6 +2048,19 @@ int processInlineBuffer(client *c) {
     if (querylen == 0 && getClientType(c) == CLIENT_TYPE_SLAVE)
         c->repl_ack_time = g_pserver->unixtime;
 
+    /* Masters should never send us inline protocol to run actual
+     * commands. If this happens, it is likely due to a bug in Redis where
+     * we got some desynchronization in the protocol, for example
+     * beause of a PSYNC gone bad.
+     *
+     * However the is an exception: masters may send us just a newline
+     * to keep the connection active. */
+    if (querylen != 0 && c->flags & CLIENT_MASTER) {
+        serverLog(LL_WARNING,"WARNING: Receiving inline protocol from master, master stream corruption? Closing the master connection and discarding the cached master.");
+        setProtocolError("Master using the inline protocol. Desync?",c);
+        return C_ERR;
+    }
+
     /* Move querybuffer position to the next query in the buffer. */
     c->qb_pos += querylen+linefeed_chars;
 
@@ -2102,7 +2084,7 @@ int processInlineBuffer(client *c) {
  * CLIENT_PROTOCOL_ERROR. */
 #define PROTO_DUMP_LEN 128
 static void setProtocolError(const char *errstr, client *c) {
-    if (cserver.verbosity <= LL_VERBOSE) {
+    if (cserver.verbosity <= LL_VERBOSE || c->flags & CLIENT_MASTER) {
         sds client = catClientInfoString(sdsempty(),c);
 
         /* Sample some protocol to given an idea about what was inside. */
@@ -2121,7 +2103,9 @@ static void setProtocolError(const char *errstr, client *c) {
         }
 
         /* Log all the client and protocol info. */
-        serverLog(LL_VERBOSE,
+        int loglevel = (c->flags & CLIENT_MASTER) ? LL_WARNING :
+                                                    LL_VERBOSE;
+        serverLog(loglevel,
             "Protocol error (%s) from client: %s. %s", errstr, client, buf);
         sdsfree(client);
     }
@@ -2280,7 +2264,6 @@ int processMultibulkBuffer(client *c) {
  * 2. In the case of master clients, the replication offset is updated.
  * 3. Propagate commands we got from our master to replicas down the line. */
 void commandProcessed(client *c) {
-    int cmd_is_ping = c->cmd && c->cmd->proc == pingCommand;
     long long prev_offset = c->reploff;
     if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
         /* Update the applied replication offset of our master. */
@@ -2307,7 +2290,6 @@ void commandProcessed(client *c) {
         AeLocker ae;
             ae.arm(c);
         long long applied = c->reploff - prev_offset;
-        long long prev_master_repl_meaningful_offset = g_pserver->master_repl_meaningful_offset;
         if (applied) {
             if (!g_pserver->fActiveReplica)
             {
@@ -2316,10 +2298,6 @@ void commandProcessed(client *c) {
             }
             sdsrange(c->pending_querybuf,applied,-1);
         }
-        /* The g_pserver->master_repl_meaningful_offset variable represents
-         * the offset of the replication stream without the pending PINGs. */
-        if (cmd_is_ping)
-            g_pserver->master_repl_meaningful_offset = prev_master_repl_meaningful_offset;
     }
 }
 
@@ -2852,7 +2830,7 @@ NULL
         if (target && target->flags & CLIENT_BLOCKED) {
             std::unique_lock<fastlock> ul(target->lock);
             if (unblock_error)
-                addReplyError(target,
+                addReplyErrorAsync(target,
                     "-UNBLOCKED client unblocked via CLIENT UNBLOCK");
             else
                 replyToBlockedClientTimedOut(target);

@@ -66,6 +66,8 @@ struct benchmarkThread;
 struct clusterNode;
 struct redisConfig;
 
+int g_fTestMode = false;
+
 static struct config {
     aeEventLoop *el;
     const char *hostip;
@@ -308,7 +310,7 @@ fail:
     else fprintf(stderr, "%s\n", hostsocket);
     freeReplyObject(reply);
     redisFree(c);
-    zfree(cfg);
+    freeRedisConfig(cfg);
     return NULL;
 }
 static void freeRedisConfig(redisConfig *cfg) {
@@ -1284,6 +1286,17 @@ static void updateClusterSlotsConfiguration() {
     pthread_mutex_unlock(&config.is_updating_slots_mutex);
 }
 
+/* Generate random data for redis benchmark. See #7196. */
+static void genBenchmarkRandomData(char *data, int count) {
+    static uint32_t state = 1234;
+    int i = 0;
+
+    while (count--) {
+        state = (state*1103515245+12345);
+        data[i++] = '0'+((state>>16)&63);
+    }
+}
+
 /* Returns number of consumed options. */
 int parseOptions(int argc, const char **argv) {
     int i;
@@ -1646,7 +1659,7 @@ int main(int argc, const char **argv) {
     /* Run default benchmark suite. */
     data = (char*)zmalloc(config.datasize+1, MALLOC_LOCAL);
     do {
-        memset(data,'x',config.datasize);
+        genBenchmarkRandomData(data, config.datasize);
         data[config.datasize] = '\0';
 
         if (test_is_selected("ping_inline") || test_is_selected("ping"))

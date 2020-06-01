@@ -36,6 +36,7 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
 
         test {Active replicas propogate} {
             $master set testkey foo
+            after 500
             wait_for_condition 50 500 {
                 [string match *foo* [$slave get testkey]]
             } else {

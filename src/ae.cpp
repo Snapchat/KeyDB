@@ -122,6 +122,7 @@ struct aeCommand
     AE_ASYNC_OP op;
     int fd; 
     int mask;
+    bool fLock = true;
     union {
         aePostFunctionProc *proc;
         aeFileProc *fproc;
@@ -169,7 +170,9 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
 
         case AE_ASYNC_OP::PostFunction:
             {
-            std::unique_lock<decltype(g_lock)> ulock(g_lock);
+            std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
+            if (cmd.fLock)
+                ulock.lock();
             ((aePostFunctionProc*)cmd.proc)(cmd.clientData);
             break;
             }
@@ -179,7 +182,9 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
             if (cmd.pctl != nullptr)
                 cmd.pctl->mutexcv.lock();
             
-            std::unique_lock<decltype(g_lock)> ulock(g_lock);
+            std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
+            if (cmd.fLock)
+                ulock.lock();
             (*cmd.pfn)();
             
             if (cmd.pctl != nullptr)
@@ -239,6 +244,7 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
     cmd.fproc = proc;
     cmd.clientData = clientData;
     cmd.pctl = nullptr;
+    cmd.fLock = true;
     if (fSynchronous)
     {
         cmd.pctl = new (MALLOC_LOCAL) aeCommandControl();
@@ -275,13 +281,14 @@ int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg)
     cmd.op = AE_ASYNC_OP::PostFunction;
     cmd.proc = proc;
     cmd.clientData = arg;
+    cmd.fLock = true;
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
     if (size != sizeof(cmd))
         return AE_ERR;
     return AE_OK;
 }
 
-int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynchronous)
+int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynchronous, bool fLock)
 {
     if (eventLoop == g_eventLoopThisThread)
     {
@@ -293,6 +300,7 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
     cmd.op = AE_ASYNC_OP::PostCppFunction;
     cmd.pfn = new (MALLOC_LOCAL) std::function<void()>(fn);
     cmd.pctl = nullptr;
+    cmd.fLock = fLock;
     if (fSynchronous)
     {
         cmd.pctl = new (MALLOC_LOCAL) aeCommandControl();
@@ -453,6 +461,7 @@ void aeDeleteFileEventAsync(aeEventLoop *eventLoop, int fd, int mask)
     cmd.op = AE_ASYNC_OP::DeleteFileEvent;
     cmd.fd = fd;
     cmd.mask = mask;
+    cmd.fLock = true;
     auto cb = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
     AE_ASSERT(cb == sizeof(cmd));
 }

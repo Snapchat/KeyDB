@@ -2029,8 +2029,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     {
         processUnblockedClients(IDX_EVENT_LOOP_MAIN);
     }
-
-    ProcessPendingAsyncWrites();    // This is really a bug, but for now catch any laggards that didn't clean up
         
     /* Software watchdog: deliver the SIGALRM that will reach the signal
      * handler if we don't return here fast enough. */
@@ -2236,6 +2234,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     run_with_period(30000) {
         checkTrialTimeout();
+
+        /* Tune the fastlock to CPU load */
+        fastlock_auto_adjust_waits();
     }
 
     /* Resize tracking keys table if needed. This is also done at every
@@ -2272,6 +2273,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                           0,
                           &ei);
 
+
+    /* CRON functions may trigger async writes, so do this last */
+    ProcessPendingAsyncWrites();
 
     g_pserver->cronloops++;
     return 1000/g_pserver->hz;
@@ -2656,7 +2660,6 @@ void initServerConfig(void) {
     g_pserver->enable_multimaster = CONFIG_DEFAULT_ENABLE_MULTIMASTER;
     g_pserver->repl_syncio_timeout = CONFIG_REPL_SYNCIO_TIMEOUT;
     g_pserver->master_repl_offset = 0;
-    g_pserver->master_repl_meaningful_offset = 0;
 
     /* Replication partial resync backlog */
     g_pserver->repl_backlog = NULL;
@@ -4848,8 +4851,17 @@ sds genRedisInfoString(const char *section) {
             listIter li;
             listNode *ln;
             listRewind(g_pserver->masters, &li);
+            bool fAllUp = true;
+            while ((ln = listNext(&li))) {
+                redisMaster *mi = (redisMaster*)listNodeValue(ln);
+                fAllUp = fAllUp && mi->repl_state == REPL_STATE_CONNECTED;
+            }
+
+            info = sdscatprintf(info, "master_global_link_status:%s\r\n",
+                fAllUp ? "up" : "down");
 
             int cmasters = 0;
+            listRewind(g_pserver->masters, &li);
             while ((ln = listNext(&li)))
             {
                 long long slave_repl_offset = 1;
@@ -4961,7 +4973,6 @@ sds genRedisInfoString(const char *section) {
             "master_replid:%s\r\n"
             "master_replid2:%s\r\n"
             "master_repl_offset:%lld\r\n"
-            "master_repl_meaningful_offset:%lld\r\n"
             "second_repl_offset:%lld\r\n"
             "repl_backlog_active:%d\r\n"
             "repl_backlog_size:%lld\r\n"
@@ -4970,7 +4981,6 @@ sds genRedisInfoString(const char *section) {
             g_pserver->replid,
             g_pserver->replid2,
             g_pserver->master_repl_offset,
-            g_pserver->master_repl_meaningful_offset,
             g_pserver->second_replid_offset,
             g_pserver->repl_backlog != NULL,
             g_pserver->repl_backlog_size,
@@ -5390,7 +5400,6 @@ void loadDataFromDisk(void) {
             {
                 memcpy(g_pserver->replid,rsi.repl_id,sizeof(g_pserver->replid));
                 g_pserver->master_repl_offset = rsi.repl_offset;
-                g_pserver->master_repl_meaningful_offset = rsi.repl_offset;
                 listIter li;
                 listNode *ln;
                 

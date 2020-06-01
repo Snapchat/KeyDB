@@ -2243,6 +2243,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     size_t ckeysLoaded = 0;
     robj *subexpireKey = nullptr;
     sds key = nullptr;
+    bool fLastKeyExpired = false;
 
     for (int idb = 0; idb < cserver.dbnum; ++idb)
     {
@@ -2380,11 +2381,22 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 static_assert(sizeof(unsigned long long) == sizeof(uint64_t), "Ensure long long is 64-bits");
                 mvcc_tstamp = strtoull(szFromObj(auxval), nullptr, 10);
             } else if (!strcasecmp(szFromObj(auxkey), "keydb-subexpire-key")) {
+                if (subexpireKey != nullptr) {
+                    serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping. key: %s subkey: %s", key != nullptr ? key : "(null)", subexpireKey != nullptr ? szFromObj(subexpireKey) : "(null)");
+                    decrRefCount(subexpireKey);
+                    subexpireKey = nullptr;
+                }
                 subexpireKey = auxval;
                 incrRefCount(subexpireKey);
             } else if (!strcasecmp(szFromObj(auxkey), "keydb-subexpire-when")) {
                 if (key == nullptr || subexpireKey == nullptr) {
-                    serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping. key: %s subkey: %s", key != nullptr ? key : "(null)", subexpireKey != nullptr ? szFromObj(subexpireKey) : "(null)");
+                    if (!fLastKeyExpired) { // This is not an error if we just expired the key associated with this subexpire
+                        serverLog(LL_WARNING, "Corrupt subexpire entry in RDB skipping. key: %s subkey: %s", key != nullptr ? key : "(null)", subexpireKey != nullptr ? szFromObj(subexpireKey) : "(null)");
+                    }
+                    if (subexpireKey) {
+                        decrRefCount(subexpireKey);
+                        subexpireKey = nullptr;
+                    }
                 }
                 else {
                     redisObject keyobj;
@@ -2489,6 +2501,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 rsi->mi->staleKeyMap->operator[](dbid).push_back(objKeyDup);
                 decrRefCount(objKeyDup);
             }
+            fLastKeyExpired = true;
             sdsfree(key);
             key = nullptr;
             decrRefCount(val);
@@ -2512,6 +2525,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             
             /* Add the new object in the hash table */
             int fInserted = dbMerge(db, &keyobj, val, (rsi && rsi->fForceSetKey) || (rdbflags & RDBFLAGS_ALLOW_DUP));   // Note: dbMerge will incrRef
+            fLastKeyExpired = false;
 
             if (fInserted)
             {

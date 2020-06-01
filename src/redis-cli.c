@@ -69,6 +69,8 @@
 redisContext *context;
 struct config config;
 
+int g_fTestMode = 0;
+
 /* User preferences. */
 static struct pref {
     int hints;
@@ -1607,7 +1609,14 @@ static void usage(void) {
     exit(1);
 }
 
-int confirmWithYes(const char *msg) {
+int confirmWithYes(const char *msg, int force) {
+    /* if force is true and --cluster-yes option is on,
+     * do not prompt for an answer */
+    if (force &&
+        (config.cluster_manager_command.flags & CLUSTER_MANAGER_CMD_FLAG_YES)) {
+        return 1;
+    }
+
     printf("%s (type 'yes' to accept): ", msg);
     fflush(stdout);
     char buf[4];
@@ -4586,7 +4595,8 @@ assign_replicas:
     }
     clusterManagerOptimizeAntiAffinity(ip_nodes, ip_count);
     clusterManagerShowNodes();
-    if (confirmWithYes("Can I set the above configuration?")) {
+    int force = 1;
+    if (confirmWithYes("Can I set the above configuration?", force)) {
         listRewind(cluster_manager.nodes, &li);
         while ((ln = listNext(&li)) != NULL) {
             clusterManagerNode *node = ln->value;

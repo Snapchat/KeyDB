@@ -272,6 +272,23 @@ start_server {tags {"expire"}} {
         r expiremember testkey foo 10000
         r save
         r debug reload
+        if {[log_file_matches [srv 0 stdout] "*Corrupt subexpire*"]} {
+            fail "Server reported corrupt subexpire"
+        }
         assert [expr [r ttl testkey foo] > 0]
+    }
+
+    test {Load subkey for an expired key works} {
+        # Note test inherits keys from previous tests, we want more traffic in the RDB
+        r multi
+        r sadd testset val1
+        r expiremember testset val1 300
+        r pexpire testset 1
+        r debug reload
+        r exec
+        set logerr [log_file_matches [srv 0 stdout] "*Corrupt subexpire*"]
+        if {$logerr} {
+            fail "Server reported corrupt subexpire"
+        }
     }
 }

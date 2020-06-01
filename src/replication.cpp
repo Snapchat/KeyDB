@@ -47,7 +47,6 @@
 #include <unordered_map>
 #include <string>
 
-long long adjustMeaningfulReplOffset();
 void replicationDiscardCachedMaster(redisMaster *mi);
 void replicationResurrectCachedMaster(redisMaster *mi, connection *conn);
 void replicationSendAck(redisMaster *mi);
@@ -249,7 +248,6 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
     const unsigned char *p = (const unsigned char*)ptr;
 
     g_pserver->master_repl_offset += len;
-    g_pserver->master_repl_meaningful_offset = g_pserver->master_repl_offset;
 
     /* This is a circular buffer, so write as much data we can at every
      * iteration and rewind the "idx" index if we reach the limit. */
@@ -541,6 +539,40 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     fake->sentlen = 0;
     fake->reply_bytes = 0;
     listEmpty(fake->reply);
+}
+
+/* This is a debugging function that gets called when we detect something
+ * wrong with the replication protocol: the goal is to peek into the
+ * replication backlog and show a few final bytes to make simpler to
+ * guess what kind of bug it could be. */
+void showLatestBacklog(void) {
+    if (g_pserver->repl_backlog == NULL) return;
+
+    long long dumplen = 256;
+    if (g_pserver->repl_backlog_histlen < dumplen)
+        dumplen = g_pserver->repl_backlog_histlen;
+
+    /* Identify the first byte to dump. */
+    long long idx =
+      (g_pserver->repl_backlog_idx + (g_pserver->repl_backlog_size - dumplen)) %
+       g_pserver->repl_backlog_size;
+
+    /* Scan the circular buffer to collect 'dumplen' bytes. */
+    sds dump = sdsempty();
+    while(dumplen) {
+        long long thislen =
+            ((g_pserver->repl_backlog_size - idx) < dumplen) ?
+            (g_pserver->repl_backlog_size - idx) : dumplen;
+
+        dump = sdscatrepr(dump,g_pserver->repl_backlog+idx,thislen);
+        dumplen -= thislen;
+        idx = 0;
+    }
+
+    /* Finally log such bytes: this is vital debugging info to
+     * understand what happened. */
+    serverLog(LL_WARNING,"Latest backlog is: '%s'", dump);
+    sdsfree(dump);
 }
 
 /* This function is used in order to proxy what we receive from our master
@@ -1006,6 +1038,9 @@ void syncCommand(client *c) {
         changeReplicationId();
         clearReplicationId2();
         createReplicationBacklog();
+        serverLog(LL_NOTICE,"Replication backlog created, my new "
+                            "replication IDs are '%s' and '%s'",
+                            g_pserver->replid, g_pserver->replid2);
     }
 
     /* CASE 1: BGSAVE is in progress, with disk target. */
@@ -1085,6 +1120,25 @@ void processReplconfUuid(client *c, robj *arg)
 
     if (uuid_parse(remoteUUID, c->uuid) != 0)
         goto LError;
+
+    listIter liMi;
+    listNode *lnMi;
+    listRewind(g_pserver->masters, &liMi);
+
+    // Enforce a fair ordering for connection, if they attempt to connect before us close them out
+    // This must be consistent so that both make the same decision of who should proceed first
+    while ((lnMi = listNext(&liMi))) {
+        redisMaster *mi = (redisMaster*)listNodeValue(lnMi);
+        if (mi->repl_state == REPL_STATE_CONNECTED)
+            continue;
+        if (FSameUuidNoNil(mi->master_uuid, c->uuid)) {
+            // Decide based on UUID so both clients make the same decision of which host loses 
+            //  otherwise we may entere a loop where neither client can proceed
+            if (memcmp(mi->master_uuid, c->uuid, UUID_BINARY_LEN) < 0) {
+                freeClientAsync(c);
+            }
+        }
+    }
 
     char szServerUUID[36 + 2]; // 1 for the '+', another for '\0'
     szServerUUID[0] = '+';
@@ -1301,8 +1355,7 @@ void sendBulkToSlave(connection *conn) {
     
     client *replica = (client*)connGetPrivateData(conn);
     serverAssert(FCorrectThread(replica));
-    char buf[PROTO_IOBUF_LEN];
-    ssize_t nwritten, buflen;
+    ssize_t nwritten;
     AeLocker aeLock;
     std::unique_lock<fastlock> ul(replica->lock);
 
@@ -1331,27 +1384,36 @@ void sendBulkToSlave(connection *conn) {
         }
     }
 
-    /* If the preamble was already transferred, send the RDB bulk data. */
-    lseek(replica->repldbfd,replica->repldboff,SEEK_SET);
-    buflen = read(replica->repldbfd,buf,PROTO_IOBUF_LEN);
-    if (buflen <= 0) {
-        serverLog(LL_WARNING,"Read error sending DB to replica: %s",
-            (buflen == 0) ? "premature EOF" : strerror(errno));
-        ul.unlock();
-        aeLock.arm(nullptr);
-        freeClient(replica);
-        return;
-    }
-    if ((nwritten = connWrite(conn,buf,buflen)) == -1) {
-        if (connGetState(conn) != CONN_STATE_CONNECTED) {
-            serverLog(LL_WARNING,"Write error sending DB to replica: %s",
-                connGetLastError(conn));
+    /* If the preamble was already transferred, send the RDB bulk data.
+     * try to use sendfile system call if supported, unless tls is enabled.
+     * fallback to normal read+write otherwise. */
+    nwritten = 0;
+    if (!nwritten) {
+        ssize_t buflen;
+        char buf[PROTO_IOBUF_LEN];
+
+        lseek(replica->repldbfd,replica->repldboff,SEEK_SET);
+        buflen = read(replica->repldbfd,buf,PROTO_IOBUF_LEN);
+        if (buflen <= 0) {
+            serverLog(LL_WARNING,"Read error sending DB to replica: %s",
+                (buflen == 0) ? "premature EOF" : strerror(errno));
             ul.unlock();
             aeLock.arm(nullptr);
             freeClient(replica);
+            return;
         }
-        return;
+        if ((nwritten = connWrite(conn,buf,buflen)) == -1) {
+            if (connGetState(conn) != CONN_STATE_CONNECTED) {
+                serverLog(LL_WARNING,"Write error sending DB to replica: %s",
+                    connGetLastError(conn));
+                ul.unlock();
+                aeLock.arm(nullptr);
+                freeClient(replica);
+            }
+            return;
+        }
     }
+
     replica->repldboff += nwritten;
     g_pserver->stat_net_output_bytes += nwritten;
     if (replica->repldboff == replica->repldbsize) {
@@ -1936,6 +1998,10 @@ void readSyncBulkPayload(connection *conn) {
 
         nread = connRead(conn,buf,readlen);
         if (nread <= 0) {
+            if (connGetState(conn) == CONN_STATE_CONNECTED) {
+                /* equivalent to EAGAIN */
+                return;
+            }
             serverLog(LL_WARNING,"I/O error trying to sync with MASTER: %s",
                 (nread == -1) ? strerror(errno) : "connection lost");
             cancelReplicationHandshake(mi);
@@ -2206,7 +2272,6 @@ void readSyncBulkPayload(connection *conn) {
         * we are starting a new history. */
         memcpy(g_pserver->replid,mi->master->replid,sizeof(g_pserver->replid));
         g_pserver->master_repl_offset = mi->master->reploff;
-        g_pserver->master_repl_meaningful_offset = mi->master->reploff;
     }
     clearReplicationId2();
 
@@ -3054,11 +3119,6 @@ void replicationUnsetMaster(redisMaster *mi) {
 
     sdsfree(mi->masterhost);
     mi->masterhost = NULL;
-    /* When a slave is turned into a master, the current replication ID
-     * (that was inherited from the master at synchronization time) is
-     * used as secondary ID up to the current offset, and a new replication
-     * ID is created to continue with a new replication history. */
-    shiftReplicationId();
     if (mi->master) {
         if (FCorrectThread(mi->master))
             freeClient(mi->master);
@@ -3067,6 +3127,15 @@ void replicationUnsetMaster(redisMaster *mi) {
     }
     replicationDiscardCachedMaster(mi);
     cancelReplicationHandshake(mi);
+    /* When a slave is turned into a master, the current replication ID
+     * (that was inherited from the master at synchronization time) is
+     * used as secondary ID up to the current offset, and a new replication
+     * ID is created to continue with a new replication history.
+     *
+     * NOTE: this function MUST be called after we call
+     * freeClient(server.master), since there we adjust the replication
+     * offset trimming the final PINGs. See Github issue #7320. */
+    shiftReplicationId();
     /* Disconnecting all the slaves is required: we need to inform slaves
      * of the replication ID change (see shiftReplicationId() call). However
      * the slaves will be able to partially resync with us, so it will be
@@ -3302,10 +3371,6 @@ void replicationCacheMaster(redisMaster *mi, client *c) {
      * pending outputs to the master. */
     sdsclear(mi->master->querybuf);
     sdsclear(mi->master->pending_querybuf);
-    
-    /* Adjust reploff and read_reploff to the last meaningful offset we executed.
-     * this is the offset the replica will use for future PSYNC. */
-    mi->master->reploff = adjustMeaningfulReplOffset();
     mi->master->read_reploff = mi->master->reploff;
     if (c->flags & CLIENT_MULTI) discardTransaction(c);
     listEmpty(c->reply);
@@ -3329,38 +3394,6 @@ void replicationCacheMaster(redisMaster *mi, client *c) {
      * so make sure to adjust the replication state. This function will
      * also set g_pserver->master to NULL. */
     replicationHandleMasterDisconnection(mi);
-}
-
-/* If the "meaningful" offset, that is the offset without the final PINGs
- * in the stream, is different than the last offset, use it instead:
- * often when the master is no longer reachable, replicas will never
- * receive the PINGs, however the master will end with an incremented
- * offset because of the PINGs and will not be able to incrementally
- * PSYNC with the new master.
- * This function trims the replication backlog when needed, and returns
- * the offset to be used for future partial sync. */
-long long adjustMeaningfulReplOffset() {
-    if (g_pserver->master_repl_offset > g_pserver->master_repl_meaningful_offset) {
-        long long delta = g_pserver->master_repl_offset -
-                          g_pserver->master_repl_meaningful_offset;
-        serverLog(LL_NOTICE,
-            "Using the meaningful offset %lld instead of %lld to exclude "
-            "the final PINGs (%lld bytes difference)",
-                g_pserver->master_repl_meaningful_offset,
-                g_pserver->master_repl_offset,
-                delta);
-        g_pserver->master_repl_offset = g_pserver->master_repl_meaningful_offset;
-        if (g_pserver->repl_backlog_histlen <= delta) {
-            g_pserver->repl_backlog_histlen = 0;
-            g_pserver->repl_backlog_idx = 0;
-        } else {
-            g_pserver->repl_backlog_histlen -= delta;
-            g_pserver->repl_backlog_idx =
-                (g_pserver->repl_backlog_idx + (g_pserver->repl_backlog_size - delta)) %
-                g_pserver->repl_backlog_size;
-        }
-    }
-    return g_pserver->master_repl_offset;
 }
 
 /* This function is called when a master is turend into a slave, in order to
@@ -3388,7 +3421,7 @@ void replicationCacheMasterUsingMyself(redisMaster *mi) {
      * by replicationCreateMasterClient(). We'll later set the created
      * master as server.cached_master, so the replica will use such
      * offset for PSYNC. */
-    mi->master_initial_offset = adjustMeaningfulReplOffset();
+    mi->master_initial_offset = g_pserver->master_repl_offset;
 
     /* The master client we create can be set to any DBID, because
      * the new master will start its replication stream with SELECT. */
@@ -3730,6 +3763,18 @@ void replicationCron(void) {
     listIter liMaster;
     listNode *lnMaster;
     listRewind(g_pserver->masters, &liMaster);
+
+    bool fInMasterConnection = false;
+    while ((lnMaster = listNext(&liMaster)) && !fInMasterConnection)
+    {
+        redisMaster *mi = (redisMaster*)listNodeValue(lnMaster);
+        if (mi->repl_state != REPL_STATE_NONE && mi->repl_state != REPL_STATE_CONNECTED && mi->repl_state != REPL_STATE_CONNECT) {
+            fInMasterConnection = true;
+        }
+    }
+
+    bool fConnectionStarted = false;
+    listRewind(g_pserver->masters, &liMaster);
     while ((lnMaster = listNext(&liMaster)))
     {
         redisMaster *mi = (redisMaster*)listNodeValue(lnMaster);
@@ -3768,12 +3813,14 @@ void replicationCron(void) {
         }
 
         /* Check if we should connect to a MASTER */
-        if (mi->repl_state == REPL_STATE_CONNECT) {
+        if (mi->repl_state == REPL_STATE_CONNECT && !fInMasterConnection) {
             serverLog(LL_NOTICE,"Connecting to MASTER %s:%d",
                 mi->masterhost, mi->masterport);
             if (connectWithMaster(mi) == C_OK) {
                 serverLog(LL_NOTICE,"MASTER <-> REPLICA sync started");
             }
+            fInMasterConnection = true;
+            fConnectionStarted = true;
         }
 
         /* Send ACK to master from time to time.
@@ -3782,6 +3829,11 @@ void replicationCron(void) {
         if (mi->masterhost && mi->master &&
             !(mi->master->flags & CLIENT_PRE_PSYNC))
             replicationSendAck(mi);
+    }
+
+    if (fConnectionStarted) {
+        // If we cancel this handshake we want the next attempt to be a different master
+        listRotateHeadToTail(g_pserver->masters);
     }
 
     /* If we have attached slaves, PING them from time to time.
@@ -3806,18 +3858,10 @@ void replicationCron(void) {
             clientsArePaused();
 
         if (!manual_failover_in_progress) {
-            long long before_ping = g_pserver->master_repl_meaningful_offset;
             ping_argv[0] = createStringObject("PING",4);
             replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb,
                 ping_argv, 1);
             decrRefCount(ping_argv[0]);
-            /* The server.master_repl_meaningful_offset variable represents
-             * the offset of the replication stream without the pending PINGs.
-             * This is useful to set the right replication offset for PSYNC
-             * when the master is turned into a replica. Otherwise pending
-             * PINGs may not allow it to perform an incremental sync with the
-             * new master. */
-            g_pserver->master_repl_meaningful_offset = before_ping;
         }
     }
 

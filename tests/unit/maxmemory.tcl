@@ -1,3 +1,4 @@
+run_solo {maxmemory} {
 start_server {tags {"maxmemory"}} {
     test "Without maxmemory small integers are shared" {
         r config set maxmemory 0
@@ -144,7 +145,11 @@ start_server {tags {"maxmemory"}} {
 }
 
 proc test_slave_buffers {test_name cmd_count payload_len limit_memory pipeline} {
-    start_server {tags {"maxmemory"}} {
+    # This is a single thread only test because there is a race in getMaxMemoryState
+    #  between zmalloc_used_memory and getting the client outbut buffer memory usage.
+    #  The cure would be worse than the disease, we do not want lock every replica 
+    #  simultaneously just to get more accurate memory usage.
+    start_server {tags {"maxmemory"} overrides { server-threads 1 }} {
         start_server {} {
         set slave_pid [s process_id]
         test "$test_name" {
@@ -240,3 +245,4 @@ test_slave_buffers {slave buffer are counted correctly} 1000000 10 0 1
 # test that slave buffer don't induce eviction
 # test again with fewer (and bigger) commands without pipeline, but with eviction
 test_slave_buffers "replica buffer don't induce eviction" 100000 100 1 0
+} ;# run_solo

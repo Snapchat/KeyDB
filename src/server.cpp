@@ -4640,8 +4640,17 @@ sds genRedisInfoString(const char *section) {
             listIter li;
             listNode *ln;
             listRewind(g_pserver->masters, &li);
+            bool fAllUp = true;
+            while ((ln = listNext(&li))) {
+                redisMaster *mi = (redisMaster*)listNodeValue(ln);
+                fAllUp = fAllUp && mi->repl_state == REPL_STATE_CONNECTED;
+            }
+
+            sdscatprintf(info, "all_master_link_status:%s\r\n",
+                fAllUp ? "up" : "down");
 
             int cmasters = 0;
+            listRewind(g_pserver->masters, &li);
             while ((ln = listNext(&li)))
             {
                 long long slave_repl_offset = 1;

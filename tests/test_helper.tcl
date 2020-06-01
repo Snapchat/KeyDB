@@ -613,7 +613,7 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--stop}} {
         set ::stop_on_failure 1
     } elseif {$opt eq {--loop}} {
-        set ::loop 1000
+        set ::loop -1
     } elseif {$opt eq {--loopn}} {
         set ::loop [expr $arg - 1]
         incr j

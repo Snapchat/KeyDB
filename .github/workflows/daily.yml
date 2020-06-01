@@ -5,6 +5,7 @@ on:
     - cron: '0 7 * * *'
 
 jobs:
+
   test-jemalloc:
     runs-on: ubuntu-latest
     timeout-minutes: 1200
@@ -36,6 +37,40 @@ jobs:
         ./runtest --accurate --verbose
     - name: module api test
       run: ./runtest-moduleapi --verbose
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - name: make
+      run: |
+        sudo apt-get -y install uuid-dev libcurl4-openssl-dev
+        make BUILD_TLS=yes -j2
+    - name: "test (tls)"
+      run: |
+        sudo apt-get install tcl8.5 tcl-tls
+        ./utils/gen-test-certs.sh
+        ./runtest --accurate --verbose --tls
+    - name: test
+      run: ./runtest --accurate --verbose
+    - name: module api test (tls)
+      run: ./runtest-moduleapi --verbose --tls
+
+  test-ubuntu-arm:
+    runs-on: [self-hosted, linux, arm]
+    steps:
+    - uses: actions/checkout@v1
+    - name: make
+      run: |
+          sudo apt-get -y install uuid-dev libcurl4-openssl-dev
+          make -j4
+    - name: test
+      run: |
+        sudo apt-get -y install tcl8.5
+        ./runtest --clients 2 --verbose
+    - name: module tests
+      run: |
+          ./runtest-moduleapi
 
   test-valgrind:
     runs-on: ubuntu-latest

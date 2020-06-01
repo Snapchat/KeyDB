@@ -3,6 +3,7 @@ name: CI
 on: [push, pull_request]
 
 jobs:
+
   test-ubuntu-latest:
     runs-on: self-hosted
     steps:
@@ -14,19 +15,19 @@ jobs:
           sudo apt-get -y remove libzstd || true
           sudo apt-get -y install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
           sudo apt-get -y install uuid-dev libcurl4-openssl-dev
-          make -j$(nproc)
-    - name: test
+          make BUILD_TLS=yes -j2
+    - name: gen-cert
+      run: ./utils/gen-test-certs.sh
+    - name: test-tls
       run: |
-        sudo apt-get -y install tcl8.5
-        ./runtest --clients 4 --verbose
+        sudo apt-get -y install tcl8.5 tcl-tls
+        ./runtest --clients 2 --verbose --tls
     - name: cluster-test
       run: |
-        ./runtest-cluster
+        ./runtest-cluster --tls
     - name: sentinel test
       run: |
           ./runtest-sentinel
     - name: module tests
       run: |
           ./runtest-moduleapi
-
-        

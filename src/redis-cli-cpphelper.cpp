@@ -108,10 +108,41 @@ extern "C" void freeClusterManager(void) {
         dictRelease(clusterManagerUncoveredSlots);
 }
 
+/* This function returns a random master node, return NULL if none */
+
+static clusterManagerNode *clusterManagerNodeMasterRandom() {
+    int master_count = 0;
+    int idx;
+    listIter li;
+    listNode *ln;
+    listRewind(cluster_manager.nodes, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        clusterManagerNode *n = (clusterManagerNode*) ln->value;
+        if (n->flags & CLUSTER_MANAGER_FLAG_SLAVE) continue;
+        master_count++;
+    }
+
+    srand(time(NULL));
+    idx = rand() % master_count;
+    listRewind(cluster_manager.nodes, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        clusterManagerNode *n = (clusterManagerNode*) ln->value;
+        if (n->flags & CLUSTER_MANAGER_FLAG_SLAVE) continue;
+        if (!idx--) {
+            return n;
+        }
+    }
+    /* Can not be reached */
+    return NULL;
+}
+
 static int clusterManagerFixSlotsCoverage(char *all_slots) {
-    dictIterator *iter = nullptr;
     int force_fix = config.cluster_manager_command.flags &
                     CLUSTER_MANAGER_CMD_FLAG_FIX_WITH_UNREACHABLE_MASTERS;
+    /* we want explicit manual confirmation from users for all the fix cases */
+    int force = 0;
+
+    dictIterator *iter = nullptr;
 
     if (cluster_manager.unreachable_masters > 0 && !force_fix) {
         clusterManagerLogWarn("*** Fixing slots coverage with %d unreachable masters is dangerous: redis-cli will assume that slots about masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the --cluster-fix-with-unreachable-masters option.\n", cluster_manager.unreachable_masters);
@@ -181,7 +212,8 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
         printf("The following uncovered slots have no keys "
                "across the cluster:\n");
         clusterManagerPrintSlotsList(none);
-        if (confirmWithYes("Fix these slots by covering with a random node?")){
+        if (confirmWithYes("Fix these slots by covering with a random node?",
+                           force)) {
             listIter li;
             listNode *ln;
             listRewind(none, &li);
@@ -207,7 +239,8 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
     if (listLength(single) > 0) {
         printf("The following uncovered slots have keys in just one node:\n");
         clusterManagerPrintSlotsList(single);
-        if (confirmWithYes("Fix these slots by covering with those nodes?")){
+        if (confirmWithYes("Fix these slots by covering with those nodes?",
+                           force)) {
             listIter li;
             listNode *ln;
             listRewind(single, &li);
@@ -239,7 +272,7 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
         printf("The following uncovered slots have keys in multiple nodes:\n");
         clusterManagerPrintSlotsList(multi);
         if (confirmWithYes("Fix these slots by moving keys "
-                           "into a single node?")) {
+                           "into a single node?", force)) {
             listIter li;
             listNode *ln;
             listRewind(multi, &li);
@@ -537,35 +570,6 @@ dict *clusterManagerGetLinkStatus(void) {
         }
     }
     return status;
-}
-
-
-/* This function returns a random master node, return NULL if none */
-
-static clusterManagerNode *clusterManagerNodeMasterRandom() {
-    int master_count = 0;
-    int idx;
-    listIter li;
-    listNode *ln;
-    listRewind(cluster_manager.nodes, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        clusterManagerNode *n = (clusterManagerNode*) ln->value;
-        if (n->flags & CLUSTER_MANAGER_FLAG_SLAVE) continue;
-        master_count++;
-    }
-
-    srand(time(NULL));
-    idx = rand() % master_count;
-    listRewind(cluster_manager.nodes, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        clusterManagerNode *n = (clusterManagerNode*) ln->value;
-        if (n->flags & CLUSTER_MANAGER_FLAG_SLAVE) continue;
-        if (!idx--) {
-            return n;
-        }
-    }
-    /* Can not be reached */
-    return NULL;
 }
 
 extern "C" int clusterManagerCheckCluster(int quiet) {

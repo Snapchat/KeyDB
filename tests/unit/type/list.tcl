@@ -1,7 +1,10 @@
+# Setting server-threads to 2 is really single threaded because test mode is enabled (no client allocated to thread 1)
+# We do this because of the large numbers of nonblocking clients in this tests and the client races that causes
 start_server {
     tags {"list"}
     overrides {
         "list-max-ziplist-size" 5
+        "server-threads 2"
     }
 } {
     source "tests/unit/type/list-common.tcl"

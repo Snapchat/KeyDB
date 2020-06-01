@@ -2,7 +2,7 @@ name: Endurance
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '30 * * * *'
 
 jobs:
 
@@ -18,5 +18,5 @@ jobs:
     - name: test-multithread (5X)
       run: |
         sudo apt-get install -y tcl8.5
-        ./runtest --loopn 4 --config server-threads 3 --clients 5
+        ./runtest --loopn 5 --config server-threads 3 --clients 5
 

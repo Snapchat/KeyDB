@@ -2822,7 +2822,7 @@ NULL
         if (target && target->flags & CLIENT_BLOCKED) {
             std::unique_lock<fastlock> ul(target->lock);
             if (unblock_error)
-                addReplyError(target,
+                addReplyErrorAsync(target,
                     "-UNBLOCKED client unblocked via CLIENT UNBLOCK");
             else
                 replyToBlockedClientTimedOut(target);

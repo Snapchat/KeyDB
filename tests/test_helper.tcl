@@ -77,7 +77,9 @@ set ::all_tests {
 set ::next_test 0
 
 set ::host 127.0.0.1
-set ::port 21111
+set ::port 6379; # port for external server
+set ::baseport 21111; # initial port for spawned redis servers
+set ::portcount 8000; # we don't wanna use more than 10000 to avoid collision with cluster bus ports
 set ::traceleaks 0
 set ::valgrind 0
 set ::tls 0
@@ -235,26 +237,26 @@ proc test_server_main {} {
     set tclsh [info nameofexecutable]
     # Open a listening socket, trying different ports in order to find a
     # non busy one.
-    set port [find_available_port 11111]
+    set clientport [find_available_port 11111 32]
     if {!$::quiet} {
-        puts "Starting test server at port $port"
+        puts "Starting test server at port $clientport"
     }
-    socket -server accept_test_clients  -myaddr 127.0.0.1 $port
+    socket -server accept_test_clients  -myaddr 127.0.0.1 $clientport
 
     # Start the client instances
     set ::clients_pids {}
     if {$::external} {
         set p [exec $tclsh [info script] {*}$::argv \
-            --client $port --port $::port &]
+            --client $clientport &]
         lappend ::clients_pids $p
     } else {
-        set start_port [expr {$::port+100}]
+        set start_port $::baseport
+        set port_count [expr {$::portcount / $::numclients}]
         for {set j 0} {$j < $::numclients} {incr j} {
-            set start_port [find_available_port $start_port]
             set p [exec $tclsh [info script] {*}$::argv \
-                --client $port --port $start_port &]
+                --client $clientport --baseport $start_port --portcount $port_count &]
             lappend ::clients_pids $p
-            incr start_port 10
+            incr start_port $port_count
         }
     }
 
@@ -427,6 +429,7 @@ proc signal_idle_client fd {
         lappend ::active_clients $fd
         incr ::next_test
         if {$::loop && $::next_test == [llength $::all_tests]} {
+            incr ::loop -1
             set ::next_test 0
         }
     } elseif {[llength $::run_solo_tests] != 0 && [llength $::active_clients] == 0} {
@@ -517,6 +520,10 @@ proc print_help_screen {} {
         "--loop             Execute the specified set of tests forever."
         "--wait-server      Wait after server is started (so that you can attach a debugger)."
         "--tls              Run tests in TLS mode."
+        "--host <addr>      Run tests against an external host."
+        "--port <port>      TCP port to use against external host."
+        "--baseport <port>  Initial port number for spawned redis servers."
+        "--portcount <num>  Port range for spawned redis servers."
         "--help             Print this help screen."
     } "\n"]
 }
@@ -567,6 +574,12 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--port}} {
         set ::port $arg
         incr j
+    } elseif {$opt eq {--baseport}} {
+        set ::baseport $arg
+        incr j
+    } elseif {$opt eq {--portcount}} {
+        set ::portcount $arg
+        incr j
     } elseif {$opt eq {--accurate}} {
         set ::accurate 1
     } elseif {$opt eq {--force-failure}} {
@@ -601,7 +614,10 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--stop}} {
         set ::stop_on_failure 1
     } elseif {$opt eq {--loop}} {
-        set ::loop 1
+        set ::loop -1
+    } elseif {$opt eq {--loopn}} {
+        set ::loop [expr $arg - 1]
+        incr j
     } elseif {$opt eq {--timeout}} {
         set ::timeout $arg
         incr j

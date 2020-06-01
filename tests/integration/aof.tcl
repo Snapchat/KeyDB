@@ -315,7 +315,7 @@ tags {"aof"} {
         }
 
         test "AOF+PEXPIREMEMBERAT: set should have 3 values" {
-            set client [redis [dict get $srv host] [dict get $srv port]]
+            set client [redis [dict get $srv host] [dict get $srv port] 0 $::tls]
             wait_for_condition 50 100 {
                 [catch {$client ping} e] == 0
             } else {

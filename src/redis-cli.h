@@ -273,7 +273,7 @@ int parseClusterNodeAddress(char *addr, char **ip_ptr, int *port_ptr,
     int *bus_port_ptr);
 int clusterManagerCheckRedisReply(clusterManagerNode *n,
     redisReply *r, char **err);
-int confirmWithYes(const char *msg);
+int confirmWithYes(const char *msg, int force);
 int clusterManagerSetSlotOwner(clusterManagerNode *owner,
     int slot,
     int do_clear);

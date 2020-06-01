@@ -15,6 +15,7 @@ void fastlock_unlock(struct fastlock *lock);
 void fastlock_free(struct fastlock *lock);
 int fastlock_unlock_recursive(struct fastlock *lock);
 void fastlock_lock_recursive(struct fastlock *lock, int nesting);
+void fastlock_auto_adjust_waits();
 
 uint64_t fastlock_getlongwaitcount();   // this is a global value
 

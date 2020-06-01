@@ -2235,6 +2235,8 @@ void clusterWriteHandler(connection *conn) {
 void clusterLinkConnectHandler(connection *conn) {
     clusterLink *link = (clusterLink*)connGetPrivateData(conn);
     clusterNode *node = link->node;
+    if (node == nullptr)
+        return; // we're about to be freed
 
     /* Check if connection succeeded */
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
@@ -5289,6 +5291,7 @@ try_again:
         zfree(ov); zfree(kv);
         return; /* error sent to the client by migrateGetSocket() */
     }
+    connMarshalThread(cs->conn);
 
     rioInitWithBuffer(&cmd,sdsempty());
 

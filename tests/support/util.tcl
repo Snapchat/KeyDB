@@ -1,3 +1,10 @@
+proc log_file_matches {log pattern} {
+    set fp [open $log r]
+    set content [read $fp]
+    close $fp
+    string match $pattern $content
+}
+
 proc randstring {min max {type binary}} {
     set len [expr {$min+int(rand()*($max-$min+1))}]
     set output {}

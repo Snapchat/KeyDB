@@ -34,7 +34,7 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
     test "$topology all nodes up" {
         for {set j 0} {$j < 4} {incr j} {
             wait_for_condition 50 100 {
-                [string match {*all_master_link_status:up*} [$R($j) info replication]]
+                [string match {*master_global_link_status:up*} [$R($j) info replication]]
             } else {
                 fail "Multimaster group didn't connect up in a reasonable period of time"
             }

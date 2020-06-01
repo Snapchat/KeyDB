@@ -31,13 +31,21 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
         $R(3) replicaof $R_host(2) $R_port(2)
     }
 
-    after 2000
+    test "$topology all nodes up" {
+        for {set j 0} {$j < 4} {incr j} {
+            wait_for_condition 50 100 {
+                [string match {*all_master_link_status:up*} [$R($j) info replication]]
+            } else {
+                fail "Multimaster group didn't connect up in a reasonable period of time"
+            }
+        }
+    }
 
     test "$topology replicates to all nodes" {
         $R(0) set testkey foo
         after 500
         for {set n 0} {$n < 4} {incr n} {
-            wait_for_condition 50 1000 {
+            wait_for_condition 50 100 {
                 [$R($n) get testkey] == "foo"
             } else {
                 fail "Failed to replicate to $n"
@@ -48,12 +56,17 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
     test "$topology replicates only once" {
         $R(0) set testkey 1
         after 500
+        #wait_for_condition 50 100 {
+        #    [$R(1) get testkey] == 1 && [$R(2) get testkey] == 1
+        #} else {
+        #    fail "Set failed to replicate"
+        #}
         $R(1) incr testkey
         after 500
         $R(2) incr testkey
         after 500
         for {set n 0} {$n < 4} {incr n} {
-            wait_for_condition 50 1000 {
+            wait_for_condition 100 100 {
                 [$R($n) get testkey] == 3
             } else {
                 fail "node $n did not replicate"
@@ -69,7 +82,7 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
             $R(0) incr testkey
             $R(0) exec
 	    for {set n 0} {$n < 4} {incr n} {
-	        wait_for_condition 50 1000 {
+	        wait_for_condition 50 100 {
                     [$R($n) get testkey] == 3
                 } else {
                     fail "node $n failed to replicate"

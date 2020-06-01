@@ -129,7 +129,7 @@ static void initCryptoLocks(void) {
         return;
     }
     nlocks = CRYPTO_num_locks();
-    openssl_locks = zmalloc(sizeof(*openssl_locks) * nlocks);
+    openssl_locks = (pthread_mutex_t*)zmalloc(sizeof(*openssl_locks) * nlocks);
     for (i = 0; i < nlocks; i++) {
         pthread_mutex_init(openssl_locks + i, NULL);
     }
@@ -349,6 +349,7 @@ connection *connCreateTLS(void) {
 
 void connTLSMarshalThread(connection *c) {
     tls_connection *conn = (tls_connection*)c;
+    serverAssert(conn->pending_list_node == nullptr);
     conn->el = serverTL->el;
 }
 
@@ -458,7 +459,6 @@ void updateSSLEvent(tls_connection *conn) {
 
 void tlsHandleEvent(tls_connection *conn, int mask) {
     int ret;
-    serverAssert(!GlobalLocksAcquired());
     serverAssert(conn->el == serverTL->el);
 
     TLSCONN_DEBUG("tlsEventHandler(): fd=%d, state=%d, mask=%d, r=%d, w=%d, flags=%d",
@@ -910,6 +910,7 @@ int tlsHasPendingData() {
 int tlsProcessPendingData() {
     listIter li;
     listNode *ln;
+    serverAssert(!GlobalLocksAcquired());
 
     int processed = listLength(pending_list);
     listRewind(pending_list,&li);

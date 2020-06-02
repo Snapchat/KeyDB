@@ -4,7 +4,6 @@
 void *operator new(size_t size, enum MALLOC_CLASS mclass);
 
 #ifndef SANITIZE
-[[deprecated]]
 void *operator new(size_t size);
 
 void operator delete(void * p) noexcept;

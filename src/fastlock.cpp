@@ -520,7 +520,7 @@ void McsLock::lock(node *pnode)
     if (predecessor != nullptr){
         //when the predecessor unlocks, it will give us the lock
         pnode->locked = MCS_LOCKED;
-        __atomic_store(&predecessor->pnext, &pnode, __ATOMIC_RELAXED);
+        __atomic_store(&predecessor->pnext, &pnode, __ATOMIC_RELEASE);
         unsigned loopLimit = g_fHighCpuPressure ? 0x10000 : 0x100000;
 
         unsigned loopIter = 0;
@@ -556,7 +556,7 @@ bool McsLock::try_lock(node *pnode, bool fWeak)
     pnode->pnext = nullptr;
     pnode->depth = 0;
     int lockedSet = MCS_LOCKED;
-    __atomic_store(&pnode->locked, &lockedSet, __ATOMIC_RELAXED);
+    __atomic_store(&pnode->locked, &lockedSet, __ATOMIC_RELEASE);
 
     node *expected = nullptr;
     if (!__atomic_compare_exchange(&m_root, &expected, &pnode, fWeak, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))

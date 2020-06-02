@@ -8,7 +8,7 @@ keydb (6.0.8-1distribution_placeholder) codename_placeholder; urgency=medium
   * Naming conventions are now updated [ keydbpackage_version-build~distribution_architecture] and master changelog included and maintained
   * keydb-pro-server binary is no longer inluded in the open source package
 
- -- Ben Schermel <ben@eqalpha.com>  Mon, 1 June 2020 8:00:37 +0000
+ -- Ben Schermel <ben@eqalpha.com>  Mon, 1 Jun 2020 8:00:37 +0000
 
 keydb (5.3.3-1distribution_placeholder) codename_placeholder; urgency=medium
 

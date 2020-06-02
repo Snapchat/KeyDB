@@ -130,6 +130,9 @@ start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.
                 } err
                 assert {$err == {OK}}
             }
+            if {[log_file_matches [srv 0 stdout] "*Failed to evict*"]} {
+                fail "Server did not evict cleanly (detected full flush)"
+            }
             r set last val
             set dbsize [r dbsize]
             assert {[s used_memory] < $limit+4096}

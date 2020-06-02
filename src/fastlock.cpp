@@ -47,6 +47,7 @@
 #include <stdio.h>
 #include "config.h"
 #include "serverassert.h"
+#include "mcs_lock.h"
 
 #ifdef __APPLE__
 #include <TargetConditionals.h>
@@ -72,6 +73,12 @@ __attribute__((weak)) void logStackTrace(ucontext_t *) {}
 extern int g_fInCrash;
 extern int g_fTestMode;
 int g_fHighCpuPressure = false;
+
+#if defined(__i386__) || defined(__amd64__)
+#define asm_yield() __asm__ __volatile__ ("pause");
+#elif defined(__aarch64__)
+#define asm_yield() __asm__ __volatile__ ("yield");
+#endif
 
 /****************************************************
  *
@@ -351,11 +358,7 @@ extern "C" void fastlock_lock(struct fastlock *lock)
         if ((ticketT.u & 0xffff) == myticket)
             break;
 
-#if defined(__i386__) || defined(__amd64__)
-        __asm__ __volatile__ ("pause");
-#elif defined(__aarch64__)
-        __asm__ __volatile__ ("yield");
-#endif
+        asm_yield();
         if ((++cloops % loopLimit) == 0)
         {
             fastlock_sleep(lock, tid, ticketT.u, myticket);
@@ -493,4 +496,105 @@ void fastlock_auto_adjust_waits()
 #else
     g_fHighCpuPressure = g_fTestMode;
 #endif
+}
+
+#ifdef ASM_SPINLOCK
+extern "C" int mcs_spin_core(unsigned *locked, unsigned limit);
+#endif
+
+void McsLock::lock(node *pnode)
+{
+    serverAssert(pnode->depth >= 0);
+    if (pnode->depth > 0) {
+        ++pnode->depth;
+        return;
+    }
+
+    pnode->pnext = nullptr;
+    pnode->depth = 0;
+    
+    node *predecessor = nullptr;
+    __atomic_exchange(&m_root, &pnode, &predecessor, __ATOMIC_ACQ_REL);
+    
+    //if its null, we now own the lock and can leave, else....
+    if (predecessor != nullptr){
+        //when the predecessor unlocks, it will give us the lock
+        pnode->locked = MCS_LOCKED;
+        __atomic_store(&predecessor->pnext, &pnode, __ATOMIC_RELAXED);
+        unsigned loopLimit = g_fHighCpuPressure ? 0x10000 : 0x100000;
+
+        unsigned loopIter = 0;
+        for (;;) {
+            unsigned locked;
+            __atomic_load(&pnode->locked, &locked, __ATOMIC_ACQUIRE);
+            if (!locked)
+                break;
+            ++loopIter;
+            if (loopIter == loopLimit) {
+                unsigned lockedSet = MCS_FUTEX_LOCKED;
+                unsigned lockedExpect = MCS_LOCKED;
+                if (__atomic_compare_exchange(&pnode->locked, &lockedExpect, &lockedSet, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED) || lockedExpect == MCS_FUTEX_LOCKED) {
+                    futex(&pnode->locked, FUTEX_WAIT, MCS_FUTEX_LOCKED, nullptr, 0);
+                }
+                loopIter = 0;
+            } else {
+                //asm_yield();
+            }
+        }
+    }
+    ANNOTATE_RWLOCK_ACQUIRED(this, true);
+    pnode->depth = 1;
+}
+
+bool McsLock::try_lock(node *pnode, bool fWeak)
+{
+    if (pnode->depth > 0) {
+        ++pnode->depth;
+        return true;
+    }
+
+    pnode->pnext = nullptr;
+    pnode->depth = 0;
+    int lockedSet = MCS_LOCKED;
+    __atomic_store(&pnode->locked, &lockedSet, __ATOMIC_RELAXED);
+
+    node *expected = nullptr;
+    if (!__atomic_compare_exchange(&m_root, &expected, &pnode, fWeak, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+    {
+        return false;
+    }
+    pnode->depth = 1;
+    ANNOTATE_RWLOCK_ACQUIRED(this, true);
+    return true;
+}
+
+void McsLock::unlock(node *pnode)
+{
+    serverAssert(pnode->depth > 0);
+    pnode->depth--;
+    if (pnode->depth == 0)
+    {
+        node *pnext;
+        __atomic_load(&pnode->pnext, &pnext, __ATOMIC_ACQUIRE);
+        if (pnext == nullptr) {
+            node *desired = nullptr;
+            auto *nodeT = pnode;
+            if (__atomic_compare_exchange(&m_root, &nodeT, &desired, false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+                return;
+            }
+
+            do {
+                __atomic_load(&pnode->pnext, &pnext, __ATOMIC_ACQUIRE);
+            } while(pnext == nullptr);
+        }
+
+        int lockedSet = MCS_UNLOCKED;
+        int lockedActual;
+        __atomic_exchange(&pnext->locked, &lockedSet, &lockedActual, __ATOMIC_RELEASE);
+        ANNOTATE_RWLOCK_RELEASED(this, true);
+        
+        if (lockedActual == MCS_FUTEX_LOCKED) {
+            futex(&pnext->locked, FUTEX_WAKE, INT_MAX, nullptr, 0);
+        }
+    }
 }

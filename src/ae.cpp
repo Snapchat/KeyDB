@@ -48,6 +48,7 @@
 #include "fastlock.h"
 #include "zmalloc.h"
 #include "config.h"
+#include "mcs_lock.h"
 
 #ifdef USE_MUTEX
 thread_local int cOwnLock = 0;
@@ -80,7 +81,45 @@ public:
 mutex_wrapper g_lock;
 
 #else
-fastlock g_lock("AE (global)");
+//fastlock g_lock("AE (global)");
+McsLock g_lock;
+
+thread_local McsLock::node m_node;
+class McsLockGuard
+{
+    McsLock &m_lock;
+    bool fReleased = false;
+public:
+
+    McsLockGuard(McsLock &lock)
+        : m_lock(lock)
+    {
+        m_lock.lock(&m_node);
+    }
+
+    McsLockGuard(McsLock &lock, std::defer_lock_t)
+        : m_lock(lock)
+    {
+        fReleased = true;
+    }
+
+    void lock() {
+        m_lock.lock(&m_node);
+        fReleased = false;
+    }
+
+    void unlock() {
+        m_lock.unlock(&m_node);
+        fReleased = true;
+    }
+
+    ~McsLockGuard()
+    {
+        if (!fReleased)
+            m_lock.unlock(&m_node);
+    }
+};
+
 #endif
 thread_local aeEventLoop *g_eventLoopThisThread = NULL;
 
@@ -167,7 +206,7 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
 
         case AE_ASYNC_OP::PostFunction:
             {
-            std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
+            McsLockGuard ulock(g_lock, std::defer_lock);
             if (cmd.fLock)
                 ulock.lock();
             ((aePostFunctionProc*)cmd.proc)(cmd.clientData);
@@ -179,7 +218,7 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
             if (cmd.pctl != nullptr)
                 cmd.pctl->mutexcv.lock();
             
-            std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
+            McsLockGuard ulock(g_lock, std::defer_lock);
             if (cmd.fLock)
                 ulock.lock();
             (*cmd.pfn)();
@@ -585,7 +624,7 @@ static aeTimeEvent *aeSearchNearestTimer(aeEventLoop *eventLoop)
 
 /* Process time events */
 static int processTimeEvents(aeEventLoop *eventLoop) {
-    std::unique_lock<decltype(g_lock)> ulock(g_lock);
+    McsLockGuard ulock(g_lock);
     int processed = 0;
     aeTimeEvent *te;
     long long maxId;
@@ -671,7 +710,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
 extern "C" void ProcessEventCore(aeEventLoop *eventLoop, aeFileEvent *fe, int mask, int fd)
 {
 #define LOCK_IF_NECESSARY(fe, tsmask) \
-    std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock); \
+    McsLockGuard ulock(g_lock, std::defer_lock); \
     if (!(fe->mask & tsmask)) \
         ulock.lock()
 
@@ -798,7 +837,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         }
 
         if (eventLoop->beforesleep != NULL && flags & AE_CALL_BEFORE_SLEEP) {
-            std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
+            McsLockGuard ulock(g_lock, std::defer_lock);
             if (!(eventLoop->beforesleepFlags & AE_SLEEP_THREADSAFE))
                 ulock.lock();
             eventLoop->beforesleep(eventLoop);
@@ -810,7 +849,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
 
         /* After sleep callback. */
         if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP) {
-            std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
+            McsLockGuard ulock(g_lock, std::defer_lock);
             if (!(eventLoop->aftersleepFlags & AE_SLEEP_THREADSAFE))
                 ulock.lock();
             eventLoop->aftersleep(eventLoop);
@@ -861,7 +900,7 @@ void aeMain(aeEventLoop *eventLoop) {
     g_eventLoopThisThread = eventLoop;
     while (!eventLoop->stop) {
         if (eventLoop->beforesleep != NULL) {
-            std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
+            McsLockGuard ulock(g_lock, std::defer_lock);
             if (!(eventLoop->beforesleepFlags & AE_SLEEP_THREADSAFE))
                 ulock.lock();
             eventLoop->beforesleep(eventLoop);
@@ -888,20 +927,20 @@ void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *aftersleep, 
 
 void aeAcquireLock()
 {
-    g_lock.lock();
+    g_lock.lock(&m_node);
 }
 
 int aeTryAcquireLock(int fWeak)
 {
-    return g_lock.try_lock(!!fWeak);
+    return g_lock.try_lock(&m_node, fWeak);
 }
 
 void aeReleaseLock()
 {
-    g_lock.unlock();
+    g_lock.unlock(&m_node);
 }
 
 int aeThreadOwnsLock()
 {
-    return g_lock.fOwnLock();
+    return m_node.depth > 0;
 }

@@ -538,7 +538,7 @@ void McsLock::lock(node *pnode)
                 }
                 loopIter = 0;
             } else {
-                //asm_yield();
+                asm_yield();
             }
         }
     }

@@ -1,4 +1,4 @@
-keydb (6.0.8-1distribution_placeholder) codename_placeholder; urgency=medium
+keydb (6:6.0.8-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * This is our first release to fully support all Redis 6.0.4 features, including but not limited to: TLS Support (fully supports multithreading!), Client side caching, RESP 3 Support
   * KeyDB Has also added the following new features: Improved memory efficiency for short strings, Fastlock autotuning, KeyDB.HRENAME (rename a member of a hash)In addition we've spent a lot of time focussing on stability.
@@ -10,7 +10,7 @@ keydb (6.0.8-1distribution_placeholder) codename_placeholder; urgency=medium
 
  -- Ben Schermel <ben@eqalpha.com>  Mon, 1 Jun 2020 8:00:37 +0000
 
-keydb (5.3.3-1distribution_placeholder) codename_placeholder; urgency=medium
+keydb (5:5.3.3-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * 5.3.3 Updating deb source package, naming conventions, and build scripts.
 

@@ -8,7 +8,6 @@
 #define MCS_FUTEX_LOCKED 2
 class McsLock
 {
-    struct node *m_root = nullptr;
 public:
     struct node 
     {
@@ -19,7 +18,10 @@ public:
         char back_padding[64];
     };
 
-    void lock(node *pnode);
-    bool try_lock(node *pnode, bool fWeak);
-    void unlock(node *pnode);
+    void lock(McsLock::node *pnode);
+    bool try_lock(McsLock::node *pnode, bool fWeak);
+    void unlock(McsLock::node *pnode);
+
+private:
+    McsLock::node *m_root = nullptr;
 };

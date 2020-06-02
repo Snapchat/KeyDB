@@ -317,6 +317,11 @@ extern "C" void fastlock_sleep(fastlock *lock, pid_t pid, unsigned wake, unsigne
     
     __atomic_fetch_and(&lock->futex, ~mask, __ATOMIC_RELEASE);
     g_dlock.clearwait(lock, pid);
+#else
+    UNUSED(lock);
+    UNUSED(pid);
+    UNUSED(wake);
+    UNUSED(myticket);
 #endif
     __atomic_fetch_add(&g_longwaits, 1, __ATOMIC_RELAXED);
 }
@@ -513,7 +518,7 @@ void McsLock::lock(node *pnode)
     pnode->pnext = nullptr;
     pnode->depth = 0;
     
-    node *predecessor = nullptr;
+    McsLock::node *predecessor = nullptr;
     __atomic_exchange(&m_root, &pnode, &predecessor, __ATOMIC_ACQ_REL);
     
     //if its null, we now own the lock and can leave, else....
@@ -521,14 +526,18 @@ void McsLock::lock(node *pnode)
         //when the predecessor unlocks, it will give us the lock
         pnode->locked = MCS_LOCKED;
         __atomic_store(&predecessor->pnext, &pnode, __ATOMIC_RELEASE);
-        unsigned loopLimit = g_fHighCpuPressure ? 0x10000 : 0x100000;
 
+#ifdef __linux__
+        unsigned loopLimit = g_fHighCpuPressure ? 0x10000 : 0x100000;
         unsigned loopIter = 0;
+#endif
+
         for (;;) {
             unsigned locked;
             __atomic_load(&pnode->locked, &locked, __ATOMIC_ACQUIRE);
             if (!locked)
                 break;
+#ifdef __linux__
             ++loopIter;
             if (loopIter == loopLimit) {
                 unsigned lockedSet = MCS_FUTEX_LOCKED;
@@ -537,7 +546,10 @@ void McsLock::lock(node *pnode)
                     futex(&pnode->locked, FUTEX_WAIT, MCS_FUTEX_LOCKED, nullptr, 0);
                 }
                 loopIter = 0;
-            } else {
+            } 
+            else 
+#endif
+            {
                 asm_yield();
             }
         }
@@ -555,10 +567,10 @@ bool McsLock::try_lock(node *pnode, bool fWeak)
 
     pnode->pnext = nullptr;
     pnode->depth = 0;
-    int lockedSet = MCS_LOCKED;
+    unsigned lockedSet = MCS_LOCKED;
     __atomic_store(&pnode->locked, &lockedSet, __ATOMIC_RELEASE);
 
-    node *expected = nullptr;
+    McsLock::node *expected = nullptr;
     if (!__atomic_compare_exchange(&m_root, &expected, &pnode, fWeak, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
     {
         return false;
@@ -574,7 +586,7 @@ void McsLock::unlock(node *pnode)
     pnode->depth--;
     if (pnode->depth == 0)
     {
-        node *pnext;
+        McsLock::node *pnext;
         __atomic_load(&pnode->pnext, &pnext, __ATOMIC_ACQUIRE);
         if (pnext == nullptr) {
             node *desired = nullptr;
@@ -588,13 +600,15 @@ void McsLock::unlock(node *pnode)
             } while(pnext == nullptr);
         }
 
-        int lockedSet = MCS_UNLOCKED;
-        int lockedActual;
+        unsigned lockedSet = MCS_UNLOCKED;
+        unsigned lockedActual;
         __atomic_exchange(&pnext->locked, &lockedSet, &lockedActual, __ATOMIC_RELEASE);
         ANNOTATE_RWLOCK_RELEASED(this, true);
         
+#ifdef __linux__
         if (lockedActual == MCS_FUTEX_LOCKED) {
             futex(&pnext->locked, FUTEX_WAKE, INT_MAX, nullptr, 0);
         }
+#endif
     }
 }

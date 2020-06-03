@@ -2335,7 +2335,7 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
         {
             auto itr = m_pdbSnapshot->find_cached_threadsafe(sdsKey);
             if (itr == m_pdbSnapshot->end())
-                return; // not found
+                goto LNotFound;
 
             sds keyNew = sdsdupshared(itr.key());   // note: we use the iterator's key because the sdsKey may not be a shared string
             if (itr.val() != nullptr)
@@ -2363,6 +2363,7 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
         }
     }
     
+LNotFound:
     // If we haven't found it yet check our storage engine
     if (*pde == nullptr && m_spstorage != nullptr)
     {

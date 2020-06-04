@@ -1392,7 +1392,7 @@ protected:
 public:
     bool FWillFreeChildDebug() const { return m_spdbSnapshotHOLDER != nullptr; }
 
-    bool iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly = false) const;
+    bool iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly = false, bool fCacheOnly = false) const;
     using redisDbPersistentData::createSnapshot;
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::endSnapshotAsync;

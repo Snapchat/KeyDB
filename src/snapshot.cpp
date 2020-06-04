@@ -283,11 +283,16 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     while ((de = dictNext(di)) != NULL)
     {
         dictEntry *deSnapshot = dictFind(m_spdbSnapshotHOLDER->m_pdict, dictGetKey(de));
-        if (deSnapshot == nullptr)
+        if (deSnapshot == nullptr && m_spdbSnapshotHOLDER->m_pdbSnapshot)
         {
-            // The tombstone is for a grand child, propogate it
+            // The tombstone is for a grand child, propogate it (or possibly in the storage provider - but an extra tombstone won't hurt)
             serverAssert(m_spdbSnapshotHOLDER->m_pdbSnapshot->find_cached_threadsafe((const char*)dictGetKey(de)) != nullptr);
             dictAdd(m_spdbSnapshotHOLDER->m_pdictTombstone, sdsdupshared((sds)dictGetKey(de)), nullptr);
+            continue;
+        }
+        else if (deSnapshot == nullptr)
+        {
+            serverAssert(m_spdbSnapshotHOLDER->m_spstorage != nullptr); // the only case where we can have a tombstone without a snapshot child is if a storage engine is set
             continue;
         }
         

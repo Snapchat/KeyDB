@@ -48,6 +48,7 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum)
     options.max_background_flushes = 2;
     options.bytes_per_sync = 1048576;
     options.compaction_pri = rocksdb::kMinOverlappingRatio;
+    options.compression = rocksdb::kNoCompression;
     rocksdb::BlockBasedTableOptions table_options;
     table_options.block_size = 16 * 1024;
     table_options.cache_index_and_filter_blocks = true;

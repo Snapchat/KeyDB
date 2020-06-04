@@ -2403,9 +2403,13 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     int aof_state = g_pserver->aof_state;
     aeReleaseLock();
+
+    mstime_t commit_latency;
+    latencyStartMonitor(commit_latency);
     for (redisDb *db : vecdb)
         db->commitChanges();
-    
+    latencyEndMonitor(commit_latency);
+    latencyAddSampleIfNeeded("storage-commit", commit_latency);
     
     handleClientsWithPendingWrites(iel, aof_state);
     if (serverTL->gcEpoch != 0)

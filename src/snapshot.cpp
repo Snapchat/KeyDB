@@ -374,7 +374,7 @@ dict_iter redisDbPersistentDataSnapshot::find_cached_threadsafe(const char *key)
     return dict_iter(de);
 }
 
-bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly) const
+bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly, bool fCacheOnly) const
 {
     // Take the size so we can ensure we visited every element exactly once
     //  use volatile to ensure it's not checked too late.  This makes it more
@@ -395,7 +395,7 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
     dictReleaseIterator(di);
 
 
-    if (m_spstorage != nullptr)
+    if (m_spstorage != nullptr && !fCacheOnly)
     {
         bool fSawAll = fResult && m_spstorage->enumerate([&](const char *key, size_t cchKey, const void *data, size_t cbData){
             sds sdsKey = sdsnewlen(key, cchKey);
@@ -433,10 +433,11 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
             // Alright it's a key in the use keyspace, lets ensure it and then pass it off
             --celem;
             return fn(key, o);
-        }, fKeyOnly);
+        }, fKeyOnly, fCacheOnly);
     }
 
-    serverAssert(!fResult || celem == 0);
+    // we should have hit all keys or had a good reason not to
+    serverAssert(!fResult || celem == 0 || (m_spstorage && fCacheOnly));
     return fResult;
 }
 
@@ -487,7 +488,7 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
             incrRefCount(o);
         }
         return true;
-    }, true /*fKeyOnly*/);
+    }, true /*fKeyOnly*/, true /*fCacheOnly*/);
     spdb->m_spstorage = m_pdbSnapshot->m_spstorage;
 
     spdb->m_pdict->iterators++;

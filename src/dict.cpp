@@ -190,6 +190,7 @@ int dictMerge(dict *dst, dict *src)
         return DICT_OK;
     }
 
+    size_t expectedSize = dictSize(src) + dictSize(dst);
     if (dictSize(src) > dictSize(dst))
     {
         std::swap(*dst, *src);
@@ -198,10 +199,18 @@ int dictMerge(dict *dst, dict *src)
 
     if (!dictIsRehashing(dst) && !dictIsRehashing(src))
     {
-        dst->ht[1] = dst->ht[0];
-        dst->ht[0] = src->ht[0];
+        if (dst->ht[0].size >= src->ht[0].size)
+        {
+            dst->ht[1] = dst->ht[0];
+            dst->ht[0] = src->ht[0];
+        }
+        else
+        {
+            dst->ht[1] = src->ht[0];
+        }
         _dictReset(&src->ht[0]);
         dst->rehashidx = 0;
+        assert((dictSize(src)+dictSize(dst)) == expectedSize);
         return DICT_OK;
     }
 
@@ -229,6 +238,7 @@ int dictMerge(dict *dst, dict *src)
             }
         }
     }
+    assert((dictSize(src)+dictSize(dst)) == expectedSize);
     return DICT_OK;
 }
 

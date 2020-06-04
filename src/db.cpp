@@ -2266,6 +2266,7 @@ void redisDbPersistentData::clear(void(callback)(void*))
     m_setexpire = new (MALLOC_LOCAL) expireset();
     if (m_spstorage != nullptr)
         m_spstorage->clear();
+    dictEmpty(m_pdictTombstone,nullptr);
     m_pdbSnapshot = nullptr;
 }
 

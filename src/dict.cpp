@@ -541,7 +541,7 @@ void dictRelease(dict *d)
     zfree(d);
 }
 
-dictEntry *dictFind(dict *d, const void *key)
+dictEntry *dictFindWithPrev(dict *d, const void *key, dictEntry ***dePrevPtr, dictht **pht)
 {
     dictEntry *he;
     uint64_t h, idx, table;
@@ -550,16 +550,27 @@ dictEntry *dictFind(dict *d, const void *key)
     if (dictIsRehashing(d)) _dictRehashStep(d);
     h = dictHashKey(d, key);
     for (table = 0; table <= 1; table++) {
+        *pht = d->ht + table;
         idx = h & d->ht[table].sizemask;
         he = d->ht[table].table[idx];
+        *dePrevPtr = &d->ht[table].table[idx];
         while(he) {
-            if (key==he->key || dictCompareKeys(d, key, he->key))
+            if (key==he->key || dictCompareKeys(d, key, he->key)) {       
                 return he;
+            }
+            *dePrevPtr = &he->next;
             he = he->next;
         }
         if (!dictIsRehashing(d)) return NULL;
     }
     return NULL;
+}
+
+dictEntry *dictFind(dict *d, const void *key)
+{
+    dictEntry **deT;
+    dictht *ht;
+    return dictFindWithPrev(d, key, &deT, &ht);
 }
 
 void *dictFetchValue(dict *d, const void *key) {

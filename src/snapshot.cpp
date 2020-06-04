@@ -200,6 +200,7 @@ void redisDbPersistentData::endSnapshotAsync(const redisDbPersistentDataSnapshot
 
     // do the expensive work of merging snapshots outside the ref
     const_cast<redisDbPersistentDataSnapshot*>(psnapshotT)->freeTombstoneObjects(1);    // depth is one because we just creted it
+    const_cast<redisDbPersistentDataSnapshot*>(psnapshotT)->consolidate_children(this, true);
     
     // Final Cleanup
     aeAcquireLock();
@@ -277,12 +278,17 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
         return;
     }
 
+    mstime_t latency_endsnapshot;
+    latencyStartMonitor(latency_endsnapshot);
+
     // Stage 1 Loop through all the tracked deletes and remove them from the snapshot DB
     dictIterator *di = dictGetIterator(m_pdictTombstone);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL)
     {
-        dictEntry *deSnapshot = dictFind(m_spdbSnapshotHOLDER->m_pdict, dictGetKey(de));
+        dictEntry **dePrev;
+        dictht *ht;
+        dictEntry *deSnapshot = dictFindWithPrev(m_spdbSnapshotHOLDER->m_pdict, dictGetKey(de), &dePrev, &ht);
         if (deSnapshot == nullptr && m_spdbSnapshotHOLDER->m_pdbSnapshot)
         {
             // The tombstone is for a grand child, propogate it (or possibly in the storage provider - but an extra tombstone won't hurt)
@@ -296,8 +302,13 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
             continue;
         }
         
-        const char *key = (const char*)dictGetKey(deSnapshot);
-        dictDelete(m_spdbSnapshotHOLDER->m_pdict, key);
+        // Delete the object from the source dict, we don't use dictDelete to avoid a second search
+        dictFreeKey(m_spdbSnapshotHOLDER->m_pdict, deSnapshot);
+        dictFreeVal(m_spdbSnapshotHOLDER->m_pdict, deSnapshot);
+        serverAssert(*dePrev == deSnapshot);
+        *dePrev = deSnapshot->next;
+        zfree(deSnapshot);
+        ht->used--;
     }
     dictReleaseIterator(di);
     dictEmpty(m_pdictTombstone, nullptr);
@@ -338,6 +349,9 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     serverAssert((m_refCount == 0 && m_pdict->iterators == 0) || (m_refCount != 0 && m_pdict->iterators == 1));
     serverAssert(m_spdbSnapshotHOLDER != nullptr || dictSize(m_pdictTombstone) == 0);
     serverAssert(sizeStart == size());
+
+    latencyEndMonitor(latency_endsnapshot);
+    latencyAddSampleIfNeeded("end-mvcc-snapshot", latency_endsnapshot);
 
     freeMemoryIfNeededAndSafe(false);
 }

@@ -2393,10 +2393,14 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     // note: we also copy the DB pointer in case a DB swap is done while the lock is released
     std::vector<redisDb*> vecdb;    // note we cache the database pointer in case a dbswap is done while the lock is released
     if (!fFirstRun) {
+        mstime_t storage_process_latency;
+        latencyStartMonitor(storage_process_latency);
         for (int idb = 0; idb < cserver.dbnum; ++idb) {
             vecdb.push_back(g_pserver->db[idb]);
             g_pserver->db[idb]->processChanges();
         }
+        latencyEndMonitor(storage_process_latency);
+        latencyAddSampleIfNeeded("storage-process-changes", storage_process_latency);
     } else {
         fFirstRun = false;
     }

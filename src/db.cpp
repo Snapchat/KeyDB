@@ -2442,11 +2442,11 @@ void redisDbPersistentData::processChanges()
             {
                 for (auto &change : m_setchanged)
                 {
-                    dictEntry *de = dictFind(m_pdict, change.strkey.get());
-                    if (de == nullptr)
+                    auto itr = find_cached_threadsafe(change.strkey.get());
+                    if (itr == nullptr)
                         continue;
-                    robj *o = (robj*)dictGetVal(de);
-                    sds temp = serializeStoredObjectAndExpire(this, (const char*) dictGetKey(de), o);
+                    robj *o = itr.val();
+                    sds temp = serializeStoredObjectAndExpire(this, (const char*) itr.key(), o);
                     m_spstorage->insert(change.strkey.get(), sdslen(change.strkey.get()), temp, sdslen(temp), change.fUpdate);
                     sdsfree(temp);
                 }

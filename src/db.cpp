@@ -2519,7 +2519,11 @@ bool redisDbPersistentData::removeCachedValue(const char *key)
     
     auto itr = m_setchanged.find(key);
     if (itr != m_setchanged.end())
+    {
+        if (m_spstorage != nullptr)
+            m_spstorage->batch_unlock();
         return false; // can't evict
+    }
 
     // since we write ASAP the database already has a valid copy so safe to delete
     dictDelete(m_pdict, key);

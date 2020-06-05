@@ -29,6 +29,9 @@ public:
     virtual void beginWriteBatch() {} // NOP
     virtual void endWriteBatch() {} // NOP
 
+    virtual void batch_lock() {} // NOP
+    virtual void batch_unlock() {} // NOP
+
     virtual void flush() = 0;
 
     /* This is permitted to be a shallow clone */

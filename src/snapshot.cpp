@@ -376,7 +376,7 @@ dict_iter redisDbPersistentDataSnapshot::random_cache_threadsafe(bool fPrimaryOn
     return dict_iter(de);
 }
 
-dict_iter redisDbPersistentDataSnapshot::find_cached_threadsafe(const char *key) const
+dict_iter redisDbPersistentData::find_cached_threadsafe(const char *key) const
 {
     dictEntry *de = dictFind(m_pdict, key);
     if (de == nullptr && m_pdbSnapshot != nullptr && dictFind(m_pdictTombstone, key) == nullptr)

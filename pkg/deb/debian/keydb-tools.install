@@ -4,3 +4,4 @@ src/keydb-check-aof	/usr/bin
 src/keydb-check-rdb	/usr/bin
 src/keydb-cli		/usr/bin
 src/keydb-server	/usr/bin
+src/keydb-sentinel	/usr/bin

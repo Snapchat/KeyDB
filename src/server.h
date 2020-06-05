@@ -1333,6 +1333,8 @@ public:
     bool removeCachedValue(const char *key);
     void removeAllCachedValues();
 
+    dict_iter find_cached_threadsafe(const char *key) const;
+
 protected:
     uint64_t m_mvccCheckpoint = 0;
 
@@ -1397,9 +1399,9 @@ public:
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::endSnapshotAsync;
     using redisDbPersistentData::end;
+    using redisDbPersistentData::find_cached_threadsafe;
 
     dict_iter random_cache_threadsafe(bool fPrimaryOnly = false) const;
-    dict_iter find_cached_threadsafe(const char *key) const;
 
     expireEntry *getExpire(robj_roptr key) { return getExpire(szFromObj(key)); }
     expireEntry *getExpire(const char *key);

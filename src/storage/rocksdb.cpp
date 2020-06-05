@@ -58,10 +58,10 @@ bool RocksDBStorageProvider::erase(const char *key, size_t cchKey)
 
 void RocksDBStorageProvider::retrieve(const char *key, size_t cchKey, callbackSingle fn) const
 {
-    std::string value;
-    auto status = m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cchKey), &value);
+    rocksdb::PinnableSlice slice;
+    auto status = m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cchKey), &slice);
     if (status.ok())
-        fn(key, cchKey, value.data(), value.size());
+        fn(key, cchKey, slice.data(), slice.size());
 }
 
 size_t RocksDBStorageProvider::clear()
@@ -99,7 +99,9 @@ bool RocksDBStorageProvider::enumerate(callback fn) const
     }
     if (!it->Valid() && count != m_count)
     {
-        const_cast<RocksDBStorageProvider*>(this)->m_count = count;    // BUG!!! but be resilient
+        if (const_cast<RocksDBStorageProvider*>(this)->m_count != count)
+            printf("WARNING: rocksdb count mismatch");
+        const_cast<RocksDBStorageProvider*>(this)->m_count = count;
     }
     assert(it->status().ok()); // Check for any errors found during the scan
     return !it->Valid();
@@ -148,6 +150,16 @@ void RocksDBStorageProvider::endWriteBatch()
     m_lock.unlock();
 }
 
+void RocksDBStorageProvider::batch_lock()
+{
+    m_lock.lock();
+}
+
+void RocksDBStorageProvider::batch_unlock()
+{
+    m_lock.unlock();
+}
+
 void RocksDBStorageProvider::flush()
 {
     m_spdb->SyncWAL();
@@ -155,6 +167,6 @@ void RocksDBStorageProvider::flush()
 
 bool RocksDBStorageProvider::FKeyExists(const char *key, size_t cch) const
 {
-    std::string strT;
-    return m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cch), &strT).ok();
+    rocksdb::PinnableSlice slice;
+    return m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cch), &slice).ok();
 }

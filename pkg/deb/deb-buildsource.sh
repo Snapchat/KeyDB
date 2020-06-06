@@ -26,7 +26,7 @@ cd ../../../
 tar -czvf keydb_$version.orig.tar.gz --force-local KeyDB
 cd KeyDB/pkg/deb/
 mkdir -p $pkg_name/tmp
-if [ "$codename" == "xenial" ]; then
+if [[ "$codename" == "xenial" ]] || [[ "$codename" == "stretch" ]]; then
 	cp -r debian_dh9 $pkg_name/tmp/debian
 else
 	cp -r debian $pkg_name/tmp

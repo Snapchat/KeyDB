@@ -285,9 +285,9 @@ int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg)
     return AE_OK;
 }
 
-int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynchronous, bool fLock)
+int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynchronous, bool fLock, bool fForceQueue)
 {
-    if (eventLoop == g_eventLoopThisThread)
+    if (eventLoop == g_eventLoopThisThread && !fForceQueue)
     {
         fn();
         return AE_OK;

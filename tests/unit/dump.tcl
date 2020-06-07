@@ -245,6 +245,7 @@ start_server {tags {"dump"}} {
 
             set rd [redis_deferring_client]
             $rd debug sleep 1.0 ; # Make second server unable to reply.
+            after 100
             set e {}
             catch {r -1 migrate $second_host $second_port key 9 500} e
             assert_match {IOERR*} $e

@@ -156,6 +156,7 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
     {
         // We need to resort the expire entry since it may no longer be in the correct position
         db->resortExpire(e);
+    }
 
     if (deleted)
     {

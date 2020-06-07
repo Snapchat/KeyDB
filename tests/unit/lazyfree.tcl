@@ -17,7 +17,9 @@ start_server {tags {"lazyfree"}} {
             fail "Memory is not reclaimed by UNLINK"
         }
     }
+}
 
+start_server {tags {"lazyfree"}} {
     test "FLUSHDB ASYNC can reclaim memory in background" {
         set orig_mem [s used_memory]
         set args {}

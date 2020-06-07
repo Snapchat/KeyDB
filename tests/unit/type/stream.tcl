@@ -456,6 +456,7 @@ start_server {
         r del x
         set rd [redis_deferring_client]
         $rd XREAD BLOCK 0 STREAMS x 1-18446744073709551615
+        after 100
         r XADD x 1-1 f v
         r XADD x 1-18446744073709551615 f v
         r XADD x 2-1 f v

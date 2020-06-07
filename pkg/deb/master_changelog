@@ -1,3 +1,9 @@
+keydb (6:6.0.9-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * 6.0.9 Addressing issues 187 - cpu lockup with subkey expire, 190 - missing sentinel binary in keydb-tools. 
+
+ -- Ben Schermel <ben@eqalpha.com>  Sun, 07 Jun 2020 18:00:37 +0000
+
 keydb (6:6.0.8-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * This is our first release to fully support all Redis 6.0.4 features, including but not limited to: TLS Support (fully supports multithreading!), Client side caching, RESP 3 Support

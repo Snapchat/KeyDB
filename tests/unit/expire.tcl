@@ -291,4 +291,26 @@ start_server {tags {"expire"}} {
             fail "Server reported corrupt subexpire"
         }
     }
+
+    test {Stress subkey expires} {
+        r flushall
+        set rd [redis_deferring_client]
+        set rd2 [redis_deferring_client]
+        $rd2 multi
+        for {set j 0} {$j < 1000} {incr j} {
+            for {set k 0} {$k < 1000} {incr k} {
+                $rd hset "hash_$k" "field_$j" "foo"
+                $rd expiremember "hash_$k" "field_$j" [expr int(floor(rand() * 1000))] ms
+                if {rand() < 0.3} {
+                    $rd2 hdel "hash_$k" "field_$j"
+                }
+                if {rand() < 0.01} {
+                    $rd del "hash_$k"
+                }
+            }
+        }
+        $rd2 exec
+        after 3000
+        assert_equal [r dbsize] 0
+    }
 }

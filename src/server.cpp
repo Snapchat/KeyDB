@@ -2393,19 +2393,27 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     // note: we also copy the DB pointer in case a DB swap is done while the lock is released
     std::vector<redisDb*> vecdb;    // note we cache the database pointer in case a dbswap is done while the lock is released
     if (!fFirstRun) {
+        mstime_t storage_process_latency;
+        latencyStartMonitor(storage_process_latency);
         for (int idb = 0; idb < cserver.dbnum; ++idb) {
             vecdb.push_back(g_pserver->db[idb]);
             g_pserver->db[idb]->processChanges();
         }
+        latencyEndMonitor(storage_process_latency);
+        latencyAddSampleIfNeeded("storage-process-changes", storage_process_latency);
     } else {
         fFirstRun = false;
     }
 
     int aof_state = g_pserver->aof_state;
     aeReleaseLock();
+
+    mstime_t commit_latency;
+    latencyStartMonitor(commit_latency);
     for (redisDb *db : vecdb)
         db->commitChanges();
-    
+    latencyEndMonitor(commit_latency);
+    latencyAddSampleIfNeeded("storage-commit", commit_latency);
     
     handleClientsWithPendingWrites(iel, aof_state);
     if (serverTL->gcEpoch != 0)
@@ -4674,6 +4682,15 @@ sds genRedisInfoString(const char *section) {
             g_pserver->m_pstorageFactory ? g_pserver->m_pstorageFactory->name() : "none"
         );
         freeMemoryOverheadData(mh);
+
+        if (g_pserver->m_pstorageFactory)
+        {
+            info = sdscatprintf(info, 
+                "%s_memory:%zu\r\n",
+                g_pserver->m_pstorageFactory->name(),
+                g_pserver->m_pstorageFactory->totalDiskspaceUsed()
+            );
+        }
     }
 
     /* Persistence */

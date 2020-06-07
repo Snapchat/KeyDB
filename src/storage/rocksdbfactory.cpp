@@ -3,11 +3,13 @@
 #include <rocksdb/filter_policy.h>
 #include <rocksdb/table.h>
 #include <rocksdb/utilities/options_util.h>
+#include <rocksdb/sst_file_manager.h>
 
 class RocksDBStorageFactory : public IStorageFactory
 {
     std::shared_ptr<rocksdb::DB> m_spdb;    // Note: This must be first so it is deleted last
     std::vector<std::unique_ptr<rocksdb::ColumnFamilyHandle>> m_vecspcols;
+    std::shared_ptr<rocksdb::SstFileManager> m_pfilemanager;
 
 public:
     RocksDBStorageFactory(const char *dbfile, int dbnum);
@@ -15,6 +17,8 @@ public:
 
     virtual IStorage *create(int db, key_load_iterator iter) override;
     virtual const char *name() const override;
+
+    virtual size_t totalDiskspaceUsed() const override;
 
 private:
     void setVersion(rocksdb::ColumnFamilyHandle*);
@@ -38,6 +42,8 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum)
     std::vector<rocksdb::ColumnFamilyDescriptor> veccoldesc;
     veccoldesc.push_back(rocksdb::ColumnFamilyDescriptor(rocksdb::kDefaultColumnFamilyName, rocksdb::ColumnFamilyOptions()));  // ignore default col family
 
+    m_pfilemanager = std::shared_ptr<rocksdb::SstFileManager>(rocksdb::NewSstFileManager(rocksdb::Env::Default()));
+
     rocksdb::Options options;
     options.create_if_missing = true;
     options.create_missing_column_families = true;
@@ -48,6 +54,8 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum)
     options.max_background_flushes = 2;
     options.bytes_per_sync = 1048576;
     options.compaction_pri = rocksdb::kMinOverlappingRatio;
+    options.compression = rocksdb::kNoCompression;
+    options.sst_file_manager = m_pfilemanager;
     rocksdb::BlockBasedTableOptions table_options;
     table_options.block_size = 16 * 1024;
     table_options.cache_index_and_filter_blocks = true;
@@ -143,4 +151,9 @@ IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter)
 const char *RocksDBStorageFactory::name() const
 {
     return "flash";
+}
+
+size_t RocksDBStorageFactory::totalDiskspaceUsed() const
+{
+    return m_pfilemanager->GetTotalSize();
 }

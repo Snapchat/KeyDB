@@ -135,7 +135,7 @@ aeEventLoop *aeCreateEventLoop(int setsize);
 int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg);
 #ifdef __cplusplus
 }   // EXTERN C
-int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynchronous = false, bool fLock = true);
+int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynchronous = false, bool fLock = true, bool fForceQueue = false);
 extern "C" {
 #endif
 void aeDeleteEventLoop(aeEventLoop *eventLoop);

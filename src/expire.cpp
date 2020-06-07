@@ -81,6 +81,7 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
 
     robj objKey;
     initStaticStringObject(objKey, (char*)e.key());
+    bool fTtlChanged = false;
 
     while (!pfat->FEmpty())
     {
@@ -127,7 +128,15 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
             break;
 
         case OBJ_CRON:
-            executeCronJobExpireHook(e.key(), val);
+        {
+            sds keyCopy = sdsdup(e.key());
+            incrRefCount(val);
+            aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [keyCopy, val]{
+                executeCronJobExpireHook(keyCopy, val);
+                sdsfree(keyCopy);
+                decrRefCount(val);
+            }, false, true /*fLock*/, true /*fForceQueue*/);
+        }
             return;
 
         case OBJ_LIST:
@@ -140,16 +149,16 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
         propagateSubkeyExpire(db, val->type, &objKey, &objSubkey);
         
         pfat->popfrontExpireEntry();
+        fTtlChanged = true;
     }
+
+    if (!pfat->FEmpty() && fTtlChanged)
+    {
+        // We need to resort the expire entry since it may no longer be in the correct position
+        db->resortExpire(e);
 
     if (deleted)
     {
-        if (!pfat->FEmpty())
-        {
-            // We need to resort the expire entry since it may no longer be in the correct position
-            db->resortExpire(e);
-        }
-
         switch (val->type)
         {
         case OBJ_SET:

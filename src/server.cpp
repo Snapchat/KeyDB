@@ -4682,6 +4682,15 @@ sds genRedisInfoString(const char *section) {
             g_pserver->m_pstorageFactory ? g_pserver->m_pstorageFactory->name() : "none"
         );
         freeMemoryOverheadData(mh);
+
+        if (g_pserver->m_pstorageFactory)
+        {
+            info = sdscatprintf(info, 
+                "%s_memory:%zu\r\n",
+                g_pserver->m_pstorageFactory->name(),
+                g_pserver->m_pstorageFactory->totalDiskspaceUsed()
+            );
+        }
     }
 
     /* Persistence */

@@ -2266,6 +2266,7 @@ void redisDbPersistentData::clear(void(callback)(void*))
     m_setexpire = new (MALLOC_LOCAL) expireset();
     if (m_spstorage != nullptr)
         m_spstorage->clear();
+    dictEmpty(m_pdictTombstone,nullptr);
     m_pdbSnapshot = nullptr;
 }
 
@@ -2335,7 +2336,7 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
         {
             auto itr = m_pdbSnapshot->find_cached_threadsafe(sdsKey);
             if (itr == m_pdbSnapshot->end())
-                return; // not found
+                goto LNotFound;
 
             sds keyNew = sdsdupshared(itr.key());   // note: we use the iterator's key because the sdsKey may not be a shared string
             if (itr.val() != nullptr)
@@ -2363,6 +2364,7 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
         }
     }
     
+LNotFound:
     // If we haven't found it yet check our storage engine
     if (*pde == nullptr && m_spstorage != nullptr)
     {
@@ -2440,11 +2442,11 @@ void redisDbPersistentData::processChanges()
             {
                 for (auto &change : m_setchanged)
                 {
-                    dictEntry *de = dictFind(m_pdict, change.strkey.get());
-                    if (de == nullptr)
+                    auto itr = find_cached_threadsafe(change.strkey.get());
+                    if (itr == nullptr)
                         continue;
-                    robj *o = (robj*)dictGetVal(de);
-                    sds temp = serializeStoredObjectAndExpire(this, (const char*) dictGetKey(de), o);
+                    robj *o = itr.val();
+                    sds temp = serializeStoredObjectAndExpire(this, (const char*) itr.key(), o);
                     m_spstorage->insert(change.strkey.get(), sdslen(change.strkey.get()), temp, sdslen(temp), change.fUpdate);
                     sdsfree(temp);
                 }
@@ -2512,12 +2514,23 @@ bool redisDbPersistentData::removeCachedValue(const char *key)
 {
     serverAssert(m_spstorage != nullptr);
     // First ensure its not a pending key
+    if (m_spstorage != nullptr)
+        m_spstorage->batch_lock();
+    
     auto itr = m_setchanged.find(key);
     if (itr != m_setchanged.end())
+    {
+        if (m_spstorage != nullptr)
+            m_spstorage->batch_unlock();
         return false; // can't evict
+    }
 
     // since we write ASAP the database already has a valid copy so safe to delete
     dictDelete(m_pdict, key);
+
+    if (m_spstorage != nullptr)
+        m_spstorage->batch_unlock();
+    
     return true;
 }
 

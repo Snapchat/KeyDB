@@ -200,6 +200,7 @@ void redisDbPersistentData::endSnapshotAsync(const redisDbPersistentDataSnapshot
 
     // do the expensive work of merging snapshots outside the ref
     const_cast<redisDbPersistentDataSnapshot*>(psnapshotT)->freeTombstoneObjects(1);    // depth is one because we just creted it
+    const_cast<redisDbPersistentDataSnapshot*>(psnapshotT)->consolidate_children(this, true);
     
     // Final Cleanup
     aeAcquireLock();
@@ -277,22 +278,37 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
         return;
     }
 
+    mstime_t latency_endsnapshot;
+    latencyStartMonitor(latency_endsnapshot);
+
     // Stage 1 Loop through all the tracked deletes and remove them from the snapshot DB
     dictIterator *di = dictGetIterator(m_pdictTombstone);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL)
     {
-        dictEntry *deSnapshot = dictFind(m_spdbSnapshotHOLDER->m_pdict, dictGetKey(de));
-        if (deSnapshot == nullptr)
+        dictEntry **dePrev;
+        dictht *ht;
+        dictEntry *deSnapshot = dictFindWithPrev(m_spdbSnapshotHOLDER->m_pdict, dictGetKey(de), &dePrev, &ht);
+        if (deSnapshot == nullptr && m_spdbSnapshotHOLDER->m_pdbSnapshot)
         {
-            // The tombstone is for a grand child, propogate it
+            // The tombstone is for a grand child, propogate it (or possibly in the storage provider - but an extra tombstone won't hurt)
             serverAssert(m_spdbSnapshotHOLDER->m_pdbSnapshot->find_cached_threadsafe((const char*)dictGetKey(de)) != nullptr);
             dictAdd(m_spdbSnapshotHOLDER->m_pdictTombstone, sdsdupshared((sds)dictGetKey(de)), nullptr);
             continue;
         }
+        else if (deSnapshot == nullptr)
+        {
+            serverAssert(m_spdbSnapshotHOLDER->m_spstorage != nullptr); // the only case where we can have a tombstone without a snapshot child is if a storage engine is set
+            continue;
+        }
         
-        const char *key = (const char*)dictGetKey(deSnapshot);
-        dictDelete(m_spdbSnapshotHOLDER->m_pdict, key);
+        // Delete the object from the source dict, we don't use dictDelete to avoid a second search
+        dictFreeKey(m_spdbSnapshotHOLDER->m_pdict, deSnapshot);
+        dictFreeVal(m_spdbSnapshotHOLDER->m_pdict, deSnapshot);
+        serverAssert(*dePrev == deSnapshot);
+        *dePrev = deSnapshot->next;
+        zfree(deSnapshot);
+        ht->used--;
     }
     dictReleaseIterator(di);
     dictEmpty(m_pdictTombstone, nullptr);
@@ -334,6 +350,9 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     serverAssert(m_spdbSnapshotHOLDER != nullptr || dictSize(m_pdictTombstone) == 0);
     serverAssert(sizeStart == size());
 
+    latencyEndMonitor(latency_endsnapshot);
+    latencyAddSampleIfNeeded("end-mvcc-snapshot", latency_endsnapshot);
+
     freeMemoryIfNeededAndSafe(false);
 }
 
@@ -357,7 +376,7 @@ dict_iter redisDbPersistentDataSnapshot::random_cache_threadsafe(bool fPrimaryOn
     return dict_iter(de);
 }
 
-dict_iter redisDbPersistentDataSnapshot::find_cached_threadsafe(const char *key) const
+dict_iter redisDbPersistentData::find_cached_threadsafe(const char *key) const
 {
     dictEntry *de = dictFind(m_pdict, key);
     if (de == nullptr && m_pdbSnapshot != nullptr && dictFind(m_pdictTombstone, key) == nullptr)
@@ -369,7 +388,7 @@ dict_iter redisDbPersistentDataSnapshot::find_cached_threadsafe(const char *key)
     return dict_iter(de);
 }
 
-bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly) const
+bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly, bool fCacheOnly) const
 {
     // Take the size so we can ensure we visited every element exactly once
     //  use volatile to ensure it's not checked too late.  This makes it more
@@ -390,7 +409,7 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
     dictReleaseIterator(di);
 
 
-    if (m_spstorage != nullptr)
+    if (m_spstorage != nullptr && !fCacheOnly)
     {
         bool fSawAll = fResult && m_spstorage->enumerate([&](const char *key, size_t cchKey, const void *data, size_t cbData){
             sds sdsKey = sdsnewlen(key, cchKey);
@@ -428,10 +447,11 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
             // Alright it's a key in the use keyspace, lets ensure it and then pass it off
             --celem;
             return fn(key, o);
-        }, fKeyOnly);
+        }, fKeyOnly, fCacheOnly);
     }
 
-    serverAssert(!fResult || celem == 0);
+    // we should have hit all keys or had a good reason not to
+    serverAssert(!fResult || celem == 0 || (m_spstorage && fCacheOnly));
     return fResult;
 }
 
@@ -482,7 +502,7 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
             incrRefCount(o);
         }
         return true;
-    }, true /*fKeyOnly*/);
+    }, true /*fKeyOnly*/, true /*fCacheOnly*/);
     spdb->m_spstorage = m_pdbSnapshot->m_spstorage;
 
     spdb->m_pdict->iterators++;

@@ -34,6 +34,9 @@ public:
     virtual void beginWriteBatch() override;
     virtual void endWriteBatch() override;
 
+    virtual void batch_lock() override;
+    virtual void batch_unlock() override;
+
     virtual void flush() override;
 
     size_t count() const;

@@ -216,7 +216,7 @@ proc s {args} {
 # test server, so that the test server will send them again to
 # clients once the clients are idle.
 proc run_solo {name code} {
-    if {$::numclients == 1 || $::loop || $::external} {
+    if {$::numclients == 1 || $::loop < 0 || $::external} {
         # run_solo is not supported in these scenarios, just run the code.
         eval $code
         return

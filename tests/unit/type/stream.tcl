@@ -176,6 +176,7 @@ start_server {
         r XADD s2 * old abcd1234
         set rd [redis_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS s1 s2 s3 $ $ $
+        after 100
         r XADD s2 * new abcd1234
         set res [$rd read]
         assert {[lindex $res 0 0] eq {s2}}
@@ -185,6 +186,7 @@ start_server {
     test {Blocking XREAD waiting old data} {
         set rd [redis_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS s1 s2 s3 $ 0-0 $
+        after 100
         r XADD s2 * foo abcd1234
         set res [$rd read]
         assert {[lindex $res 0 0] eq {s2}}
@@ -198,6 +200,7 @@ start_server {
         r XDEL s1 667
         set rd [redis_deferring_client]
         $rd XREAD BLOCK 10 STREAMS s1 666
+        after 100
         after 20
         assert {[$rd read] == {}} ;# before the fix, client didn't even block, but was served synchronously with {s1 {}}
     }
@@ -206,6 +209,7 @@ start_server {
         set rd [redis_deferring_client]
         r del s1
         $rd XREAD BLOCK 20000 STREAMS s1 $
+        after 100
         r multi
         r XADD s1 * old abcd1234
         r DEL s1
@@ -220,6 +224,7 @@ start_server {
         set rd [redis_deferring_client]
         r del s1
         $rd XREAD BLOCK 20000 STREAMS s1 $
+        after 100
         r multi
         r XADD s1 * old abcd1234
         r DEL s1
@@ -236,6 +241,7 @@ start_server {
         r XADD s2 * old abcd1234
         set rd [redis_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS s2 s2 s2 $ $ $
+        after 100
         r XADD s2 * new abcd1234
         set res [$rd read]
         assert {[lindex $res 0 0] eq {s2}}
@@ -246,6 +252,7 @@ start_server {
         r XADD s2 * old abcd1234
         set rd [redis_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS s2 s2 s2 $ $ $
+        after 100
         r MULTI
         r XADD s2 * field one
         r XADD s2 * field two
@@ -353,6 +360,7 @@ start_server {
         r del x
         set rd [redis_deferring_client]
         $rd XREAD BLOCK 0 STREAMS x 1-18446744073709551615
+        after 100
         r XADD x 1-1 f v
         r XADD x 1-18446744073709551615 f v
         r XADD x 2-1 f v

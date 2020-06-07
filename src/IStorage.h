@@ -9,6 +9,7 @@ public:
     virtual ~IStorageFactory() {}
     virtual class IStorage *create(int db, key_load_iterator itr) = 0;
     virtual const char *name() const = 0;
+    virtual size_t totalDiskspaceUsed() const = 0;
 };
 
 class IStorage

@@ -2561,7 +2561,7 @@ int slaveTryPartialResynchronization(redisMaster *mi, connection *conn, int read
  * establish a connection with the master. */
 void syncWithMaster(connection *conn) {
     serverAssert(GlobalLocksAcquired());
-    char tmpfile[256], *err = NULL;
+    char tmpfile[256] = {0}, *err = NULL;
     int dfd = -1, maxtries = 5;
     int psync_result;
 

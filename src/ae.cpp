@@ -294,6 +294,7 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
     }
 
     aeCommand cmd = {};
+    memset(&cmd, 0, sizeof(aeCommand));
     cmd.op = AE_ASYNC_OP::PostCppFunction;
     cmd.pfn = new (MALLOC_LOCAL) std::function<void()>(fn);
     cmd.pctl = nullptr;

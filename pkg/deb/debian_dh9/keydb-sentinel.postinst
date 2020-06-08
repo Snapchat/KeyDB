@@ -1,0 +1,24 @@
+#!/bin/sh
+
+set -eu
+
+USER="keydb"
+GROUP="$USER"
+CONFFILE="/etc/keydb/sentinel.conf"
+
+if [ "$1" = "configure" ]
+then
+	if ! dpkg-statoverride --list ${CONFFILE} >/dev/null 2>&1
+	then
+		dpkg-statoverride --update --add ${USER} ${GROUP} 640 ${CONFFILE}
+	fi
+fi
+
+#DEBHELPER#
+
+if [ "$1" = "configure" ]
+then
+	find /etc/keydb -maxdepth 1 -type d -name 'keydb-sentinel.*.d' -empty -delete
+fi
+
+exit 0

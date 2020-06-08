@@ -1,0 +1,2 @@
+debian/keydb-sentinel.service /lib/systemd/system
+pkg/deb/conf/sentinel.conf	/etc/keydb

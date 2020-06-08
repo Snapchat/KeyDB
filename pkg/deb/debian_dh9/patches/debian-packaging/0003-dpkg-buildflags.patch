@@ -1,0 +1,49 @@
+From: Chris Lamb <lamby@debian.org>
+Date: Fri, 30 Oct 2015 10:53:42 +0000
+Subject: Add CPPFLAGS in upstream makefiles
+
+---
+ deps/hiredis/Makefile   | 2 +-
+ deps/linenoise/Makefile | 2 +-
+ src/Makefile            | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/deps/hiredis/Makefile b/deps/hiredis/Makefile
+index 9a4de83..4c8a8e4 100644
+--- a/deps/hiredis/Makefile
++++ b/deps/hiredis/Makefile
+@@ -41,7 +41,7 @@ CXX:=$(shell sh -c 'type $(CXX) >/dev/null 2>/dev/null && echo $(CXX) || echo g+
+ OPTIMIZATION?=-O3
+ WARNINGS=-Wall -W -Wstrict-prototypes -Wwrite-strings
+ DEBUG_FLAGS?= -g -ggdb
+-REAL_CFLAGS=$(OPTIMIZATION) -fPIC $(CFLAGS) $(WARNINGS) $(DEBUG_FLAGS) $(ARCH)
++REAL_CFLAGS=$(OPTIMIZATION) -fPIC $(CFLAGS) $(WARNINGS) $(DEBUG_FLAGS) $(ARCH) $(CPPFLAGS)
+ REAL_LDFLAGS=$(LDFLAGS) $(ARCH)
+ 
+ DYLIBSUFFIX=so
+diff --git a/deps/linenoise/Makefile b/deps/linenoise/Makefile
+index 1dd894b..12ada21 100644
+--- a/deps/linenoise/Makefile
++++ b/deps/linenoise/Makefile
+@@ -6,7 +6,7 @@ R_CFLAGS= $(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS)
+ R_LDFLAGS= $(LDFLAGS)
+ DEBUG= -g
+ 
+-R_CC=$(CC) $(R_CFLAGS)
++R_CC=$(CC) $(R_CFLAGS) $(CPPFLAGS)
+ R_LD=$(CC) $(R_LDFLAGS)
+ 
+ linenoise.o: linenoise.h linenoise.c
+diff --git a/src/Makefile b/src/Makefile
+index 773d3b2..0ff6e8b 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -125,7 +125,7 @@ ifeq ($(MALLOC),jemalloc)
+ 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
+ endif
+ 
+-REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
++REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS) $(CPPFLAGS)
+ REDIS_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
+ REDIS_INSTALL=$(QUIET_INSTALL)$(INSTALL)
+ 

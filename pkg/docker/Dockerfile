@@ -56,7 +56,6 @@ RUN \
   ln -s keydb.conf redis.conf
 
 # Ensure deps installed for binaries
-# libc6 (>= 2.17), libcurl4 (>= 7.16.2), libgcc1 (>= 1:3.0), libstdc++6 (>= 4.8.1), libuuid1 (>= 2.16), libssl1.1 (>= 1.1.1)
 RUN set -eux; \
 	\
 	savedAptMark="$(apt-mark showmanual)"; \
@@ -68,6 +67,10 @@ RUN set -eux; \
 		libstdc++6 \
 		libgcc1 \
 		zlib1g \
+		libbz2-1.0 \
+		liblz4-1 \
+		libsnappy1v5 \		
+		libzstd1 \
 	; \
 	rm -rf /var/lib/apt/lists/*
 

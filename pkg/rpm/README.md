@@ -1,6 +1,6 @@
 ### Generate RPM files for the generated binaries
 
-After making the binaries you can run the following script
+After running make to produce keydb binaries you can run the following script to create rpm package
 
 Usage: 
 ```

@@ -1,0 +1,17 @@
+.TH KEYDB-CHECK-AOF 1 "August 17, 2019"
+.SH NAME
+keydb-check-aof \- Check integrity of a KeyDB .AOF file
+.SH SYNOPSIS
+.B keydb-check-aof
+filename
+.SH DESCRIPTION
+KeyDB is a key-value database. It is similar to memcached but the dataset is
+not volatile and other datatypes (such as lists and sets) are natively
+supported.
+.PP
+This utility checks the integrity of a dumped .AOF file.
+.SH AUTHOR
+\fBkeydb-check-aof\fP was written by John Sully, originating as a fork of Redis. Redis was written by Salvatore Sanfilippo.
+.PP
+This manual page was written by Chris Lamb <lamby@debian.org> for the Debian
+project (but may be used by others). Modified by Ben Schermel <ben@eqalpha.com>

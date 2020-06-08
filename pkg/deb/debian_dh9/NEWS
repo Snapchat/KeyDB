@@ -1,0 +1,8 @@
+keydb (4:4.0.2-3) unstable; urgency=medium
+
+  This version drops the Debian-specific support for the
+  /etc/keydb/keydb-{server,sentinel}.{pre,post}-{up,down}.d directories in
+  favour of using systemd's ExecStartPre, ExecStartPost, ExecStopPre,
+  ExecStopPost commands.
+
+ -- Chris Lamb <lamby@debian.org>  Wed, 11 Oct 2017 22:55:00 -0400

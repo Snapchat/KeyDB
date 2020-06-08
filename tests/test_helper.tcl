@@ -105,6 +105,7 @@ set ::dont_clean 0
 set ::wait_server 0
 set ::stop_on_failure 0
 set ::loop 0
+set ::endurance 0
 set ::tlsdir "tests/tls"
 
 # Set to 1 when we are running in client mode. The Redis test uses a
@@ -216,9 +217,13 @@ proc s {args} {
 # test server, so that the test server will send them again to
 # clients once the clients are idle.
 proc run_solo {name code} {
-    if {$::numclients == 1 || $::loop < 0 || $::external} {
+    if {$::numclients == 1 || $::loop < 0 || $::external || $::endurance} {
         # run_solo is not supported in these scenarios, just run the code.
-        eval $code
+        if {$::endurance} {
+            puts "Skipping solo tests because endurance mode is enabled"
+        } else {
+            eval $code
+        }
         return
     }
     send_data_packet $::test_server_fd run_solo [list $name $code]
@@ -621,6 +626,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--timeout}} {
         set ::timeout $arg
         incr j
+    } elseif {$opt eq {--endurance}} {
+        set ::endurance 1
     } elseif {$opt eq {--help}} {
         print_help_screen
         exit 0

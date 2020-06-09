@@ -1171,6 +1171,7 @@ public:
     explicit operator long long() const noexcept { return when(); }
 };
 typedef semiorderedset<expireEntry, sdsview, true /*expireEntry can be memmoved*/> expireset;
+extern fastlock g_expireLock;
 
 /* The a string name for an object's type as listed above
  * Native types are checked against the OBJ_STRING, OBJ_LIST, OBJ_* defines,

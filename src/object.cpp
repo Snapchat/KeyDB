@@ -1078,8 +1078,10 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
               db->size() * sizeof(robj);
         mh->db[mh->num_dbs].overhead_ht_main = mem;
         mem_total+=mem;
-
+        
+        std::unique_lock<fastlock> ul(g_expireLock);
         mem = db->setexpire()->bytes_used();
+        
         mh->db[mh->num_dbs].overhead_ht_expires = mem;
         mem_total+=mem;
 

@@ -2853,6 +2853,7 @@ bool getCommandAsync(client *c)
     }
     
     // Are we expired?
+    std::unique_lock<fastlock> ul(g_expireLock);
     const expireEntry *expire = serverTL->rgdbSnapshot[idb]->getExpire(c->argv[1]);
     long long when;
     if (expire && expire->FGetPrimaryExpire(&when) && when > 0) {

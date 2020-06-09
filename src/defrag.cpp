@@ -811,6 +811,7 @@ long defragStream(redisDb *db, dictEntry *kde) {
  * all the various pointers it has. Returns a stat of how many pointers were
  * moved. */
 long defragKey(redisDb *db, dictEntry *de) {
+    std::unique_lock<fastlock> ul(g_expireLock);
     sds keysds = (sds)dictGetKey(de);
     robj *newob, *ob;
     unsigned char *newzl;

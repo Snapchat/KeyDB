@@ -118,6 +118,7 @@ void freeObjAsync(robj *o) {
  * create a new empty set of hash tables and scheduling the old ones for
  * lazy freeing. */
 void redisDbPersistentData::emptyDbAsync() {
+    std::unique_lock<fastlock> ul(g_expireLock);
     dict *oldht1 = m_pdict;
     auto *set = m_setexpire;
     m_setexpire = new (MALLOC_LOCAL) expireset();

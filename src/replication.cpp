@@ -3151,15 +3151,46 @@ void replicaofCommand(client *c) {
         return;
     }
 
-    /* The special host/port combination "NO" "ONE" turns the instance
-     * into a master. Otherwise the new master address is set. */
-    if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"no") &&
+    if (c->argc > 3) {
+        if (c->argc != 4) {
+            addReplyError(c, "Invalid arguments");
+            return;
+        }
+        if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"remove")) {
+            listIter li;
+            listNode *ln;
+            bool fRemoved = false;
+            long port;
+            string2l(szFromObj(c->argv[3]), sdslen(szFromObj(c->argv[3])), &port);
+        LRestart:
+            listRewind(g_pserver->masters, &li);
+            while ((ln = listNext(&li))) {
+                redisMaster *mi = (redisMaster*)listNodeValue(ln);
+                if (mi->masterport != port)
+                    continue;
+                if (sdscmp(szFromObj(c->argv[2]), mi->masterhost) == 0) {
+                    replicationUnsetMaster(mi);
+                    fRemoved = true;
+                    goto LRestart;
+                }
+            }
+            if (!fRemoved) {
+                addReplyError(c, "Master not found");
+                return;
+            } else if (listLength(g_pserver->masters) == 0) {
+                goto LLogNoMaster;
+            }
+        }
+    } else if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"no") &&
         !strcasecmp((const char*)ptrFromObj(c->argv[2]),"one")) {
+        /* The special host/port combination "NO" "ONE" turns the instance
+         * into a master. Otherwise the new master address is set. */
         if (listLength(g_pserver->masters)) {
             while (listLength(g_pserver->masters))
             {
                 replicationUnsetMaster((redisMaster*)listNodeValue(listFirst(g_pserver->masters)));
             }
+        LLogNoMaster:
             sds client = catClientInfoString(sdsempty(),c);
             serverLog(LL_NOTICE,"MASTER MODE enabled (user request from '%s')",
                 client);

@@ -127,6 +127,7 @@ void mixStringObjectDigest(unsigned char *digest, robj_roptr o) {
 void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj_roptr o) {
     uint32_t aux = htonl(o->type);
     mixDigest(digest,&aux,sizeof(aux));
+    std::unique_lock<fastlock> ul(g_expireLock);
     expireEntry *pexpire = db->getExpire(keyobj);
     long long expiretime = -1;
     char buf[128];

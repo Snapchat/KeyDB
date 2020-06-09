@@ -33,6 +33,8 @@
 #include "server.h"
 #include "cron.h"
 
+fastlock g_expireLock {"Expire"};
+
 /* Helper function for the activeExpireCycle() function.
  * This function will try to expire the key that is stored in the hash table
  * entry 'de' of the 'expires' hash table of a Redis database.
@@ -372,6 +374,7 @@ void activeExpireCycle(int type) {
             continue;
         }
         
+        std::unique_lock<fastlock> ul(g_expireLock);
         size_t expired = 0;
         size_t tried = 0;
         long long check = ACTIVE_EXPIRE_CYCLE_FAST_DURATION;    // assume a check is roughly 1us.  It isn't but good enough
@@ -661,6 +664,7 @@ void ttlGenericCommand(client *c, int output_ms) {
 
     /* The key exists. Return -1 if it has no expire, or the actual
         * TTL value otherwise. */
+    std::unique_lock<fastlock> ul(g_expireLock);
     expireEntry *pexpire = c->db->getExpire(c->argv[1]);
 
     if (c->argc == 2) {

@@ -5324,6 +5324,7 @@ try_again:
     /* Create RESTORE payload and generate the protocol to call the command. */
     for (j = 0; j < num_keys; j++) {
         long long ttl = 0;
+        std::unique_lock<fastlock> ul(g_expireLock);
         expireEntry *pexpire = c->db->getExpire(kv[j]);
         long long expireat = -1;
         if (pexpire != nullptr)

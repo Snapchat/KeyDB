@@ -1241,6 +1241,7 @@ void renameGenericCommand(client *c, int nx) {
     std::unique_ptr<expireEntry> spexpire;
 
     {   // scope pexpireOld since it will be invalid soon
+    std::unique_lock<fastlock> ul(g_expireLock);
     expireEntry *pexpireOld = c->db->getExpire(c->argv[1]);
     if (pexpireOld != nullptr)
         spexpire = std::make_unique<expireEntry>(std::move(*pexpireOld));
@@ -1319,6 +1320,7 @@ void moveCommand(client *c) {
 
     std::unique_ptr<expireEntry> spexpire;
     {   // scope pexpireOld
+    std::unique_lock<fastlock> ul(g_expireLock);
     expireEntry *pexpireOld = c->db->getExpire(c->argv[1]);
     if (pexpireOld != nullptr)
         spexpire = std::make_unique<expireEntry>(std::move(*pexpireOld));
@@ -1441,6 +1443,7 @@ int redisDbPersistentData::removeExpire(robj *key, dict_iter itr) {
     /* An expire may only be removed if there is a corresponding entry in the
      * main dict. Otherwise, the key will never be freed. */
     serverAssertWithInfo(NULL,key,itr != nullptr);
+    std::unique_lock<fastlock> ul(g_expireLock);
 
     robj *val = itr.val();
     if (!val->FExpires())
@@ -1457,7 +1460,8 @@ int redisDbPersistentData::removeExpire(robj *key, dict_iter itr) {
 int redisDbPersistentData::removeSubkeyExpire(robj *key, robj *subkey) {
     auto de = find(szFromObj(key));
     serverAssertWithInfo(NULL,key,de != nullptr);
-    
+    std::unique_lock<fastlock> ul(g_expireLock);
+
     robj *val = de.val();
     if (!val->FExpires())
         return 0;
@@ -1489,6 +1493,7 @@ int redisDbPersistentData::removeSubkeyExpire(robj *key, robj *subkey) {
 
 void redisDbPersistentData::resortExpire(expireEntry &e)
 {
+    std::unique_lock<fastlock> ul(g_expireLock);
     auto itr = m_setexpire->find(e.key());
     expireEntry eT = std::move(e);
     m_setexpire->erase(itr);
@@ -1648,6 +1653,7 @@ void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey)
 
 /* Check if the key is expired. Note, this does not check subexpires */
 int keyIsExpired(const redisDbPersistentDataSnapshot *db, robj *key) {
+    std::unique_lock<fastlock> ul(g_expireLock);
     const expireEntry *pexpire = db->getExpire(key);
     mstime_t now;
 
@@ -2273,6 +2279,7 @@ void redisDbPersistentData::clear(void(callback)(void*))
 void redisDbPersistentData::setExpire(robj *key, robj *subkey, long long when)
 {
     /* Reuse the sds from the main dict in the expire dict */
+    std::unique_lock<fastlock> ul(g_expireLock);
     dictEntry *kde = dictFind(m_pdict,ptrFromObj(key));
     serverAssertWithInfo(NULL,key,kde != NULL);
     trackkey(key, true /* fUpdate */);
@@ -2302,12 +2309,14 @@ void redisDbPersistentData::setExpire(robj *key, robj *subkey, long long when)
 
 void redisDbPersistentData::setExpire(expireEntry &&e)
 {
+    std::unique_lock<fastlock> ul(g_expireLock);
     trackkey(e.key(), true /* fUpdate */);
     m_setexpire->insert(e);
 }
 
 bool redisDb::FKeyExpires(const char *key)
 {
+    std::unique_lock<fastlock> ul(g_expireLock);
     return setexpireUnsafe()->find(key) != setexpire()->end();
 }
 
@@ -2327,6 +2336,7 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
 {
     serverAssert(sdsKey != nullptr);
     serverAssert(FImplies(*pde != nullptr, dictGetVal(*pde) != nullptr));    // early versions set a NULL object, this is no longer valid
+    std::unique_lock<fastlock> ul(g_expireLock);
 
     // First see if the key can be obtained from a snapshot
     if (*pde == nullptr && m_pdbSnapshot != nullptr)

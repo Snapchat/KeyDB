@@ -39,7 +39,7 @@
  * C-level DB API
  *----------------------------------------------------------------------------*/
 
-int keyIsExpired(redisDb *db, robj *key);
+int keyIsExpired(const redisDbPersistentDataSnapshot *db, robj *key);
 int expireIfNeeded(redisDb *db, robj *key, robj *o);
 void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add);
 
@@ -840,7 +840,7 @@ void keysCommandCore(client *cIn, const redisDbPersistentDataSnapshot *db, sds p
 
         if (allkeys || stringmatchlen(pattern,plen,key,sdslen(key),0)) {
             keyobj = createStringObject(key,sdslen(key));
-            if (!keyIsExpired(c->db,keyobj)) {
+            if (!keyIsExpired(db,keyobj)) {
                 addReplyBulk(c,keyobj);
                 numkeys++;
             }
@@ -1647,8 +1647,8 @@ void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey)
 }
 
 /* Check if the key is expired. Note, this does not check subexpires */
-int keyIsExpired(redisDb *db, robj *key) {
-    expireEntry *pexpire = db->getExpire(key);
+int keyIsExpired(const redisDbPersistentDataSnapshot *db, robj *key) {
+    const expireEntry *pexpire = db->getExpire(key);
     mstime_t now;
 
     if (pexpire == nullptr) return 0; /* No expire for this key */

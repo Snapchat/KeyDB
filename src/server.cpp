@@ -768,7 +768,7 @@ struct redisCommand redisCommandTable[] = {
      "admin no-script ok-stale",
      0,NULL,0,0,0,0,0,0},
 
-    {"replicaof",replicaofCommand,3,
+    {"replicaof",replicaofCommand,-3,
      "admin no-script ok-stale",
      0,NULL,0,0,0,0,0,0},
 

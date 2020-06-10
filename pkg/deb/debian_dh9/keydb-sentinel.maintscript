@@ -1,0 +1,4 @@
+rm_conffile /etc/keydb/keydb-sentinel.post-down.d/00_example 4:4.0.2-3~
+rm_conffile /etc/keydb/keydb-sentinel.post-up.d/00_example 4:4.0.2-3~
+rm_conffile /etc/keydb/keydb-sentinel.pre-down.d/00_example 4:4.0.2-3~
+rm_conffile /etc/keydb/keydb-sentinel.pre-up.d/00_example 4:4.0.2-3~

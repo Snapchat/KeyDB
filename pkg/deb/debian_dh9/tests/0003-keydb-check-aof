@@ -1,0 +1,5 @@
+#!/bin/sh
+#
+# Smoke test keydb-check-aof
+
+keydb-check-aof 2>&1 | grep -qsi usage:

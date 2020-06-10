@@ -1335,6 +1335,7 @@ void moveCommand(client *c) {
     /* Return zero if the key already exists in the target DB */
     if (lookupKeyWrite(dst,c->argv[1]) != NULL) {
         addReply(c,shared.czero);
+        decrRefCount(o);
         return;
     }
     dbAdd(dst,c->argv[1],o);

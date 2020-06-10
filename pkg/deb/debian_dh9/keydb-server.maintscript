@@ -1,0 +1,4 @@
+rm_conffile /etc/keydb/keydb-server.post-down.d/00_example 4:4.0.2-3~
+rm_conffile /etc/keydb/keydb-server.post-up.d/00_example 4:4.0.2-3~
+rm_conffile /etc/keydb/keydb-server.pre-down.d/00_example 4:4.0.2-3~
+rm_conffile /etc/keydb/keydb-server.pre-up.d/00_example 4:4.0.2-3~

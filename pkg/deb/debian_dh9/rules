@@ -1,0 +1,48 @@
+#!/usr/bin/make -f
+
+include /usr/share/dpkg/buildflags.mk
+
+#LUA_LIBS_DEBIAN = cjson bitop
+#LUA_LIBS_BUNDLED = struct cmsgpack
+#
+#LUA_OBJECTS = $(addprefix lua_,$(addsuffix .o,$(LUA_LIBS_BUNDLED)))
+#LUA_LDFLAGS = $(addprefix -llua5.1-,$(LUA_LIBS_DEBIAN)) $(addprefix ../deps/lua/src/,$(LUA_OBJECTS))
+
+export BUILD_TLS=yes
+export CFLAGS CPPFLAGS LDFLAGS
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export DEB_LDFLAGS_MAINT_APPEND = -ldl -latomic $(LUA_LDFLAGS)
+
+ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
+	NUMJOBS = $(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
+	MAKEFLAGS += -j$(NUMJOBS)
+	export MAKEFLAGS
+endif
+
+%:
+	dh $@
+
+override_dh_auto_install:
+	debian/bin/generate-systemd-service-files
+
+#override_dh_auto_build:
+#	make -C deps/lua/src $(LUA_OBJECTS)
+#	dh_auto_build --parallel -- V=1 USE_SYSTEM_JEMALLOC=yes USE_SYSTEM_LUA=yes USE_SYSTEM_HIREDIS=yes
+
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	# Avoid race conditions in upstream testsuite.
+#	./runtest --clients 1 || true
+#	./runtest-cluster || true
+#	./runtest-sentinel || true
+endif
+
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -f src/release.h debian/*.service
+
+override_dh_compress:
+	dh_compress -Xredis-trib.rb
+
+override_dh_installchangelogs:
+	dh_installchangelogs --keep 00-RELEASENOTES

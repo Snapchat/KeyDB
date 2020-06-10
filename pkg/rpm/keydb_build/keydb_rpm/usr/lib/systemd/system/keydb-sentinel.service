@@ -1,7 +1,7 @@
 [Unit]
 Description=Advanced key-value store
 After=network.target
-Documentation=https://docs.keydb.dev, man:keydb-sentinel(1)
+Documentation=http://keydb.io/documentation, man:keydb-sentinel(1)
 
 [Service]
 Type=forking

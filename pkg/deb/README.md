@@ -1,18 +1,14 @@
 ### KeyDB DEB Package Source Builds
 
-This directory contains scripts and components needed to generate debian packages on different distributions/architectures from source
+This directory contains scripts and components needed to generate debian packages on different distributions/architectures using source
 
-The 'debian' directory contains debian source code for bionic, buster and later distributions as it uses functions only available with debhelper11+. 'debian_dh9' is used for xenial, stretch and earlier distributions using debhelper9.
-
-You will need to install pbuilder `sudo apt install pbuilder` along with other distribution specific dependancies
+You will need to install pbuilder `sudo apt install pbuilder`
 
 Generate deb packages with the following script command run from this directory:
-
 ```
 $ ./deb-buildsource.sh
 ```
-
-This generates a directory structure, .dsc file, original.tar.gz, and new changelog for the distribution and architecture installed.
+This generates a directory structure, .dsc file, original.tar.gz, .changes files and new changelog for the distribution and architecture installed.
 
 When complete the produced debian packages will be located in deb_files_generated directory.
 

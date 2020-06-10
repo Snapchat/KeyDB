@@ -1,5 +1,5 @@
-Name        : keydb
-Version     : 5.3.3
+Name        : keydb-pro
+Version     : 6.0.5
 Release     : 1%{?dist}
 Group       : Unspecified
 License     : BSD
@@ -7,7 +7,6 @@ Packager    : EQ Alpha Technology
 
 URL         : https://keydb.dev
 Summary     : A persistent key-value database
-
 
 Requires:          /bin/awk
 Requires:          logrotate
@@ -28,7 +27,7 @@ getent group keydb &> /dev/null || \
 groupadd -r keydb &> /dev/null
 getent passwd keydb &> /dev/null || \
 useradd -r -g keydb -d /var/lib/keydb -s /sbin/nologin \
--c 'KeyDB Database Server' keydb &> /dev/null
+-c 'KeyDB Professional Database Server' keydb &> /dev/null
 exit 0
 
 #postinstall scriptlet (using /bin/sh):

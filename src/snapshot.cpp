@@ -502,10 +502,13 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
     spdb->initialize();
     dictExpand(spdb->m_pdict, m_pdbSnapshot->size());
 
+    volatile size_t skipped = 0;
     m_pdbSnapshot->iterate_threadsafe([&](const char *key, robj_roptr o) {
         if (o != nullptr) {
             dictAdd(spdb->m_pdict, sdsdupshared(key), o.unsafe_robjcast());
             incrRefCount(o);
+        } else {
+            ++skipped;
         }
         return true;
     }, true /*fKeyOnly*/, true /*fCacheOnly*/);
@@ -518,7 +521,11 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
 
     spdb->m_pdict->iterators++;
 
-    serverAssert(spdb->size() == m_pdbSnapshot->size());
+    if (m_spstorage) {
+        serverAssert(spdb->size() == m_pdbSnapshot->size());
+    } else {
+        serverAssert((spdb->size()+skipped) == m_pdbSnapshot->size());
+    }
 
     // Now wire us in (Acquire the LOCK)
     AeLocker locker;

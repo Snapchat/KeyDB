@@ -2412,9 +2412,7 @@ struct redisServer {
 
 inline int redisServerThreadVars::getRdbKeySaveDelay() {
     if (rdb_key_save_delay < 0) {
-        aeAcquireLock();
-        rdb_key_save_delay = g_pserver->rdb_key_save_delay;
-        aeReleaseLock();
+        __atomic_load(&g_pserver->rdb_key_save_delay, &rdb_key_save_delay, __ATOMIC_ACQUIRE);
     }
     return rdb_key_save_delay;
 }

@@ -1,0 +1,83 @@
+Description: <short summary of the patch>
+ TODO: Put a short summary on the line above and replace this paragraph
+ with a longer explanation of this change. Complete the meta-information
+ with other relevant fields (see below for details). To make it easier, the
+ information below has been extracted from the changelog. Adjust it or drop
+ it.
+ .
+ redis (5:5.0.5-1chl1~bionic1) bionic; urgency=medium
+ .
+   * Redis 5.0.5 fixes an important issue with AOF and adds multiple very useful
+     modules APIs. Moreover smaller bugs in other parts of Redis are fixed in
+     this release.
+   * Streams: a bug in the iterator could prevent certain items to be returned in
+     range queries under specific conditions.
+   * Memleak in bitfieldCommand fixed.
+   * Modules API: Preserve client*>id for blocked clients.
+   * Fix memory leak when rewriting config file in case of write errors.
+   * New modules API: RedisModule_GetKeyNameFromIO().
+   * Fix non critical bugs in diskless replication.
+   * New mdouels API: command filtering. See RedisModule_RegisterCommandFilter();
+   * Tests improved to be more deterministic.
+   * Fix a Redis Cluster bug, manual failover may abort because of the master
+     sending PINGs to the replicas.
+Author: Chris Lea <chris.lea@gmail.com>
+
+---
+The information above should follow the Patch Tagging Guidelines, please
+checkout http://dep.debian.net/deps/dep3/ to learn about the format. Here
+are templates for supplementary fields that you might want to add:
+
+Origin: <vendor|upstream|other>, <url of original patch>
+Bug: <url in upstream bugtracker>
+Bug-Debian: https://bugs.debian.org/<bugnumber>
+Bug-Ubuntu: https://launchpad.net/bugs/<bugnumber>
+Forwarded: <no|not-needed|url proving that it has been forwarded>
+Reviewed-By: <name and email of someone who approved the patch>
+Last-Update: 2019-08-14
+
+--- /dev/null
++++ redis-5.0.5/redis_5.0.5-1chl1~bionic1.dsc
+@@ -0,0 +1,42 @@
++-----BEGIN PGP SIGNED MESSAGE-----
++Hash: SHA512
++
++Format: 3.0 (quilt)
++Source: redis
++Binary: redis, redis-sentinel, redis-server, redis-tools
++Architecture: any all
++Version: 5:5.0.5-1chl1~bionic1
++Maintainer: Chris Lamb <lamby@debian.org>
++Homepage: https://redis.io/
++Standards-Version: 4.2.1
++Vcs-Browser: https://salsa.debian.org/lamby/pkg-redis
++Vcs-Git: https://salsa.debian.org/lamby/pkg-redis.git
++Testsuite: autopkgtest
++Build-Depends: debhelper (>= 9~), dpkg-dev (>= 1.17.5), systemd, procps <!nocheck>, tcl <!nocheck>
++Package-List:
++ redis deb database optional arch=all
++ redis-sentinel deb database optional arch=any
++ redis-server deb database optional arch=any
++ redis-tools deb database optional arch=any
++Checksums-Sha1:
++ 71e38ae09ac70012b5bc326522b976bcb8e269d6 1975750 redis_5.0.5.orig.tar.gz
++ 4698bbe4c190f31601d3864d9bcd5ed8380c8723 25956 redis_5.0.5-1chl1~bionic1.debian.tar.xz
++Checksums-Sha256:
++ 2139009799d21d8ff94fc40b7f36ac46699b9e1254086299f8d3b223ca54a375 1975750 redis_5.0.5.orig.tar.gz
++ 639fdb1be66542dc6b84e8c0bc30357e661bde809118cd1754e4cbbb83773a62 25956 redis_5.0.5-1chl1~bionic1.debian.tar.xz
++Files:
++ 2d2c8142baf72e6543174fc7beccaaa1 1975750 redis_5.0.5.orig.tar.gz
++ 1dd668600931bcca0e25f86c5c2cc0aa 25956 redis_5.0.5-1chl1~bionic1.debian.tar.xz
++
++-----BEGIN PGP SIGNATURE-----
++
++iQEzBAEBCgAdFiEEtTSUDPRzjdEehKuC2ZMjAYFA0IoFAl1Tk1QACgkQ2ZMjAYFA
++0Iqqzgf5AbOFgzqszqv4YxXg9hf+Iq5CCuw4J5U2Aid5fijLQVFPZaI0AgE3Br7C
++0nxqvxYEIjKF+e2nX6zNjVk3JXYz3/Am/quyrSBI4KW2lIbpfCnhC8zCLOVcDtlX
++jhdlg2rziqCDVaS1jGKR76vdz2FGSv/nAcGrjjOn0Lux7VhoaJgBoMgGCNigL8gB
++Wo36UBhZQ6h3zXJjiJUee40ne55xYENhBoWpMvChOlA6/7cW4Xwf6PKBiqwKaRry
++TYMTeLYgZ2S51ThK5zitfOPpBiP2xVuisL9NxgPiRTL1BnclJnOQzupX3xntNPtn
++Ym34YnxbLTGwew232JvgK3ywMmwBeA==
++=CJU0
++-----END PGP SIGNATURE-----
++

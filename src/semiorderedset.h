@@ -92,15 +92,16 @@ public:
  
         for (int hashset = 0; hashset < 2; ++hashset)   // rehashing may only be 1 resize behind, so we check up to two slots
         {
-            if (m_data[itr.idxPrimary] == nullptr)
-                continue;
-            const auto &vecBucket = *m_data[itr.idxPrimary];
-
-            auto itrFind = std::find(vecBucket.begin(), vecBucket.end(), key);
-            if (itrFind != vecBucket.end())
+            if (m_data[itr.idxPrimary] != nullptr)
             {
-                itr.idxSecondary =  itrFind - vecBucket.begin();
-                return itr;
+                const auto &vecBucket = *m_data[itr.idxPrimary];
+
+                auto itrFind = std::find(vecBucket.begin(), vecBucket.end(), key);
+                if (itrFind != vecBucket.end())
+                {
+                    itr.idxSecondary =  itrFind - vecBucket.begin();
+                    return itr;
+                }
             }
 
             // See if we have to check the older slot
@@ -333,7 +334,8 @@ private:
         {
             if (m_data[idxRehash] == nullptr)
                 continue;
-            CowPtr<vector_type> spvecT = std::make_shared<vector_type>();
+
+            CowPtr<vector_type> spvecT;
             std::swap(m_data[idxRehash], spvecT); 
 
             for (const auto &v : *spvecT)

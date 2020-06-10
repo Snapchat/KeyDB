@@ -1,0 +1,75 @@
+From: Chris Lamb <lamby@debian.org>
+Date: Wed, 24 Jan 2018 22:06:35 +1100
+Subject: Use get_current_dir_name over PATHMAX, etc.
+
+---
+ src/aof.c | 3 ++-
+ src/rdb.c | 7 ++++---
+ 2 files changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/src/aof.c b/src/aof.c
+index 9723fc3..cc89847 100644
+--- a/src/aof.c
++++ b/src/aof.c
+@@ -246,7 +246,7 @@ int startAppendOnly(void) {
+     newfd = open(server.aof_filename,O_WRONLY|O_APPEND|O_CREAT,0644);
+     serverAssert(server.aof_state == AOF_OFF);
+     if (newfd == -1) {
+-        char *cwdp = getcwd(cwd,MAXPATHLEN);
++        char *cwdp = get_current_dir_name();
+ 
+         serverLog(LL_WARNING,
+             "Redis needs to enable the AOF but can't open the "
+@@ -254,6 +254,7 @@ int startAppendOnly(void) {
+             server.aof_filename,
+             cwdp ? cwdp : "unknown",
+             strerror(errno));
++        zfree(cwdp);
+         return C_ERR;
+     }
+     if (server.rdb_child_pid != -1) {
+diff --git a/src/rdb.c b/src/rdb.c
+index 3e43cb4..6058160 100644
+--- a/src/rdb.c
++++ b/src/rdb.c
+@@ -1218,7 +1218,6 @@ werr: /* Write error. */
+ /* Save the DB on disk. Return C_ERR on error, C_OK on success. */
+ int rdbSave(char *filename, rdbSaveInfo *rsi) {
+     char tmpfile[256];
+-    char cwd[MAXPATHLEN]; /* Current working dir path for error messages. */
+     FILE *fp;
+     rio rdb;
+     int error = 0;
+@@ -1226,13 +1225,14 @@ int rdbSave(char *filename, rdbSaveInfo *rsi) {
+     snprintf(tmpfile,256,"temp-%d.rdb", (int) getpid());
+     fp = fopen(tmpfile,"w");
+     if (!fp) {
+-        char *cwdp = getcwd(cwd,MAXPATHLEN);
++        char *cwdp = get_current_dir_name();
+         serverLog(LL_WARNING,
+             "Failed opening the RDB file %s (in server root dir %s) "
+             "for saving: %s",
+             filename,
+             cwdp ? cwdp : "unknown",
+             strerror(errno));
++        zfree(cwdp);
+         return C_ERR;
+     }
+ 
+@@ -1254,7 +1254,7 @@ int rdbSave(char *filename, rdbSaveInfo *rsi) {
+     /* Use RENAME to make sure the DB file is changed atomically only
+      * if the generate DB file is ok. */
+     if (rename(tmpfile,filename) == -1) {
+-        char *cwdp = getcwd(cwd,MAXPATHLEN);
++        char *cwdp = get_current_dir_name();
+         serverLog(LL_WARNING,
+             "Error moving temp DB file %s on the final "
+             "destination %s (in server root dir %s): %s",
+@@ -1262,6 +1262,7 @@ int rdbSave(char *filename, rdbSaveInfo *rsi) {
+             filename,
+             cwdp ? cwdp : "unknown",
+             strerror(errno));
++        zfree(cwdp);
+         unlink(tmpfile);
+         return C_ERR;
+     }

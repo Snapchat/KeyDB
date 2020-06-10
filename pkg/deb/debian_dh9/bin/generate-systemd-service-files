@@ -1,0 +1,131 @@
+#!/bin/sh
+
+SYSTEMD_VER=$(systemctl --version | head -1 | cut -d' ' -f2)
+
+if [ ${SYSTEMD_VER} -lt 237 ]
+then
+    SYSTEMD_EXTRA=""
+else
+    SYSTEMD_EXTRA=$(cat <<EOF
+
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+#MemoryDenyWriteExecute=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictNamespaces=true
+EOF
+                 )
+fi
+
+for BINARY in keydb-server keydb-sentinel
+do
+	for MODE in default templated
+	do
+		case "${BINARY}" in
+		keydb-server)
+			NAME="keydb"
+			;;
+		keydb-sentinel)
+			NAME="sentinel"
+			;;
+		esac
+
+		case "${MODE}" in
+		default)
+			EXTRA="Alias=${NAME}.service"
+			TARGET="debian/${BINARY}.service"
+			NAMESPACED="${NAME}"
+			DESCRIPTION="Advanced key-value store"
+			;;
+		templated)
+			EXTRA=""
+			TARGET="debian/${BINARY}@.service"
+			NAMESPACED="${NAME}-%i"
+			DESCRIPTION="Advanced key-value store (%I)"
+			;;
+		esac
+
+		: >${TARGET}
+
+		if [ "${MODE}" = "templated" ]
+		then
+			cat >> ${TARGET} <<EOF
+# Templated service file for ${BINARY}(1)
+#
+# Each instance of ${BINARY} requires its own configuration file:
+#
+#   $ cp /etc/keydb/${NAME}.conf /etc/keydb/${NAME}-myname.conf
+#   $ chown keydb:keydb /etc/keydb/${NAME}-myname.conf
+#
+# Ensure each instance is using their own database:
+#
+#   $ sed -i -e 's@^dbfilename .*@dbfilename dump-myname.rdb@' /etc/keydb/${NAME}-myname.conf
+#
+# We then listen exlusively on UNIX sockets to avoid TCP port collisions:
+#
+#   $ sed -i -e 's@^port .*@port 0@' /etc/keydb/${NAME}-myname.conf
+#   $ sed -i -e 's@^\\(# \\)\\{0,1\\}unixsocket .*@unixsocket /var/run/${NAME}-myname/${BINARY}.sock@' /etc/keydb/${NAME}-myname.conf
+#
+# ... and ensure we are logging, etc. in a unique location:
+#
+#   $ sed -i -e 's@^logfile .*@logfile /var/log/keydb/${BINARY}-myname.log@' /etc/keydb/${NAME}-myname.conf
+#   $ sed -i -e 's@^pidfile .*@pidfile /var/run/keydb-myname/${BINARY}.pid@' /etc/keydb/${NAME}-myname.conf
+#
+# We can then start the service as follows, validating we are using our own
+# configuration:
+#
+#   $ systemctl start ${BINARY}@myname.service
+#   $ keydb-cli -s /var/run/${NAME}-myname/${BINARY}.sock info | grep config_file
+#
+#  -- Chris Lamb <lamby@debian.org>  Mon, 09 Oct 2017 22:17:24 +0100
+EOF
+		fi
+
+		cat >> ${TARGET} <<EOF
+[Unit]
+Description=${DESCRIPTION}
+After=network.target
+Documentation=https://docs.keydb.dev, man:${BINARY}(1)
+
+[Service]
+Type=forking
+ExecStart=/usr/bin/${BINARY} /etc/keydb/${NAMESPACED}.conf
+ExecStop=/bin/kill -s TERM \$MAINPID
+PIDFile=/var/run/${NAMESPACED}/${BINARY}.pid
+TimeoutStopSec=0
+Restart=always
+User=keydb
+Group=keydb
+RuntimeDirectory=${NAMESPACED}
+RuntimeDirectoryMode=2755
+
+UMask=007
+PrivateTmp=yes
+LimitNOFILE=65535
+PrivateDevices=yes
+ProtectHome=yes
+ReadOnlyDirectories=/
+ReadWriteDirectories=-/var/lib/keydb
+ReadWriteDirectories=-/var/log/keydb
+ReadWriteDirectories=-/var/run/${NAMESPACED}
+
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_SETGID CAP_SETUID CAP_SYS_RESOURCE${SYSTEMD_EXTRA}
+
+# ${BINARY} can write to its own config file when in cluster mode so we
+# permit writing there by default. If you are not using this feature, it is
+# recommended that you replace the following lines with "ProtectSystem=full".
+ProtectSystem=true
+ReadWriteDirectories=-/etc/keydb
+
+[Install]
+WantedBy=multi-user.target
+EOF
+		if [ "${EXTRA}" != "" ]
+		then
+			echo "${EXTRA}" >> "${TARGET}"
+		fi
+	done
+done

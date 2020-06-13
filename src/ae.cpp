@@ -234,7 +234,7 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
 
     int ret = AE_OK;
     
-    aeCommand cmd = {};
+    aeCommand cmd;
     cmd.op = AE_ASYNC_OP::CreateFileEvent;
     cmd.fd = fd;
     cmd.mask = mask;
@@ -294,7 +294,6 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
     }
 
     aeCommand cmd = {};
-    memset(&cmd, 0, sizeof(aeCommand));
     cmd.op = AE_ASYNC_OP::PostCppFunction;
     cmd.pfn = new (MALLOC_LOCAL) std::function<void()>(fn);
     cmd.pctl = nullptr;
@@ -454,7 +453,7 @@ void aeDeleteFileEventAsync(aeEventLoop *eventLoop, int fd, int mask)
 {
     if (eventLoop == g_eventLoopThisThread)
         return aeDeleteFileEvent(eventLoop, fd, mask);
-    aeCommand cmd;
+    aeCommand cmd = {};
     cmd.op = AE_ASYNC_OP::DeleteFileEvent;
     cmd.fd = fd;
     cmd.mask = mask;

@@ -1219,8 +1219,7 @@ int dbSwapDatabases(long id1, long id2) {
     if (id1 < 0 || id1 >= cserver.dbnum ||
         id2 < 0 || id2 >= cserver.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
-    redisDb aux; 
-    memcpy(&aux, &g_pserver->db[id1], sizeof(redisDb));
+    redisDb aux(g_pserver->db[id1]);
     redisDb *db1 = &g_pserver->db[id1], *db2 = &g_pserver->db[id2];
 
     /* Swap hash tables. Note that we don't swap blocking_keys,

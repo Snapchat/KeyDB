@@ -258,7 +258,7 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
     
     if (fSynchronous)
     {
-        std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::defer_lock);
+        std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv);
         cmd.pctl->cv.wait(ulock);
         ret = cmd.pctl->rval;
         delete cmd.pctl;
@@ -311,7 +311,7 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
     int ret = AE_OK;
     if (fSynchronous)
     {
-        std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::defer_lock);
+        std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv);
         cmd.pctl->cv.wait(ulock);
         ret = cmd.pctl->rval;
         delete cmd.pctl;

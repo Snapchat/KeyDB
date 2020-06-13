@@ -166,22 +166,24 @@ class robj_sharedptr
 
 public:
     robj_sharedptr()
-        : m_ptr(nullptr)
-        {}
-    robj_sharedptr(redisObject *ptr)
-        : m_ptr(ptr)
-        {
+    : m_ptr(nullptr)
+    {}
+    explicit robj_sharedptr(redisObject *ptr)
+    : m_ptr(ptr)
+    {
+        if(m_ptr)
             incrRefCount(ptr);
-        }
+    }
     ~robj_sharedptr()
     {
         if (m_ptr)
             decrRefCount(m_ptr);
     }
     robj_sharedptr(const robj_sharedptr& other)
-    {
-        m_ptr = other.m_ptr;
-        incrRefCount(m_ptr);
+    : m_ptr(other.m_ptr)
+    {        
+        if(m_ptr)
+            incrRefCount(m_ptr);
     }
 
     robj_sharedptr(robj_sharedptr&& other)
@@ -192,41 +194,19 @@ public:
 
     robj_sharedptr &operator=(const robj_sharedptr& other)
     {
-        if (m_ptr)
-            decrRefCount(m_ptr);
-        m_ptr = other.m_ptr;
-        incrRefCount(m_ptr);
+        robj_sharedptr tmp(other);
+        using std::swap;
+        swap(m_ptr, tmp.m_ptr);
         return *this;
     }
     robj_sharedptr &operator=(redisObject *ptr)
     {
-        if (m_ptr)
-            decrRefCount(m_ptr);
-        m_ptr = ptr;
-        incrRefCount(m_ptr);
+        robj_sharedptr tmp(ptr);
+        using std::swap;
+        swap(m_ptr, tmp.m_ptr);
         return *this;
     }
-
-    bool operator==(const robj_sharedptr &other) const
-    {
-        return m_ptr == other.m_ptr;
-    }
-
-    bool operator==(const void *p) const
-    {
-        return m_ptr == p;
-    }
-
-    bool operator!=(const robj_sharedptr &other) const
-    {
-        return m_ptr != other.m_ptr;
-    }
-
-    bool operator!=(const void *p) const
-    {
-        return m_ptr != p;
-    }
-
+    
     redisObject* operator->() const
     {
         return m_ptr;
@@ -237,7 +217,7 @@ public:
         return !m_ptr;
     }
 
-    operator bool() const{
+    explicit operator bool() const{
         return !!m_ptr;
     }
 
@@ -247,7 +227,38 @@ public:
     }
 
     redisObject *get() { return m_ptr; }
+    const redisObject *get() const { return m_ptr; }
 };
+
+inline bool operator==(const robj_sharedptr &lhs, const robj_sharedptr &rhs)
+{
+    return lhs.get() == rhs.get();
+}
+
+inline bool operator!=(const robj_sharedptr &lhs, const robj_sharedptr &rhs)
+{
+    return !(lhs == rhs);
+}
+
+inline bool operator==(const robj_sharedptr &lhs, const void *p)
+{
+    return lhs.get() == p;
+}
+
+inline bool operator==(const void *p, const robj_sharedptr &rhs)
+{
+    return rhs == p;
+}
+
+inline bool operator!=(const robj_sharedptr &lhs, const void *p)
+{
+    return !(lhs == p);
+}
+
+inline bool operator!=(const void *p, const robj_sharedptr &rhs)
+{
+    return !(rhs == p);
+}
 
 /* Error codes */
 #define C_OK                    0

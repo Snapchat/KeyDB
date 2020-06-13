@@ -2412,9 +2412,8 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             if (fStaleMvccKey && !fExpiredKey && rsi != nullptr && rsi->mi != nullptr && rsi->mi->staleKeyMap != nullptr && lookupKeyRead(db, &keyobj) == nullptr) {
                 // We have a key that we've already deleted and is not back in our database.
                 //  We'll need to inform the sending master of the delete if it is also a replica of us
-                robj *objKeyDup = createStringObject(key, sdslen(key));
-                rsi->mi->staleKeyMap->operator[](db - g_pserver->db).push_back(objKeyDup);
-                decrRefCount(objKeyDup);
+                robj_sharedptr objKeyDup(createStringObject(key, sdslen(key)));
+                rsi->mi->staleKeyMap->operator[](db - g_pserver->db).push_back(objKeyDup);                
             }
             fLastKeyExpired = true;
             sdsfree(key);

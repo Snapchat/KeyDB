@@ -60,9 +60,10 @@ bool redisDbPersistentData::asyncDelete(robj *key) {
         return syncDelete(key); // async delte never makes sense with a storage provider
 
     dictEntry *de = dictUnlink(m_pdict,ptrFromObj(key));
-    if (m_pdbSnapshot != nullptr && m_pdbSnapshot->find_cached_threadsafe(szFromObj(key)) != nullptr)
-        dictAdd(m_pdictTombstone, sdsdup((sds)dictGetKey(de)), nullptr);
     if (de) {
+        if (m_pdbSnapshot != nullptr && m_pdbSnapshot->find_cached_threadsafe(szFromObj(key)) != nullptr)
+            dictAdd(m_pdictTombstone, sdsdup((sds)dictGetKey(de)), nullptr);
+
         robj *val = (robj*)dictGetVal(de);
         if (val->FExpires())
         {

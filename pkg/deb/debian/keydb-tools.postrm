@@ -1,0 +1,13 @@
+#!/bin/sh
+
+set -eu
+
+if [ "${1}" = "purge" ]
+then
+	userdel keydb || true
+	rm -rf /var/lib/keydb /var/log/keydb
+fi
+
+#DEBHELPER#
+
+exit 0

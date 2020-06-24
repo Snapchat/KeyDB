@@ -1,0 +1,7 @@
+#!/bin/sh
+#
+# Run the benchmarking
+
+set -eu
+
+keydb-benchmark -P 10

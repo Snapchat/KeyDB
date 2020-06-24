@@ -1,3 +1,9 @@
+keydb-pro (6:6.0.11-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * 6.0.11 fixes applied related to cluster usage and expires
+
+ -- Ben Schermel <ben@eqalpha.com>  Wed, 17 Jun 2020 20:00:37 +0000
+
 keydb-pro (6:6.0.9-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * 6.0.9 Addressing issues 187 - cpu lockup with subkey expire, 190 - missing sentinel binary in keydb-tools.

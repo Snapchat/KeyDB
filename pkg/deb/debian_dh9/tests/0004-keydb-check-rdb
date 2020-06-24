@@ -1,0 +1,10 @@
+#!/bin/sh
+#
+# Test keydb-check-rdb
+
+set -eu
+
+# Perform a synchronous save to ensure .rdb file eixsts
+keydb-cli SAVE
+
+keydb-check-rdb /var/lib/keydb/dump.rdb

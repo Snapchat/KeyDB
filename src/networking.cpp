@@ -1928,9 +1928,12 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
         }
     }
 
-    AeLocker locker;
-    locker.arm(nullptr);
-    ProcessPendingAsyncWrites();
+    if (listLength(serverTL->clients_pending_asyncwrite))
+    {
+        AeLocker locker;
+        locker.arm(nullptr);
+        ProcessPendingAsyncWrites();
+    }
 
     return processed;
 }

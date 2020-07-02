@@ -2306,6 +2306,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             g_pserver->rdb_bgsave_scheduled = 0;
     }
 
+<<<<<<< HEAD
     if (cserver.storage_memory_model == STORAGE_WRITEBACK && g_pserver->m_pstorageFactory) {
         run_with_period(g_pserver->storage_flush_period) {
             flushStorageWeak();
@@ -2316,6 +2317,15 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         g_pserver->db[0]->consolidate_snapshot();
     }, true /*HiPri*/);
     
+=======
+    if (g_pserver->db[0]->FSnapshot())  // BUG only db 0?!
+    {
+        g_pserver->asyncworkqueue->AddWorkFunction([]{
+            g_pserver->db[0]->consolidate_snapshot();
+        }, true /*HiPri*/);
+    }
+
+>>>>>>> dd700f1d6... Remove unnecessary work from critical path (Latency Fixes)
     /* Fire the cron loop modules event. */
     RedisModuleCronLoopV1 ei = {REDISMODULE_CRON_LOOP_VERSION,g_pserver->hz};
     moduleFireServerEvent(REDISMODULE_EVENT_CRON_LOOP,
@@ -2441,7 +2451,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     static thread_local bool fFirstRun = true;
     // note: we also copy the DB pointer in case a DB swap is done while the lock is released
     std::vector<redisDb*> vecdb;    // note we cache the database pointer in case a dbswap is done while the lock is released
-    if (cserver.storage_memory_model == STORAGE_WRITETHROUGH)
+    if (cserver.storage_memory_model == STORAGE_WRITETHROUGH && g_pserver->m_pstorageFactory != nullptr)
     {
         if (!fFirstRun) {
             mstime_t storage_process_latency;
@@ -2462,8 +2472,11 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     mstime_t commit_latency;
     latencyStartMonitor(commit_latency);
-    for (redisDb *db : vecdb)
-        db->commitChanges();
+    if (g_pserver->m_pstorageFactory != nullptr)
+    {
+        for (redisDb *db : vecdb)
+            db->commitChanges();
+    }
     latencyEndMonitor(commit_latency);
     latencyAddSampleIfNeeded("storage-commit", commit_latency);
     
@@ -4150,6 +4163,7 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
+<<<<<<< HEAD
 #if 0
         if (cserver.cthreads >= 2 && !g_fTestMode && g_pserver->m_pstorageFactory == nullptr && listLength(g_pserver->monitors) == 0 && c->cmd->proc == getCommand)
         {
@@ -4157,6 +4171,8 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
                 return C_OK;
         }
 #endif
+=======
+>>>>>>> dd700f1d6... Remove unnecessary work from critical path (Latency Fixes)
         locker.arm(c);
         incrementMvccTstamp();
         call(c,callFlags);

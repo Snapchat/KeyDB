@@ -961,10 +961,10 @@ int parseScanCursorOrReply(client *c, robj *o, unsigned long *cursor) {
  *
  * In the case of a Hash object the function returns both the field and value
  * of every element on the Hash. */
+void scanFilterAndReply(client *c, list *keys, sds pat, sds type, int use_pattern, robj_roptr o, unsigned long cursor);
 void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
     int i, j;
     list *keys = listCreate();
-    listNode *node, *nextnode;
     long count = 10;
     sds pat = NULL;
     sds type = NULL;
@@ -1011,6 +1011,46 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
         } else {
             addReply(c,shared.syntaxerr);
             goto cleanup;
+        }
+    }
+
+    if (o == nullptr && count > 100)
+    {
+        // Do an async version
+        const redisDbPersistentDataSnapshot *snapshot = nullptr;
+        if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
+            snapshot = c->db->createSnapshot(c->mvccCheckpoint, true /* fOptional */);
+        if (snapshot != nullptr)
+        {
+            aeEventLoop *el = serverTL->el;
+            blockClient(c, BLOCKED_ASYNC);
+            redisDb *db = c->db;
+            sds patCopy = pat ? sdsdup(pat) : nullptr;
+            sds typeCopy = type ? sdsdup(type) : nullptr;
+            g_pserver->asyncworkqueue->AddWorkFunction([c, snapshot, cursor, count, keys, el, db, patCopy, typeCopy, use_pattern]{
+                auto cursorResult = snapshot->scan_threadsafe(cursor, count, keys, nullptr);
+
+                aePostFunction(el, [c, snapshot, keys, db, cursorResult, patCopy, typeCopy, use_pattern]{
+                    aeReleaseLock();    // we need to lock with coordination of the client
+
+                    std::unique_lock<decltype(c->lock)> lock(c->lock);
+                    AeLocker locker;
+                    locker.arm(c);
+
+                    unblockClient(c);
+                    scanFilterAndReply(c, keys, patCopy, typeCopy, use_pattern, nullptr, cursorResult);
+                    if (patCopy != nullptr)
+                        sdsfree(patCopy);
+                    if (typeCopy != nullptr)
+                        sdsfree(typeCopy);
+
+                    db->endSnapshot(snapshot);
+                    listSetFreeMethod(keys,decrRefCountVoid);
+                    listRelease(keys);
+                    aeAcquireLock();
+                });
+            });
+            return;
         }
     }
 
@@ -1080,6 +1120,18 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
         serverPanic("Not handled encoding in SCAN.");
     }
 
+    scanFilterAndReply(c, keys, pat, type, use_pattern, o, cursor);
+
+cleanup:
+    listSetFreeMethod(keys,decrRefCountVoid);
+    listRelease(keys);
+}
+
+void scanFilterAndReply(client *c, list *keys, sds pat, sds type, int use_pattern, robj_roptr o, unsigned long cursor)
+{
+    listNode *node, *nextnode;
+    int patlen = (pat != nullptr) ? sdslen(pat) : 0;
+    
     /* Step 3: Filter elements. */
     node = listFirst(keys);
     while (node) {
@@ -1144,10 +1196,6 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
         decrRefCount(kobj);
         listDelNode(keys, node);
     }
-
-cleanup:
-    listSetFreeMethod(keys,decrRefCountVoid);
-    listRelease(keys);
 }
 
 /* The SCAN command completely relies on scanGenericCommand. */

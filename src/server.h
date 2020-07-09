@@ -1395,6 +1395,8 @@ public:
     bool FWillFreeChildDebug() const { return m_spdbSnapshotHOLDER != nullptr; }
 
     bool iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly = false, bool fCacheOnly = false) const;
+    unsigned long scan_threadsafe(unsigned long iterator, long count, list *keys, struct scan_callback_data *pdata = nullptr) const;
+    
     using redisDbPersistentData::createSnapshot;
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::endSnapshotAsync;

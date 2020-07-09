@@ -388,6 +388,61 @@ dict_iter redisDbPersistentData::find_cached_threadsafe(const char *key) const
     return dict_iter(de);
 }
 
+struct scan_callback_data
+{
+    dict *dictTombstone;
+    list *keys;
+};
+void snapshot_scan_callback(void *privdata, const dictEntry *de)
+{
+    scan_callback_data *data = (scan_callback_data*)privdata;
+    if (data->dictTombstone != nullptr && dictFind(data->dictTombstone, dictGetKey(de)) != nullptr)
+        return;
+    
+    sds sdskey = (sds)dictGetKey(de);
+    listAddNodeHead(data->keys, createStringObject(sdskey, sdslen(sdskey)));
+}
+unsigned long redisDbPersistentDataSnapshot::scan_threadsafe(unsigned long iterator, long count, list *keys, scan_callback_data *pdata) const
+{
+    unsigned long iteratorReturn = 0;
+
+    scan_callback_data dataT;
+    if (pdata == nullptr)
+    {
+        dataT.dictTombstone = m_pdictTombstone;
+        dataT.keys = keys;
+        pdata = &dataT;
+    }
+
+    const redisDbPersistentDataSnapshot *psnapshot;
+    __atomic_load(&m_pdbSnapshot, &psnapshot, __ATOMIC_ACQUIRE);
+    if (psnapshot != nullptr)
+    {
+        // Always process the snapshot first as we assume its bigger than we are
+        iteratorReturn = psnapshot->scan_threadsafe(iterator, count, keys, pdata);
+    }
+
+    if (psnapshot == nullptr)
+    {
+        long maxiterations = count * 10; // allow more iterations than keys for sparse tables
+        iteratorReturn = iterator;
+        do {
+            iteratorReturn = dictScan(m_pdict, iteratorReturn, snapshot_scan_callback, NULL, pdata);
+        } while (iteratorReturn &&
+              maxiterations-- &&
+              listLength(keys) < (unsigned long)count);
+    }
+    else
+    {
+        // Just catch up with our snapshot
+        do
+        {
+            iterator = dictScan(m_pdict, iterator, snapshot_scan_callback, nullptr, pdata);
+        } while (iterator != 0 && iterator < iteratorReturn);
+    }
+    return iteratorReturn;
+}
+
 bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly, bool fCacheOnly) const
 {
     // Take the size so we can ensure we visited every element exactly once

@@ -3636,12 +3636,12 @@ void call(client *c, int flags) {
  * If C_OK is returned the client is still alive and valid and
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
-int processCommand(client *c, int callFlags, AeLocker &locker) {
+int processCommand(client *c, int callFlags) {
     AssertCorrectThread(c);
+    serverAssert(GlobalLocksAcquired());
 
     if (moduleHasCommandFilters())
     {
-        locker.arm(c);
         moduleCallCommandFilters(c);
     }
 
@@ -3693,9 +3693,6 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
 
     /* Check if the user can run this command according to the current
      * ACLs. */
-    if (c->puser && !(c->puser->flags & USER_FLAG_ALLCOMMANDS))
-        locker.arm(c);  // ACLs require the lock
-
     int acl_keypos;
     int acl_retval = ACLCheckCommandPerm(c,&acl_keypos);
     if (acl_retval != ACL_OK) {
@@ -3723,7 +3720,6 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
         !(c->cmd->getkeys_proc == NULL && c->cmd->firstkey == 0 &&
           c->cmd->proc != execCommand))
     {
-        locker.arm(c);
         int hashslot;
         int error_code;
         clusterNode *n = getNodeByQuery(c,c->cmd,c->argv,c->argc,
@@ -3738,9 +3734,6 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
             return C_OK;
         }
     }
-    
-    if (!locker.isArmed())
-        locker.arm(c);
 
     incrementMvccTstamp();
 

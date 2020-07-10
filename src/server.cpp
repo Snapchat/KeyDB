@@ -4096,11 +4096,13 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
+#if 0
         if (cserver.cthreads >= 2 && !g_fTestMode && g_pserver->m_pstorageFactory == nullptr && listLength(g_pserver->monitors) == 0 && c->cmd->proc == getCommand)
         {
             if (getCommandAsync(c))
                 return C_OK;
         }
+#endif
         locker.arm(c);
         incrementMvccTstamp();
         call(c,callFlags);

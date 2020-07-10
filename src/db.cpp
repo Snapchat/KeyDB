@@ -1032,7 +1032,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
         }
     }
 
-    if (o == nullptr && count > 100)
+    if (o == nullptr && count >= 100)
     {
         // Do an async version
         const redisDbPersistentDataSnapshot *snapshot = nullptr;
@@ -1046,7 +1046,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
             sds patCopy = pat ? sdsdup(pat) : nullptr;
             sds typeCopy = type ? sdsdup(type) : nullptr;
             g_pserver->asyncworkqueue->AddWorkFunction([c, snapshot, cursor, count, keys, el, db, patCopy, typeCopy, use_pattern]{
-                auto cursorResult = snapshot->scan_threadsafe(cursor, count, keys, nullptr);
+                auto cursorResult = snapshot->scan_threadsafe(cursor, count, keys);
                 if (use_pattern) {
                     listNode *ln = listFirst(keys);
                     int patlen = sdslen(patCopy);
@@ -1109,23 +1109,30 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
     }
 
     if (ht) {
-        void *privdata[2];
-        /* We set the max number of iterations to ten times the specified
-         * COUNT, so if the hash table is in a pathological state (very
-         * sparsely populated) we avoid to block too much time at the cost
-         * of returning no or very few elements. */
-        long maxiterations = count*10;
+        if (ht == c->db->dictUnsafeKeyOnly())
+        {
+            cursor = c->db->scan_threadsafe(cursor, count, keys);
+        }
+        else
+        {
+            void *privdata[2];
+            /* We set the max number of iterations to ten times the specified
+            * COUNT, so if the hash table is in a pathological state (very
+            * sparsely populated) we avoid to block too much time at the cost
+            * of returning no or very few elements. */
+            long maxiterations = count*10;
 
-        /* We pass two pointers to the callback: the list to which it will
-         * add new elements, and the object containing the dictionary so that
-         * it is possible to fetch more data in a type-dependent way. */
-        privdata[0] = keys;
-        privdata[1] = o.unsafe_robjcast();
-        do {
-            cursor = dictScan(ht, cursor, scanCallback, NULL, privdata);
-        } while (cursor &&
-              maxiterations-- &&
-              listLength(keys) < (unsigned long)count);
+            /* We pass two pointers to the callback: the list to which it will
+            * add new elements, and the object containing the dictionary so that
+            * it is possible to fetch more data in a type-dependent way. */
+            privdata[0] = keys;
+            privdata[1] = o.unsafe_robjcast();
+            do {
+                cursor = dictScan(ht, cursor, scanCallback, NULL, privdata);
+            } while (cursor &&
+                maxiterations-- &&
+                listLength(keys) < (unsigned long)count);
+        }
     } else if (o->type == OBJ_SET) {
         int pos = 0;
         int64_t ll;

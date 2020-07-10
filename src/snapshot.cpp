@@ -61,8 +61,11 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     }
 
     // See if we have too many levels and can bail out of this to reduce load
-    if (fOptional && (levels >= 4))
+    if (fOptional && (levels >= 6))
+    {
+        serverLog(LL_DEBUG, "Snapshot nesting too deep, abondoning");
         return nullptr;
+    }
 
     auto spdb = std::unique_ptr<redisDbPersistentDataSnapshot>(new (MALLOC_LOCAL) redisDbPersistentDataSnapshot());
     
@@ -392,6 +395,62 @@ dict_iter redisDbPersistentData::find_cached_threadsafe(const char *key) const
             return itr;
     }
     return dict_iter(de);
+}
+
+struct scan_callback_data
+{
+    dict *dictTombstone;
+    sds type;
+    list *keys;
+};
+void snapshot_scan_callback(void *privdata, const dictEntry *de)
+{
+    scan_callback_data *data = (scan_callback_data*)privdata;
+    if (data->dictTombstone != nullptr && dictFind(data->dictTombstone, dictGetKey(de)) != nullptr)
+        return;
+    
+    sds sdskey = (sds)dictGetKey(de);
+    if (data->type != nullptr)
+    {
+        if (strcasecmp(data->type, getObjectTypeName((robj*)dictGetVal(de))) != 0)
+            return;
+    }
+    listAddNodeHead(data->keys, createStringObject(sdskey, sdslen(sdskey)));
+}
+unsigned long redisDbPersistentDataSnapshot::scan_threadsafe(unsigned long iterator, long count, sds type, list *keys) const
+{
+    unsigned long iteratorReturn = 0;
+
+    scan_callback_data data;
+    data.dictTombstone = m_pdictTombstone;
+    data.keys = keys;
+    data.type = type;
+
+    const redisDbPersistentDataSnapshot *psnapshot;
+    __atomic_load(&m_pdbSnapshot, &psnapshot, __ATOMIC_ACQUIRE);
+    if (psnapshot != nullptr)
+    {
+        // Always process the snapshot first as we assume its bigger than we are
+        iteratorReturn = psnapshot->scan_threadsafe(iterator, count, type, keys);
+
+        // Just catch up with our snapshot
+        do
+        {
+            iterator = dictScan(m_pdict, iterator, snapshot_scan_callback, nullptr, &data);
+        } while (iterator != 0 && (iterator < iteratorReturn || iteratorReturn == 0));
+    }
+    else
+    {
+        long maxiterations = count * 10; // allow more iterations than keys for sparse tables
+        iteratorReturn = iterator;
+        do {
+            iteratorReturn = dictScan(m_pdict, iteratorReturn, snapshot_scan_callback, NULL, &data);
+        } while (iteratorReturn &&
+              maxiterations-- &&
+              listLength(keys) < (unsigned long)count);
+    }
+    
+    return iteratorReturn;
 }
 
 bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly, bool fCacheOnly) const

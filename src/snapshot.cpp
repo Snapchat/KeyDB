@@ -20,7 +20,6 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
 
     if (m_spdbSnapshotHOLDER != nullptr)
     {
-        serverLog(LL_DEBUG, "Attempting reuse of snapshot, client tstamp: %llu snapshot tstamp: %llu", mvccCheckpoint, m_spdbSnapshotHOLDER->m_mvccCheckpoint);
         // If possible reuse an existing snapshot (we want to minimize nesting)
         if (mvccCheckpoint <= m_spdbSnapshotHOLDER->m_mvccCheckpoint)
         {
@@ -395,6 +394,7 @@ dict_iter redisDbPersistentData::find_cached_threadsafe(const char *key) const
 struct scan_callback_data
 {
     dict *dictTombstone;
+    sds type;
     list *keys;
 };
 void snapshot_scan_callback(void *privdata, const dictEntry *de)
@@ -404,22 +404,28 @@ void snapshot_scan_callback(void *privdata, const dictEntry *de)
         return;
     
     sds sdskey = (sds)dictGetKey(de);
+    if (data->type != nullptr)
+    {
+        if (strcasecmp(data->type, getObjectTypeName((robj*)dictGetVal(de))) != 0)
+            return;
+    }
     listAddNodeHead(data->keys, createStringObject(sdskey, sdslen(sdskey)));
 }
-unsigned long redisDbPersistentDataSnapshot::scan_threadsafe(unsigned long iterator, long count, list *keys) const
+unsigned long redisDbPersistentDataSnapshot::scan_threadsafe(unsigned long iterator, long count, sds type, list *keys) const
 {
     unsigned long iteratorReturn = 0;
 
     scan_callback_data data;
     data.dictTombstone = m_pdictTombstone;
     data.keys = keys;
+    data.type = type;
 
     const redisDbPersistentDataSnapshot *psnapshot;
     __atomic_load(&m_pdbSnapshot, &psnapshot, __ATOMIC_ACQUIRE);
     if (psnapshot != nullptr)
     {
         // Always process the snapshot first as we assume its bigger than we are
-        iteratorReturn = psnapshot->scan_threadsafe(iterator, count, keys);
+        iteratorReturn = psnapshot->scan_threadsafe(iterator, count, type, keys);
 
         // Just catch up with our snapshot
         do

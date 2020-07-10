@@ -1046,7 +1046,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
             sds patCopy = pat ? sdsdup(pat) : nullptr;
             sds typeCopy = type ? sdsdup(type) : nullptr;
             g_pserver->asyncworkqueue->AddWorkFunction([c, snapshot, cursor, count, keys, el, db, patCopy, typeCopy, use_pattern]{
-                auto cursorResult = snapshot->scan_threadsafe(cursor, count, keys);
+                auto cursorResult = snapshot->scan_threadsafe(cursor, count, typeCopy, keys);
                 if (use_pattern) {
                     listNode *ln = listFirst(keys);
                     int patlen = sdslen(patCopy);
@@ -1060,8 +1060,12 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
                         ln = next;
                     }
                 }
+                if (patCopy != nullptr)
+                    sdsfree(patCopy);
+                if (typeCopy != nullptr)
+                    sdsfree(typeCopy);
 
-                aePostFunction(el, [c, snapshot, keys, db, cursorResult, patCopy, typeCopy, use_pattern]{
+                aePostFunction(el, [c, snapshot, keys, db, cursorResult, use_pattern]{
                     aeReleaseLock();    // we need to lock with coordination of the client
 
                     std::unique_lock<decltype(c->lock)> lock(c->lock);
@@ -1069,11 +1073,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
                     locker.arm(c);
 
                     unblockClient(c);
-                    scanFilterAndReply(c, keys, nullptr, typeCopy, false, nullptr, cursorResult);
-                    if (patCopy != nullptr)
-                        sdsfree(patCopy);
-                    if (typeCopy != nullptr)
-                        sdsfree(typeCopy);
+                    scanFilterAndReply(c, keys, nullptr, nullptr, false, nullptr, cursorResult);
 
                     db->endSnapshot(snapshot);
                     listSetFreeMethod(keys,decrRefCountVoid);
@@ -1111,7 +1111,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
     if (ht) {
         if (ht == c->db->dictUnsafeKeyOnly())
         {
-            cursor = c->db->scan_threadsafe(cursor, count, keys);
+            cursor = c->db->scan_threadsafe(cursor, count, nullptr, keys);
         }
         else
         {

@@ -73,6 +73,18 @@ bool AsyncWorkQueue::removeClientAsyncWrites(client *c)
     return fFound;
 }
 
+void AsyncWorkQueue::shutdown()
+{
+    std::unique_lock<std::mutex> lock(m_mutex);
+    serverAssert(!GlobalLocksAcquired());
+    m_fQuitting = true;
+    m_cvWakeup.notify_all();
+    lock.unlock();
+
+    for (auto &thread : m_vecthreads)
+        thread.join();
+}
+
 void AsyncWorkQueue::abandonThreads()
 {
     std::unique_lock<std::mutex> lock(m_mutex);

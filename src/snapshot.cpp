@@ -20,6 +20,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
 
     if (m_spdbSnapshotHOLDER != nullptr)
     {
+        serverLog(LL_DEBUG, "Attempting reuse of snapshot, client tstamp: %llu snapshot tstamp: %llu", mvccCheckpoint, m_spdbSnapshotHOLDER->m_mvccCheckpoint);
         // If possible reuse an existing snapshot (we want to minimize nesting)
         if (mvccCheckpoint <= m_spdbSnapshotHOLDER->m_mvccCheckpoint)
         {
@@ -59,8 +60,11 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     }
 
     // See if we have too many levels and can bail out of this to reduce load
-    if (fOptional && (levels >= 4))
+    if (fOptional && (levels >= 6))
+    {
+        serverLog(LL_DEBUG, "Snapshot nesting too deep, abondoning");
         return nullptr;
+    }
 
     auto spdb = std::unique_ptr<redisDbPersistentDataSnapshot>(new (MALLOC_LOCAL) redisDbPersistentDataSnapshot());
     
@@ -402,44 +406,38 @@ void snapshot_scan_callback(void *privdata, const dictEntry *de)
     sds sdskey = (sds)dictGetKey(de);
     listAddNodeHead(data->keys, createStringObject(sdskey, sdslen(sdskey)));
 }
-unsigned long redisDbPersistentDataSnapshot::scan_threadsafe(unsigned long iterator, long count, list *keys, scan_callback_data *pdata) const
+unsigned long redisDbPersistentDataSnapshot::scan_threadsafe(unsigned long iterator, long count, list *keys) const
 {
     unsigned long iteratorReturn = 0;
 
-    scan_callback_data dataT;
-    if (pdata == nullptr)
-    {
-        dataT.dictTombstone = m_pdictTombstone;
-        dataT.keys = keys;
-        pdata = &dataT;
-    }
+    scan_callback_data data;
+    data.dictTombstone = m_pdictTombstone;
+    data.keys = keys;
 
     const redisDbPersistentDataSnapshot *psnapshot;
     __atomic_load(&m_pdbSnapshot, &psnapshot, __ATOMIC_ACQUIRE);
     if (psnapshot != nullptr)
     {
         // Always process the snapshot first as we assume its bigger than we are
-        iteratorReturn = psnapshot->scan_threadsafe(iterator, count, keys, pdata);
-    }
+        iteratorReturn = psnapshot->scan_threadsafe(iterator, count, keys);
 
-    if (psnapshot == nullptr)
+        // Just catch up with our snapshot
+        do
+        {
+            iterator = dictScan(m_pdict, iterator, snapshot_scan_callback, nullptr, &data);
+        } while (iterator != 0 && (iterator < iteratorReturn || iteratorReturn == 0));
+    }
+    else
     {
         long maxiterations = count * 10; // allow more iterations than keys for sparse tables
         iteratorReturn = iterator;
         do {
-            iteratorReturn = dictScan(m_pdict, iteratorReturn, snapshot_scan_callback, NULL, pdata);
+            iteratorReturn = dictScan(m_pdict, iteratorReturn, snapshot_scan_callback, NULL, &data);
         } while (iteratorReturn &&
               maxiterations-- &&
               listLength(keys) < (unsigned long)count);
     }
-    else
-    {
-        // Just catch up with our snapshot
-        do
-        {
-            iterator = dictScan(m_pdict, iterator, snapshot_scan_callback, nullptr, pdata);
-        } while (iterator != 0 && (iterator < iteratorReturn || iteratorReturn == 0));
-    }
+    
     return iteratorReturn;
 }
 

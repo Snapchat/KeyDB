@@ -34,5 +34,7 @@ public:
     void AddWorkFunction(std::function<void()> &&fnAsync, bool fHiPri = false);
     bool removeClientAsyncWrites(struct client *c);
 
+    void shutdown();
+
     void abandonThreads();
 };

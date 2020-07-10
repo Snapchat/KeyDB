@@ -950,6 +950,24 @@ int parseScanCursorOrReply(client *c, robj *o, unsigned long *cursor) {
     return C_OK;
 }
 
+
+static bool filterKey(robj_roptr kobj, sds pat, int patlen)
+{
+    bool filter = false;
+    if (sdsEncodedObject(kobj)) {
+        if (!stringmatchlen(pat, patlen, szFromObj(kobj), sdslen(szFromObj(kobj)), 0))
+            filter = true;
+    } else {
+        char buf[LONG_STR_SIZE];
+        int len;
+
+        serverAssert(kobj->encoding == OBJ_ENCODING_INT);
+        len = ll2string(buf,sizeof(buf),(long)ptrFromObj(kobj));
+        if (!stringmatchlen(pat, patlen, buf, len, 0)) filter = true;
+    }
+    return filter;
+}
+
 /* This command implements SCAN, HSCAN and SSCAN commands.
  * If object 'o' is passed, then it must be a Hash, Set or Zset object, otherwise
  * if 'o' is NULL the command will operate on the dictionary associated with
@@ -961,10 +979,10 @@ int parseScanCursorOrReply(client *c, robj *o, unsigned long *cursor) {
  *
  * In the case of a Hash object the function returns both the field and value
  * of every element on the Hash. */
+void scanFilterAndReply(client *c, list *keys, sds pat, sds type, int use_pattern, robj_roptr o, unsigned long cursor);
 void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
     int i, j;
     list *keys = listCreate();
-    listNode *node, *nextnode;
     long count = 10;
     sds pat = NULL;
     sds type = NULL;
@@ -1014,6 +1032,59 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
         }
     }
 
+    if (o == nullptr && count >= 100)
+    {
+        // Do an async version
+        const redisDbPersistentDataSnapshot *snapshot = nullptr;
+        if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
+            snapshot = c->db->createSnapshot(c->mvccCheckpoint, true /* fOptional */);
+        if (snapshot != nullptr)
+        {
+            aeEventLoop *el = serverTL->el;
+            blockClient(c, BLOCKED_ASYNC);
+            redisDb *db = c->db;
+            sds patCopy = pat ? sdsdup(pat) : nullptr;
+            sds typeCopy = type ? sdsdup(type) : nullptr;
+            g_pserver->asyncworkqueue->AddWorkFunction([c, snapshot, cursor, count, keys, el, db, patCopy, typeCopy, use_pattern]{
+                auto cursorResult = snapshot->scan_threadsafe(cursor, count, typeCopy, keys);
+                if (use_pattern) {
+                    listNode *ln = listFirst(keys);
+                    int patlen = sdslen(patCopy);
+                    while (ln != nullptr)
+                    {
+                        listNode *next = ln->next;
+                        if (filterKey((robj*)listNodeValue(ln), patCopy, patlen))
+                        {
+                            listDelNode(keys, ln);
+                        }
+                        ln = next;
+                    }
+                }
+                if (patCopy != nullptr)
+                    sdsfree(patCopy);
+                if (typeCopy != nullptr)
+                    sdsfree(typeCopy);
+
+                aePostFunction(el, [c, snapshot, keys, db, cursorResult, use_pattern]{
+                    aeReleaseLock();    // we need to lock with coordination of the client
+
+                    std::unique_lock<decltype(c->lock)> lock(c->lock);
+                    AeLocker locker;
+                    locker.arm(c);
+
+                    unblockClient(c);
+                    scanFilterAndReply(c, keys, nullptr, nullptr, false, nullptr, cursorResult);
+
+                    db->endSnapshot(snapshot);
+                    listSetFreeMethod(keys,decrRefCountVoid);
+                    listRelease(keys);
+                    aeAcquireLock();
+                });
+            });
+            return;
+        }
+    }
+
     /* Step 2: Iterate the collection.
      *
      * Note that if the object is encoded with a ziplist, intset, or any other
@@ -1038,23 +1109,30 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
     }
 
     if (ht) {
-        void *privdata[2];
-        /* We set the max number of iterations to ten times the specified
-         * COUNT, so if the hash table is in a pathological state (very
-         * sparsely populated) we avoid to block too much time at the cost
-         * of returning no or very few elements. */
-        long maxiterations = count*10;
+        if (ht == c->db->dictUnsafeKeyOnly())
+        {
+            cursor = c->db->scan_threadsafe(cursor, count, nullptr, keys);
+        }
+        else
+        {
+            void *privdata[2];
+            /* We set the max number of iterations to ten times the specified
+            * COUNT, so if the hash table is in a pathological state (very
+            * sparsely populated) we avoid to block too much time at the cost
+            * of returning no or very few elements. */
+            long maxiterations = count*10;
 
-        /* We pass two pointers to the callback: the list to which it will
-         * add new elements, and the object containing the dictionary so that
-         * it is possible to fetch more data in a type-dependent way. */
-        privdata[0] = keys;
-        privdata[1] = o.unsafe_robjcast();
-        do {
-            cursor = dictScan(ht, cursor, scanCallback, NULL, privdata);
-        } while (cursor &&
-              maxiterations-- &&
-              listLength(keys) < (unsigned long)count);
+            /* We pass two pointers to the callback: the list to which it will
+            * add new elements, and the object containing the dictionary so that
+            * it is possible to fetch more data in a type-dependent way. */
+            privdata[0] = keys;
+            privdata[1] = o.unsafe_robjcast();
+            do {
+                cursor = dictScan(ht, cursor, scanCallback, NULL, privdata);
+            } while (cursor &&
+                maxiterations-- &&
+                listLength(keys) < (unsigned long)count);
+        }
     } else if (o->type == OBJ_SET) {
         int pos = 0;
         int64_t ll;
@@ -1080,6 +1158,18 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
         serverPanic("Not handled encoding in SCAN.");
     }
 
+    scanFilterAndReply(c, keys, pat, type, use_pattern, o, cursor);
+
+cleanup:
+    listSetFreeMethod(keys,decrRefCountVoid);
+    listRelease(keys);
+}
+
+void scanFilterAndReply(client *c, list *keys, sds pat, sds type, int use_pattern, robj_roptr o, unsigned long cursor)
+{
+    listNode *node, *nextnode;
+    int patlen = (pat != nullptr) ? sdslen(pat) : 0;
+    
     /* Step 3: Filter elements. */
     node = listFirst(keys);
     while (node) {
@@ -1089,17 +1179,8 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
 
         /* Filter element if it does not match the pattern. */
         if (!filter && use_pattern) {
-            if (sdsEncodedObject(kobj)) {
-                if (!stringmatchlen(pat, patlen, szFromObj(kobj), sdslen(szFromObj(kobj)), 0))
-                    filter = 1;
-            } else {
-                char buf[LONG_STR_SIZE];
-                int len;
-
-                serverAssert(kobj->encoding == OBJ_ENCODING_INT);
-                len = ll2string(buf,sizeof(buf),(long)ptrFromObj(kobj));
-                if (!stringmatchlen(pat, patlen, buf, len, 0)) filter = 1;
-            }
+            if (filterKey(kobj, pat, patlen))
+                filter = 1;
         }
 
         /* Filter an element if it isn't the type we want. */
@@ -1144,10 +1225,6 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
         decrRefCount(kobj);
         listDelNode(keys, node);
     }
-
-cleanup:
-    listSetFreeMethod(keys,decrRefCountVoid);
-    listRelease(keys);
 }
 
 /* The SCAN command completely relies on scanGenericCommand. */

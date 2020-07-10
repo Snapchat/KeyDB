@@ -438,7 +438,7 @@ unsigned long redisDbPersistentDataSnapshot::scan_threadsafe(unsigned long itera
         do
         {
             iterator = dictScan(m_pdict, iterator, snapshot_scan_callback, nullptr, pdata);
-        } while (iterator != 0 && iterator < iteratorReturn);
+        } while (iterator != 0 && (iterator < iteratorReturn || iteratorReturn == 0));
     }
     return iteratorReturn;
 }

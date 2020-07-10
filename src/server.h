@@ -1528,6 +1528,9 @@ typedef struct redisTLSContextConfig {
     char *ciphers;
     char *ciphersuites;
     int prefer_server_ciphers;
+    int session_caching;
+    int session_cache_size;
+    int session_cache_timeout;
 } redisTLSContextConfig;
 
 /*-----------------------------------------------------------------------------
@@ -2564,7 +2567,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 size_t freeMemoryGetNotCountedMemory();
 int freeMemoryIfNeeded(void);
 int freeMemoryIfNeededAndSafe(void);
-int processCommand(client *c, int callFlags, class AeLocker &locker);
+int processCommand(client *c, int callFlags);
 void setupSignalHandlers(void);
 struct redisCommand *lookupCommand(sds name);
 struct redisCommand *lookupCommandByCString(const char *s);

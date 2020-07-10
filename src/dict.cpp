@@ -952,7 +952,7 @@ unsigned long dictScan(dict *d,
 
     /* Having a safe iterator means no rehashing can happen, see _dictRehashStep.
      * This is needed in case the scan callback tries to do dictFind or alike. */
-    d->iterators++;
+    __atomic_fetch_add(&d->iterators, 1, __ATOMIC_SEQ_CST);
 
     if (!dictIsRehashing(d)) {
         t0 = &(d->ht[0]);
@@ -1021,7 +1021,7 @@ unsigned long dictScan(dict *d,
     }
 
     /* undo the ++ at the top */
-    d->iterators--;
+    __atomic_fetch_sub(&d->iterators, 1, __ATOMIC_SEQ_CST);
 
     return v;
 }

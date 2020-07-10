@@ -2308,8 +2308,9 @@ void commandProcessed(client *c) {
 int processCommandAndResetClient(client *c, int flags) {
     int deadclient = 0;
     serverTL->current_client = c;
-    AeLocker locker;
-    if (processCommand(c, flags, locker) == C_OK) {
+    serverAssert(GlobalLocksAcquired());
+    
+    if (processCommand(c, flags) == C_OK) {
         commandProcessed(c);
     }
     if (serverTL->current_client == NULL) deadclient = 1;
@@ -2465,7 +2466,8 @@ void readQueryFromClient(connection *conn) {
 
 void processClients()
 {
-    aeAcquireLock();
+    serverAssert(GlobalLocksAcquired());
+
     for (client *c : serverTL->vecclientsProcess) {
         /* There is more data in the client input buffer, continue parsing it
         * in case to check if there is a full command to execute. */
@@ -2477,7 +2479,6 @@ void processClients()
     {
         ProcessPendingAsyncWrites();
     }
-    aeReleaseLock();
     
     serverTL->vecclientsProcess.clear();
 }
@@ -3437,7 +3438,7 @@ void processEventsWhileBlocked(int iel) {
     
 
     aeReleaseLock();
-    serverAssertDebug(!GlobalLocksAcquired());
+    serverAssert(!GlobalLocksAcquired());
     try
     {
         while (iterations--) {

@@ -496,6 +496,7 @@ int freeMemoryIfNeeded(bool fPreSnapshot) {
     int slaves = listLength(g_pserver->slaves);
     const bool fEvictToStorage = !cserver.delete_on_evict && g_pserver->db[0]->FStorageProvider();
     int result = C_ERR;
+    int ckeysFailed = 0;
 
     /* When clients are paused the dataset should be static not just from the
      * POV of clients not being able to write, but also from the POV of
@@ -618,8 +619,16 @@ int freeMemoryIfNeeded(bool fPreSnapshot) {
             {
                 // This key is in the storage so we only need to free the object
                 delta = (long long) zmalloc_used_memory();
-                db->removeCachedValue(bestkey);
-                delta -= (long long) zmalloc_used_memory();
+                if (db->removeCachedValue(bestkey)) {
+                    delta -= (long long) zmalloc_used_memory();
+                    ckeysFailed = 0;
+                }
+                else {
+                    delta = 0;
+                    ckeysFailed++;
+                    if (ckeysFailed > 1024)
+                        goto cant_free;
+                }
                 mem_freed += delta;
             }
             else
@@ -678,6 +687,13 @@ int freeMemoryIfNeeded(bool fPreSnapshot) {
     result = C_OK;
 
 cant_free:
+    if (g_pserver->m_pstorageFactory)
+    {
+        if (mem_reported < g_pserver->maxmemory*1.2) {
+            return C_OK;    // Allow us to temporarily go over without OOMing
+        }
+    }
+
     if (!cserver.delete_on_evict && result != C_OK)
     {
         for (int idb = 0; idb < cserver.dbnum; ++idb)

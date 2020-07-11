@@ -8,7 +8,8 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     serverAssert(GlobalLocksAcquired());
     serverAssert(m_refCount == 0);  // do not call this on a snapshot
 
-    freeMemoryIfNeededAndSafe(true /*fPreSnapshot*/);
+    if (freeMemoryIfNeededAndSafe(true /*fPreSnapshot*/) != C_OK && fOptional)
+        return nullptr; // can't create snapshot due to OOM
 
     int levels = 1;
     redisDbPersistentDataSnapshot *psnapshot = m_spdbSnapshotHOLDER.get();
@@ -76,7 +77,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     dictForceRehash(spdb->m_pdictTombstone);    // prevent rehashing by finishing the rehash now
     spdb->m_spdbSnapshotHOLDER = std::move(m_spdbSnapshotHOLDER);
     if (m_spstorage != nullptr)
-        spdb->m_spstorage = std::shared_ptr<IStorage>(const_cast<IStorage*>(m_spstorage->clone()));
+        spdb->m_spstorage = std::shared_ptr<StorageCache>(const_cast<StorageCache*>(m_spstorage->clone()));
     spdb->m_pdbSnapshot = m_pdbSnapshot;
     spdb->m_refCount = 1;
     spdb->m_mvccCheckpoint = getMvccTstamp();

@@ -4,12 +4,13 @@
 class IStorageFactory
 {
 public:
-    typedef void (*key_load_iterator)(const char *rgchKey, size_t cchKey);
+    typedef void (*key_load_iterator)(const char *rgchKey, size_t cchKey, void *privdata);
 
     virtual ~IStorageFactory() {}
-    virtual class IStorage *create(int db, key_load_iterator itr) = 0;
+    virtual class IStorage *create(int db, key_load_iterator itr, void *privdata) = 0;
     virtual const char *name() const = 0;
     virtual size_t totalDiskspaceUsed() const = 0;
+    virtual bool FSlow() const = 0;
 };
 
 class IStorage

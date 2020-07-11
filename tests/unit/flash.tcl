@@ -1,4 +1,4 @@
-start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.db} delete-on-evict no]] {
+start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.db} delete-on-evict no storage-flush-period 10]] {
 
     test { FLASH - GET works after eviction } {
         r set testkey foo
@@ -100,6 +100,8 @@ start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.
     }
 
     r flushall
+    # If a weak storage memory model is set, wait for any pending snapshot writes to finish
+    after 500 
     foreach policy {
         allkeys-random allkeys-lru allkeys-lfu
     } {
@@ -107,7 +109,7 @@ start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.
             # Get the current memory limit and calculate a new limit.
             # Set limit to 100M.
             set used [s used_memory]
-            set limit [expr {$used+50000*1024}]
+            set limit [expr {$used+60*1024*1024}]
             r config set maxmemory $limit
             r config set maxmemory-policy $policy
             # Now add keys equivalent to 1024b until the limit is almost reached.
@@ -124,7 +126,8 @@ start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.
             # should still be under the limit for maxmemory, however all keys set should still exist between flash and memory
             # check same number of keys exist in addition to values of first and last keys
             set err 0
-            for {set j 0} {$j < 10000} {incr j} {
+	    set extra_keys [expr floor([expr ($limit * 0.4) / 1024])]
+            for {set j 0} {$j < $extra_keys} {incr j} {
                 catch {
                 r set p2$j xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
                 } err
@@ -135,8 +138,8 @@ start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.
             }
             r set last val
             set dbsize [r dbsize]
-            assert {[s used_memory] < $limit+4096}
-            assert {$dbsize == $numkeys+10002}
+            assert {[s used_memory] < ($limit*1.2)}
+            assert {$dbsize == $numkeys+$extra_keys+2}
             assert {[r get first] == {val}}
             assert {[r get last] == {val}}
             r flushall

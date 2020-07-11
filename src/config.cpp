@@ -518,7 +518,7 @@ void loadServerConfigFromString(char *config) {
             err = "KeyDB not compliled with scratch-file support.";
             goto loaderr;
 #endif
-        } else if (!strcasecmp(argv[0],"server-threads") && argc == 2) {
+        } else if ((!strcasecmp(argv[0],"server-threads") || !strcasecmp(argv[0],"io-threads")) && argc == 2) {
             cserver.cthreads = atoi(argv[1]);
             if (cserver.cthreads <= 0 || cserver.cthreads > MAX_EVENT_LOOPS) {
                 err = "Invalid number of threads specified";
@@ -2185,6 +2185,7 @@ static int updateTlsCfgBool(int val, int prev, const char **err) {
 }
 #endif  /* USE_OPENSSL */
 
+int fDummy = false;
 standardConfig configs[] = {
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, g_pserver->rdb_checksum, 1, NULL, NULL),
@@ -2200,6 +2201,7 @@ standardConfig configs[] = {
     createBoolConfig("lazyfree-lazy-eviction", NULL, MODIFIABLE_CONFIG, g_pserver->lazyfree_lazy_eviction, 0, NULL, NULL),
     createBoolConfig("lazyfree-lazy-expire", NULL, MODIFIABLE_CONFIG, g_pserver->lazyfree_lazy_expire, 0, NULL, NULL),
     createBoolConfig("lazyfree-lazy-server-del", NULL, MODIFIABLE_CONFIG, g_pserver->lazyfree_lazy_server_del, 0, NULL, NULL),
+    createBoolConfig("lazyfree-lazy-user-del", NULL, MODIFIABLE_CONFIG, g_pserver->lazyfree_lazy_user_del , 0, NULL, NULL),
     createBoolConfig("repl-disable-tcp-nodelay", NULL, MODIFIABLE_CONFIG, g_pserver->repl_disable_tcp_nodelay, 0, NULL, NULL),
     createBoolConfig("repl-diskless-sync", NULL, MODIFIABLE_CONFIG, g_pserver->repl_diskless_sync, 0, NULL, NULL),
     createBoolConfig("aof-rewrite-incremental-fsync", NULL, MODIFIABLE_CONFIG, g_pserver->aof_rewrite_incremental_fsync, 1, NULL, NULL),

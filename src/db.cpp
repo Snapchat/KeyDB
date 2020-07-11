@@ -399,7 +399,7 @@ bool redisDbPersistentData::syncDelete(robj *key)
     
     bool fDeleted = false;
     if (m_spstorage != nullptr)
-        fDeleted = m_spstorage->erase(szFromObj(key), sdslen(szFromObj(key)));
+        fDeleted = m_spstorage->erase(szFromObj(key));
     fDeleted = (dictDelete(m_pdict,ptrFromObj(key)) == DICT_OK) || fDeleted;
 
     if (fDeleted) {
@@ -2266,13 +2266,13 @@ void redisDbPersistentData::initialize()
     m_fTrackingChanges = 0;
 }
 
-void redisDbPersistentData::setStorageProvider(IStorage *pstorage)
+void redisDbPersistentData::setStorageProvider(StorageCache *pstorage)
 {
     serverAssert(m_spstorage == nullptr);
-    m_spstorage = std::unique_ptr<IStorage>(pstorage);
+    m_spstorage = std::unique_ptr<StorageCache>(pstorage);
 }
 
-void clusterStorageLoadCallback(const char *rgchkey, size_t cch)
+void clusterStorageLoadCallback(const char *rgchkey, size_t cch, void *)
 {
     slotToKeyUpdateKeyCore(rgchkey, cch, true /*add*/);
 }
@@ -2296,7 +2296,7 @@ void redisDb::storageProviderInitialize()
     if (g_pserver->m_pstorageFactory != nullptr)
     {
         IStorageFactory::key_load_iterator itr = (g_pserver->cluster_enabled) ? clusterStorageLoadCallback : nullptr;
-        this->setStorageProvider(g_pserver->m_pstorageFactory->create(id, itr));
+        this->setStorageProvider(StorageCache::create(g_pserver->m_pstorageFactory, id, itr, nullptr));
     }
 }
 
@@ -2339,7 +2339,11 @@ void redisDbPersistentData::clear(void(callback)(void*))
 {
     dictEmpty(m_pdict,callback);
     if (m_fTrackingChanges)
+    {
+        m_setchanged.clear();
+        m_cnewKeysPending = 0;
         m_fAllChanged++;
+    }
     delete m_setexpire;
     m_setexpire = new (MALLOC_LOCAL) expireset();
     if (m_spstorage != nullptr)
@@ -2448,14 +2452,21 @@ LNotFound:
     {
         if (dictSize(m_pdict) != size())    // if all keys are cached then no point in looking up the database
         {
-            m_spstorage->retrieve(sdsKey, sdslen(sdsKey), [&](const char *, size_t, const void *data, size_t cb){
+            sds sdsNewKey = nullptr;  // the storage cache will give us its cached key if available
+            robj *o = nullptr;
+            std::unique_ptr<expireEntry> spexpire;
+            m_spstorage->retrieve((sds)sdsKey, [&](const char *, size_t, const void *data, size_t cb){
                 size_t offset = 0;
-                sds sdsNewKey = sdsdupshared(sdsKey);
-                auto spexpire = deserializeExpire((sds)sdsNewKey, (const char*)data, cb, &offset);
-                robj *o = deserializeStoredObject(this, sdsKey, reinterpret_cast<const char*>(data) + offset, cb - offset);
+                spexpire = deserializeExpire((sds)sdsNewKey, (const char*)data, cb, &offset);    
+                o = deserializeStoredObject(this, sdsKey, reinterpret_cast<const char*>(data) + offset, cb - offset);
                 serverAssert(o != nullptr);
+            }, &sdsNewKey);
+            
+            if (o != nullptr)
+            {
+                if (sdsNewKey == nullptr)
+                    sdsNewKey = sdsdupshared(sdsKey);
                 dictAdd(m_pdict, sdsNewKey, o);
-
                 o->SetFExpires(spexpire != nullptr);
 
                 if (spexpire != nullptr)
@@ -2467,7 +2478,13 @@ LNotFound:
                     serverAssert(m_setexpire->find(sdsKey) != m_setexpire->end());
                 }
                 serverAssert(o->FExpires() == (m_setexpire->find(sdsKey) != m_setexpire->end()));
-            });
+            }
+            else
+            {
+                if (sdsNewKey != nullptr)
+                    sdsfree(sdsNewKey); // BUG but don't bother crashing
+            }
+
             *pde = dictFind(m_pdict, sdsKey);
         }
     }
@@ -2479,10 +2496,10 @@ LNotFound:
     }
 }
 
-void redisDbPersistentData::storeKey(const char *szKey, size_t cchKey, robj *o, bool fOverwrite)
+void redisDbPersistentData::storeKey(sds key, robj *o, bool fOverwrite)
 {
-    sds temp = serializeStoredObjectAndExpire(this, szKey, o);
-    m_spstorage->insert(szKey, cchKey, temp, sdslen(temp), fOverwrite);
+    sds temp = serializeStoredObjectAndExpire(this, key, o);
+    m_spstorage->insert(key, temp, sdslen(temp), fOverwrite);
     sdsfree(temp);
 }
 
@@ -2493,12 +2510,24 @@ void redisDbPersistentData::storeDatabase()
     while ((de = dictNext(di)) != NULL) {
         sds key = (sds)dictGetKey(de);
         robj *o = (robj*)dictGetVal(de);
-        storeKey(key, sdslen(key), o, false);
+        storeKey(key, o, false);
     }
+    serverAssert(dictSize(m_pdict) == m_spstorage->count());
     dictReleaseIterator(di);
 }
 
-void redisDbPersistentData::processChanges()
+/* static */ void redisDbPersistentData::serializeAndStoreChange(StorageCache *storage, redisDbPersistentData *db, const redisDbPersistentData::changedesc &change)
+{
+    auto itr = db->find_cached_threadsafe(change.strkey.get());
+    if (itr == nullptr)
+        return;
+    robj *o = itr.val();
+    sds temp = serializeStoredObjectAndExpire(db, (const char*) itr.key(), o);
+    storage->insert((sds)change.strkey.get(), temp, sdslen(temp), change.fUpdate);
+    sdsfree(temp);
+}
+
+void redisDbPersistentData::processChanges(bool fSnapshot)
 {
     serverAssert(GlobalLocksAcquired());
 
@@ -2508,35 +2537,51 @@ void redisDbPersistentData::processChanges()
     if (m_spstorage != nullptr)
     {
         m_spstorage->beginWriteBatch();
-        if (m_fTrackingChanges >= 0)
+        serverAssert(m_pdbSnapshotStorageFlush == nullptr);
+        if (fSnapshot && !m_fAllChanged && m_setchanged.size() > 100)
+        {
+            // Do a snapshot based process if possible
+            m_pdbSnapshotStorageFlush = createSnapshot(getMvccTstamp(), true /* optional */);
+            if (m_pdbSnapshotStorageFlush)
+            {
+                m_setchangedStorageFlush = std::move(m_setchanged);
+            }
+        }
+        
+        if (m_pdbSnapshotStorageFlush == nullptr)
         {
             if (m_fAllChanged)
             {
                 m_spstorage->clear();
                 storeDatabase();
-                m_fAllChanged--;
+                m_fAllChanged = 0;
             }
             else
             {
                 for (auto &change : m_setchanged)
                 {
-                    auto itr = find_cached_threadsafe(change.strkey.get());
-                    if (itr == nullptr)
-                        continue;
-                    robj *o = itr.val();
-                    sds temp = serializeStoredObjectAndExpire(this, (const char*) itr.key(), o);
-                    m_spstorage->insert(change.strkey.get(), sdslen(change.strkey.get()), temp, sdslen(temp), change.fUpdate);
-                    sdsfree(temp);
+                    serializeAndStoreChange(m_spstorage.get(), this, change);
                 }
             }
-            m_setchanged.clear();
-            m_cnewKeysPending = 0;
         }
+        m_setchanged.clear();
+        m_cnewKeysPending = 0;
     }
 }
 
-void redisDbPersistentData::commitChanges()
+void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **psnapshotFree)
 {
+    if (m_pdbSnapshotStorageFlush)
+    {
+
+        for (auto &change : m_setchangedStorageFlush)
+        {
+            serializeAndStoreChange(m_spstorage.get(), (redisDbPersistentData*)m_pdbSnapshotStorageFlush, change);
+        }
+        m_setchangedStorageFlush.clear();
+        *psnapshotFree = m_pdbSnapshotStorageFlush;
+        m_pdbSnapshotStorageFlush = nullptr;
+    }
     if (m_spstorage != nullptr)
         m_spstorage->endWriteBatch();
 }
@@ -2581,7 +2626,7 @@ dict_iter redisDbPersistentData::random()
 
 size_t redisDbPersistentData::size() const 
 { 
-    if (m_spstorage != nullptr)
+    if (m_spstorage != nullptr && !m_fAllChanged)
         return m_spstorage->count() + m_cnewKeysPending;
     
     return dictSize(m_pdict) 
@@ -2624,7 +2669,7 @@ void redisDbPersistentData::removeAllCachedValues()
     // First we have to flush the tracked changes
     if (m_fTrackingChanges)
     {
-        processChanges();
+        processChanges(false);
         commitChanges();
         trackChanges(false);
     }

@@ -106,6 +106,7 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "endianconv.h"
 #include "crc64.h"
 #include "IStorage.h"
+#include "StorageCache.h"
 #include "AsyncWorkQueue.h"
 #include "gc.h"
 
@@ -605,6 +606,10 @@ public:
 #define REPL_DISKLESS_LOAD_DISABLED 0
 #define REPL_DISKLESS_LOAD_WHEN_DB_EMPTY 1
 #define REPL_DISKLESS_LOAD_SWAPDB 2
+
+/* Storage Memory Model Defines */
+#define STORAGE_WRITEBACK 0
+#define STORAGE_WRITETHROUGH 1
 
 /* Sets operations codes */
 #define SET_OP_UNION 0
@@ -1304,7 +1309,7 @@ public:
     void setExpire(expireEntry &&e);
     void initialize();
 
-    void setStorageProvider(IStorage *pstorage);
+    void setStorageProvider(StorageCache *pstorage);
 
     void trackChanges(bool fBulk);
 
@@ -1312,8 +1317,8 @@ public:
     //  to allow you to release the global lock before commiting.  To prevent deadlocks you *must*
     //  either release the global lock or keep the same global lock between the two functions as
     //  a second look is kept to ensure writes to secondary storage are ordered
-    void processChanges();
-    void commitChanges();
+    void processChanges(bool fSnapshot);
+    void commitChanges(const redisDbPersistentDataSnapshot **psnapshotFree = nullptr);
 
     // This should only be used if you look at the key, we do not fixup
     //  objects stored elsewhere
@@ -1354,10 +1359,12 @@ private:
         bool operator()(const char *key, const changedesc &b) const { return sdsview(key) < b.strkey; }
     };
 
+    static void serializeAndStoreChange(StorageCache *storage, redisDbPersistentData *db, const changedesc &change);
+
     void ensure(const char *key);
     void ensure(const char *key, dictEntry **de);
     void storeDatabase();
-    void storeKey(const char *key, size_t cchKey, robj *o, bool fOverwrite);
+    void storeKey(sds key, robj *o, bool fOverwrite);
     void recursiveFreeSnapshots(redisDbPersistentDataSnapshot *psnapshot);
 
     // Keyspace
@@ -1367,7 +1374,7 @@ private:
     int m_fAllChanged = 0;
     std::set<changedesc, changedescCmp> m_setchanged;
     size_t m_cnewKeysPending = 0;
-    std::shared_ptr<IStorage> m_spstorage = nullptr;
+    std::shared_ptr<StorageCache> m_spstorage = nullptr;
 
     // Expire
     expireset *m_setexpire = nullptr;
@@ -1378,6 +1385,10 @@ private:
     const redisDbPersistentDataSnapshot *m_pdbSnapshot = nullptr;
     std::unique_ptr<redisDbPersistentDataSnapshot> m_spdbSnapshotHOLDER;
     const redisDbPersistentDataSnapshot *m_pdbSnapshotASYNC = nullptr;
+    
+    const redisDbPersistentDataSnapshot *m_pdbSnapshotStorageFlush = nullptr;
+    std::set<changedesc, changedescCmp> m_setchangedStorageFlush;
+    
     int m_refCount = 0;
 };
 
@@ -2033,6 +2044,7 @@ struct redisServerConst {
     int trial_timeout = 120;
     int delete_on_evict = false;   // Only valid when a storage provider is set
     int thread_min_client_threshold = 50;
+    int storage_memory_model = STORAGE_WRITETHROUGH;
 };
 
 struct redisServer {
@@ -2395,6 +2407,7 @@ struct redisServer {
     GarbageCollector<redisDbPersistentDataSnapshot> garbageCollector;
 
     IStorageFactory *m_pstorageFactory = nullptr;
+    int storage_flush_period;   // The time between flushes in the CRON job
 
     /* TLS Configuration */
     int tls_cluster;

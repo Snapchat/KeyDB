@@ -5095,6 +5095,16 @@ sds genRedisInfoString(const char *section) {
         }
     }
 
+    if (allsections || defsections || !strcasecmp(section,"keydb")) {
+        if (sections++) info = sdscat(info,"\r\n");
+        info = sdscatprintf(info, 
+            "# KeyDB\r\n"
+            "variant:pro\r\n"
+            "license_status:%s\r\n",
+            cserver.license_key ? "OK" : "Trial"
+        );
+    }
+
     /* Get info from modules.
      * if user asked for "everything" or "modules", or a specific section
      * that's not found yet. */

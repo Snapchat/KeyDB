@@ -968,7 +968,7 @@ int loadAppendOnlyFile(char *filename) {
 loaded_ok: /* DB loaded, cleanup and return C_OK to the caller. */
     for (int idb = 0; idb < cserver.dbnum; ++idb)
     {
-        g_pserver->db[idb]->processChanges();
+        g_pserver->db[idb]->processChanges(false);
         g_pserver->db[idb]->commitChanges();
     }
     fclose(fp);

@@ -82,6 +82,7 @@ size_t RocksDBStorageProvider::clear()
 
 size_t RocksDBStorageProvider::count() const
 {
+    std::unique_lock<fastlock> l(m_lock);
     return m_count;
 }
 

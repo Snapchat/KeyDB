@@ -99,6 +99,7 @@ start_server {tags {"introspection"}} {
             bio_cpulist
             aof_rewrite_cpulist
             bgsave_cpulist
+	    storage-cache-mode
         }
 
         set configs {}

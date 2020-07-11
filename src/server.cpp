@@ -1126,6 +1126,8 @@ void serverLog(int level, const char *fmt, ...) {
 static void checkTrialTimeout()
 {
 #ifndef NO_LICENSE_CHECK
+    if (g_pserver->sentinel_mode)
+        return; // sentinel is not licensed
     if (cserver.license_key != nullptr && FValidKey(cserver.license_key, strlen(cserver.license_key)))
         return;
     time_t curtime = time(NULL);
@@ -5251,7 +5253,7 @@ void redisAsciiArt(void) {
         serverLogRaw(LL_NOTICE|LL_RAW,buf);
     }
 
-    if (cserver.license_key == nullptr)
+    if (cserver.license_key == nullptr && !g_pserver->sentinel_mode)
     {
 #ifndef NO_LICENSE_CHECK
         serverLog(LL_WARNING, "!!!! KeyDB Pro is being run in trial mode  !!!!");

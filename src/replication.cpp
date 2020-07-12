@@ -2723,9 +2723,6 @@ void syncWithMaster(connection *conn) {
             if (err[1] == 'E' && err[2] == 'R' && err[3] == 'R') {
                 // Replicating with non-pro
                 serverLog(LL_WARNING, "Replicating with non-pro server.");
-                mi->repl_state = REPL_STATE_SEND_PORT;
-                sdsfree(err);
-                return;
             } else {
                 serverLog(LL_WARNING, "Recieved error from client: %s", err);
                 sdsfree(err);

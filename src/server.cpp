@@ -247,6 +247,10 @@ struct redisCommand redisCommandTable[] = {
      "read-only fast @keyspace",
      0,NULL,1,-1,1,0,0,0},
 
+    {"keydb.mexists",mexistsCommand,-2,
+     "read-only fast @keyspace",
+     0,NULL,1,-1,1,0,0,0},
+
     {"setbit",setbitCommand,4,
      "write use-memory @bitmap",
      0,NULL,1,1,1,0,0,0},

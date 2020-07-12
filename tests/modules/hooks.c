@@ -30,6 +30,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#define REDISMODULE_EXPERIMENTAL_API 1
 #include "redismodule.h"
 #include <stdio.h>
 #include <string.h>
@@ -143,10 +144,12 @@ void flushdbCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void
 {
     REDISMODULE_NOT_USED(e);
 
+    RedisModule_ThreadSafeContextLock(ctx);
     RedisModuleFlushInfo *fi = data;
     char *keyname = (sub == REDISMODULE_SUBEVENT_FLUSHDB_START) ?
         "flush-start" : "flush-end";
     LogNumericEvent(ctx, keyname, fi->dbnum);
+    RedisModule_ThreadSafeContextUnlock(ctx);
 }
 
 void roleChangeCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)

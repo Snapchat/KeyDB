@@ -2167,6 +2167,13 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
     return 1;
 }
 
+static int validateMultiMasterNoForward(int val, const char **) {
+    if (val) {
+        serverLog(LL_WARNING, "WARNING: multi-master-no-forward is set, you *must* use a mesh topology or dataloss will occur");
+    }
+    return 1;
+}
+
 #ifdef USE_OPENSSL
 static int updateTlsCfg(char *val, char *prev, const char **err) {
     UNUSED(val);
@@ -2222,6 +2229,7 @@ standardConfig configs[] = {
     createBoolConfig("cluster-enabled", NULL, IMMUTABLE_CONFIG, g_pserver->cluster_enabled, 0, NULL, NULL),
     createBoolConfig("appendonly", NULL, MODIFIABLE_CONFIG, g_pserver->aof_enabled, 0, NULL, updateAppendonly),
     createBoolConfig("cluster-allow-reads-when-down", NULL, MODIFIABLE_CONFIG, g_pserver->cluster_allow_reads_when_down, 0, NULL, NULL),
+    createBoolConfig("multi-master-no-forward", NULL, MODIFIABLE_CONFIG, cserver.multimaster_no_forward, 0, validateMultiMasterNoForward, NULL),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->acl_filename, "", NULL, NULL),

@@ -2069,7 +2069,6 @@ void readSyncBulkPayload(connection *conn) {
      *
      * 2. Or when we are done reading from the socket to the RDB file, in
      *    such case we want just to read the RDB file in memory. */
-    serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Flushing old data");
 
     /* We need to stop any AOF rewriting child before flusing and parsing
      * the RDB, otherwise we'll create a copy-on-write disaster. */
@@ -2089,7 +2088,10 @@ void readSyncBulkPayload(connection *conn) {
      * (Where disklessLoadMakeBackups left server.db empty) because we
      * want to execute all the auxiliary logic of emptyDb (Namely,
      * fire module events) */
-    emptyDb(-1,empty_db_flags,replicationEmptyDbCallback);
+    if (!fUpdate) {
+        serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Flushing old data");
+        emptyDb(-1,empty_db_flags,replicationEmptyDbCallback);
+    }
 
     /* Before loading the DB into memory we need to delete the readable
      * handler, otherwise it will get called recursively since

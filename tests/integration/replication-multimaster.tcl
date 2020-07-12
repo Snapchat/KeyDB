@@ -1,4 +1,6 @@
 foreach topology {mesh ring} {
+
+foreach noforward [expr {[string equal $topology "mesh"] ? {no yes} : {no}}] {
 start_server {tags {"multi-master"} overrides {hz 500 active-replica yes multi-master yes}} {
 start_server {overrides {hz 500 active-replica yes multi-master yes}} {
 start_server {overrides {hz 500 active-replica yes multi-master yes}} {
@@ -8,7 +10,11 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
         set R($j) [srv [expr 0-$j] client]
         set R_host($j) [srv [expr 0-$j] host]
         set R_port($j) [srv [expr 0-$j] port]
+
+	$R($j) config set multi-master-no-forward $noforward
     }
+
+    set topology_name "$topology[expr {[string equal $noforward "yes"] ? " no-forward" : ""}]"
 
     # Initialize as mesh
     if [string equal $topology "mesh"] {
@@ -31,7 +37,7 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
         $R(3) replicaof $R_host(2) $R_port(2)
     }
 
-    test "$topology all nodes up" {
+    test "$topology_name all nodes up" {
         for {set j 0} {$j < 4} {incr j} {
             wait_for_condition 50 100 {
                 [string match {*master_global_link_status:up*} [$R($j) info replication]]
@@ -41,7 +47,7 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
         }
     }
 
-    test "$topology replicates to all nodes" {
+    test "$topology_name replicates to all nodes" {
         $R(0) set testkey foo
         after 500
         for {set n 0} {$n < 4} {incr n} {
@@ -53,7 +59,7 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
         }
     }
 
-    test "$topology replicates only once" {
+    test "$topology_name replicates only once" {
         $R(0) set testkey 1
         after 500
         #wait_for_condition 50 100 {
@@ -74,7 +80,7 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
         }
     }
 
-    test "$topology transaction replicates only once" {
+    test "$topology_name transaction replicates only once" {
         for {set j 0} {$j < 1000} {incr j} {
             $R(0) set testkey 1
             $R(0) multi
@@ -90,6 +96,7 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
             }
         }
     }
+}
 }
 }
 }

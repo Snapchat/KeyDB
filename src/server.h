@@ -1648,6 +1648,7 @@ struct redisServerConst {
     unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
     bool fUsePro = false;
     int thread_min_client_threshold = 50;
+    int multimaster_no_forward;
 };
 
 struct redisServer {

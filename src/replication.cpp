@@ -4251,7 +4251,7 @@ void replicaReplayCommand(client *c)
     serverTL->current_client = current_clientSave;
 
     // call() will not propogate this for us, so we do so here
-    if (!s_pstate->FCancelled() && s_pstate->FFirst())
+    if (!s_pstate->FCancelled() && s_pstate->FFirst() && !cserver.multimaster_no_forward)
         alsoPropagate(cserver.rreplayCommand,c->db->id,c->argv,c->argc,PROPAGATE_AOF|PROPAGATE_REPL);
     
     s_pstate->Pop();

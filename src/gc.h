@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <assert.h>
+#include <unordered_set>
 
 template<typename T>
 class GarbageCollector
@@ -99,6 +100,6 @@ private:
     fastlock m_lock { "Garbage Collector"};
 
     std::vector<EpochHolder> m_vecepochs;
-    std::set<uint64_t> m_setepochOutstanding;
+    std::unordered_set<uint64_t> m_setepochOutstanding;
     uint64_t m_epochNext = 0;
 };

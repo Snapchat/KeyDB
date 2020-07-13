@@ -1738,14 +1738,14 @@ void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey)
 
 /* Check if the key is expired. Note, this does not check subexpires */
 int keyIsExpired(const redisDbPersistentDataSnapshot *db, robj *key) {
+    /* Don't expire anything while loading. It will be done later. */
+    if (g_pserver->loading) return 0;
+    
     std::unique_lock<fastlock> ul(g_expireLock);
     const expireEntry *pexpire = db->getExpire(key);
     mstime_t now;
 
     if (pexpire == nullptr) return 0; /* No expire for this key */
-
-    /* Don't expire anything while loading. It will be done later. */
-    if (g_pserver->loading) return 0;
 
     long long when = -1;
     for (auto &exp : *pexpire)

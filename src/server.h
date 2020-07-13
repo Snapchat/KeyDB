@@ -1350,6 +1350,8 @@ public:
     bool removeCachedValue(const char *key);
     void removeAllCachedValues();
 
+    bool FSnapshot() const { return m_spdbSnapshotHOLDER != nullptr; }
+
     dict_iter find_cached_threadsafe(const char *key) const;
 
 protected:
@@ -1425,6 +1427,7 @@ public:
     using redisDbPersistentData::endSnapshotAsync;
     using redisDbPersistentData::end;
     using redisDbPersistentData::find_cached_threadsafe;
+    using redisDbPersistentData::FSnapshot;
 
     dict_iter random_cache_threadsafe(bool fPrimaryOnly = false) const;
 

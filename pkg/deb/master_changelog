@@ -1,3 +1,14 @@
+keydb (6:6.0.13-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * 6.0.13 New features added: KEYDB.MEXISTS, REPLICAOF REMOVE, multi-master-no-forward configuration option
+  * KEYDB.MEXISTS - return exactly which keys exist in the database not just the count
+  * REPLICAOF REMOVE - Remove specific masters in a multi master setup
+  * multi-master-no-forward configuration option - Reduce network traffic in mesh topology multimaster setups
+  * Redis 6.0.5 feature parity
+  * Fixed Issues: 194 Bad directive or wrong number of arguments error on 'lazyfree-lazy-user-del no'; 209 Timeout using modules; 210 Databases are not merged on multi-master sync; 211 rpm packages now signed; 212 rpm file permissions updated
+
+ -- Ben Schermel <ben@eqalpha.com>  Mon, 13 Jul 2020 8:00:00 +0000
+
 keydb (6:6.0.9-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * 6.0.9 Addressing issues 187 - cpu lockup with subkey expire, 190 - missing sentinel binary in keydb-tools. 

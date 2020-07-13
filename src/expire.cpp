@@ -152,7 +152,11 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
         fTtlChanged = true;
     }
 
-    if (!pfat->FEmpty() && fTtlChanged)
+    if (pfat->FEmpty())
+    {
+        removeExpire(db, &objKey);
+    }
+    else if (!pfat->FEmpty() && fTtlChanged)
     {
         // We need to resort the expire entry since it may no longer be in the correct position
         db->resortExpire(e);
@@ -167,11 +171,6 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
             notifyKeyspaceEvent(NOTIFY_SET,"srem",&objKey,db->id);
             break;
         }
-    }
-
-    if (pfat->FEmpty())
-    {
-        removeExpire(db, &objKey);
     }
 }
 

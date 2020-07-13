@@ -741,6 +741,13 @@ void existsCommand(client *c) {
     addReplyLongLong(c,count);
 }
 
+void mexistsCommand(client *c) {
+    addReplyArrayLen(c, c->argc - 1);
+    for (int j = 1; j < c->argc; ++j) {
+        addReplyBool(c, lookupKeyRead(c->db, c->argv[j]));
+    }
+}
+
 void selectCommand(client *c) {
     long id;
 

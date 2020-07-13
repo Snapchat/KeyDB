@@ -1150,11 +1150,14 @@ int saveKey(rio *rdb, const redisDbPersistentDataSnapshot *db, int flags, size_t
     robj key;
 
     initStaticStringObject(key,(char*)keystr);
-    std::unique_lock<fastlock> ul(g_expireLock);
-    const expireEntry *pexpire = db->getExpire(&key);
-    serverAssert((o->FExpires() && pexpire != nullptr) || (!o->FExpires() && pexpire == nullptr));
-    if (pexpire == nullptr)
-        ul.unlock();    // no need to hold the lock if we're not saving the expire
+    std::unique_lock<fastlock> ul(g_expireLock, std::defer_lock);
+    const expireEntry *pexpire = nullptr;
+    if (o->FExpires())
+    {
+        ul.lock();
+        pexpire = db->getExpire(&key);
+        serverAssert((o->FExpires() && pexpire != nullptr) || (!o->FExpires() && pexpire == nullptr));
+    }
 
     if (rdbSaveKeyValuePair(rdb,&key,o,pexpire) == -1)
         return 0;

@@ -313,4 +313,14 @@ start_server {tags {"expire"}} {
         after 3000
         assert_equal [r dbsize] 0
     }
+
+    test {SET - use KEEPTTL option, TTL should not be removed after loadaof} {
+        r config set appendonly yes
+        r set foo bar EX 100
+        r set foo bar2 KEEPTTL
+        after 2000
+        r debug loadaof
+        set ttl [r ttl foo]
+        assert {$ttl <= 98 && $ttl > 90}
+    }
 }

@@ -59,6 +59,13 @@ void queueMultiCommand(client *c) {
     multiCmd *mc;
     int j;
 
+    /* No sense to waste memory if the transaction is already aborted.
+     * this is useful in case client sends these in a pipeline, or doesn't
+     * bother to read previous responses and didn't notice the multi was already
+     * aborted. */
+    if (c->flags & CLIENT_DIRTY_EXEC)
+        return;
+
     c->mstate.commands = (multiCmd*)zrealloc(c->mstate.commands,
             sizeof(multiCmd)*(c->mstate.count+1), MALLOC_LOCAL);
     mc = c->mstate.commands+c->mstate.count;
@@ -128,6 +135,15 @@ void execCommand(client *c) {
 
     if (!(c->flags & CLIENT_MULTI)) {
         addReplyError(c,"EXEC without MULTI");
+        return;
+    }
+
+    /* If we are in -BUSY state, flag the transaction and return the
+     * -BUSY error, like Redis <= 5. This is a temporary fix, may be changed
+     *  ASAP, see issue #7353 on Github. */
+    if (g_pserver->lua_timedout) {
+        flagTransaction(c);
+        addReply(c, shared.slowscripterr);
         return;
     }
 

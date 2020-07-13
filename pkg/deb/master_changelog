@@ -1,3 +1,9 @@
+keydb-pro (6:6.0.12-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * 6.0.12 Enable SCAN for MVCC
+
+ -- Ben Schermel <ben@eqalpha.com>  Fri, 10 Jul 2020 20:00:37 +0000
+
 keydb-pro (6:6.0.11-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * 6.0.11 fixes applied related to cluster usage and expires

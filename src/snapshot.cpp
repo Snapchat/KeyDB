@@ -49,8 +49,10 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
         dictForceRehash(m_spdbSnapshotHOLDER->m_pdictTombstone);
         dictMerge(m_pdbSnapshot->m_pdict, m_pdict);
         dictEmpty(m_pdictTombstone, nullptr);
-        delete m_spdbSnapshotHOLDER->m_setexpire;
-        m_spdbSnapshotHOLDER->m_setexpire =  new (MALLOC_LOCAL) expireset(*m_setexpire);
+        {
+        std::unique_lock<fastlock> ul(g_expireLock);
+        (*m_spdbSnapshotHOLDER->m_setexpire) = *m_setexpire;
+        }
 
         m_pdbSnapshotASYNC = nullptr;
         serverAssert(m_pdbSnapshot->m_pdict->iterators == 1);
@@ -82,6 +84,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     spdb->m_mvccCheckpoint = getMvccTstamp();
     if (m_setexpire != nullptr)
     {
+        std::unique_lock<fastlock> ul(g_expireLock);
         spdb->m_setexpire =  new (MALLOC_LOCAL) expireset(*m_setexpire);
         spdb->m_setexpire->pause_rehash();  // needs to be const
     }
@@ -161,8 +164,11 @@ void redisDbPersistentData::restoreSnapshot(const redisDbPersistentDataSnapshot 
     size_t expectedSize = psnapshot->size();
     dictEmpty(m_pdict, nullptr);
     dictEmpty(m_pdictTombstone, nullptr);
+    {
+    std::unique_lock<fastlock> ul(g_expireLock);
     delete m_setexpire;
     m_setexpire = new (MALLOC_LOCAL) expireset(*psnapshot->m_setexpire);
+    }
     endSnapshot(psnapshot);
     serverAssert(size() == expectedSize);
 }
@@ -555,18 +561,30 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
     spdb->initialize();
     dictExpand(spdb->m_pdict, m_pdbSnapshot->size());
 
+    volatile size_t skipped = 0;
     m_pdbSnapshot->iterate_threadsafe([&](const char *key, robj_roptr o) {
         if (o != nullptr) {
             dictAdd(spdb->m_pdict, sdsdupshared(key), o.unsafe_robjcast());
             incrRefCount(o);
+        } else {
+            ++skipped;
         }
         return true;
     }, true /*fKeyOnly*/, true /*fCacheOnly*/);
     spdb->m_spstorage = m_pdbSnapshot->m_spstorage;
+    {
+    std::unique_lock<fastlock> ul(g_expireLock);
+    delete spdb->m_setexpire;
+    spdb->m_setexpire = new (MALLOC_LOCAL) expireset(*m_pdbSnapshot->m_setexpire);
+    }
 
     spdb->m_pdict->iterators++;
 
-    serverAssert(spdb->size() == m_pdbSnapshot->size());
+    if (m_spstorage) {
+        serverAssert(spdb->size() == m_pdbSnapshot->size());
+    } else {
+        serverAssert((spdb->size()+skipped) == m_pdbSnapshot->size());
+    }
 
     // Now wire us in (Acquire the LOCK)
     AeLocker locker;

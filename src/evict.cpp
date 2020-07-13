@@ -262,6 +262,7 @@ int evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct evi
 {
     if (setexpire != nullptr)
     {
+        std::unique_lock<fastlock> ul(g_expireLock);
         visitFunctor visitor { dbid, db->dictUnsafeKeyOnly(), pool, 0 };
         setexpire->random_visit(visitor);
         return visitor.count;

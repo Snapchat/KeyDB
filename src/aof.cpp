@@ -1436,8 +1436,6 @@ int rewriteAppendOnlyFileRio(rio *aof) {
 
             initStaticStringObject(key,(sds)keystr);
 
-            expireEntry *pexpire = db->getExpire(&key);
-
             /* Save the key and associated value */
             if (o->type == OBJ_STRING) {
                 /* Emit a SET command */
@@ -1462,6 +1460,8 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                 serverPanic("Unknown object type");
             }
             /* Save the expire time */
+            std::unique_lock<fastlock> ul(g_expireLock);
+            expireEntry *pexpire = db->getExpire(&key);
             if (pexpire != nullptr) {
                 for (auto &subExpire : *pexpire) {
                     if (subExpire.subkey() == nullptr)
@@ -1480,6 +1480,8 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                     if (rioWriteBulkLongLong(aof,subExpire.when()) == 0) return false; // common
                 }
             }
+            ul.unlock();
+            
             /* Read some diff from the parent process from time to time. */
             if (aof->processed_bytes > processed+AOF_READ_DIFF_INTERVAL_BYTES) {
                 processed = aof->processed_bytes;

@@ -813,11 +813,11 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"watch",watchCommand,-2,
-     "no-script fast @transaction",
+     "no-script fast ok-loading ok-stale @transaction",
      0,NULL,1,-1,1,0,0,0},
 
     {"unwatch",unwatchCommand,1,
-     "no-script fast @transaction",
+     "no-script fast ok-loading ok-stale @transaction",
      0,NULL,0,0,0,0,0,0},
 
     {"cluster",clusterCommand,-2,
@@ -3870,6 +3870,8 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
           c->cmd->proc != multiCommand &&
           c->cmd->proc != execCommand &&
           c->cmd->proc != discardCommand &&
+          c->cmd->proc != watchCommand &&
+          c->cmd->proc != unwatchCommand &&
         !(c->cmd->proc == shutdownCommand &&
           c->argc == 2 &&
           tolower(((char*)ptrFromObj(c->argv[1]))[0]) == 'n') &&

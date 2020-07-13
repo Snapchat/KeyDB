@@ -265,3 +265,18 @@ foreach mdl {no yes} {
     }
 }
 }
+
+start_server {tags {"active-repl"} overrides {active-replica yes}} {
+    set slave [srv 0 client]
+    set slave_host [srv 0 host]
+    set slave_port [srv 0 port]
+    start_server {tags {"active-repl"} overrides { active-replica yes}} {
+        r set testkeyB bar
+        test {Active Replica Merges Database On Sync} {
+            $slave set testkeyA foo
+            r replicaof $slave_host $slave_port
+	    after 1000
+	    assert_equal 2 [r dbsize]
+	}
+    }
+}

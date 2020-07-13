@@ -101,8 +101,8 @@ void disableTracking(client *c) {
 
 /* Set the client 'c' to track the prefix 'prefix'. If the client 'c' is
  * already registered for the specified prefix, no operation is performed. */
-void enableBcastTrackingForPrefix(client *c, const char *prefix, size_t plen) {
-    bcastState *bs = (bcastState*)raxFind(PrefixTable,(unsigned char*)prefix,sdslen(prefix));
+static void enableBcastTrackingForPrefix(client *c, const char *prefix, size_t plen) {
+    bcastState *bs = (bcastState*)raxFind(PrefixTable,(unsigned char*)prefix,plen);
     /* If this is the first client subscribing to such prefix, create
      * the prefix in the table. */
     if (bs == raxNotFound) {

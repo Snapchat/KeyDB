@@ -1652,7 +1652,7 @@ int freeClientsInAsyncFreeQueue(int iel) {
     while((ln = listNext(&li))) 
     {
         client *c = (client*)listNodeValue(ln);
-        if (c->iel == iel)
+        if (c->iel == iel && !(c->flags & CLIENT_PROTECTED))
         {
             vecclientsFree.push_back(c);
             listDelNode(g_pserver->clients_to_close, ln);
@@ -1935,9 +1935,12 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
         }
     }
 
-    AeLocker locker;
-    locker.arm(nullptr);
-    ProcessPendingAsyncWrites();
+    if (listLength(serverTL->clients_pending_asyncwrite))
+    {
+        AeLocker locker;
+        locker.arm(nullptr);
+        ProcessPendingAsyncWrites();
+    }
 
     return processed;
 }
@@ -3065,7 +3068,7 @@ void helloCommand(client *c) {
     addReplyBulkCString(c,KEYDB_SET_VERSION);
 
     addReplyBulkCString(c,"proto");
-    addReplyLongLong(c,3);
+    addReplyLongLong(c,ver);
 
     addReplyBulkCString(c,"id");
     addReplyLongLong(c,c->id);

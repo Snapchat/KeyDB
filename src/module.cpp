@@ -4895,14 +4895,17 @@ void RM_FreeThreadSafeContext(RedisModuleCtx *ctx) {
     zfree(ctx);
 }
 
+static bool g_fModuleThread = false;
 /* Acquire the server lock before executing a thread safe API call.
  * This is not needed for `RedisModule_Reply*` calls when there is
  * a blocked client connected to the thread safe context. */
 void RM_ThreadSafeContextLock(RedisModuleCtx *ctx) {
     UNUSED(ctx);
-    moduleAcquireGIL(FALSE /*fServerThread*/);
-    if (serverTL == nullptr)
+    if (serverTL == nullptr) {
         serverTL = &g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN];    // arbitrary module threads get the main thread context
+        g_fModuleThread = true;
+    }
+    moduleAcquireGIL(FALSE /*fServerThread*/);
 }
 
 /* Release the server lock after a thread safe API call was executed. */
@@ -4911,9 +4914,19 @@ void RM_ThreadSafeContextUnlock(RedisModuleCtx *ctx) {
     moduleReleaseGIL(FALSE /*fServerThread*/);
 }
 
+// A module may be triggered synchronously in a non-module context.  In this scenario we don't lock again
+//  as the server thread acquisition is sufficient.  If we did try to lock we would deadlock
+static bool FModuleCallBackLock(bool fServerThread)
+{
+    return !fServerThread && aeThreadOwnsLock() && !g_fModuleThread && s_cAcquisitionsServer > 0;
+}
 void moduleAcquireGIL(int fServerThread) {
     std::unique_lock<std::mutex> lock(s_mutex);
     int *pcheck = fServerThread ? &s_cAcquisitionsModule : &s_cAcquisitionsServer;
+
+    if (FModuleCallBackLock(fServerThread)) {
+        return;
+    }
 
     while (*pcheck > 0)
         s_cv.wait(lock);
@@ -4931,6 +4944,10 @@ void moduleAcquireGIL(int fServerThread) {
 
 void moduleReleaseGIL(int fServerThread) {
     std::unique_lock<std::mutex> lock(s_mutex);
+
+    if (FModuleCallBackLock(fServerThread)) {
+        return;
+    }
 
     if (fServerThread)
     {

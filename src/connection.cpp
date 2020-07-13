@@ -165,7 +165,7 @@ static int connSocketWrite(connection *conn, const void *data, size_t data_len) 
     int ret = write(conn->fd, data, data_len);
     if (ret < 0 && errno != EAGAIN) {
         conn->last_errno = errno;
-        conn->state = CONN_STATE_ERROR;
+        conn->state.store(CONN_STATE_ERROR, std::memory_order_relaxed);
     }
 
     return ret;
@@ -174,10 +174,10 @@ static int connSocketWrite(connection *conn, const void *data, size_t data_len) 
 static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
     int ret = read(conn->fd, buf, buf_len);
     if (!ret) {
-        conn->state = CONN_STATE_CLOSED;
+        conn->state.store(CONN_STATE_CLOSED, std::memory_order_release);
     } else if (ret < 0 && errno != EAGAIN) {
         conn->last_errno = errno;
-        conn->state = CONN_STATE_ERROR;
+        conn->state.store(CONN_STATE_ERROR, std::memory_order_release);
     }
 
     return ret;
@@ -256,14 +256,14 @@ void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientData, in
     UNUSED(fd);
     connection *conn = (connection*)clientData;
 
-    if (conn->state == CONN_STATE_CONNECTING &&
+    if (conn->state.load(std::memory_order_relaxed) == CONN_STATE_CONNECTING &&
             (mask & AE_WRITABLE) && conn->conn_handler) {
 
         if (connGetSocketError(conn)) {
             conn->last_errno = errno;
-            conn->state = CONN_STATE_ERROR;
+            conn->state.store(CONN_STATE_ERROR, std::memory_order_release);
         } else {
-            conn->state = CONN_STATE_CONNECTED;
+            conn->state.store(CONN_STATE_CONNECTED, std::memory_order_release);
         }
 
         if (!conn->write_handler) aeDeleteFileEvent(serverTL->el,conn->fd,AE_WRITABLE);
@@ -426,7 +426,7 @@ int connRecvTimeout(connection *conn, long long ms) {
 }
 
 int connGetState(connection *conn) {
-    return conn->state;
+    return conn->state.load(std::memory_order_relaxed);
 }
 
 void connSetThreadAffinity(connection *conn, int cpu) {

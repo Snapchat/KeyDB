@@ -1370,30 +1370,28 @@ void sendBulkToSlave(connection *conn) {
      * try to use sendfile system call if supported, unless tls is enabled.
      * fallback to normal read+write otherwise. */
     nwritten = 0;
-    if (!nwritten) {
-        ssize_t buflen;
-        char buf[PROTO_IOBUF_LEN];
+    ssize_t buflen;
+    char buf[PROTO_IOBUF_LEN];
 
-        lseek(replica->repldbfd,replica->repldboff,SEEK_SET);
-        buflen = read(replica->repldbfd,buf,PROTO_IOBUF_LEN);
-        if (buflen <= 0) {
-            serverLog(LL_WARNING,"Read error sending DB to replica: %s",
-                (buflen == 0) ? "premature EOF" : strerror(errno));
+    lseek(replica->repldbfd,replica->repldboff,SEEK_SET);
+    buflen = read(replica->repldbfd,buf,PROTO_IOBUF_LEN);
+    if (buflen <= 0) {
+        serverLog(LL_WARNING,"Read error sending DB to replica: %s",
+            (buflen == 0) ? "premature EOF" : strerror(errno));
+        ul.unlock();
+        aeLock.arm(nullptr);
+        freeClient(replica);
+        return;
+    }
+    if ((nwritten = connWrite(conn,buf,buflen)) == -1) {
+        if (connGetState(conn) != CONN_STATE_CONNECTED) {
+            serverLog(LL_WARNING,"Write error sending DB to replica: %s",
+                connGetLastError(conn));
             ul.unlock();
             aeLock.arm(nullptr);
             freeClient(replica);
-            return;
         }
-        if ((nwritten = connWrite(conn,buf,buflen)) == -1) {
-            if (connGetState(conn) != CONN_STATE_CONNECTED) {
-                serverLog(LL_WARNING,"Write error sending DB to replica: %s",
-                    connGetLastError(conn));
-                ul.unlock();
-                aeLock.arm(nullptr);
-                freeClient(replica);
-            }
-            return;
-        }
+        return;
     }
 
     replica->repldboff += nwritten;

@@ -2167,6 +2167,7 @@ int RM_UnlinkKey(RedisModuleKey *key) {
  * If no TTL is associated with the key or if the key is empty,
  * REDISMODULE_NO_EXPIRE is returned. */
 mstime_t RM_GetExpire(RedisModuleKey *key) {
+    std::unique_lock<fastlock> ul(g_expireLock);
     expireEntry *pexpire = key->db->getExpire(key->key);
     mstime_t expire = -1;
     if (pexpire != nullptr)

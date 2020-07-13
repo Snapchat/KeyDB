@@ -2306,26 +2306,22 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             g_pserver->rdb_bgsave_scheduled = 0;
     }
 
-<<<<<<< HEAD
     if (cserver.storage_memory_model == STORAGE_WRITEBACK && g_pserver->m_pstorageFactory) {
         run_with_period(g_pserver->storage_flush_period) {
             flushStorageWeak();
         }
     }
 
-    g_pserver->asyncworkqueue->AddWorkFunction([]{
-        g_pserver->db[0]->consolidate_snapshot();
-    }, true /*HiPri*/);
-    
-=======
-    if (g_pserver->db[0]->FSnapshot())  // BUG only db 0?!
+    bool fAnySnapshots = false;
+    for (int idb = 0; idb < cserver.dbnum && !fAnySnapshots; ++idb)
+        fAnySnapshots = fAnySnapshots || g_pserver->db[0]->FSnapshot();
+    if (fAnySnapshots)  
     {
         g_pserver->asyncworkqueue->AddWorkFunction([]{
             g_pserver->db[0]->consolidate_snapshot();
         }, true /*HiPri*/);
     }
-
->>>>>>> dd700f1d6... Remove unnecessary work from critical path (Latency Fixes)
+    
     /* Fire the cron loop modules event. */
     RedisModuleCronLoopV1 ei = {REDISMODULE_CRON_LOOP_VERSION,g_pserver->hz};
     moduleFireServerEvent(REDISMODULE_EVENT_CRON_LOOP,
@@ -4163,16 +4159,6 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
-<<<<<<< HEAD
-#if 0
-        if (cserver.cthreads >= 2 && !g_fTestMode && g_pserver->m_pstorageFactory == nullptr && listLength(g_pserver->monitors) == 0 && c->cmd->proc == getCommand)
-        {
-            if (getCommandAsync(c))
-                return C_OK;
-        }
-#endif
-=======
->>>>>>> dd700f1d6... Remove unnecessary work from critical path (Latency Fixes)
         locker.arm(c);
         incrementMvccTstamp();
         call(c,callFlags);

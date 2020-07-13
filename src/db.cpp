@@ -683,6 +683,13 @@ void existsCommand(client *c) {
     addReplyLongLong(c,count);
 }
 
+void mexistsCommand(client *c) {
+    addReplyArrayLen(c, c->argc - 1);
+    for (int j = 1; j < c->argc; ++j) {
+        addReplyBool(c, lookupKeyRead(c->db, c->argv[j]));
+    }
+}
+
 void selectCommand(client *c) {
     long id;
 
@@ -1173,6 +1180,7 @@ void moveCommand(client *c) {
     /* Return zero if the key already exists in the target DB */
     if (lookupKeyWrite(dst,c->argv[1]) != NULL) {
         addReply(c,shared.czero);
+        decrRefCount(o);
         return;
     }
     dbAdd(dst,c->argv[1],o);
@@ -1218,8 +1226,7 @@ int dbSwapDatabases(long id1, long id2) {
     if (id1 < 0 || id1 >= cserver.dbnum ||
         id2 < 0 || id2 >= cserver.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
-    redisDb aux; 
-    memcpy(&aux, &g_pserver->db[id1], sizeof(redisDb));
+    redisDb aux(g_pserver->db[id1]);
     redisDb *db1 = &g_pserver->db[id1], *db2 = &g_pserver->db[id2];
 
     /* Swap hash tables. Note that we don't swap blocking_keys,

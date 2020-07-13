@@ -671,19 +671,23 @@ sds catCommandForAofAndActiveReplication(sds buf, struct redisCommand *cmd, robj
     } else if (cmd->proc == setCommand && argc > 3) {
         int i;
         robj *exarg = NULL, *pxarg = NULL;
-        /* Translate SET [EX seconds][PX milliseconds] to SET and PEXPIREAT */
-        buf = catAppendOnlyGenericCommand(buf,3,argv);
         for (i = 3; i < argc; i ++) {
             if (!strcasecmp(szFromObj(argv[i]), "ex")) exarg = argv[i+1];
             if (!strcasecmp(szFromObj(argv[i]), "px")) pxarg = argv[i+1];
         }
         serverAssert(!(exarg && pxarg));
-        if (exarg)
-            buf = catAppendOnlyExpireAtCommand(buf,cserver.expireCommand,argv[1],
-                                               exarg);
-        if (pxarg)
-            buf = catAppendOnlyExpireAtCommand(buf,cserver.pexpireCommand,argv[1],
-                                               pxarg);
+        if (exarg || pxarg) {
+            /* Translate SET [EX seconds][PX milliseconds] to SET and PEXPIREAT */
+            buf = catAppendOnlyGenericCommand(buf,3,argv);
+            if (exarg)
+                buf = catAppendOnlyExpireAtCommand(buf,cserver.expireCommand,argv[1],
+                                                   exarg);
+            if (pxarg)
+                buf = catAppendOnlyExpireAtCommand(buf,cserver.pexpireCommand,argv[1],
+                                                   pxarg);
+        } else {
+            buf = catAppendOnlyGenericCommand(buf,argc,argv);
+        }
     } else if (cmd->proc == expireMemberCommand || cmd->proc == expireMemberAtCommand ||
         cmd->proc == pexpireMemberAtCommand) {
         /* Translate subkey expire commands to PEXPIREMEMBERAT */

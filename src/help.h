@@ -1325,7 +1325,12 @@ struct commandHelp {
     "Rename a hash key, copying the value.",
     4,
     "6.5.3"
-    }
+    },
+    { "KEYDB.MEXISTS",
+    "key [key ...]",
+    "Determine if a key exists",
+    0,
+    "6.5.12" },
 };
 
 #endif

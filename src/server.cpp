@@ -2002,6 +2002,43 @@ void checkChildrenDone(void) {
     }
 }
 
+static std::atomic<bool> s_fFlushInProgress { false };
+void flushStorageWeak()
+{
+    bool fExpected = false;
+    if (s_fFlushInProgress.compare_exchange_strong(fExpected, true /* desired */, std::memory_order_seq_cst, std::memory_order_relaxed))
+    {
+        g_pserver->asyncworkqueue->AddWorkFunction([]{
+            aeAcquireLock();
+            mstime_t storage_process_latency;
+            latencyStartMonitor(storage_process_latency);
+            std::vector<redisDb*> vecdb;
+            for (int idb = 0; idb < cserver.dbnum; ++idb) {
+                vecdb.push_back(g_pserver->db[idb]);
+                g_pserver->db[idb]->processChanges(true);
+            }
+            latencyEndMonitor(storage_process_latency);
+            latencyAddSampleIfNeeded("storage-process-changes", storage_process_latency);
+            aeReleaseLock();
+
+            std::vector<const redisDbPersistentDataSnapshot*> vecsnapshotFree;
+            vecsnapshotFree.resize(vecdb.size());
+            for (size_t idb = 0; idb < vecdb.size(); ++idb)
+                vecdb[idb]->commitChanges(&vecsnapshotFree[idb]);
+
+            for (size_t idb = 0; idb < vecsnapshotFree.size(); ++idb) {
+                if (vecsnapshotFree[idb] != nullptr)
+                    vecdb[idb]->endSnapshotAsync(vecsnapshotFree[idb]);
+            }
+            s_fFlushInProgress = false;
+        }, true /* fHiPri */);
+    }
+    else
+    {
+        serverLog(LOG_INFO, "Missed storage flush due to existing flush still in flight.  Consider increasing storage-weak-flush-period");
+    }
+}
+
 /* This is our timer interrupt, called g_pserver->hz times per second.
  * Here is where we do a number of things that need to be done asynchronously.
  * For instance:
@@ -2269,6 +2306,12 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             g_pserver->rdb_bgsave_scheduled = 0;
     }
 
+    if (cserver.storage_memory_model == STORAGE_WRITEBACK && g_pserver->m_pstorageFactory) {
+        run_with_period(g_pserver->storage_flush_period) {
+            flushStorageWeak();
+        }
+    }
+
     g_pserver->asyncworkqueue->AddWorkFunction([]{
         g_pserver->db[0]->consolidate_snapshot();
     }, true /*HiPri*/);
@@ -2398,17 +2441,20 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     static thread_local bool fFirstRun = true;
     // note: we also copy the DB pointer in case a DB swap is done while the lock is released
     std::vector<redisDb*> vecdb;    // note we cache the database pointer in case a dbswap is done while the lock is released
-    if (!fFirstRun) {
-        mstime_t storage_process_latency;
-        latencyStartMonitor(storage_process_latency);
-        for (int idb = 0; idb < cserver.dbnum; ++idb) {
-            vecdb.push_back(g_pserver->db[idb]);
-            g_pserver->db[idb]->processChanges();
+    if (cserver.storage_memory_model == STORAGE_WRITETHROUGH)
+    {
+        if (!fFirstRun) {
+            mstime_t storage_process_latency;
+            latencyStartMonitor(storage_process_latency);
+            for (int idb = 0; idb < cserver.dbnum; ++idb) {
+                vecdb.push_back(g_pserver->db[idb]);
+                g_pserver->db[idb]->processChanges(false);
+            }
+            latencyEndMonitor(storage_process_latency);
+            latencyAddSampleIfNeeded("storage-process-changes", storage_process_latency);
+        } else {
+            fFirstRun = false;
         }
-        latencyEndMonitor(storage_process_latency);
-        latencyAddSampleIfNeeded("storage-process-changes", storage_process_latency);
-    } else {
-        fFirstRun = false;
     }
 
     int aof_state = g_pserver->aof_state;
@@ -2440,7 +2486,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (moduleCount()) moduleReleaseGIL(TRUE /*fServerThread*/);
     aeReleaseLock();
 }
-
 
 /* This function is called immadiately after the event loop multiplexing
  * API returned, and the control is going to soon return to Redis by invoking
@@ -4217,6 +4262,12 @@ int prepareForShutdown(int flags) {
             if (cserver.supervised_mode == SUPERVISED_SYSTEMD)
                 redisCommunicateSystemd("STATUS=Error trying to save the DB, can't exit.\n");
             return C_ERR;
+        }
+
+        // Also Dump To FLASH if Applicable
+        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+            g_pserver->db[idb]->processChanges(false);
+            g_pserver->db[idb]->commitChanges();
         }
     }
 

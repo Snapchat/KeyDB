@@ -518,7 +518,7 @@ void loadServerConfigFromString(char *config) {
             err = "KeyDB not compliled with scratch-file support.";
             goto loaderr;
 #endif
-        } else if (!strcasecmp(argv[0],"server-threads") && argc == 2) {
+        } else if ((!strcasecmp(argv[0],"server-threads") || !strcasecmp(argv[0],"io-threads")) && argc == 2) {
             cserver.cthreads = atoi(argv[1]);
             if (cserver.cthreads <= 0 || cserver.cthreads > MAX_EVENT_LOOPS) {
                 err = "Invalid number of threads specified";
@@ -2167,6 +2167,13 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
     return 1;
 }
 
+static int validateMultiMasterNoForward(int val, const char **) {
+    if (val) {
+        serverLog(LL_WARNING, "WARNING: multi-master-no-forward is set, you *must* use a mesh topology or dataloss will occur");
+    }
+    return 1;
+}
+
 #ifdef USE_OPENSSL
 static int updateTlsCfg(char *val, char *prev, const char **err) {
     UNUSED(val);
@@ -2185,6 +2192,7 @@ static int updateTlsCfgBool(int val, int prev, const char **err) {
 }
 #endif  /* USE_OPENSSL */
 
+int fDummy = false;
 standardConfig configs[] = {
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, g_pserver->rdb_checksum, 1, NULL, NULL),
@@ -2200,6 +2208,7 @@ standardConfig configs[] = {
     createBoolConfig("lazyfree-lazy-eviction", NULL, MODIFIABLE_CONFIG, g_pserver->lazyfree_lazy_eviction, 0, NULL, NULL),
     createBoolConfig("lazyfree-lazy-expire", NULL, MODIFIABLE_CONFIG, g_pserver->lazyfree_lazy_expire, 0, NULL, NULL),
     createBoolConfig("lazyfree-lazy-server-del", NULL, MODIFIABLE_CONFIG, g_pserver->lazyfree_lazy_server_del, 0, NULL, NULL),
+    createBoolConfig("lazyfree-lazy-user-del", NULL, MODIFIABLE_CONFIG, g_pserver->lazyfree_lazy_user_del , 0, NULL, NULL),
     createBoolConfig("repl-disable-tcp-nodelay", NULL, MODIFIABLE_CONFIG, g_pserver->repl_disable_tcp_nodelay, 0, NULL, NULL),
     createBoolConfig("repl-diskless-sync", NULL, MODIFIABLE_CONFIG, g_pserver->repl_diskless_sync, 0, NULL, NULL),
     createBoolConfig("aof-rewrite-incremental-fsync", NULL, MODIFIABLE_CONFIG, g_pserver->aof_rewrite_incremental_fsync, 1, NULL, NULL),
@@ -2220,6 +2229,7 @@ standardConfig configs[] = {
     createBoolConfig("cluster-enabled", NULL, IMMUTABLE_CONFIG, g_pserver->cluster_enabled, 0, NULL, NULL),
     createBoolConfig("appendonly", NULL, MODIFIABLE_CONFIG, g_pserver->aof_enabled, 0, NULL, updateAppendonly),
     createBoolConfig("cluster-allow-reads-when-down", NULL, MODIFIABLE_CONFIG, g_pserver->cluster_allow_reads_when_down, 0, NULL, NULL),
+    createBoolConfig("multi-master-no-forward", NULL, MODIFIABLE_CONFIG, cserver.multimaster_no_forward, 0, validateMultiMasterNoForward, NULL),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->acl_filename, "", NULL, NULL),

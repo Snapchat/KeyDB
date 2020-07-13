@@ -234,7 +234,7 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
 
     int ret = AE_OK;
     
-    aeCommand cmd = {};
+    aeCommand cmd;
     cmd.op = AE_ASYNC_OP::CreateFileEvent;
     cmd.fd = fd;
     cmd.mask = mask;
@@ -258,7 +258,7 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
     
     if (fSynchronous)
     {
-        std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::defer_lock);
+        std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::adopt_lock);
         cmd.pctl->cv.wait(ulock);
         ret = cmd.pctl->rval;
         delete cmd.pctl;
@@ -311,7 +311,7 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
     int ret = AE_OK;
     if (fSynchronous)
     {
-        std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::defer_lock);
+        std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::adopt_lock);
         cmd.pctl->cv.wait(ulock);
         ret = cmd.pctl->rval;
         delete cmd.pctl;
@@ -453,7 +453,7 @@ void aeDeleteFileEventAsync(aeEventLoop *eventLoop, int fd, int mask)
 {
     if (eventLoop == g_eventLoopThisThread)
         return aeDeleteFileEvent(eventLoop, fd, mask);
-    aeCommand cmd;
+    aeCommand cmd = {};
     cmd.op = AE_ASYNC_OP::DeleteFileEvent;
     cmd.fd = fd;
     cmd.mask = mask;

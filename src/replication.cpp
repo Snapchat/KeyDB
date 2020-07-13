@@ -1370,30 +1370,28 @@ void sendBulkToSlave(connection *conn) {
      * try to use sendfile system call if supported, unless tls is enabled.
      * fallback to normal read+write otherwise. */
     nwritten = 0;
-    if (!nwritten) {
-        ssize_t buflen;
-        char buf[PROTO_IOBUF_LEN];
+    ssize_t buflen;
+    char buf[PROTO_IOBUF_LEN];
 
-        lseek(replica->repldbfd,replica->repldboff,SEEK_SET);
-        buflen = read(replica->repldbfd,buf,PROTO_IOBUF_LEN);
-        if (buflen <= 0) {
-            serverLog(LL_WARNING,"Read error sending DB to replica: %s",
-                (buflen == 0) ? "premature EOF" : strerror(errno));
+    lseek(replica->repldbfd,replica->repldboff,SEEK_SET);
+    buflen = read(replica->repldbfd,buf,PROTO_IOBUF_LEN);
+    if (buflen <= 0) {
+        serverLog(LL_WARNING,"Read error sending DB to replica: %s",
+            (buflen == 0) ? "premature EOF" : strerror(errno));
+        ul.unlock();
+        aeLock.arm(nullptr);
+        freeClient(replica);
+        return;
+    }
+    if ((nwritten = connWrite(conn,buf,buflen)) == -1) {
+        if (connGetState(conn) != CONN_STATE_CONNECTED) {
+            serverLog(LL_WARNING,"Write error sending DB to replica: %s",
+                connGetLastError(conn));
             ul.unlock();
             aeLock.arm(nullptr);
             freeClient(replica);
-            return;
         }
-        if ((nwritten = connWrite(conn,buf,buflen)) == -1) {
-            if (connGetState(conn) != CONN_STATE_CONNECTED) {
-                serverLog(LL_WARNING,"Write error sending DB to replica: %s",
-                    connGetLastError(conn));
-                ul.unlock();
-                aeLock.arm(nullptr);
-                freeClient(replica);
-            }
-            return;
-        }
+        return;
     }
 
     replica->repldboff += nwritten;
@@ -2069,7 +2067,6 @@ void readSyncBulkPayload(connection *conn) {
      *
      * 2. Or when we are done reading from the socket to the RDB file, in
      *    such case we want just to read the RDB file in memory. */
-    serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Flushing old data");
 
     /* We need to stop any AOF rewriting child before flusing and parsing
      * the RDB, otherwise we'll create a copy-on-write disaster. */
@@ -2089,7 +2086,10 @@ void readSyncBulkPayload(connection *conn) {
      * (Where disklessLoadMakeBackups left server.db empty) because we
      * want to execute all the auxiliary logic of emptyDb (Namely,
      * fire module events) */
-    emptyDb(-1,empty_db_flags,replicationEmptyDbCallback);
+    if (!fUpdate) {
+        serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Flushing old data");
+        emptyDb(-1,empty_db_flags,replicationEmptyDbCallback);
+    }
 
     /* Before loading the DB into memory we need to delete the readable
      * handler, otherwise it will get called recursively since
@@ -2561,7 +2561,7 @@ int slaveTryPartialResynchronization(redisMaster *mi, connection *conn, int read
  * establish a connection with the master. */
 void syncWithMaster(connection *conn) {
     serverAssert(GlobalLocksAcquired());
-    char tmpfile[256], *err = NULL;
+    char tmpfile[256] = {0}, *err = NULL;
     int dfd = -1, maxtries = 5;
     int psync_result;
 
@@ -3151,15 +3151,46 @@ void replicaofCommand(client *c) {
         return;
     }
 
-    /* The special host/port combination "NO" "ONE" turns the instance
-     * into a master. Otherwise the new master address is set. */
-    if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"no") &&
+    if (c->argc > 3) {
+        if (c->argc != 4) {
+            addReplyError(c, "Invalid arguments");
+            return;
+        }
+        if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"remove")) {
+            listIter li;
+            listNode *ln;
+            bool fRemoved = false;
+            long port;
+            string2l(szFromObj(c->argv[3]), sdslen(szFromObj(c->argv[3])), &port);
+        LRestart:
+            listRewind(g_pserver->masters, &li);
+            while ((ln = listNext(&li))) {
+                redisMaster *mi = (redisMaster*)listNodeValue(ln);
+                if (mi->masterport != port)
+                    continue;
+                if (sdscmp(szFromObj(c->argv[2]), mi->masterhost) == 0) {
+                    replicationUnsetMaster(mi);
+                    fRemoved = true;
+                    goto LRestart;
+                }
+            }
+            if (!fRemoved) {
+                addReplyError(c, "Master not found");
+                return;
+            } else if (listLength(g_pserver->masters) == 0) {
+                goto LLogNoMaster;
+            }
+        }
+    } else if (!strcasecmp((const char*)ptrFromObj(c->argv[1]),"no") &&
         !strcasecmp((const char*)ptrFromObj(c->argv[2]),"one")) {
+        /* The special host/port combination "NO" "ONE" turns the instance
+         * into a master. Otherwise the new master address is set. */
         if (listLength(g_pserver->masters)) {
             while (listLength(g_pserver->masters))
             {
                 replicationUnsetMaster((redisMaster*)listNodeValue(listFirst(g_pserver->masters)));
             }
+        LLogNoMaster:
             sds client = catClientInfoString(sdsempty(),c);
             serverLog(LL_NOTICE,"MASTER MODE enabled (user request from '%s')",
                 client);
@@ -4218,7 +4249,7 @@ void replicaReplayCommand(client *c)
     serverTL->current_client = current_clientSave;
 
     // call() will not propogate this for us, so we do so here
-    if (!s_pstate->FCancelled() && s_pstate->FFirst())
+    if (!s_pstate->FCancelled() && s_pstate->FFirst() && !cserver.multimaster_no_forward)
         alsoPropagate(cserver.rreplayCommand,c->db->id,c->argv,c->argc,PROPAGATE_AOF|PROPAGATE_REPL);
     
     s_pstate->Pop();

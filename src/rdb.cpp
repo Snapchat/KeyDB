@@ -2517,7 +2517,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 {
                     for (int idb = 0; idb < cserver.dbnum; ++idb)
                     {
-                        g_pserver->db[idb]->processChanges();
+                        g_pserver->db[idb]->processChanges(false);
                         g_pserver->db[idb]->commitChanges();
                         g_pserver->db[idb]->trackChanges(false);
                     }
@@ -2593,7 +2593,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
     for (int idb = 0; idb < cserver.dbnum; ++idb)
     {
-        g_pserver->db[idb]->processChanges();
+        g_pserver->db[idb]->processChanges(false);
         g_pserver->db[idb]->commitChanges();
     }
     return C_OK;

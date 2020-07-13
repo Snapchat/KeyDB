@@ -15,10 +15,12 @@ public:
     RocksDBStorageFactory(const char *dbfile, int dbnum);
     ~RocksDBStorageFactory();
 
-    virtual IStorage *create(int db, key_load_iterator iter) override;
+    virtual IStorage *create(int db, key_load_iterator iter, void *privdata) override;
     virtual const char *name() const override;
 
     virtual size_t totalDiskspaceUsed() const override;
+
+    virtual bool FSlow() const override { return true; }
 
 private:
     void setVersion(rocksdb::ColumnFamilyHandle*);
@@ -54,7 +56,8 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum)
     options.max_background_flushes = 2;
     options.bytes_per_sync = 1048576;
     options.compaction_pri = rocksdb::kMinOverlappingRatio;
-    options.compression = rocksdb::kNoCompression;
+    options.compression = rocksdb::kLZ4Compression;
+    options.enable_pipelined_write = true;
     options.sst_file_manager = m_pfilemanager;
     rocksdb::BlockBasedTableOptions table_options;
     table_options.block_size = 16 * 1024;
@@ -110,7 +113,7 @@ void RocksDBStorageFactory::setVersion(rocksdb::ColumnFamilyHandle *handle)
         throw status.ToString();
 }
 
-IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter)
+IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *privdata)
 {
     ++db;   // skip default col family
     std::shared_ptr<rocksdb::ColumnFamilyHandle> spcolfamily(m_vecspcols[db].release());
@@ -141,7 +144,7 @@ IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter)
             if (FInternalKey(it->key().data(), it->key().size()))
                 continue;
             if (iter != nullptr)
-                iter(it->key().data(), it->key().size());
+                iter(it->key().data(), it->key().size(), privdata);
             ++count;
         }
     }

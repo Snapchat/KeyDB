@@ -17,7 +17,7 @@ class RocksDBStorageProvider : public IStorage
     std::shared_ptr<rocksdb::ColumnFamilyHandle> m_spcolfamily;
     rocksdb::ReadOptions m_readOptionsTemplate;
     size_t m_count = 0;
-    fastlock m_lock {"RocksDBStorageProvider"};
+    mutable fastlock m_lock {"RocksDBStorageProvider"};
 
 public:
     RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count);

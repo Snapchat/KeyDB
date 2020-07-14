@@ -2061,6 +2061,7 @@ struct redisServerConst {
     int thread_min_client_threshold = 50;
     int multimaster_no_forward;
     int storage_memory_model = STORAGE_WRITETHROUGH;
+    char *storage_conf = nullptr;
 };
 
 struct redisServer {

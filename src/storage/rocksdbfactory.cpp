@@ -4,6 +4,7 @@
 #include <rocksdb/table.h>
 #include <rocksdb/utilities/options_util.h>
 #include <rocksdb/sst_file_manager.h>
+#include <rocksdb/utilities/convenience.h>
 
 class RocksDBStorageFactory : public IStorageFactory
 {
@@ -12,7 +13,7 @@ class RocksDBStorageFactory : public IStorageFactory
     std::shared_ptr<rocksdb::SstFileManager> m_pfilemanager;
 
 public:
-    RocksDBStorageFactory(const char *dbfile, int dbnum);
+    RocksDBStorageFactory(const char *dbfile, int dbnum, const char *rgchConfig, size_t cchConfig);
     ~RocksDBStorageFactory();
 
     virtual IStorage *create(int db, key_load_iterator iter, void *privdata) override;
@@ -26,12 +27,12 @@ private:
     void setVersion(rocksdb::ColumnFamilyHandle*);
 };
 
-IStorageFactory *CreateRocksDBStorageFactory(const char *path, int dbnum)
+IStorageFactory *CreateRocksDBStorageFactory(const char *path, int dbnum, const char *rgchConfig, size_t cchConfig)
 {
-    return new RocksDBStorageFactory(path, dbnum);
+    return new RocksDBStorageFactory(path, dbnum, rgchConfig, cchConfig);
 }
 
-RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum)
+RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, const char *rgchConfig, size_t cchConfig)
 {
     // Get the count of column families in the actual database
     std::vector<std::string> vecT;
@@ -51,7 +52,17 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum)
     options.create_missing_column_families = true;
     rocksdb::DB *db = nullptr;
 
-    
+    if (rgchConfig != nullptr)
+    {
+        std::string options_string(rgchConfig, cchConfig);
+        rocksdb::Status status;
+        if (!(status = rocksdb::GetDBOptionsFromString(options, options_string, &options)).ok())
+        {
+            fprintf(stderr, "Failed to parse FLASH options: %s\r\n", status.ToString().c_str());
+            exit(EXIT_FAILURE);
+        }
+    }
+
     options.max_background_compactions = 4;
     options.max_background_flushes = 2;
     options.bytes_per_sync = 1048576;

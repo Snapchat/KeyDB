@@ -313,7 +313,7 @@ bool initializeStorageProvider(const char **err)
         {
             // Create The Storage Factory (if necessary)
             serverLog(LL_NOTICE, "Initializing FLASH storage provider (this may take a long time)");
-            g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(g_sdsArgs, cserver.dbnum);
+            g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(g_sdsArgs, cserver.dbnum, cserver.storage_conf, cserver.storage_conf ? strlen(cserver.storage_conf) : 0);
         }
         else if (!strcasecmp(g_sdsProvider, "test") && g_sdsArgs == nullptr)
         {
@@ -2324,6 +2324,7 @@ standardConfig configs[] = {
     createStringConfig("bio_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->bio_cpulist, NULL, NULL, NULL),
     createStringConfig("aof_rewrite_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->aof_rewrite_cpulist, NULL, NULL, NULL),
     createStringConfig("bgsave_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->bgsave_cpulist, NULL, NULL, NULL),
+    createStringConfig("storage-provider-options", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, cserver.storage_conf, NULL, NULL, NULL),
 
     /* Enum Configs */
     createEnumConfig("supervised", NULL, IMMUTABLE_CONFIG, supervised_mode_enum, cserver.supervised_mode, SUPERVISED_NONE, NULL, NULL),

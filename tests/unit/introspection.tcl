@@ -100,6 +100,7 @@ start_server {tags {"introspection"}} {
             aof_rewrite_cpulist
             bgsave_cpulist
 	    storage-cache-mode
+	    storage-provider-options
         }
 
         set configs {}

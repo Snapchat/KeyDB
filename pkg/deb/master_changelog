@@ -1,3 +1,9 @@
+keydb-pro (6:6.0.14-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * 6.0.14 Fix memory leak in SCAN when used with MVCC
+
+ -- Ben Schermel <ben@eqalpha.com>  Thu, 16 Jul 2020 18:47:00 +0000
+
 keydb-pro (6:6.0.13-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * 6.0.13 New features added: KEYDB.MEXISTS, REPLICAOF REMOVE, multi-master-no-forward configuration option, new FLASH config options

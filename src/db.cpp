@@ -1062,6 +1062,8 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
                         listNode *next = ln->next;
                         if (filterKey((robj*)listNodeValue(ln), patCopy, patlen))
                         {
+                            robj *kobj = (robj*)listNodeValue(ln);
+                            decrRefCount(kobj);
                             listDelNode(keys, ln);
                         }
                         ln = next;

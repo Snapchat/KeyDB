@@ -764,10 +764,17 @@ dictEntry *dictGetFairRandomKey(dict *d) {
 }
 
 /* Function to reverse bits. Algorithm from:
- * http://graphics.stanford.edu/~seander/bithacks.html#ReverseParallel */
+ * 1. Hacker's Delight (2nd Edition) Chapter 7
+ * 2. Practically efficient methods for performing bit-reversedpermutation in C++11 on the x86-64 architecture
+ *    https://arxiv.org/pdf/1708.01873.pdf
+ *    with sources at https://bitbucket.org/orserang/bit-reversal-methods/src/master/src_and_bin/src/algorithms/BitReversal.hpp
+ * This is my extension to handle either 64 or 32 bits unsgined longs conditionally
+ * TODO: upgrade to constexpr if when moving to C++17
+ * */
+
 static unsigned long rev(unsigned long x) {
 #if ULONG_MAX == 0xFFFFFFFFUL
-    x = (x & 0x55555555) <<  1 | (x & 0xAAAAAAAA) >>  1;
+        
     x = (x & 0x33333333) <<  2 | (x & 0xCCCCCCCC) >>  2;
     x = (x & 0x0F0F0F0F) <<  4 | (x & 0xF0F0F0F0) >>  4;
     x = (x & 0x00FF00FF) <<  8 | (x & 0xFF00FF00) >>  8;

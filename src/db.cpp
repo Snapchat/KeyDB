@@ -896,7 +896,10 @@ void keysCommand(client *c) {
                 locker.arm(c);
 
                 unblockClient(c);
-                db->endSnapshot(snapshot);
+
+                locker.disarm();
+                lock.unlock();
+                db->endSnapshotAsync(snapshot);
                 aeAcquireLock();
             });
         });
@@ -1044,7 +1047,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
         // Do an async version
         const redisDbPersistentDataSnapshot *snapshot = nullptr;
         if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
-            snapshot = c->db->createSnapshot(c->mvccCheckpoint, true /* fOptional */);
+            snapshot = c->db->createSnapshot(c->mvccCheckpoint, false /* fOptional */);
         if (snapshot != nullptr)
         {
             aeEventLoop *el = serverTL->el;
@@ -1082,9 +1085,16 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
                     locker.arm(c);
 
                     unblockClient(c);
+                    mstime_t timeScanFilter;
+                    latencyStartMonitor(timeScanFilter);
                     scanFilterAndReply(c, keys, nullptr, nullptr, false, nullptr, cursorResult);
+                    latencyEndMonitor(timeScanFilter);
+                    latencyAddSampleIfNeeded("scan-async-filter", timeScanFilter);
 
-                    db->endSnapshot(snapshot);
+                    locker.disarm();
+                    lock.unlock();
+
+                    db->endSnapshotAsync(snapshot);
                     listSetFreeMethod(keys,decrRefCountVoid);
                     listRelease(keys);
                     aeAcquireLock();

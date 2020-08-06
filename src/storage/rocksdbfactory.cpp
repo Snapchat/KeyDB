@@ -67,7 +67,8 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
     options.max_background_flushes = 2;
     options.bytes_per_sync = 1048576;
     options.compaction_pri = rocksdb::kMinOverlappingRatio;
-    options.compression = rocksdb::kLZ4Compression;
+    //options.compression = rocksdb::kLZ4Compression;
+    options.compression = rocksdb::kNoCompression;
     options.enable_pipelined_write = true;
     options.sst_file_manager = m_pfilemanager;
     rocksdb::BlockBasedTableOptions table_options;

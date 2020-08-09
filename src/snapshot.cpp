@@ -8,7 +8,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     serverAssert(GlobalLocksAcquired());
     serverAssert(m_refCount == 0);  // do not call this on a snapshot
 
-    if (freeMemoryIfNeededAndSafe(true /*fPreSnapshot*/) != C_OK && fOptional)
+    if (freeMemoryIfNeededAndSafe(false /*fQuickCycle*/, true /*fPreSnapshot*/) != C_OK && fOptional)
         return nullptr; // can't create snapshot due to OOM
 
     int levels = 1;
@@ -369,7 +369,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     latencyEndMonitor(latency_endsnapshot);
     latencyAddSampleIfNeeded("end-mvcc-snapshot", latency_endsnapshot);
 
-    freeMemoryIfNeededAndSafe(false);
+    freeMemoryIfNeededAndSafe(false /*fQuickCycle*/, false);
 }
 
 dict_iter redisDbPersistentDataSnapshot::random_cache_threadsafe(bool fPrimaryOnly) const

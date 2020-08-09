@@ -5,6 +5,7 @@ class StorageCache
 {
     std::shared_ptr<IStorage> m_spstorage;
     std::unique_ptr<semiorderedset<sdsimmutablestring, sdsview, true>> m_setkeys;
+    mutable fastlock m_lock {"StorageCache"};
 
     StorageCache(IStorage *storage)
         : m_spstorage(storage)

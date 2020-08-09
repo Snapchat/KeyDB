@@ -1473,7 +1473,7 @@ void evalGenericCommand(client *c, int evalsha) {
     int delhook = 0, err;
 
     if (g_pserver->m_pstorageFactory != nullptr)
-        freeMemoryIfNeededAndSafe(true);
+        freeMemoryIfNeededAndSafe(false /*fQuickCycle*/, true);
 
     /* When we replicate whole scripts, we want the same PRNG sequence at
      * every call so that our PRNG is not affected by external state. */

@@ -2556,7 +2556,7 @@ void redisDbPersistentData::storeDatabase()
     sdsfree(temp);
 }
 
-void redisDbPersistentData::processChanges(bool fSnapshot)
+bool redisDbPersistentData::processChanges(bool fSnapshot)
 {
     serverAssert(GlobalLocksAcquired());
 
@@ -2565,6 +2565,8 @@ void redisDbPersistentData::processChanges(bool fSnapshot)
 
     if (m_spstorage != nullptr)
     {
+        if (!m_fAllChanged && m_setchanged.empty() && m_cnewKeysPending == 0)
+            return false;
         m_spstorage->beginWriteBatch();
         serverAssert(m_pdbSnapshotStorageFlush == nullptr);
         if (fSnapshot && !m_fAllChanged && m_setchanged.size() > 100)
@@ -2596,6 +2598,7 @@ void redisDbPersistentData::processChanges(bool fSnapshot)
         m_setchanged.clear();
         m_cnewKeysPending = 0;
     }
+    return (m_spstorage != nullptr);
 }
 
 void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **psnapshotFree)
@@ -2698,8 +2701,8 @@ void redisDbPersistentData::removeAllCachedValues()
     // First we have to flush the tracked changes
     if (m_fTrackingChanges)
     {
-        processChanges(false);
-        commitChanges();
+        if (processChanges(false))
+            commitChanges();
         trackChanges(false);
     }
 
@@ -2811,4 +2814,81 @@ int dbnumFromDb(redisDb *db)
             return i;
     }
     serverPanic("invalid database pointer");
+}
+
+void redisDbPersistentData::prefetchKeysAsync(AeLocker &lock, client *c)
+{
+    if (m_spstorage == nullptr)
+        return;
+
+    std::vector<robj*> veckeys;
+    lock.arm(c);
+    int numkeys = 0;
+    int *keys = getKeysFromCommand(c->cmd, c->argv, c->argc, &numkeys);
+    for (int ikey = 0; ikey < numkeys; ++ikey)
+    {
+        robj *objKey = c->argv[keys[ikey]];
+        if (this->find_cached_threadsafe(szFromObj(objKey)) == nullptr)
+            veckeys.push_back(objKey);
+    }
+    lock.disarm();
+
+    getKeysFreeResult(keys);
+
+    std::vector<std::tuple<sds, robj*, std::unique_ptr<expireEntry>>> vecInserts;
+    for (robj *objKey : veckeys)
+    {
+        sds sharedKey = nullptr;
+        std::unique_ptr<expireEntry> spexpire;
+        robj *o = nullptr;
+        m_spstorage->retrieve((sds)szFromObj(objKey), [&](const char *, size_t, const void *data, size_t cb){
+                size_t offset = 0;
+                spexpire = deserializeExpire((sds)szFromObj(objKey), (const char*)data, cb, &offset);    
+                o = deserializeStoredObject(this, szFromObj(objKey), reinterpret_cast<const char*>(data) + offset, cb - offset);
+                serverAssert(o != nullptr);
+        }, &sharedKey);
+
+        if (sharedKey == nullptr)
+            sharedKey = sdsdupshared(szFromObj(objKey));
+
+        vecInserts.emplace_back(sharedKey, o, std::move(spexpire));
+    }
+
+    lock.arm(c);
+    for (auto &tuple : vecInserts)
+    {
+        sds sharedKey = std::get<0>(tuple);
+        robj *o = std::get<1>(tuple);
+        std::unique_ptr<expireEntry> spexpire = std::move(std::get<2>(tuple));
+
+        if (o != nullptr)
+        {
+            if (this->find_cached_threadsafe(sharedKey) != nullptr)
+            {
+                // While unlocked this was already ensured
+                decrRefCount(o);
+                sdsfree(sharedKey);
+            }
+            else
+            {
+                dictAdd(m_pdict, sharedKey, o);
+                o->SetFExpires(spexpire != nullptr);
+
+                if (spexpire != nullptr)
+                {
+                    auto itr = m_setexpire->find(sharedKey);
+                    if (itr != m_setexpire->end())
+                        m_setexpire->erase(itr);
+                    m_setexpire->insert(std::move(*spexpire));
+                    serverAssert(m_setexpire->find(sharedKey) != m_setexpire->end());
+                }
+                serverAssert(o->FExpires() == (m_setexpire->find(sharedKey) != m_setexpire->end()));
+            }
+        }
+        else
+        {
+            if (sharedKey != nullptr)
+                sdsfree(sharedKey); // BUG but don't bother crashing
+        }
+    }
 }

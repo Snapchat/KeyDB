@@ -2,6 +2,7 @@
 
 void StorageCache::clear()
 {
+    std::unique_lock<fastlock> ul(m_lock);
     if (m_setkeys != nullptr)
         m_setkeys->clear();
     m_spstorage->clear();
@@ -24,6 +25,7 @@ void StorageCache::cacheKey(const char *rgch, size_t cch)
 bool StorageCache::erase(sds key)
 {
     bool result = m_spstorage->erase(key, sdslen(key));
+    std::unique_lock<fastlock> ul(m_lock);
     if (result && m_setkeys != nullptr)
     {
         auto itr = m_setkeys->find(sdsview(key));
@@ -35,15 +37,18 @@ bool StorageCache::erase(sds key)
 
 void StorageCache::insert(sds key, const void *data, size_t cbdata, bool fOverwrite)
 {
+    std::unique_lock<fastlock> ul(m_lock);
     if (!fOverwrite && m_setkeys != nullptr)
     {
         cacheKey(key);
     }
+    ul.unlock();
     m_spstorage->insert(key, sdslen(key), (void*)data, cbdata, fOverwrite);
 }
 
 const StorageCache *StorageCache::clone()
 {
+    std::unique_lock<fastlock> ul(m_lock);
     // Clones never clone the cache
     StorageCache *cacheNew = new StorageCache(const_cast<IStorage*>(m_spstorage->clone()));
     return cacheNew;
@@ -51,6 +56,7 @@ const StorageCache *StorageCache::clone()
 
 void StorageCache::retrieve(sds key, IStorage::callbackSingle fn, sds *cachedKey) const
 {
+    std::unique_lock<fastlock> ul(m_lock);
     if (m_setkeys != nullptr)
     {
         auto itr = m_setkeys->find(sdsview(key));
@@ -59,11 +65,13 @@ void StorageCache::retrieve(sds key, IStorage::callbackSingle fn, sds *cachedKey
         if (cachedKey != nullptr)
             *cachedKey = sdsdupshared(itr->get());
     }
+    ul.unlock();
     m_spstorage->retrieve(key, sdslen(key), fn);
 }
 
 size_t StorageCache::count() const
 {
+    std::unique_lock<fastlock> ul(m_lock);
     size_t count = m_spstorage->count();
     if (m_setkeys != nullptr)
         serverAssert(count == m_setkeys->size());

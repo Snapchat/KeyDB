@@ -2014,8 +2014,8 @@ void flushStorageWeak()
             latencyStartMonitor(storage_process_latency);
             std::vector<redisDb*> vecdb;
             for (int idb = 0; idb < cserver.dbnum; ++idb) {
-                vecdb.push_back(g_pserver->db[idb]);
-                g_pserver->db[idb]->processChanges(true);
+                if (g_pserver->db[idb]->processChanges(true))
+                    vecdb.push_back(g_pserver->db[idb]);
             }
             latencyEndMonitor(storage_process_latency);
             latencyAddSampleIfNeeded("storage-process-changes", storage_process_latency);
@@ -2453,8 +2453,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
             mstime_t storage_process_latency;
             latencyStartMonitor(storage_process_latency);
             for (int idb = 0; idb < cserver.dbnum; ++idb) {
-                vecdb.push_back(g_pserver->db[idb]);
-                g_pserver->db[idb]->processChanges(false);
+                if (g_pserver->db[idb]->processChanges(false))
+                    vecdb.push_back(g_pserver->db[idb]);
             }
             latencyEndMonitor(storage_process_latency);
             latencyAddSampleIfNeeded("storage-process-changes", storage_process_latency);
@@ -3936,6 +3936,9 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
         return C_OK;
     }
 
+    if (!locker.isArmed())
+        c->db->prefetchKeysAsync(locker, c);
+
     /* Check if the user is authenticated. This check is skipped in case
      * the default user is flagged as "nopass" and is active. */
     int auth_required = (!(DefaultUser->flags & USER_FLAG_NOPASS) ||
@@ -4007,7 +4010,7 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
      * propagation of DELs due to eviction. */
     if (g_pserver->maxmemory && !g_pserver->lua_timedout) {
         locker.arm(c);
-        int out_of_memory = freeMemoryIfNeededAndSafe(false /*fPreSnapshot*/) == C_ERR;
+        int out_of_memory = freeMemoryIfNeededAndSafe(true /*fQuickCycle*/, false /*fPreSnapshot*/) == C_ERR;
         /* freeMemoryIfNeeded may flush replica output buffers. This may result
          * into a replica, that may be the active client, to be freed. */
         if (serverTL->current_client == NULL) return C_ERR;
@@ -4268,8 +4271,8 @@ int prepareForShutdown(int flags) {
 
         // Also Dump To FLASH if Applicable
         for (int idb = 0; idb < cserver.dbnum; ++idb) {
-            g_pserver->db[idb]->processChanges(false);
-            g_pserver->db[idb]->commitChanges();
+            if (g_pserver->db[idb]->processChanges(false))
+                g_pserver->db[idb]->commitChanges();
         }
     }
 

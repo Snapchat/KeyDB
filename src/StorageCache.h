@@ -32,7 +32,7 @@ public:
         StorageCache *cache = new StorageCache(nullptr);
         if (pfactory->FSlow())
         {
-            cache->m_setkeys = std::make_unique<semiorderedset<sdsimmutablestring, sdsview, true>>();
+            cache->m_setkeys = std::make_unique<semiorderedset<sdsimmutablestring, sdsview, true>>(20);
         }
         load_iter_data data = {cache, fn, privdata};
         cache->m_spstorage = std::shared_ptr<IStorage>(pfactory->create(db, key_load_itr, (void*)&data));

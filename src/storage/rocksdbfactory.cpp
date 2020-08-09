@@ -75,6 +75,8 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
     table_options.block_size = 16 * 1024;
     table_options.cache_index_and_filter_blocks = true;
     table_options.pin_l0_filter_and_index_blocks_in_cache = true;
+    table_options.data_block_index_type = rocksdb::BlockBasedTableOptions::kDataBlockBinaryAndHash;
+    table_options.checksum = rocksdb::kNoChecksum;
     options.table_factory.reset(NewBlockBasedTableFactory(table_options));
     options.table_factory.reset(
         rocksdb::NewBlockBasedTableFactory(table_options));

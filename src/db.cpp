@@ -92,9 +92,11 @@ static robj *lookupKey(redisDb *db, robj *key, int flags) {
 
         updateDbValAccess(de, flags);
 
+#ifdef ENABLE_MVCC
         if (flags & LOOKUP_UPDATEMVCC) {
             val->mvcc_tstamp = getMvccTstamp();
         }
+#endif
         return val;
     } else {
         return NULL;
@@ -206,7 +208,9 @@ int dbAddCore(redisDb *db, robj *key, robj *val) {
     serverAssert(!val->FExpires());
     sds copy = sdsdup(szFromObj(key));
     int retval = dictAdd(db->pdict, copy, val);
+#ifdef ENABLE_MVCC
     val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
+#endif
 
     if (retval == DICT_OK)
     {
@@ -256,7 +260,9 @@ void dbOverwriteCore(redisDb *db, dictEntry *de, robj *key, robj *val, bool fUpd
     if (fUpdateMvcc) {
         if (val->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
             val = dupStringObject(val);
+#ifdef ENABLE_MVCC
         val->mvcc_tstamp = getMvccTstamp();
+#endif
     }
 
     dictSetVal(db->pdict, de, val);
@@ -290,13 +296,15 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
         if (de == nullptr)
             return (dbAddCore(db, key, val) == DICT_OK);
 
+#ifdef ENABLE_MVCC
         robj *old = (robj*)dictGetVal(de);
         if (old->mvcc_tstamp <= val->mvcc_tstamp)
         {
             dbOverwriteCore(db, de, key, val, false, true);
             return true;
         }
-        
+#endif
+
         return false;
     }
     else

@@ -238,15 +238,14 @@ void redisDbPersistentDataSnapshot::freeTombstoneObjects(int depth)
     
     dictIterator *di = dictGetIterator(m_pdictTombstone);
     dictEntry *de;
-    size_t freed = 0;
     while ((de = dictNext(di)) != nullptr)
     {
         dictEntry *deObj = dictFind(m_pdbSnapshot->m_pdict, dictGetKey(de));
         if (deObj != nullptr && dictGetVal(deObj) != nullptr)
         {
             decrRefCount((robj*)dictGetVal(deObj));
-            deObj->v.val = nullptr;
-            ++freed;
+            void *ptrSet = nullptr;
+            __atomic_store(&deObj->v.val, &ptrSet, __ATOMIC_RELAXED);
         }
     }
     dictReleaseIterator(di);
@@ -465,7 +464,7 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
     // Take the size so we can ensure we visited every element exactly once
     //  use volatile to ensure it's not checked too late.  This makes it more
     //  likely we'll detect races (but it won't gurantee it)
-    volatile size_t celem = size();
+    volatile ssize_t celem = (ssize_t)size();
 
     dictEntry *de = nullptr;
     bool fResult = true;
@@ -570,9 +569,11 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
 
     volatile size_t skipped = 0;
     m_pdbSnapshot->iterate_threadsafe([&](const char *key, robj_roptr o) {
-        if (o != nullptr) {
+        if (o != nullptr || !m_spstorage) {
             dictAdd(spdb->m_pdict, sdsdupshared(key), o.unsafe_robjcast());
-            incrRefCount(o);
+            if (o != nullptr) {
+                incrRefCount(o);
+            }
         } else {
             ++skipped;
         }

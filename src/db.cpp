@@ -101,7 +101,12 @@ static robj* lookupKey(redisDb *db, robj *key, int flags) {
 }
 static robj_roptr lookupKeyConst(redisDb *db, robj *key, int flags) {
     serverAssert((flags & LOOKUP_UPDATEMVCC) == 0);
-    robj_roptr val = db->find(szFromObj(key));
+    robj_roptr val;
+    if (g_pserver->m_pstorageFactory)
+        val = db->find(szFromObj(key)).val();
+    else
+        val = db->find_cached_threadsafe(szFromObj(key)).val();
+    
     if (val != nullptr) {
         lookupKeyUpdateObj(val.unsafe_robjcast(), flags);
         return val;
@@ -2333,10 +2338,12 @@ bool redisDbPersistentData::insert(char *key, robj *o, bool fAssumeNew)
     serverAssert(FImplies(fAssumeNew, res == DICT_OK));
     if (res == DICT_OK)
     {
+#ifdef CHECKED_BUILD
         if (m_pdbSnapshot != nullptr && m_pdbSnapshot->find_cached_threadsafe(key) != nullptr)
         {
             serverAssert(dictFind(m_pdictTombstone, key) != nullptr);
         }
+#endif
         trackkey(key, false /* fUpdate */);
     }
     return (res == DICT_OK);

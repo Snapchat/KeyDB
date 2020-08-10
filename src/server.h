@@ -805,7 +805,9 @@ typedef struct redisObject {
 private:
     mutable std::atomic<unsigned> refcount {0};
 public:
+#ifdef ENABLE_MVCC
     uint64_t mvcc_tstamp;
+#endif
     void *m_ptr;
 
     inline bool FExpires() const { return refcount.load(std::memory_order_relaxed) >> 31; }
@@ -816,7 +818,11 @@ public:
     void addref() const { refcount.fetch_add(1, std::memory_order_relaxed); }
     unsigned release() const { return refcount.fetch_sub(1, std::memory_order_seq_cst) & ~(1U << 31); }
 } robj;
+#ifdef ENABLE_MVCC
 static_assert(sizeof(redisObject) == 24, "object size is critical, don't increase");
+#else
+static_assert(sizeof(redisObject) == 16, "object size is critical, don't increase");
+#endif
 
 __attribute__((always_inline)) inline const void *ptrFromObj(robj_roptr &o)
 {

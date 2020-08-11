@@ -2181,7 +2181,7 @@ static int updateMaxmemory(long long val, long long prev, const char **err) {
         if ((unsigned long long)val < used) {
             serverLog(LL_WARNING,"WARNING: the new maxmemory value set via CONFIG SET (%llu) is smaller than the current memory usage (%zu). This will result in key eviction and/or the inability to accept new write commands depending on the maxmemory-policy.", g_pserver->maxmemory, used);
         }
-        freeMemoryIfNeededAndSafe(false /*fPreSnapshot*/);
+        freeMemoryIfNeededAndSafe(false /*fQuickCycle*/, false /*fPreSnapshot*/);
     }
     return 1;
 }

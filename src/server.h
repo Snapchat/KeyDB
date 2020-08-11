@@ -1329,7 +1329,7 @@ public:
     //  to allow you to release the global lock before commiting.  To prevent deadlocks you *must*
     //  either release the global lock or keep the same global lock between the two functions as
     //  a second look is kept to ensure writes to secondary storage are ordered
-    void processChanges(bool fSnapshot);
+    bool processChanges(bool fSnapshot);
     void commitChanges(const redisDbPersistentDataSnapshot **psnapshotFree = nullptr);
 
     // This should only be used if you look at the key, we do not fixup
@@ -1349,6 +1349,8 @@ public:
     bool FStorageProvider() { return m_spstorage != nullptr; }
     bool removeCachedValue(const char *key);
     void removeAllCachedValues();
+
+    void prefetchKeysAsync(class AeLocker &locker, client *c);
 
     bool FSnapshot() const { return m_spdbSnapshotHOLDER != nullptr; }
 
@@ -1462,7 +1464,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
     friend void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e);
     friend int evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct evictionPoolEntry *pool);
     friend void activeDefragCycle(void);
-    friend int freeMemoryIfNeeded(bool);
+    friend int freeMemoryIfNeeded(bool, bool);
     friend void activeExpireCycle(int);
     friend void expireSlaveKeys(void);
 
@@ -1518,6 +1520,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::removeAllCachedValues;
     using redisDbPersistentData::dictUnsafeKeyOnly;
     using redisDbPersistentData::resortExpire;
+    using redisDbPersistentData::prefetchKeysAsync;
 
 public:
     expireset::setiter expireitr;
@@ -2997,10 +3000,10 @@ int zslLexValueGteMin(sds value, zlexrangespec *spec);
 int zslLexValueLteMax(sds value, zlexrangespec *spec);
 
 /* Core functions */
-int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, bool fPreSnapshot=false);
+int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, bool fQuickCycle = false, bool fPreSnapshot=false);
 size_t freeMemoryGetNotCountedMemory();
-int freeMemoryIfNeeded(bool fPreSnapshot);
-int freeMemoryIfNeededAndSafe(bool fPreSnapshot);
+int freeMemoryIfNeeded(bool fQuickCycle, bool fPreSnapshot);
+int freeMemoryIfNeededAndSafe(bool fQuickCycle, bool fPreSnapshot);
 int processCommand(client *c, int callFlags, class AeLocker &locker);
 void setupSignalHandlers(void);
 struct redisCommand *lookupCommand(sds name);

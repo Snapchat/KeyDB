@@ -1,3 +1,10 @@
+
+keydb-pro (6:6.0.15-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * 6.0.15 has several improvements to FLASH read performance, latency normalization with SCAN, and MVCC performance fixes
+
+ -- Ben Schermel <ben@eqalpha.com>  Mon, 10 Aug 2020 22:00:00 +0000
+
 keydb-pro (6:6.0.14-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * 6.0.14 Fix memory leak in SCAN when used with MVCC

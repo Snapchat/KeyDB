@@ -19,6 +19,7 @@ RocksDBStorageProvider::RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spd
     : m_spdb(spdb), m_psnapshot(psnapshot), m_spcolfamily(spcolfam), m_count(count)
 {
     m_readOptionsTemplate = rocksdb::ReadOptions();
+    m_readOptionsTemplate.verify_checksums = false;
     m_readOptionsTemplate.snapshot = m_psnapshot;
 }
 

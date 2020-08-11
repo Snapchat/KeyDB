@@ -49,8 +49,11 @@ class semiorderedset
     }
 
 public:
-    semiorderedset()
+    semiorderedset(size_t bitsStart = 0)
     {
+        if (bitsStart < bits_min)
+            bitsStart = bits_min;
+        bits = bitsStart;
         m_data.resize((1ULL << bits));
     }
 

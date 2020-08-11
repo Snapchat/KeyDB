@@ -2520,11 +2520,11 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 {
                     for (int idb = 0; idb < cserver.dbnum; ++idb)
                     {
-                        g_pserver->db[idb]->processChanges(false);
-                        g_pserver->db[idb]->commitChanges();
+                        if (g_pserver->db[idb]->processChanges(false))
+                            g_pserver->db[idb]->commitChanges();
                         g_pserver->db[idb]->trackChanges(false);
                     }
-                    freeMemoryIfNeeded(false /* fPreSnapshot*/);
+                    freeMemoryIfNeeded(false /*fQuickCycle*/, false /* fPreSnapshot*/);
                 }
             }
             
@@ -2596,8 +2596,8 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
     for (int idb = 0; idb < cserver.dbnum; ++idb)
     {
-        g_pserver->db[idb]->processChanges(false);
-        g_pserver->db[idb]->commitChanges();
+        if (g_pserver->db[idb]->processChanges(false))
+            g_pserver->db[idb]->commitChanges();
     }
     return C_OK;
 

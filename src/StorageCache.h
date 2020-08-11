@@ -5,6 +5,7 @@ class StorageCache
 {
     std::shared_ptr<IStorage> m_spstorage;
     std::unique_ptr<semiorderedset<sdsimmutablestring, sdsview, true>> m_setkeys;
+    mutable fastlock m_lock {"StorageCache"};
 
     StorageCache(IStorage *storage)
         : m_spstorage(storage)
@@ -32,7 +33,7 @@ public:
         StorageCache *cache = new StorageCache(nullptr);
         if (pfactory->FSlow())
         {
-            cache->m_setkeys = std::make_unique<semiorderedset<sdsimmutablestring, sdsview, true>>();
+            cache->m_setkeys = std::make_unique<semiorderedset<sdsimmutablestring, sdsview, true>>(20);
         }
         load_iter_data data = {cache, fn, privdata};
         cache->m_spstorage = std::shared_ptr<IStorage>(pfactory->create(db, key_load_itr, (void*)&data));

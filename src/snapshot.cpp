@@ -8,7 +8,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     serverAssert(GlobalLocksAcquired());
     serverAssert(m_refCount == 0);  // do not call this on a snapshot
 
-    if (freeMemoryIfNeededAndSafe(true /*fPreSnapshot*/) != C_OK && fOptional)
+    if (freeMemoryIfNeededAndSafe(false /*fQuickCycle*/, true /*fPreSnapshot*/) != C_OK && fOptional)
         return nullptr; // can't create snapshot due to OOM
 
     int levels = 1;
@@ -182,7 +182,8 @@ void redisDbPersistentData::restoreSnapshot(const redisDbPersistentDataSnapshot 
 //  have some internal heuristics to do a synchronous endSnapshot if it makes sense
 void redisDbPersistentData::endSnapshotAsync(const redisDbPersistentDataSnapshot *psnapshot)
 {
-    aeAcquireLock();
+    mstime_t latency;
+    aeAcquireLock(); latencyStartMonitor(latency);
         if (m_pdbSnapshotASYNC && m_pdbSnapshotASYNC->m_mvccCheckpoint <= psnapshot->m_mvccCheckpoint)
         {
             // Free a stale async snapshot so consolidate_children can clean it up later
@@ -198,6 +199,8 @@ void redisDbPersistentData::endSnapshotAsync(const redisDbPersistentDataSnapshot
         {
             // For small snapshots it makes more sense just to merge it directly
             endSnapshot(psnapshot);
+            latencyEndMonitor(latency);
+            latencyAddSampleIfNeeded("end-snapshot-async-synchronous-path", latency);
             aeReleaseLock();
             return;
         }
@@ -206,19 +209,22 @@ void redisDbPersistentData::endSnapshotAsync(const redisDbPersistentDataSnapshot
         auto psnapshotT = createSnapshot(LLONG_MAX, false);
         endSnapshot(psnapshot); // this will just dec the ref count since our new snapshot has a ref 
         psnapshot = nullptr;
-    aeReleaseLock();
+    aeReleaseLock(); latencyEndMonitor(latency);
+    latencyAddSampleIfNeeded("end-snapshot-async-phase-1", latency);
 
     // do the expensive work of merging snapshots outside the ref
     const_cast<redisDbPersistentDataSnapshot*>(psnapshotT)->freeTombstoneObjects(1);    // depth is one because we just creted it
     const_cast<redisDbPersistentDataSnapshot*>(psnapshotT)->consolidate_children(this, true);
     
     // Final Cleanup
-    aeAcquireLock();
+    aeAcquireLock(); latencyStartMonitor(latency);
         if (m_pdbSnapshotASYNC == nullptr)
             m_pdbSnapshotASYNC = psnapshotT;
         else
             endSnapshot(psnapshotT);    // finally clean up our temp snapshot
-    aeReleaseLock();
+    aeReleaseLock(); latencyEndMonitor(latency);
+    
+    latencyAddSampleIfNeeded("end-snapshot-async-phase-2", latency);
 }
 
 void redisDbPersistentDataSnapshot::freeTombstoneObjects(int depth)
@@ -232,15 +238,14 @@ void redisDbPersistentDataSnapshot::freeTombstoneObjects(int depth)
     
     dictIterator *di = dictGetIterator(m_pdictTombstone);
     dictEntry *de;
-    size_t freed = 0;
     while ((de = dictNext(di)) != nullptr)
     {
         dictEntry *deObj = dictFind(m_pdbSnapshot->m_pdict, dictGetKey(de));
         if (deObj != nullptr && dictGetVal(deObj) != nullptr)
         {
             decrRefCount((robj*)dictGetVal(deObj));
-            deObj->v.val = nullptr;
-            ++freed;
+            void *ptrSet = nullptr;
+            __atomic_store(&deObj->v.val, &ptrSet, __ATOMIC_RELAXED);
         }
     }
     dictReleaseIterator(di);
@@ -261,6 +266,9 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
         m_spdbSnapshotHOLDER->endSnapshot(psnapshot);
         return;
     }
+
+    mstime_t latency_endsnapshot;
+    latencyStartMonitor(latency_endsnapshot);
 
     // Alright we're ready to be free'd, but first dump all the refs on our child snapshots
     if (m_spdbSnapshotHOLDER->m_refCount == 1)
@@ -287,9 +295,6 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
         m_spdbSnapshotHOLDER = std::move(m_spdbSnapshotHOLDER->m_spdbSnapshotHOLDER);
         return;
     }
-
-    mstime_t latency_endsnapshot;
-    latencyStartMonitor(latency_endsnapshot);
 
     // Stage 1 Loop through all the tracked deletes and remove them from the snapshot DB
     dictIterator *di = dictGetIterator(m_pdictTombstone);
@@ -363,7 +368,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     latencyEndMonitor(latency_endsnapshot);
     latencyAddSampleIfNeeded("end-mvcc-snapshot", latency_endsnapshot);
 
-    freeMemoryIfNeededAndSafe(false);
+    freeMemoryIfNeededAndSafe(false /*fQuickCycle*/, false);
 }
 
 dict_iter redisDbPersistentDataSnapshot::random_cache_threadsafe(bool fPrimaryOnly) const
@@ -459,7 +464,7 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe(std::function<bool(const 
     // Take the size so we can ensure we visited every element exactly once
     //  use volatile to ensure it's not checked too late.  This makes it more
     //  likely we'll detect races (but it won't gurantee it)
-    volatile size_t celem = size();
+    volatile ssize_t celem = (ssize_t)size();
 
     dictEntry *de = nullptr;
     bool fResult = true;
@@ -564,9 +569,11 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
 
     volatile size_t skipped = 0;
     m_pdbSnapshot->iterate_threadsafe([&](const char *key, robj_roptr o) {
-        if (o != nullptr) {
+        if (o != nullptr || !m_spstorage) {
             dictAdd(spdb->m_pdict, sdsdupshared(key), o.unsafe_robjcast());
-            incrRefCount(o);
+            if (o != nullptr) {
+                incrRefCount(o);
+            }
         } else {
             ++skipped;
         }

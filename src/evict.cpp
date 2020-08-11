@@ -425,7 +425,7 @@ size_t freeMemoryGetNotCountedMemory(void) {
  *              limit.
  *              (Populated both for C_ERR and C_OK)
  */
-int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, bool fPreSnapshot) {
+int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, bool fQuickCycle, bool fPreSnapshot) {
     size_t mem_reported, mem_used, mem_tofree;
 
     /* Check if we are over the memory usage limit. If we are not, no need
@@ -464,7 +464,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 
     /* Compute how much memory we need to free. */
     mem_tofree = mem_used - maxmemory;
-    if (g_pserver->m_pstorageFactory)
+    if (g_pserver->m_pstorageFactory && !fQuickCycle)
     {
         mem_tofree += static_cast<size_t>(maxmemory * 0.05); // if we have a storage provider be much more aggressive
     }
@@ -484,7 +484,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
  * were over the limit, but the attempt to free memory was successful.
  * Otehrwise if we are over the memory limit, but not enough memory
  * was freed to return back under the limit, the function returns C_ERR. */
-int freeMemoryIfNeeded(bool fPreSnapshot) {
+int freeMemoryIfNeeded(bool fQuickCycle, bool fPreSnapshot) {
     serverAssert(GlobalLocksAcquired());
 
     /* By default replicas should ignore maxmemory
@@ -498,12 +498,13 @@ int freeMemoryIfNeeded(bool fPreSnapshot) {
     const bool fEvictToStorage = !cserver.delete_on_evict && g_pserver->db[0]->FStorageProvider();
     int result = C_ERR;
     int ckeysFailed = 0;
+    int keys_freed = 0;
 
     /* When clients are paused the dataset should be static not just from the
      * POV of clients not being able to write, but also from the POV of
      * expires and evictions of keys not being performed. */
     if (clientsArePaused()) return C_OK;
-    if (getMaxmemoryState(&mem_reported,NULL,&mem_tofree,NULL,fPreSnapshot) == C_OK)
+    if (getMaxmemoryState(&mem_reported,NULL,&mem_tofree,NULL,fQuickCycle,fPreSnapshot) == C_OK)
         return C_OK;
 
     mem_freed = 0;
@@ -513,13 +514,13 @@ int freeMemoryIfNeeded(bool fPreSnapshot) {
         goto cant_free; /* We need to free memory, but policy forbids. */
 
     while (mem_freed < mem_tofree) {
-        int j, k, i, keys_freed = 0;
+        int j, k, i;
         static unsigned int next_db = 0;
         sds bestkey = NULL;
         int bestdbid;
         redisDb *db;
         bool fFallback = false;
-
+        
         if (g_pserver->maxmemory_policy & (MAXMEMORY_FLAG_LRU|MAXMEMORY_FLAG_LFU) ||
             g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_TTL)
         {
@@ -737,7 +738,7 @@ cant_free:
  * - Nor we are loading data right now.
  *
  */
-int freeMemoryIfNeededAndSafe(bool fPreSnapshot) {
+int freeMemoryIfNeededAndSafe(bool fQuickCycle, bool fPreSnapshot) {
     if (g_pserver->shutdown_asap || g_pserver->lua_timedout || g_pserver->loading) return C_OK;
-    return freeMemoryIfNeeded(fPreSnapshot);
+    return freeMemoryIfNeeded(fQuickCycle, fPreSnapshot);
 }

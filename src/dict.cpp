@@ -326,7 +326,7 @@ int dictRehashMilliseconds(dict *d, int ms) {
 static void _dictRehashStep(dict *d) {
     unsigned long iterators;
     __atomic_load(&d->iterators, &iterators, __ATOMIC_RELAXED);
-    if (iterators == 0) dictRehash(d,1);
+    if (iterators == 0) dictRehash(d,10);
 }
 
 /* Add an element to the target hash table */
@@ -541,14 +541,13 @@ void dictRelease(dict *d)
     zfree(d);
 }
 
-dictEntry *dictFindWithPrev(dict *d, const void *key, dictEntry ***dePrevPtr, dictht **pht)
+dictEntry *dictFindWithPrev(dict *d, const void *key, uint64_t h, dictEntry ***dePrevPtr, dictht **pht)
 {
     dictEntry *he;
-    uint64_t h, idx, table;
+    uint64_t idx, table;
 
     if (dictSize(d) == 0) return NULL; /* dict is empty */
     if (dictIsRehashing(d)) _dictRehashStep(d);
-    h = dictHashKey(d, key);
     for (table = 0; table <= 1; table++) {
         *pht = d->ht + table;
         idx = h & d->ht[table].sizemask;
@@ -570,7 +569,8 @@ dictEntry *dictFind(dict *d, const void *key)
 {
     dictEntry **deT;
     dictht *ht;
-    return dictFindWithPrev(d, key, &deT, &ht);
+    uint64_t h = dictHashKey(d, key);
+    return dictFindWithPrev(d, key, h, &deT, &ht);
 }
 
 void *dictFetchValue(dict *d, const void *key) {

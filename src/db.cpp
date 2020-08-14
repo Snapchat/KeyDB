@@ -422,7 +422,8 @@ bool redisDbPersistentData::syncDelete(robj *key)
             if (itr != nullptr)
             {
                 sds keyTombstone = sdsdup(szFromObj(key));
-                if (dictAdd(m_pdictTombstone, keyTombstone, nullptr) != DICT_OK)
+                uint64_t hash = dictGetHash(m_pdict, keyTombstone);
+                if (dictAdd(m_pdictTombstone, keyTombstone, (void*)hash) != DICT_OK)
                     sdsfree(keyTombstone);
             }
         }
@@ -2290,7 +2291,7 @@ void redisDbPersistentData::initialize()
 {
     m_pdbSnapshot = nullptr;
     m_pdict = dictCreate(&dbDictType,this);
-    m_pdictTombstone = dictCreate(&dbDictType,this);
+    m_pdictTombstone = dictCreate(&dbDictTypeTombstone,this);
     m_setexpire = new(MALLOC_LOCAL) expireset();
     m_fAllChanged = 0;
     m_fTrackingChanges = 0;
@@ -2477,8 +2478,11 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
             {
                 dictAdd(m_pdict, keyNew, nullptr);
             }
-            *pde = dictFind(m_pdict, sdsKey);
-            dictAdd(m_pdictTombstone, sdsdupshared(itr.key()), nullptr);
+            uint64_t hash = dictGetHash(m_pdict, sdsKey);
+            dictEntry **deT;
+            dictht *ht;
+            *pde = dictFindWithPrev(m_pdict, sdsKey, hash, &deT, &ht);
+            dictAdd(m_pdictTombstone, sdsdupshared(itr.key()), (void*)hash);
         }
     }
     

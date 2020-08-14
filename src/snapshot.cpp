@@ -70,6 +70,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
 
     auto spdb = std::unique_ptr<redisDbPersistentDataSnapshot>(new (MALLOC_LOCAL) redisDbPersistentDataSnapshot());
     
+    dictRehashMilliseconds(m_pdict, 50);   // Give us the best chance at a fast cleanup
     spdb->m_fAllChanged = false;
     spdb->m_fTrackingChanges = 0;
     spdb->m_pdict = m_pdict;
@@ -303,7 +304,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     {
         dictEntry **dePrev;
         dictht *ht;
-        dictEntry *deSnapshot = dictFindWithPrev(m_spdbSnapshotHOLDER->m_pdict, dictGetKey(de), &dePrev, &ht);
+        dictEntry *deSnapshot = dictFindWithPrev(m_spdbSnapshotHOLDER->m_pdict, dictGetKey(de), (uint64_t)dictGetVal(de), &dePrev, &ht);
         if (deSnapshot == nullptr && m_spdbSnapshotHOLDER->m_pdbSnapshot)
         {
             // The tombstone is for a grand child, propogate it (or possibly in the storage provider - but an extra tombstone won't hurt)

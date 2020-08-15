@@ -1326,6 +1326,9 @@ public:
     void setExpire(robj *key, robj *subkey, long long when);
     void setExpire(expireEntry &&e);
     void initialize();
+    void prepOverwriteForSnapshot(char *key);
+
+    bool FRehashing() const { return dictIsRehashing(m_pdict) || dictIsRehashing(m_pdictTombstone); }
 
     void setStorageProvider(StorageCache *pstorage);
 
@@ -1527,6 +1530,8 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::dictUnsafeKeyOnly;
     using redisDbPersistentData::resortExpire;
     using redisDbPersistentData::prefetchKeysAsync;
+    using redisDbPersistentData::prepOverwriteForSnapshot;
+    using redisDbPersistentData::FRehashing;
 
 public:
     expireset::setiter expireitr;

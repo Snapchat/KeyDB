@@ -47,6 +47,11 @@ endif
 
 USEASM?=true
 
+ifeq ($(NOMVCC),)
+	CFLAGS+= -DENABLE_MVCC
+	CXXFLAGS+= -DENABLE_MVCC
+endif
+
 ifneq ($(SANITIZE),)
 	CFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE
 	CXXFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE

@@ -4920,9 +4920,11 @@ void createDumpPayload(rio *payload, robj_roptr o, robj *key) {
     rioInitWithBuffer(payload,sdsempty());
     serverAssert(rdbSaveObjectType(payload,o));
     serverAssert(rdbSaveObject(payload,o,key));
+#ifdef ENABLE_MVCC
     char szT[32];
     snprintf(szT, 32, "%" PRIu64, o->mvcc_tstamp);
     serverAssert(rdbSaveAuxFieldStrStr(payload,"mvcc-tstamp", szT) != -1);
+#endif
 
     /* Write the footer, this is how it looks like:
      * ----------------+---------------------+---------------+
@@ -5064,9 +5066,11 @@ void restoreCommand(client *c) {
             decrRefCount(auxkey);
             goto eoferr;
         }
+#ifdef ENABLE_MVCC
         if (strcasecmp(szFromObj(auxkey), "mvcc-tstamp") == 0) {
             obj->mvcc_tstamp = strtoull(szFromObj(auxval), nullptr, 10);
         }
+#endif
         decrRefCount(auxkey);
         decrRefCount(auxval);
     }

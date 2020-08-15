@@ -1092,8 +1092,10 @@ int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEn
     }
 
     char szT[32];
+#ifdef ENABLE_MVCC
     snprintf(szT, 32, "%" PRIu64, val->mvcc_tstamp);
     if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szT) == -1) return -1;
+#endif
 
     /* Save type, key, value */
     if (rdbSaveObjectType(rdb,val) == -1) return -1;
@@ -2131,7 +2133,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
         return NULL;
     }
 
+#ifdef ENABLE_MVCC
     o->mvcc_tstamp = mvcc_tstamp;
+#endif
     serverAssert(!o->FExpires());
     return o;
 }
@@ -2489,7 +2493,11 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             key = nullptr;
             goto eoferr;
         }
+#ifdef ENABLE_MVCC
         bool fStaleMvccKey = (rsi) ? val->mvcc_tstamp < rsi->mvccMinThreshold : false;
+#else
+        bool fStaleMvccKey = false;
+#endif
 
         /* Check if the key already expired. This function is used when loading
          * an RDB file from disk, either at startup, or when an RDB was

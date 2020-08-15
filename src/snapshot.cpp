@@ -91,8 +91,13 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
         spdb->m_setexpire->pause_rehash();  // needs to be const
     }
 
+    if (dictIsRehashing(spdb->m_pdict) || dictIsRehashing(spdb->m_pdictTombstone)) {
+        serverLog(LL_NOTICE, "NOTICE: Suboptimal snapshot");
+    }
+
     m_pdict = dictCreate(&dbDictType,this);
-    m_pdictTombstone = dictCreate(&dbDictTypeTombstone, this);
+    dictExpand(m_pdict, 1024);   // minimize rehash overhead
+    m_pdictTombstone = dictCreate(&dbTombstoneDictType, this);
 
     serverAssert(spdb->m_pdict->iterators == 1);
 

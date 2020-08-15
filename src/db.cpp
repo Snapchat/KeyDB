@@ -430,7 +430,7 @@ bool redisDbPersistentData::syncDelete(robj *key)
             auto itr = m_pdbSnapshot->find_cached_threadsafe(szFromObj(key));
             if (itr != nullptr)
             {
-                sds keyTombstone = sdsdup(szFromObj(key));
+                sds keyTombstone = sdsdupshared(itr.key());
                 uint64_t hash = dictGetHash(m_pdict, keyTombstone);
                 if (dictAdd(m_pdictTombstone, keyTombstone, (void*)hash) != DICT_OK)
                     sdsfree(keyTombstone);
@@ -2300,7 +2300,7 @@ void redisDbPersistentData::initialize()
 {
     m_pdbSnapshot = nullptr;
     m_pdict = dictCreate(&dbDictType,this);
-    m_pdictTombstone = dictCreate(&dbDictTypeTombstone,this);
+    m_pdictTombstone = dictCreate(&dbTombstoneDictType,this);
     m_setexpire = new(MALLOC_LOCAL) expireset();
     m_fAllChanged = 0;
     m_fTrackingChanges = 0;

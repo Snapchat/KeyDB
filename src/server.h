@@ -2564,7 +2564,7 @@ extern dictType zsetDictType;
 extern dictType clusterNodesDictType;
 extern dictType clusterNodesBlackListDictType;
 extern dictType dbDictType;
-extern dictType dbDictTypeTombstone;
+extern dictType dbTombstoneDictType;
 extern dictType dbSnapshotDictType;
 extern dictType shaScriptObjectDictType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;

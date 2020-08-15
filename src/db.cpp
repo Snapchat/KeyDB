@@ -338,6 +338,7 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
  * The client 'c' argument may be set to NULL if the operation is performed
  * in a context where there is no clear client performing the operation. */
 void genericSetKey(client *c, redisDb *db, robj *key, robj *val, int keepttl, int signal) {
+    db->prepOverwriteForSnapshot(szFromObj(key));
     if (!dbAddCore(db, key, val)) {
         dbOverwrite(db, key, val, !keepttl);
     }
@@ -2356,6 +2357,24 @@ bool redisDbPersistentData::insert(char *key, robj *o, bool fAssumeNew)
         trackkey(key, false /* fUpdate */);
     }
     return (res == DICT_OK);
+}
+
+// This is a performance tool to prevent us copying over an object we're going to overwrite anyways
+void redisDbPersistentData::prepOverwriteForSnapshot(char *key)
+{
+    if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU)
+        return;
+
+    if (m_pdbSnapshot != nullptr)
+    {
+        auto itr = m_pdbSnapshot->find_cached_threadsafe(key);
+        if (itr.key() != nullptr)
+        {
+            sds keyNew = sdsdupshared(itr.key());
+            if (dictAdd(m_pdictTombstone, keyNew, (void*)dictHashKey(m_pdict, key)) != DICT_OK)
+                sdsfree(keyNew);
+        }
+    }
 }
 
 void redisDbPersistentData::tryResize()

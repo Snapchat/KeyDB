@@ -613,7 +613,7 @@ void dictRelease(dict *d)
     zfree(d);
 }
 
-dictEntry *dictFindWithPrev(dict *d, const void *key, uint64_t h, dictEntry ***dePrevPtr, dictht **pht)
+dictEntry *dictFindWithPrev(dict *d, const void *key, uint64_t h, dictEntry ***dePrevPtr, dictht **pht, bool fShallowCompare)
 {
     dictEntry *he;
     uint64_t idx, table;
@@ -626,7 +626,7 @@ dictEntry *dictFindWithPrev(dict *d, const void *key, uint64_t h, dictEntry ***d
         he = d->ht[table].table[idx];
         *dePrevPtr = &d->ht[table].table[idx];
         while(he) {
-            if (key==he->key || dictCompareKeys(d, key, he->key)) {       
+            if (key==he->key || (!fShallowCompare && dictCompareKeys(d, key, he->key))) {
                 return he;
             }
             *dePrevPtr = &he->next;

@@ -1387,14 +1387,14 @@ dictType dbDictType = {
     dictObjectDestructor   /* val destructor */
 };
 
-/* db->pdict, keys are sds strings, vals uints. */
-dictType dbDictTypeTombstone = {
+/* db->pdict, keys are sds strings, vals are Redis objects. */
+dictType dbTombstoneDictType = {
     dictSdsHash,                /* hash function */
     NULL,                       /* key dup */
     NULL,                       /* val dup */
     dictSdsKeyCompare,          /* key compare */
-    dictDbKeyDestructor,          /* key destructor */
-    NULL   /* val destructor */
+    dictDbKeyDestructor,        /* key destructor */
+    NULL                        /* val destructor */
 };
 
 dictType dbSnapshotDictType = {
@@ -1539,8 +1539,9 @@ void tryResizeHashTables(int dbid) {
  * is returned. */
 int redisDbPersistentData::incrementallyRehash() {
     /* Keys dictionary */
-    if (dictIsRehashing(m_pdict)) {
+    if (dictIsRehashing(m_pdict) || dictIsRehashing(m_pdictTombstone)) {
         dictRehashMilliseconds(m_pdict,1);
+        dictRehashMilliseconds(m_pdictTombstone,1);
         return 1; /* already used our millisecond for this loop... */
     }
     return 0;

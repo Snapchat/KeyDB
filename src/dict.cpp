@@ -326,7 +326,7 @@ int dictRehashMilliseconds(dict *d, int ms) {
 static void _dictRehashStep(dict *d) {
     unsigned long iterators;
     __atomic_load(&d->iterators, &iterators, __ATOMIC_RELAXED);
-    if (iterators == 0) dictRehash(d,10);
+    if (iterators == 0) dictRehash(d,2);
 }
 
 /* Add an element to the target hash table */
@@ -1220,7 +1220,9 @@ void dictGetStats(char *buf, size_t bufsize, dict *d) {
 
 void dictForceRehash(dict *d)
 {
-    while (dictIsRehashing(d)) _dictRehashStep(d);
+    unsigned long iterators;
+    __atomic_load(&d->iterators, &iterators, __ATOMIC_RELAXED);
+    while (iterators == 0 && dictIsRehashing(d)) _dictRehashStep(d);
 }
 
 /* ------------------------------- Benchmark ---------------------------------*/

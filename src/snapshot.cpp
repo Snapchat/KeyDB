@@ -246,8 +246,11 @@ void redisDbPersistentDataSnapshot::freeTombstoneObjects(int depth)
     dictEntry *de;
     while ((de = dictNext(di)) != nullptr)
     {
-        dictEntry *deObj = dictFind(m_pdbSnapshot->m_pdict, dictGetKey(de));
-        if (deObj != nullptr && dictGetVal(deObj) != nullptr)
+        dictEntry **dePrev = nullptr;
+        dictht *ht = nullptr;
+        sds key = (sds)dictGetKey(de);
+        dictEntry *deObj = dictFindWithPrev(m_pdbSnapshot->m_pdict, key, (uint64_t)dictGetVal(de), &dePrev, &ht, !!sdsisshared(key));
+        if (deObj != nullptr)
         {
             decrRefCount((robj*)dictGetVal(deObj));
             void *ptrSet = nullptr;
@@ -309,7 +312,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     {
         dictEntry **dePrev;
         dictht *ht;
-        dictEntry *deSnapshot = dictFindWithPrev(m_spdbSnapshotHOLDER->m_pdict, dictGetKey(de), (uint64_t)dictGetVal(de), &dePrev, &ht);
+        dictEntry *deSnapshot = dictFindWithPrev(m_spdbSnapshotHOLDER->m_pdict, dictGetKey(de), (uint64_t)dictGetVal(de), &dePrev, &ht, !!sdsisshared((sds)dictGetKey(de)));
         if (deSnapshot == nullptr && m_spdbSnapshotHOLDER->m_pdbSnapshot)
         {
             // The tombstone is for a grand child, propogate it (or possibly in the storage provider - but an extra tombstone won't hurt)

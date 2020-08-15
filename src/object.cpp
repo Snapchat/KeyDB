@@ -94,6 +94,7 @@ robj *createRawStringObject(const char *ptr, size_t len) {
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
 robj *createEmbeddedStringObject(const char *ptr, size_t len) {
+    serverAssert(len <= UINT8_MAX);
     size_t allocsize = sizeof(struct sdshdr8)+len+1;
     if (allocsize < sizeof(void*))
         allocsize = sizeof(void*);
@@ -136,10 +137,10 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
 #ifdef ENABLE_MVCC
 #define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 48
 #else
-#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 256
+#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 56
 #endif
 
-//static_assert((sizeof(redisObject)+OBJ_ENCODING_EMBSTR_SIZE_LIMIT-8) == 64, "Max EMBSTR obj should be 64 bytes total");
+static_assert((sizeof(redisObject)+OBJ_ENCODING_EMBSTR_SIZE_LIMIT-8) == 64, "Max EMBSTR obj should be 64 bytes total");
 robj *createStringObject(const char *ptr, size_t len) {
     if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT)
         return createEmbeddedStringObject(ptr,len);

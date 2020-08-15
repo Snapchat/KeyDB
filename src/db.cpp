@@ -91,7 +91,9 @@ static robj* lookupKey(redisDb *db, robj *key, int flags) {
         robj *val = itr.val();
         lookupKeyUpdateObj(val, flags);
         if (flags & LOOKUP_UPDATEMVCC) {
+#ifdef ENABLE_MVCC
             val->mvcc_tstamp = getMvccTstamp();
+#endif
             db->trackkey(key, true /* fUpdate */);
         }
         return val;
@@ -218,8 +220,10 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
 bool dbAddCore(redisDb *db, robj *key, robj *val, bool fAssumeNew = false) {
     serverAssert(!val->FExpires());
     sds copy = sdsdupshared(szFromObj(key));
+#ifdef ENABLE_MVCC
     if (g_pserver->fActiveReplica)
         val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
+#endif
 
     bool fInserted = db->insert(copy, val, fAssumeNew);
 
@@ -270,7 +274,9 @@ void redisDb::dbOverwriteCore(redisDb::iter itr, robj *key, robj *val, bool fUpd
     if (fUpdateMvcc) {
         if (val->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
             val = dupStringObject(val);
+#ifdef ENABLE_MVCC
         val->mvcc_tstamp = getMvccTstamp();
+#endif
     }
 
     if (g_pserver->lazyfree_lazy_server_del)
@@ -303,13 +309,15 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
         if (itr == nullptr)
             return (dbAddCore(db, key, val) == true);
 
+#ifdef ENABLE_MVCC
         robj *old = itr.val();
         if (old->mvcc_tstamp <= val->mvcc_tstamp)
         {
             db->dbOverwriteCore(itr, key, val, false, true);
             return true;
         }
-        
+#endif
+
         return false;
     }
     else
@@ -2471,7 +2479,9 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
                     sdsfree(strT);
                     dictAdd(m_pdict, keyNew, objNew);
                     serverAssert(objNew->getrefcount(std::memory_order_relaxed) == 1);
+#ifdef ENABLE_MVCC
                     serverAssert(objNew->mvcc_tstamp == itr.val()->mvcc_tstamp);
+#endif
                 }
             }
             else

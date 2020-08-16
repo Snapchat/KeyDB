@@ -571,11 +571,12 @@ void redisDbPersistentData::consolidate_snapshot()
 {
     aeAcquireLock();
     auto psnapshot = (m_pdbSnapshot != nullptr) ? m_spdbSnapshotHOLDER.get() : nullptr;
-    if (psnapshot == nullptr)
+    if (psnapshot == nullptr || psnapshot->snapshot_depth() == 0)
     {
         aeReleaseLock();
         return;
     }
+
     psnapshot->m_refCount++;    // ensure it's not free'd
     aeReleaseLock();
     psnapshot->consolidate_children(this, false /* fForce */);
@@ -648,7 +649,6 @@ void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *
 
     serverLog(LL_VERBOSE, "cleaned %d snapshots", snapshot_depth()-1);
     spdb->m_refCount = depth;
-    spdb->m_fConsolidated = true;
     // Drop our refs from this snapshot and its children
     psnapshotT = this;
     std::vector<redisDbPersistentDataSnapshot*> vecT;

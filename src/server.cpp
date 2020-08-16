@@ -5187,12 +5187,20 @@ sds genRedisInfoString(const char *section) {
     }
 
     if (allsections || defsections || !strcasecmp(section,"keydb")) {
+        // Compute the MVCC depth
+        int mvcc_depth = 0;
+        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+            mvcc_depth = std::max(mvcc_depth, g_pserver->db[idb]->snapshot_depth());
+        }
+
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, 
             "# KeyDB\r\n"
             "variant:pro\r\n"
-            "license_status:%s\r\n",
-            cserver.license_key ? "OK" : "Trial"
+            "license_status:%s\r\n"
+            "mvcc_depth:%d\r\n",
+            cserver.license_key ? "OK" : "Trial",
+            mvcc_depth
         );
     }
 

@@ -1425,7 +1425,7 @@ protected:
     static void gcDisposeSnapshot(redisDbPersistentDataSnapshot *psnapshot);
     int snapshot_depth() const;
     void consolidate_children(redisDbPersistentData *pdbPrimary, bool fForce);
-    void freeTombstoneObjects(int depth);
+    bool freeTombstoneObjects(int depth);
 
 public:
     bool FWillFreeChildDebug() const { return m_spdbSnapshotHOLDER != nullptr; }
@@ -2451,6 +2451,10 @@ struct redisServer {
     char *bio_cpulist; /* cpu affinity list of bio thread. */
     char *aof_rewrite_cpulist; /* cpu affinity list of aof rewrite process. */
     char *bgsave_cpulist; /* cpu affinity list of bgsave process. */
+
+    std::vector<dict*> vecdictLazyFree;
+    std::vector<robj*> vecobjLazyFree;
+    std::vector<std::vector<dictEntry*>> vecvecde;
 
     bool FRdbSaveInProgress() const { return rdbThreadVars.fRdbThreadActive; }
 };

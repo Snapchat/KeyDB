@@ -1097,8 +1097,10 @@ int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEn
 
     char szT[32];
 #ifdef ENABLE_MVCC
-    snprintf(szT, 32, "%" PRIu64, val->mvcc_tstamp);
-    if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szT) == -1) return -1;
+    if (g_pserver->fActiveReplica) {
+        snprintf(szT, 32, "%" PRIu64, val->mvcc_tstamp);
+        if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szT) == -1) return -1;
+    }
 #endif
 
     /* Save type, key, value */

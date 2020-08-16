@@ -1421,13 +1421,12 @@ class redisDbPersistentDataSnapshot : protected redisDbPersistentData
 {
     friend class redisDbPersistentData;
 protected:
-    bool m_fConsolidated = false;
     static void gcDisposeSnapshot(redisDbPersistentDataSnapshot *psnapshot);
-    int snapshot_depth() const;
     void consolidate_children(redisDbPersistentData *pdbPrimary, bool fForce);
     bool freeTombstoneObjects(int depth);
 
 public:
+    int snapshot_depth() const;
     bool FWillFreeChildDebug() const { return m_spdbSnapshotHOLDER != nullptr; }
 
     bool iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly = false, bool fCacheOnly = false) const;

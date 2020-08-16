@@ -233,17 +233,23 @@ void redisDbPersistentData::endSnapshotAsync(const redisDbPersistentDataSnapshot
     latencyAddSampleIfNeeded("end-snapshot-async-phase-2", latency);
 }
 
-void redisDbPersistentDataSnapshot::freeTombstoneObjects(int depth)
+bool redisDbPersistentDataSnapshot::freeTombstoneObjects(int depth)
 {
     if (m_pdbSnapshot == nullptr)
-        return;
+    {
+        serverAssert(dictSize(m_pdictTombstone) == 0);
+        return true;
+    }
 
-    const_cast<redisDbPersistentDataSnapshot*>(m_pdbSnapshot)->freeTombstoneObjects(depth+1);
+    bool fPrevResult = const_cast<redisDbPersistentDataSnapshot*>(m_pdbSnapshot)->freeTombstoneObjects(depth+1);
     if (m_pdbSnapshot->m_refCount != depth && (m_pdbSnapshot->m_refCount != (m_refCount+1)))
-        return;
+        return false;
     
     dictIterator *di = dictGetIterator(m_pdictTombstone);
     dictEntry *de;
+    std::vector<dictEntry*> vecdeFree;
+    vecdeFree.reserve(dictSize(m_pdictTombstone));
+    bool fAllCovered = true;
     while ((de = dictNext(di)) != nullptr)
     {
         dictEntry **dePrev = nullptr;
@@ -252,12 +258,28 @@ void redisDbPersistentDataSnapshot::freeTombstoneObjects(int depth)
         dictEntry *deObj = dictFindWithPrev(m_pdbSnapshot->m_pdict, key, (uint64_t)dictGetVal(de), &dePrev, &ht, !!sdsisshared(key));
         if (deObj != nullptr)
         {
-            decrRefCount((robj*)dictGetVal(deObj));
-            void *ptrSet = nullptr;
-            __atomic_store(&deObj->v.val, &ptrSet, __ATOMIC_RELAXED);
+            // Now unlink the DE
+            __atomic_store(dePrev, &deObj->next, __ATOMIC_RELEASE);
+            ht->used--;
+            vecdeFree.push_back(deObj);
+        }
+        else
+        {
+            fAllCovered = fPrevResult;
         }
     }
     dictReleaseIterator(di);
+
+    aeAcquireLock();
+    if (fAllCovered)
+    {
+        g_pserver->vecdictLazyFree.push_back(m_pdictTombstone);
+        m_pdictTombstone = dictCreate(&dbTombstoneDictType, nullptr);
+    }
+    g_pserver->vecvecde.emplace_back(std::move(vecdeFree));
+    aeReleaseLock();
+    
+    return fAllCovered;
 }
 
 void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psnapshot)
@@ -308,6 +330,8 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     // Stage 1 Loop through all the tracked deletes and remove them from the snapshot DB
     dictIterator *di = dictGetIterator(m_pdictTombstone);
     dictEntry *de;
+    m_spdbSnapshotHOLDER->m_pdict->iterators++;
+    std::vector<dictEntry*> vecde;
     while ((de = dictNext(di)) != NULL)
     {
         dictEntry **dePrev;
@@ -327,15 +351,15 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
         }
         
         // Delete the object from the source dict, we don't use dictDelete to avoid a second search
-        dictFreeKey(m_spdbSnapshotHOLDER->m_pdict, deSnapshot);
-        dictFreeVal(m_spdbSnapshotHOLDER->m_pdict, deSnapshot);
-        serverAssert(*dePrev == deSnapshot);
+        vecde.push_back(deSnapshot);
         *dePrev = deSnapshot->next;
-        zfree(deSnapshot);
         ht->used--;
     }
+    g_pserver->vecvecde.emplace_back(std::move(vecde));
+    m_spdbSnapshotHOLDER->m_pdict->iterators--;
     dictReleaseIterator(di);
-    dictEmpty(m_pdictTombstone, nullptr);
+    g_pserver->vecdictLazyFree.push_back(m_pdictTombstone);
+    m_pdictTombstone = dictCreate(&dbTombstoneDictType, nullptr);
 
     // Stage 2 Move all new keys to the snapshot DB
     dictMerge(m_spdbSnapshotHOLDER->m_pdict, m_pdict);

@@ -1420,6 +1420,9 @@ private:
 class redisDbPersistentDataSnapshot : protected redisDbPersistentData
 {
     friend class redisDbPersistentData;
+private:
+    bool iterate_threadsafe_core(std::function<bool(const char*, robj_roptr o)> &fn, bool fKeyOnly, bool fCacheOnly, bool fTop) const;
+
 protected:
     static void gcDisposeSnapshot(redisDbPersistentDataSnapshot *psnapshot);
     void consolidate_children(redisDbPersistentData *pdbPrimary, bool fForce);
@@ -2502,10 +2505,6 @@ struct redisServer {
     char *bio_cpulist; /* cpu affinity list of bio thread. */
     char *aof_rewrite_cpulist; /* cpu affinity list of aof rewrite process. */
     char *bgsave_cpulist; /* cpu affinity list of bgsave process. */
-
-    std::vector<dict*> vecdictLazyFree;
-    std::vector<robj*> vecobjLazyFree;
-    std::vector<std::vector<dictEntry*>> vecvecde;
 
     bool FRdbSaveInProgress() const { return rdbThreadVars.fRdbThreadActive; }
 };

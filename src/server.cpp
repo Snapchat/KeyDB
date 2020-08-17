@@ -2040,29 +2040,6 @@ void flushStorageWeak()
     }
 }
 
-void freeSnapshotLazyFreesAsync()
-{
-    aeAcquireLock();
-    std::vector<robj*> vecObjs = std::move(g_pserver->vecobjLazyFree);
-    std::vector<dict*> vecDicts = std::move(g_pserver->vecdictLazyFree);
-    std::vector<std::vector<dictEntry*>> vecvecde = std::move(g_pserver->vecvecde);
-    aeReleaseLock();
-    
-    for (auto &vecdeFree : vecvecde)
-    {
-        for (auto *de : vecdeFree)
-        {
-            dbDictType.keyDestructor(nullptr, dictGetKey(de));
-            dbDictType.valDestructor(nullptr, dictGetVal(de));
-            zfree(de);
-        }
-    }
-    for (robj *o : vecObjs)
-        decrRefCount(o);
-    for (dict *d : vecDicts)
-        dictRelease(d);
-}
-
 /* This is our timer interrupt, called g_pserver->hz times per second.
  * Here is where we do a number of things that need to be done asynchronously.
  * For instance:
@@ -2243,11 +2220,22 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                  CONFIG_BGSAVE_RETRY_DELAY ||
                  g_pserver->lastbgsave_status == C_OK))
             {
-                serverLog(LL_NOTICE,"%d changes in %d seconds. Saving...",
-                    sp->changes, (int)sp->seconds);
-                rdbSaveInfo rsi, *rsiptr;
-                rsiptr = rdbPopulateSaveInfo(&rsi);
-                rdbSaveBackground(rsiptr);
+                // Ensure rehashing is complete
+                bool fRehashInProgress = false;
+                if (g_pserver->activerehashing) {
+                    for (int idb = 0; idb < cserver.dbnum && !fRehashInProgress; ++idb) {
+                        if (g_pserver->db[idb]->FRehashing())
+                            fRehashInProgress = true;
+                    }
+                }
+
+                if (!fRehashInProgress) {
+                    serverLog(LL_NOTICE,"%d changes in %d seconds. Saving...",
+                        sp->changes, (int)sp->seconds);
+                    rdbSaveInfo rsi, *rsiptr;
+                    rsiptr = rdbPopulateSaveInfo(&rsi);
+                    rdbSaveBackground(rsiptr);
+                }
                 break;
             }
         }
@@ -2337,15 +2325,13 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     run_with_period(100) {
-        bool fAsyncFrees = g_pserver->vecobjLazyFree.size() || g_pserver->vecdictLazyFree.size() || g_pserver->vecvecde.size();
         bool fAnySnapshots = false;
-        for (int idb = 0; idb < cserver.dbnum && !fAnySnapshots && !fAsyncFrees; ++idb)
+        for (int idb = 0; idb < cserver.dbnum && !fAnySnapshots; ++idb)
             fAnySnapshots = fAnySnapshots || g_pserver->db[0]->FSnapshot();
-        if (fAnySnapshots || fAsyncFrees)
+        if (fAnySnapshots)
         {
-            g_pserver->asyncworkqueue->AddWorkFunction([fAsyncFrees]{
+            g_pserver->asyncworkqueue->AddWorkFunction([]{
                 g_pserver->db[0]->consolidate_snapshot();
-                freeSnapshotLazyFreesAsync();
             }, true /*HiPri*/);
         }
     }
@@ -6084,7 +6070,6 @@ int main(int argc, char **argv) {
     serverAssert(fLockAcquired);
 
     g_pserver->garbageCollector.shutdown();
-    freeSnapshotLazyFreesAsync();
     delete g_pserver->m_pstorageFactory;
 
     return 0;

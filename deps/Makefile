@@ -1,6 +1,7 @@
 # Redis dependency Makefile
 
 uname_S:= $(shell sh -c 'uname -s 2>/dev/null || echo not')
+uname_M := $(shell sh -c 'uname -m 2>/dev/null || echo not')
 
 CCCOLOR="\033[34m"
 LINKCOLOR="\033[34;1m"
@@ -94,6 +95,10 @@ jemalloc: .make-prerequisites
 
 rocksdb: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+ifeq ($(uname_M),x86_64)
 	cd rocksdb && PORTABLE=1 USE_SSE=1 FORCE_SSE42=1 $(MAKE) static_lib
+else
+	cd rocksdb && PORTABLE=1 $(MAKE) static_lib
+endif
 
 .PHONY: rocksdb

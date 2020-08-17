@@ -1387,14 +1387,14 @@ dictType dbDictType = {
     dictObjectDestructor   /* val destructor */
 };
 
-/* db->pdict, keys are sds strings, vals uints. */
-dictType dbDictTypeTombstone = {
+/* db->pdict, keys are sds strings, vals are Redis objects. */
+dictType dbTombstoneDictType = {
     dictSdsHash,                /* hash function */
     NULL,                       /* key dup */
     NULL,                       /* val dup */
     dictSdsKeyCompare,          /* key compare */
-    dictDbKeyDestructor,          /* key destructor */
-    NULL   /* val destructor */
+    dictDbKeyDestructor,        /* key destructor */
+    NULL                        /* val destructor */
 };
 
 dictType dbSnapshotDictType = {
@@ -1539,8 +1539,9 @@ void tryResizeHashTables(int dbid) {
  * is returned. */
 int redisDbPersistentData::incrementallyRehash() {
     /* Keys dictionary */
-    if (dictIsRehashing(m_pdict)) {
+    if (dictIsRehashing(m_pdict) || dictIsRehashing(m_pdictTombstone)) {
         dictRehashMilliseconds(m_pdict,1);
+        dictRehashMilliseconds(m_pdictTombstone,1);
         return 1; /* already used our millisecond for this loop... */
     }
     return 0;
@@ -2219,11 +2220,22 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                  CONFIG_BGSAVE_RETRY_DELAY ||
                  g_pserver->lastbgsave_status == C_OK))
             {
-                serverLog(LL_NOTICE,"%d changes in %d seconds. Saving...",
-                    sp->changes, (int)sp->seconds);
-                rdbSaveInfo rsi, *rsiptr;
-                rsiptr = rdbPopulateSaveInfo(&rsi);
-                rdbSaveBackground(rsiptr);
+                // Ensure rehashing is complete
+                bool fRehashInProgress = false;
+                if (g_pserver->activerehashing) {
+                    for (int idb = 0; idb < cserver.dbnum && !fRehashInProgress; ++idb) {
+                        if (g_pserver->db[idb]->FRehashing())
+                            fRehashInProgress = true;
+                    }
+                }
+
+                if (!fRehashInProgress) {
+                    serverLog(LL_NOTICE,"%d changes in %d seconds. Saving...",
+                        sp->changes, (int)sp->seconds);
+                    rdbSaveInfo rsi, *rsiptr;
+                    rsiptr = rdbPopulateSaveInfo(&rsi);
+                    rdbSaveBackground(rsiptr);
+                }
                 break;
             }
         }
@@ -2312,14 +2324,16 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         }
     }
 
-    bool fAnySnapshots = false;
-    for (int idb = 0; idb < cserver.dbnum && !fAnySnapshots; ++idb)
-        fAnySnapshots = fAnySnapshots || g_pserver->db[0]->FSnapshot();
-    if (fAnySnapshots)  
-    {
-        g_pserver->asyncworkqueue->AddWorkFunction([]{
-            g_pserver->db[0]->consolidate_snapshot();
-        }, true /*HiPri*/);
+    run_with_period(100) {
+        bool fAnySnapshots = false;
+        for (int idb = 0; idb < cserver.dbnum && !fAnySnapshots; ++idb)
+            fAnySnapshots = fAnySnapshots || g_pserver->db[0]->FSnapshot();
+        if (fAnySnapshots)
+        {
+            g_pserver->asyncworkqueue->AddWorkFunction([]{
+                g_pserver->db[0]->consolidate_snapshot();
+            }, true /*HiPri*/);
+        }
     }
     
     /* Fire the cron loop modules event. */
@@ -2477,17 +2491,17 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     latencyAddSampleIfNeeded("storage-commit", commit_latency);
     
     handleClientsWithPendingWrites(iel, aof_state);
-    if (serverTL->gcEpoch != 0)
+    if (!serverTL->gcEpoch.isReset())
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);
-    serverTL->gcEpoch = 0;
+    serverTL->gcEpoch.reset();
     aeAcquireLock();
 
     /* Close clients that need to be closed asynchronous */
     freeClientsInAsyncFreeQueue(iel);
 
-    if (serverTL->gcEpoch != 0)
+    if (!serverTL->gcEpoch.isReset())
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);
-    serverTL->gcEpoch = 0;
+    serverTL->gcEpoch.reset();
 
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
@@ -2503,7 +2517,7 @@ void afterSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
     if (moduleCount()) moduleAcquireGIL(TRUE /*fServerThread*/);
 
-    serverAssert(serverTL->gcEpoch == 0);
+    serverAssert(serverTL->gcEpoch.isReset());
     serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
     aeAcquireLock();
     for (int idb = 0; idb < cserver.dbnum; ++idb)
@@ -5159,12 +5173,20 @@ sds genRedisInfoString(const char *section) {
     }
 
     if (allsections || defsections || !strcasecmp(section,"keydb")) {
+        // Compute the MVCC depth
+        int mvcc_depth = 0;
+        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+            mvcc_depth = std::max(mvcc_depth, g_pserver->db[idb]->snapshot_depth());
+        }
+
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, 
             "# KeyDB\r\n"
             "variant:pro\r\n"
-            "license_status:%s\r\n",
-            cserver.license_key ? "OK" : "Trial"
+            "license_status:%s\r\n"
+            "mvcc_depth:%d\r\n",
+            cserver.license_key ? "OK" : "Trial",
+            mvcc_depth
         );
     }
 

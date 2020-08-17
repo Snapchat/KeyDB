@@ -46,7 +46,9 @@ robj *createObject(int type, void *ptr) {
     o->encoding = OBJ_ENCODING_RAW;
     o->m_ptr = ptr;
     o->setrefcount(1);
+#ifdef ENABLE_MVCC
     o->mvcc_tstamp = OBJ_MVCC_INVALID;
+#endif
 
     /* Set the LRU to the current lruclock (minutes resolution), or
      * alternatively the LFU counter. */
@@ -92,6 +94,7 @@ robj *createRawStringObject(const char *ptr, size_t len) {
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
 robj *createEmbeddedStringObject(const char *ptr, size_t len) {
+    serverAssert(len <= UINT8_MAX);
     size_t allocsize = sizeof(struct sdshdr8)+len+1;
     if (allocsize < sizeof(void*))
         allocsize = sizeof(void*);
@@ -101,7 +104,9 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     o->type = OBJ_STRING;
     o->encoding = OBJ_ENCODING_EMBSTR;
     o->setrefcount(1);
+#ifdef ENABLE_MVCC
     o->mvcc_tstamp = OBJ_MVCC_INVALID;
+#endif
 
     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
@@ -129,7 +134,12 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
  *
  * The current limit of 52 is chosen so that the biggest string object
  * we allocate as EMBSTR will still fit into the 64 byte arena of jemalloc. */
+#ifdef ENABLE_MVCC
 #define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 48
+#else
+#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 56
+#endif
+
 static_assert((sizeof(redisObject)+OBJ_ENCODING_EMBSTR_SIZE_LIMIT-8) == 64, "Max EMBSTR obj should be 64 bytes total");
 robj *createStringObject(const char *ptr, size_t len) {
     if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT)
@@ -1316,10 +1326,12 @@ NULL
          * because we update the access time only
          * when the key is read or overwritten. */
         addReplyLongLong(c,LFUDecrAndReturn(o.unsafe_robjcast()));
+#ifdef ENABLE_MVCC
     } else if (!strcasecmp(szFromObj(c->argv[1]), "lastmodified") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
                 == nullptr) return;
         addReplyLongLong(c, (g_pserver->mstime - (o->mvcc_tstamp >> MVCC_MS_SHIFT)) / 1000);
+#endif
     } else {
         addReplySubcommandSyntaxError(c);
     }
@@ -1579,9 +1591,11 @@ robj *deserializeStoredObjectCore(const void *data, size_t cb)
                     decrRefCount(auxkey);
                     goto eoferr;
                 }
+#ifdef ENABLE_MVCC
                 if (strcasecmp(szFromObj(auxkey), "mvcc-tstamp") == 0) {
                     obj->mvcc_tstamp = strtoull(szFromObj(auxval), nullptr, 10);
                 }
+#endif
                 decrRefCount(auxkey);
                 decrRefCount(auxval);
             }

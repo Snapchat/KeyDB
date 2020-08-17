@@ -62,7 +62,10 @@ bool redisDbPersistentData::asyncDelete(robj *key) {
     dictEntry *de = dictUnlink(m_pdict,ptrFromObj(key));
     if (de) {
         if (m_pdbSnapshot != nullptr && m_pdbSnapshot->find_cached_threadsafe(szFromObj(key)) != nullptr)
-            dictAdd(m_pdictTombstone, sdsdup((sds)dictGetKey(de)), nullptr);
+        {
+            uint64_t hash = dictGetHash(m_pdict, szFromObj(key));
+            dictAdd(m_pdictTombstone, sdsdup((sds)dictGetKey(de)), (void*)hash);
+        }
 
         robj *val = (robj*)dictGetVal(de);
         if (val->FExpires())

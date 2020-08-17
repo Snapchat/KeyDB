@@ -91,7 +91,9 @@ static robj* lookupKey(redisDb *db, robj *key, int flags) {
         robj *val = itr.val();
         lookupKeyUpdateObj(val, flags);
         if (flags & LOOKUP_UPDATEMVCC) {
+#ifdef ENABLE_MVCC
             val->mvcc_tstamp = getMvccTstamp();
+#endif
             db->trackkey(key, true /* fUpdate */);
         }
         return val;
@@ -218,8 +220,10 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
 bool dbAddCore(redisDb *db, robj *key, robj *val, bool fAssumeNew = false) {
     serverAssert(!val->FExpires());
     sds copy = sdsdupshared(szFromObj(key));
+#ifdef ENABLE_MVCC
     if (g_pserver->fActiveReplica)
         val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
+#endif
 
     bool fInserted = db->insert(copy, val, fAssumeNew);
 
@@ -270,7 +274,9 @@ void redisDb::dbOverwriteCore(redisDb::iter itr, robj *key, robj *val, bool fUpd
     if (fUpdateMvcc) {
         if (val->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
             val = dupStringObject(val);
+#ifdef ENABLE_MVCC
         val->mvcc_tstamp = getMvccTstamp();
+#endif
     }
 
     if (g_pserver->lazyfree_lazy_server_del)
@@ -303,13 +309,15 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
         if (itr == nullptr)
             return (dbAddCore(db, key, val) == true);
 
+#ifdef ENABLE_MVCC
         robj *old = itr.val();
         if (old->mvcc_tstamp <= val->mvcc_tstamp)
         {
             db->dbOverwriteCore(itr, key, val, false, true);
             return true;
         }
-        
+#endif
+
         return false;
     }
     else
@@ -330,6 +338,7 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
  * The client 'c' argument may be set to NULL if the operation is performed
  * in a context where there is no clear client performing the operation. */
 void genericSetKey(client *c, redisDb *db, robj *key, robj *val, int keepttl, int signal) {
+    db->prepOverwriteForSnapshot(szFromObj(key));
     if (!dbAddCore(db, key, val)) {
         dbOverwrite(db, key, val, !keepttl);
     }
@@ -421,8 +430,9 @@ bool redisDbPersistentData::syncDelete(robj *key)
             auto itr = m_pdbSnapshot->find_cached_threadsafe(szFromObj(key));
             if (itr != nullptr)
             {
-                sds keyTombstone = sdsdup(szFromObj(key));
-                if (dictAdd(m_pdictTombstone, keyTombstone, nullptr) != DICT_OK)
+                sds keyTombstone = sdsdupshared(itr.key());
+                uint64_t hash = dictGetHash(m_pdict, keyTombstone);
+                if (dictAdd(m_pdictTombstone, keyTombstone, (void*)hash) != DICT_OK)
                     sdsfree(keyTombstone);
             }
         }
@@ -2290,7 +2300,7 @@ void redisDbPersistentData::initialize()
 {
     m_pdbSnapshot = nullptr;
     m_pdict = dictCreate(&dbDictType,this);
-    m_pdictTombstone = dictCreate(&dbDictType,this);
+    m_pdictTombstone = dictCreate(&dbTombstoneDictType,this);
     m_setexpire = new(MALLOC_LOCAL) expireset();
     m_fAllChanged = 0;
     m_fTrackingChanges = 0;
@@ -2347,6 +2357,24 @@ bool redisDbPersistentData::insert(char *key, robj *o, bool fAssumeNew)
         trackkey(key, false /* fUpdate */);
     }
     return (res == DICT_OK);
+}
+
+// This is a performance tool to prevent us copying over an object we're going to overwrite anyways
+void redisDbPersistentData::prepOverwriteForSnapshot(char *key)
+{
+    if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU)
+        return;
+
+    if (m_pdbSnapshot != nullptr)
+    {
+        auto itr = m_pdbSnapshot->find_cached_threadsafe(key);
+        if (itr.key() != nullptr)
+        {
+            sds keyNew = sdsdupshared(itr.key());
+            if (dictAdd(m_pdictTombstone, keyNew, (void*)dictHashKey(m_pdict, key)) != DICT_OK)
+                sdsfree(keyNew);
+        }
+    }
 }
 
 void redisDbPersistentData::tryResize()
@@ -2470,15 +2498,20 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
                     sdsfree(strT);
                     dictAdd(m_pdict, keyNew, objNew);
                     serverAssert(objNew->getrefcount(std::memory_order_relaxed) == 1);
+#ifdef ENABLE_MVCC
                     serverAssert(objNew->mvcc_tstamp == itr.val()->mvcc_tstamp);
+#endif
                 }
             }
             else
             {
                 dictAdd(m_pdict, keyNew, nullptr);
             }
-            *pde = dictFind(m_pdict, sdsKey);
-            dictAdd(m_pdictTombstone, sdsdupshared(itr.key()), nullptr);
+            uint64_t hash = dictGetHash(m_pdict, sdsKey);
+            dictEntry **deT;
+            dictht *ht;
+            *pde = dictFindWithPrev(m_pdict, sdsKey, hash, &deT, &ht);
+            dictAdd(m_pdictTombstone, sdsdupshared(itr.key()), (void*)hash);
         }
     }
     

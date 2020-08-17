@@ -877,7 +877,9 @@ typedef struct redisObject {
 private:
     mutable std::atomic<unsigned> refcount {0};
 public:
+#ifdef ENABLE_MVCC
     uint64_t mvcc_tstamp;
+#endif
     void *m_ptr;
 
     inline bool FExpires() const { return refcount.load(std::memory_order_relaxed) >> 31; }
@@ -888,7 +890,11 @@ public:
     void addref() const { refcount.fetch_add(1, std::memory_order_relaxed); }
     unsigned release() const { return refcount.fetch_sub(1, std::memory_order_seq_cst) & ~(1U << 31); }
 } robj;
+#ifdef ENABLE_MVCC
 static_assert(sizeof(redisObject) == 24, "object size is critical, don't increase");
+#else
+static_assert(sizeof(redisObject) == 16, "object size is critical, don't increase");
+#endif
 
 __attribute__((always_inline)) inline const void *ptrFromObj(robj_roptr &o)
 {
@@ -1320,6 +1326,9 @@ public:
     void setExpire(robj *key, robj *subkey, long long when);
     void setExpire(expireEntry &&e);
     void initialize();
+    void prepOverwriteForSnapshot(char *key);
+
+    bool FRehashing() const { return dictIsRehashing(m_pdict) || dictIsRehashing(m_pdictTombstone); }
 
     void setStorageProvider(StorageCache *pstorage);
 
@@ -1411,14 +1420,16 @@ private:
 class redisDbPersistentDataSnapshot : protected redisDbPersistentData
 {
     friend class redisDbPersistentData;
+private:
+    bool iterate_threadsafe_core(std::function<bool(const char*, robj_roptr o)> &fn, bool fKeyOnly, bool fCacheOnly, bool fTop) const;
+
 protected:
-    bool m_fConsolidated = false;
     static void gcDisposeSnapshot(redisDbPersistentDataSnapshot *psnapshot);
-    int snapshot_depth() const;
     void consolidate_children(redisDbPersistentData *pdbPrimary, bool fForce);
-    void freeTombstoneObjects(int depth);
+    bool freeTombstoneObjects(int depth);
 
 public:
+    int snapshot_depth() const;
     bool FWillFreeChildDebug() const { return m_spdbSnapshotHOLDER != nullptr; }
 
     bool iterate_threadsafe(std::function<bool(const char*, robj_roptr o)> fn, bool fKeyOnly = false, bool fCacheOnly = false) const;
@@ -1521,6 +1532,8 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::dictUnsafeKeyOnly;
     using redisDbPersistentData::resortExpire;
     using redisDbPersistentData::prefetchKeysAsync;
+    using redisDbPersistentData::prepOverwriteForSnapshot;
+    using redisDbPersistentData::FRehashing;
 
 public:
     expireset::setiter expireitr;
@@ -1949,6 +1962,58 @@ struct clusterState;
 #define MAX_EVENT_LOOPS 16
 #define IDX_EVENT_LOOP_MAIN 0
 
+class GarbageCollectorCollection
+{
+    GarbageCollector<redisDbPersistentDataSnapshot> garbageCollectorSnapshot;
+    GarbageCollector<ICollectable> garbageCollectorGeneric;
+
+public:
+    struct Epoch
+    {
+        uint64_t epochSnapshot = 0;
+        uint64_t epochGeneric = 0;
+
+        void reset() {
+            epochSnapshot = 0;
+            epochGeneric = 0;
+        }
+
+        bool isReset() const {
+            return epochSnapshot == 0 && epochGeneric == 0;
+        }
+    };
+
+    Epoch startEpoch()
+    {
+        Epoch e;
+        e.epochSnapshot = garbageCollectorSnapshot.startEpoch();
+        e.epochGeneric = garbageCollectorGeneric.startEpoch();
+        return e;
+    }
+
+    void endEpoch(Epoch e, bool fNoFree = false)
+    {
+        garbageCollectorSnapshot.endEpoch(e.epochSnapshot, fNoFree);
+        garbageCollectorGeneric.endEpoch(e.epochGeneric, fNoFree);
+    }
+
+    void shutdown()
+    {
+        garbageCollectorSnapshot.shutdown();
+        garbageCollectorGeneric.shutdown();
+    }
+
+    void enqueue(Epoch e, std::unique_ptr<redisDbPersistentDataSnapshot> &&sp)
+    {
+        garbageCollectorSnapshot.enqueue(e.epochSnapshot, std::move(sp));
+    }
+
+    void enqueue(Epoch e, std::unique_ptr<ICollectable> &&sp)
+    {
+        garbageCollectorGeneric.enqueue(e.epochGeneric, std::move(sp));
+    }
+};
+
 // Per-thread variabels that may be accessed without a lock
 struct redisServerThreadVars {
     aeEventLoop *el;
@@ -1970,7 +2035,7 @@ struct redisServerThreadVars {
     struct fastlock lockPendingWrite { "thread pending write" };
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     long unsigned commandsExecuted = 0;
-    uint64_t gcEpoch = 0;
+    GarbageCollectorCollection::Epoch gcEpoch;
     const redisDbPersistentDataSnapshot **rgdbSnapshot = nullptr;
     bool fRetrySetAofEvent = false;
 
@@ -2424,7 +2489,7 @@ struct redisServer {
     /* System hardware info */
     size_t system_memory_size;  /* Total memory in system as reported by OS */
 
-    GarbageCollector<redisDbPersistentDataSnapshot> garbageCollector;
+    GarbageCollectorCollection garbageCollector;
 
     IStorageFactory *m_pstorageFactory = nullptr;
     int storage_flush_period;   // The time between flushes in the CRON job
@@ -2553,7 +2618,7 @@ extern dictType zsetDictType;
 extern dictType clusterNodesDictType;
 extern dictType clusterNodesBlackListDictType;
 extern dictType dbDictType;
-extern dictType dbDictTypeTombstone;
+extern dictType dbTombstoneDictType;
 extern dictType dbSnapshotDictType;
 extern dictType shaScriptObjectDictType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;

@@ -3,6 +3,12 @@
 #include <assert.h>
 #include <unordered_set>
 
+struct ICollectable
+{
+    virtual ~ICollectable() {}
+    bool FWillFreeChildDebug() { return false; }
+};
+
 template<typename T>
 class GarbageCollector
 {

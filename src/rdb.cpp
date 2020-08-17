@@ -349,20 +349,24 @@ writeerr:
 }
 
 ssize_t rdbSaveLzfStringObject(rio *rdb, const unsigned char *s, size_t len) {
+    char rgbuf[2048];
     size_t comprlen, outlen;
-    void *out;
+    void *out = rgbuf;
 
     /* We require at least four bytes compression for this to be worth it */
     if (len <= 4) return 0;
     outlen = len-4;
-    if ((out = zmalloc(outlen+1, MALLOC_LOCAL)) == NULL) return 0;
+    if (outlen >= sizeof(rgbuf))
+        if ((out = zmalloc(outlen+1, MALLOC_LOCAL)) == NULL) return 0;
     comprlen = lzf_compress(s, len, out, outlen);
     if (comprlen == 0) {
-        zfree(out);
+        if (out != rgbuf)
+            zfree(out);
         return 0;
     }
     ssize_t nwritten = rdbSaveLzfBlob(rdb, out, comprlen, len);
-    zfree(out);
+    if (out != rgbuf)
+        zfree(out);
     return nwritten;
 }
 
@@ -1092,8 +1096,12 @@ int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEn
     }
 
     char szT[32];
-    snprintf(szT, 32, "%" PRIu64, val->mvcc_tstamp);
-    if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szT) == -1) return -1;
+#ifdef ENABLE_MVCC
+    if (g_pserver->fActiveReplica) {
+        snprintf(szT, 32, "%" PRIu64, val->mvcc_tstamp);
+        if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szT) == -1) return -1;
+    }
+#endif
 
     /* Save type, key, value */
     if (rdbSaveObjectType(rdb,val) == -1) return -1;
@@ -2131,7 +2139,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
         return NULL;
     }
 
+#ifdef ENABLE_MVCC
     o->mvcc_tstamp = mvcc_tstamp;
+#endif
     serverAssert(!o->FExpires());
     return o;
 }
@@ -2489,7 +2499,11 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             key = nullptr;
             goto eoferr;
         }
+#ifdef ENABLE_MVCC
         bool fStaleMvccKey = (rsi) ? val->mvcc_tstamp < rsi->mvccMinThreshold : false;
+#else
+        bool fStaleMvccKey = false;
+#endif
 
         /* Check if the key already expired. This function is used when loading
          * an RDB file from disk, either at startup, or when an RDB was

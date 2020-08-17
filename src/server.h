@@ -1959,6 +1959,58 @@ struct clusterState;
 #define MAX_EVENT_LOOPS 16
 #define IDX_EVENT_LOOP_MAIN 0
 
+class GarbageCollectorCollection
+{
+    GarbageCollector<redisDbPersistentDataSnapshot> garbageCollectorSnapshot;
+    GarbageCollector<ICollectable> garbageCollectorGeneric;
+
+public:
+    struct Epoch
+    {
+        uint64_t epochSnapshot = 0;
+        uint64_t epochGeneric = 0;
+
+        void reset() {
+            epochSnapshot = 0;
+            epochGeneric = 0;
+        }
+
+        bool isReset() const {
+            return epochSnapshot == 0 && epochGeneric == 0;
+        }
+    };
+
+    Epoch startEpoch()
+    {
+        Epoch e;
+        e.epochSnapshot = garbageCollectorSnapshot.startEpoch();
+        e.epochGeneric = garbageCollectorGeneric.startEpoch();
+        return e;
+    }
+
+    void endEpoch(Epoch e, bool fNoFree = false)
+    {
+        garbageCollectorSnapshot.endEpoch(e.epochSnapshot, fNoFree);
+        garbageCollectorGeneric.endEpoch(e.epochGeneric, fNoFree);
+    }
+
+    void shutdown()
+    {
+        garbageCollectorSnapshot.shutdown();
+        garbageCollectorGeneric.shutdown();
+    }
+
+    void enqueue(Epoch e, std::unique_ptr<redisDbPersistentDataSnapshot> &&sp)
+    {
+        garbageCollectorSnapshot.enqueue(e.epochSnapshot, std::move(sp));
+    }
+
+    void enqueue(Epoch e, std::unique_ptr<ICollectable> &&sp)
+    {
+        garbageCollectorGeneric.enqueue(e.epochGeneric, std::move(sp));
+    }
+};
+
 // Per-thread variabels that may be accessed without a lock
 struct redisServerThreadVars {
     aeEventLoop *el;
@@ -1980,7 +2032,7 @@ struct redisServerThreadVars {
     struct fastlock lockPendingWrite { "thread pending write" };
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     long unsigned commandsExecuted = 0;
-    uint64_t gcEpoch = 0;
+    GarbageCollectorCollection::Epoch gcEpoch;
     const redisDbPersistentDataSnapshot **rgdbSnapshot = nullptr;
     bool fRetrySetAofEvent = false;
 
@@ -2434,7 +2486,7 @@ struct redisServer {
     /* System hardware info */
     size_t system_memory_size;  /* Total memory in system as reported by OS */
 
-    GarbageCollector<redisDbPersistentDataSnapshot> garbageCollector;
+    GarbageCollectorCollection garbageCollector;
 
     IStorageFactory *m_pstorageFactory = nullptr;
     int storage_flush_period;   // The time between flushes in the CRON job

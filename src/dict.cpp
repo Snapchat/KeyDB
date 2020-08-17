@@ -179,6 +179,9 @@ int dictExpand(dict *d, unsigned long size)
 
 int dictMerge(dict *dst, dict *src)
 {
+#define MERGE_BLOCK_SIZE 4
+    dictEntry *rgdeT[MERGE_BLOCK_SIZE];
+
     assert(dst != src);
     if (dictSize(src) == 0)
         return DICT_OK;
@@ -197,6 +200,8 @@ int dictMerge(dict *dst, dict *src)
         std::swap(dst->iterators, src->iterators);
     }
 
+    src->rehashidx = -1;
+
     if (!dictIsRehashing(dst) && !dictIsRehashing(src))
     {
         if (dst->ht[0].size >= src->ht[0].size)
@@ -210,6 +215,50 @@ int dictMerge(dict *dst, dict *src)
         }
         _dictReset(&src->ht[0]);
         dst->rehashidx = 0;
+        assert(dictIsRehashing(dst));
+        assert((dictSize(src)+dictSize(dst)) == expectedSize);
+        return DICT_OK;
+    }
+
+    if (!dictIsRehashing(src) && dictSize(src) > 0 &&
+        (src->ht[0].size == dst->ht[0].size || src->ht[0].size == dst->ht[1].size))
+    {
+        auto &htDst = (src->ht[0].size == dst->ht[0].size) ? dst->ht[0] : dst->ht[1];
+
+        assert(src->ht[0].size == htDst.size);
+        for (size_t ide = 0; ide < src->ht[0].size; ide += MERGE_BLOCK_SIZE)
+        {
+            if (src->ht[0].used == 0)
+                break;
+
+            for (int dde = 0; dde < MERGE_BLOCK_SIZE; ++dde) {
+                rgdeT[dde] = src->ht[0].table[ide + dde];
+                src->ht[0].table[ide + dde] = nullptr;
+            }
+
+            for (;;) {
+                bool fAnyFound = false;
+                for (int dde = 0; dde < MERGE_BLOCK_SIZE; ++dde) {
+                    if (rgdeT[dde] == nullptr)
+                        continue;
+                    dictEntry *deNext = rgdeT[dde]->next;
+                    rgdeT[dde]->next = htDst.table[ide+dde];
+                    htDst.table[ide+dde] = rgdeT[dde];
+                    rgdeT[dde] = deNext;
+                    htDst.used++;
+                    src->ht[0].used--;
+
+                    fAnyFound = fAnyFound || (deNext != nullptr);
+                }
+
+                if (!fAnyFound)
+                    break;
+            }
+        }
+        // If we copied to the base hash table of a rehashing dst, reset the rehash
+        if (dictIsRehashing(dst) && src->ht[0].size == dst->ht[0].size)
+            dst->rehashidx = 0;
+        assert(dictSize(src) == 0);
         assert((dictSize(src)+dictSize(dst)) == expectedSize);
         return DICT_OK;
     }
@@ -218,10 +267,34 @@ int dictMerge(dict *dst, dict *src)
     auto &htDst = dictIsRehashing(dst) ? dst->ht[1] : dst->ht[0];
     for (int iht = 0; iht < 2; ++iht)
     {
-        for (size_t ide = 0; ide < src->ht[iht].size; ++ide)
+        for (size_t ide = 0; ide < src->ht[iht].size; ide += MERGE_BLOCK_SIZE)
         {
             if (src->ht[iht].used == 0)
                 break;
+
+            for (int dde = 0; dde < MERGE_BLOCK_SIZE; ++dde) {
+                rgdeT[dde] = src->ht[iht].table[ide + dde];
+                src->ht[iht].table[ide + dde] = nullptr;
+            }
+
+            for (;;) {
+                bool fAnyFound = false;
+                for (int dde = 0; dde < MERGE_BLOCK_SIZE; ++dde) {
+                    if (rgdeT[dde] == nullptr)
+                        continue;
+                    uint64_t h = dictHashKey(dst, rgdeT[dde]->key) & htDst.sizemask;
+                    dictEntry *deNext = rgdeT[dde]->next;
+                    rgdeT[dde]->next = htDst.table[h];
+                    htDst.table[h] = rgdeT[dde];
+                    rgdeT[dde] = deNext;
+                    htDst.used++;
+                    src->ht[iht].used--;
+                    fAnyFound = fAnyFound || (deNext != nullptr);
+                }
+                if (!fAnyFound)
+                    break;
+            }
+#if 0
             dictEntry *de = src->ht[iht].table[ide];
             src->ht[iht].table[ide] = nullptr;
             while (de != nullptr)
@@ -236,6 +309,7 @@ int dictMerge(dict *dst, dict *src)
                 de = deNext;
                 src->ht[iht].used--;
             }
+#endif
         }
     }
     assert((dictSize(src)+dictSize(dst)) == expectedSize);
@@ -326,7 +400,7 @@ int dictRehashMilliseconds(dict *d, int ms) {
 static void _dictRehashStep(dict *d) {
     unsigned long iterators;
     __atomic_load(&d->iterators, &iterators, __ATOMIC_RELAXED);
-    if (iterators == 0) dictRehash(d,1);
+    if (iterators == 0) dictRehash(d,2);
 }
 
 /* Add an element to the target hash table */
@@ -541,21 +615,20 @@ void dictRelease(dict *d)
     zfree(d);
 }
 
-dictEntry *dictFindWithPrev(dict *d, const void *key, dictEntry ***dePrevPtr, dictht **pht)
+dictEntry *dictFindWithPrev(dict *d, const void *key, uint64_t h, dictEntry ***dePrevPtr, dictht **pht, bool fShallowCompare)
 {
     dictEntry *he;
-    uint64_t h, idx, table;
+    uint64_t idx, table;
 
     if (dictSize(d) == 0) return NULL; /* dict is empty */
     if (dictIsRehashing(d)) _dictRehashStep(d);
-    h = dictHashKey(d, key);
     for (table = 0; table <= 1; table++) {
         *pht = d->ht + table;
         idx = h & d->ht[table].sizemask;
         he = d->ht[table].table[idx];
         *dePrevPtr = &d->ht[table].table[idx];
         while(he) {
-            if (key==he->key || dictCompareKeys(d, key, he->key)) {       
+            if (key==he->key || (!fShallowCompare && dictCompareKeys(d, key, he->key))) {
                 return he;
             }
             *dePrevPtr = &he->next;
@@ -570,7 +643,8 @@ dictEntry *dictFind(dict *d, const void *key)
 {
     dictEntry **deT;
     dictht *ht;
-    return dictFindWithPrev(d, key, &deT, &ht);
+    uint64_t h = dictHashKey(d, key);
+    return dictFindWithPrev(d, key, h, &deT, &ht);
 }
 
 void *dictFetchValue(dict *d, const void *key) {
@@ -1220,7 +1294,9 @@ void dictGetStats(char *buf, size_t bufsize, dict *d) {
 
 void dictForceRehash(dict *d)
 {
-    while (dictIsRehashing(d)) _dictRehashStep(d);
+    unsigned long iterators;
+    __atomic_load(&d->iterators, &iterators, __ATOMIC_RELAXED);
+    while (iterators == 0 && dictIsRehashing(d)) _dictRehashStep(d);
 }
 
 /* ------------------------------- Benchmark ---------------------------------*/

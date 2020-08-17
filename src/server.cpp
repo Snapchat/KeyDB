@@ -2505,17 +2505,17 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     latencyAddSampleIfNeeded("storage-commit", commit_latency);
     
     handleClientsWithPendingWrites(iel, aof_state);
-    if (serverTL->gcEpoch != 0)
+    if (!serverTL->gcEpoch.isReset())
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);
-    serverTL->gcEpoch = 0;
+    serverTL->gcEpoch.reset();
     aeAcquireLock();
 
     /* Close clients that need to be closed asynchronous */
     freeClientsInAsyncFreeQueue(iel);
 
-    if (serverTL->gcEpoch != 0)
+    if (!serverTL->gcEpoch.isReset())
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);
-    serverTL->gcEpoch = 0;
+    serverTL->gcEpoch.reset();
 
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
@@ -2531,7 +2531,7 @@ void afterSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
     if (moduleCount()) moduleAcquireGIL(TRUE /*fServerThread*/);
 
-    serverAssert(serverTL->gcEpoch == 0);
+    serverAssert(serverTL->gcEpoch.isReset());
     serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
     aeAcquireLock();
     for (int idb = 0; idb < cserver.dbnum; ++idb)

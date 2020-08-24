@@ -1554,7 +1554,7 @@ int redisDbPersistentData::incrementallyRehash() {
  * for dict.c to resize the hash tables accordingly to the fact we have o not
  * running childs. */
 void updateDictResizePolicy(void) {
-    if (!hasActiveChildProcess() || g_pserver->FRdbSaveInProgress())
+    if (!hasActiveChildProcess() || (g_pserver->FRdbSaveInProgress() && !cserver.fForkBgSave))
         dictEnableResize();
     else
         dictDisableResize();
@@ -1946,7 +1946,7 @@ void checkChildrenDone(void) {
     if (g_pserver->FRdbSaveInProgress() && g_pserver->rdb_pipe_conns)
         return;
 
-    if (g_pserver->FRdbSaveInProgress())
+    if (g_pserver->FRdbSaveInProgress() && !cserver.fForkBgSave)
     {
         void *rval = nullptr;
         int err;
@@ -1985,6 +1985,11 @@ void checkChildrenDone(void) {
                 strerror(errno),
                 (int) g_pserver->aof_child_pid,
                 (int) g_pserver->module_child_pid);
+        } else if (pid == g_pserver->rdb_child_pid) {
+            backgroundSaveDoneHandler(exitcode,bysignal == SIGUSR1);
+            g_pserver->rdbThreadVars.fRdbThreadCancel = false;
+            g_pserver->rdb_child_pid = -1;
+            if (exitcode == 0) receiveChildInfo();
         } else if (pid == g_pserver->aof_child_pid) {
             backgroundRewriteDoneHandler(exitcode,bysignal);
             if (!bysignal && exitcode == 0) receiveChildInfo();

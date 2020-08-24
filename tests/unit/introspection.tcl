@@ -101,6 +101,7 @@ start_server {tags {"introspection"}} {
             bgsave_cpulist
 	    storage-cache-mode
 	    storage-provider-options
+	    use-fork
         }
 
         set configs {}

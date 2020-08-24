@@ -1492,29 +1492,75 @@ void *rdbSaveThread(void *vargs)
     return (retval == C_OK) ? (void*)0 : (void*)1;
 }
 
+int rdbSaveBackgroundFork(rdbSaveInfo *rsi) {
+    pid_t childpid;
+
+    if (hasActiveChildProcess() || g_pserver->rdb_child_pid != -1) return C_ERR;
+    serverAssert(g_pserver->rdb_child_pid != 10000);
+
+    g_pserver->dirty_before_bgsave = g_pserver->dirty;
+    g_pserver->lastbgsave_try = time(NULL);
+    openChildInfoPipe();
+
+    if ((childpid = redisFork()) == 0) {
+        int retval;
+
+        /* Child */
+        g_pserver->rdb_child_pid = 10000;
+        redisSetProcTitle("keydb-rdb-bgsave");
+        redisSetCpuAffinity(g_pserver->bgsave_cpulist);
+        retval = rdbSave(nullptr, rsi);
+        if (retval == C_OK) {
+            sendChildCOWInfo(CHILD_INFO_TYPE_RDB, "RDB");
+        }
+        exitFromChild((retval == C_OK) ? 0 : 1);
+    } else {
+        /* Parent */
+        if (childpid == -1) {
+            closeChildInfoPipe();
+            g_pserver->lastbgsave_status = C_ERR;
+            serverLog(LL_WARNING,"Can't save in background: fork: %s",
+                strerror(errno));
+            return C_ERR;
+        }
+        serverLog(LL_NOTICE,"Background saving started by pid %d",childpid);
+        g_pserver->rdb_save_time_start = time(NULL);
+        g_pserver->rdb_child_pid = childpid;
+        g_pserver->rdb_child_type = RDB_CHILD_TYPE_DISK;
+        return C_OK;
+    }
+    return C_OK; /* unreached */
+}
+
 int launchRdbSaveThread(pthread_t &child, rdbSaveInfo *rsi)
 {
-    rdbSaveThreadArgs *args = (rdbSaveThreadArgs*)zmalloc(sizeof(rdbSaveThreadArgs) + ((cserver.dbnum-1)*sizeof(redisDbPersistentDataSnapshot*)), MALLOC_LOCAL);
-    rdbSaveInfo rsiT = RDB_SAVE_INFO_INIT;
-    if (rsi == nullptr)
-        rsi = &rsiT;
-    memcpy(&args->rsi, rsi, sizeof(rdbSaveInfo));
-    memcpy(&args->rsi.repl_id, g_pserver->replid, sizeof(g_pserver->replid));
-    args->rsi.master_repl_offset = g_pserver->master_repl_offset;
-        
-    for (int idb = 0; idb < cserver.dbnum; ++idb)
-        args->rgpdb[idb] = g_pserver->db[idb]->createSnapshot(getMvccTstamp(), false /* fOptional */);
-
-    g_pserver->rdbThreadVars.tmpfileNum++;
-    g_pserver->rdbThreadVars.fRdbThreadCancel = false;
-    if (pthread_create(&child, NULL, rdbSaveThread, args)) {
+    if (cserver.fForkBgSave) {
+        return rdbSaveBackgroundFork(rsi);
+    } else
+    {
+        rdbSaveThreadArgs *args = (rdbSaveThreadArgs*)zmalloc(sizeof(rdbSaveThreadArgs) + ((cserver.dbnum-1)*sizeof(redisDbPersistentDataSnapshot*)), MALLOC_LOCAL);
+        rdbSaveInfo rsiT = RDB_SAVE_INFO_INIT;
+        if (rsi == nullptr)
+            rsi = &rsiT;
+        memcpy(&args->rsi, rsi, sizeof(rdbSaveInfo));
+        memcpy(&args->rsi.repl_id, g_pserver->replid, sizeof(g_pserver->replid));
+        args->rsi.master_repl_offset = g_pserver->master_repl_offset;
+            
         for (int idb = 0; idb < cserver.dbnum; ++idb)
-            g_pserver->db[idb]->endSnapshot(args->rgpdb[idb]);
-        zfree(args);
-        return C_ERR;
+            args->rgpdb[idb] = g_pserver->db[idb]->createSnapshot(getMvccTstamp(), false /* fOptional */);
+
+        g_pserver->rdbThreadVars.tmpfileNum++;
+        g_pserver->rdbThreadVars.fRdbThreadCancel = false;
+        if (pthread_create(&child, NULL, rdbSaveThread, args)) {
+            for (int idb = 0; idb < cserver.dbnum; ++idb)
+                g_pserver->db[idb]->endSnapshot(args->rgpdb[idb]);
+            zfree(args);
+            return C_ERR;
+        }
     }
     return C_OK;
 }
+
 
 int rdbSaveBackground(rdbSaveInfo *rsi) {
     pthread_t child;
@@ -2743,18 +2789,26 @@ void backgroundSaveDoneHandler(int exitcode, bool fCancelled) {
  * the cleanup needed. */
 void killRDBChild(bool fSynchronous) {
     serverAssert(GlobalLocksAcquired());
-    g_pserver->rdbThreadVars.fRdbThreadCancel = true;
-    rdbRemoveTempFile(g_pserver->rdbThreadVars.tmpfileNum);
-    closeChildInfoPipe();
-    updateDictResizePolicy();
-    if (fSynchronous)
-    {
-        aeReleaseLock();
-        serverAssert(!GlobalLocksAcquired());
-        void *result;
-        int err = pthread_join(g_pserver->rdbThreadVars.rdb_child_thread, &result);
-        g_pserver->rdbThreadVars.fRdbThreadCancel = false;
-        aeAcquireLock();
+
+    if (cserver.fForkBgSave) {
+        kill(g_pserver->rdb_child_pid,SIGUSR1);
+        rdbRemoveTempFile(g_pserver->rdb_child_pid);
+        closeChildInfoPipe();
+        updateDictResizePolicy();
+    } else { 
+        g_pserver->rdbThreadVars.fRdbThreadCancel = true;
+        rdbRemoveTempFile(g_pserver->rdbThreadVars.tmpfileNum);
+        closeChildInfoPipe();
+        updateDictResizePolicy();
+        if (fSynchronous)
+        {
+            aeReleaseLock();
+            serverAssert(!GlobalLocksAcquired());
+            void *result;
+            int err = pthread_join(g_pserver->rdbThreadVars.rdb_child_thread, &result);
+            g_pserver->rdbThreadVars.fRdbThreadCancel = false;
+            aeAcquireLock();
+        }
     }
 }
 

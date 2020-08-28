@@ -4604,6 +4604,18 @@ int moduleUnblockClientByHandle(RedisModuleBlockedClient *bc, void *privdata) {
     return REDISMODULE_OK;
 }
 
+void RM_DisableClientAsync(RedisModuleCtx *ctx) {
+    ctx->client->postFunction([](client *c) {
+        connSetReadHandler(c->conn, nullptr, true);
+    });
+}
+
+void RM_EnableClientAsync(RedisModuleCtx *ctx) {
+    ctx->client->postFunction([](client *c) {
+        connSetReadHandler(c->conn, readQueryFromClient, true /* fThreadSafe */);
+    });
+}
+
 /* This API is used by the Redis core to unblock a client that was blocked
  * by a module. */
 void moduleUnblockClient(client *c) {

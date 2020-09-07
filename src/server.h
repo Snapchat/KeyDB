@@ -1572,6 +1572,7 @@ struct redisServerThreadVars {
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     long unsigned commandsExecuted = 0;
     bool fRetrySetAofEvent = false;
+    std::vector<client*> vecclientsProcess;
 };
 
 struct redisMaster {

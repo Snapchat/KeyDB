@@ -2185,6 +2185,7 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
 }
 
 extern int ProcessingEventsWhileBlocked;
+void processClients();
 
 /* This function gets called every time Redis is entering the
  * main loop of the event driven library, that is, before to sleep
@@ -2203,6 +2204,7 @@ extern int ProcessingEventsWhileBlocked;
 void beforeSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
     int iel = ielFromEventLoop(eventLoop);
+    processClients();
 
     /* Handle precise timeouts of blocked clients. */
     handleBlockedClientsTimeout();
@@ -2287,6 +2289,7 @@ void beforeSleepLite(struct aeEventLoop *eventLoop)
     
     /* Try to process pending commands for clients that were just unblocked. */
     aeAcquireLock();
+    processClients();
     if (listLength(g_pserver->rgthreadvar[iel].unblocked_clients)) {
         processUnblockedClients(iel);
     }

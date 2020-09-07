@@ -2460,14 +2460,26 @@ void readQueryFromClient(connection *conn) {
         return;
     }
 
-    /* There is more data in the client input buffer, continue parsing it
-     * in case to check if there is a full command to execute. */
-    processInputBuffer(c, CMD_CALL_FULL);
+    serverTL->vecclientsProcess.push_back(c);   
+}
+
+void processClients()
+{
+    aeAcquireLock();
+    for (client *c : serverTL->vecclientsProcess) {
+        /* There is more data in the client input buffer, continue parsing it
+        * in case to check if there is a full command to execute. */
+        std::unique_lock<fastlock> ul(c->lock);
+        processInputBuffer(c, CMD_CALL_FULL);
+    }
+
     if (listLength(serverTL->clients_pending_asyncwrite))
     {
-        aelock.arm(c);
         ProcessPendingAsyncWrites();
     }
+    aeReleaseLock();
+    
+    serverTL->vecclientsProcess.clear();
 }
 
 void getClientsMaxBuffers(unsigned long *longest_output_list,

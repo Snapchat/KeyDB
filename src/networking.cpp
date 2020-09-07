@@ -2460,7 +2460,7 @@ void readQueryFromClient(connection *conn) {
         return;
     }
 
-    serverTL->vecclientsProcess.push_back(c);   
+    serverTL->vecclientsProcess.push_back(c);
 }
 
 void processClients()

@@ -331,7 +331,7 @@ void lindexCommand(client *c) {
             addReplyBulk(c,value);
             decrRefCount(value);
         } else {
-            addReplyNull(c,shared.nullbulk);
+            addReplyNull(c);
         }
     } else {
         serverPanic("Unknown list encoding");

@@ -2855,7 +2855,7 @@ NULL
         if (c->name)
             addReplyBulk(c,c->name);
         else
-            addReplyNull(c, shared.nullbulk);
+            addReplyNull(c);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"pause") && c->argc == 3) {
         /* CLIENT PAUSE */
         long long duration;

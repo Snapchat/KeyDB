@@ -1373,7 +1373,7 @@ NULL
             }
         }
         if ((de = dictFind(c->db->pdict,ptrFromObj(c->argv[2]))) == NULL) {
-            addReplyNull(c, shared.nullbulk);
+            addReplyNull(c);
             return;
         }
         size_t usage = objectComputeSize((robj*)dictGetVal(de),samples);

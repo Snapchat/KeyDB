@@ -96,6 +96,26 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
             }
         }
     }
+
+    # Keep this test last since it muchs with the config
+    if [string equal $topology "mesh"] {
+    test "$topology_name quorum respected" {
+        $R(0) config set replica-serve-stale-data no
+
+        # No issues when all nodes are connected with default settings
+        $R(0) get testkey
+
+        # No issues when quorum is equal to the number of nodes
+        $R(0) config set replica-quorum 3
+        $R(0) get testkey
+
+        $R(0) config set replica-quorum 4
+        catch {
+            $R(0) get testkey
+        } e
+        assert_match {*MASTER is down*} $e
+    }
+    }
 }
 }
 }

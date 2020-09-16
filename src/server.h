@@ -1881,6 +1881,7 @@ struct redisServer {
     int repl_syncio_timeout; /* Timeout for synchronous I/O calls */
     int repl_disable_tcp_nodelay;   /* Disable TCP_NODELAY after SYNC? */
     int repl_serve_stale_data; /* Serve stale data when link is down? */
+    int repl_quorum;           /* For multimaster what do we consider a quorum? -1 means all master must be online */
     int repl_slave_ro;          /* Slave is read only? */
     int repl_slave_ignore_maxmemory;    /* If true slaves do not evict. */
     int slave_priority;             /* Reported in INFO and used by Sentinel. */

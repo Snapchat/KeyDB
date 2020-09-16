@@ -4007,12 +4007,20 @@ int FBrokenLinkToMaster()
     listNode *ln;
     listRewind(g_pserver->masters, &li);
 
+    int connected = 0;
     while ((ln = listNext(&li)))
     {
         redisMaster *mi = (redisMaster*)listNodeValue(ln);
-        if (mi->repl_state != REPL_STATE_CONNECTED)
-            return true;
+        if (mi->repl_state == REPL_STATE_CONNECTED)
+            ++connected;
     }
+
+    if (g_pserver->repl_quorum < 0) {
+        return connected < (int)listLength(g_pserver->masters);
+    } else {
+        return connected < g_pserver->repl_quorum;
+    }
+
     return false;
 }
 

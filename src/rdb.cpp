@@ -2059,7 +2059,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
  * needed to provide loading stats. */
 void startLoading(size_t size, int rdbflags) {
     /* Load the DB */
-    g_pserver->loading = 1;
+    g_pserver->loading = (rdbflags & RDBFLAGS_REPLICATION) ? LOADING_REPLICATION : LOADING_BOOT;
     g_pserver->loading_start_time = time(NULL);
     g_pserver->loading_loaded_bytes = 0;
     g_pserver->loading_total_bytes = size;

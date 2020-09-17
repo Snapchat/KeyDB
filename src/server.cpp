@@ -3849,8 +3849,12 @@ int processCommand(client *c, int callFlags) {
     /* Loading DB? Return an error if the command has not the
      * CMD_LOADING flag. */
     if (g_pserver->loading && !(c->cmd->flags & CMD_LOADING)) {
-        addReply(c, shared.loadingerr);
-        return C_OK;
+        /* Active Replicas can execute read only commands, and optionally write commands */
+        if (!(g_pserver->loading == LOADING_REPLICATION && g_pserver->fActiveReplica && ((c->cmd->flags & CMD_READONLY) || g_pserver->fWriteDuringActiveLoad)))
+        {
+            addReply(c, shared.loadingerr);
+            return C_OK;
+        }
     }
 
     /* Lua script too slow? Only allow a limited number of commands.
@@ -4490,7 +4494,7 @@ sds genRedisInfoString(const char *section) {
             "aof_last_cow_size:%zu\r\n"
             "module_fork_in_progress:%d\r\n"
             "module_fork_last_cow_size:%zu\r\n",
-            g_pserver->loading.load(std::memory_order_relaxed),
+            !!g_pserver->loading.load(std::memory_order_relaxed),   /* Note: libraries expect 1 or 0 here so coerce our enum */
             g_pserver->dirty,
             g_pserver->rdb_child_pid != -1,
             (intmax_t)g_pserver->lastsave,

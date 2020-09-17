@@ -4647,6 +4647,8 @@ sds genRedisInfoString(const char *section) {
                 FBrokenLinkToMaster() ? "down" : "up");
 
             int cmasters = 0;
+            listIter li;
+            listNode *ln;
             listRewind(g_pserver->masters, &li);
             while ((ln = listNext(&li)))
             {

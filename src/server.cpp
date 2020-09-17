@@ -4643,17 +4643,8 @@ sds genRedisInfoString(const char *section) {
             listLength(g_pserver->masters) == 0 ? "master" 
                 : g_pserver->fActiveReplica ? "active-replica" : "slave");
         if (listLength(g_pserver->masters)) {
-            listIter li;
-            listNode *ln;
-            listRewind(g_pserver->masters, &li);
-            bool fAllUp = true;
-            while ((ln = listNext(&li))) {
-                redisMaster *mi = (redisMaster*)listNodeValue(ln);
-                fAllUp = fAllUp && mi->repl_state == REPL_STATE_CONNECTED;
-            }
-
             info = sdscatprintf(info, "master_global_link_status:%s\r\n",
-                fAllUp ? "up" : "down");
+                FBrokenLinkToMaster() ? "down" : "up");
 
             int cmasters = 0;
             listRewind(g_pserver->masters, &li);

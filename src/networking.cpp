@@ -1264,9 +1264,10 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) 
 void acceptOnThread(connection *conn, int flags, char *cip)
 {
     int ielCur = ielFromEventLoop(serverTL->el);
+    bool fBootLoad = (g_pserver->loading == LOADING_BOOT);
 
     int ielTarget = 0;
-    if (g_pserver->loading)
+    if (fBootLoad)
     {
         ielTarget = IDX_EVENT_LOOP_MAIN;    // During load only the main thread is active
     }
@@ -1290,10 +1291,10 @@ void acceptOnThread(connection *conn, int flags, char *cip)
             szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
             memcpy(szT, cip, NET_IP_STR_LEN);
         }
-        int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [conn, flags, ielTarget, szT] {
+        int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [conn, flags, ielTarget, szT, fBootLoad] {
             connMarshalThread(conn);
             acceptCommonHandler(conn,flags,szT,ielTarget);
-            if (!g_fTestMode && !g_pserver->loading)
+            if (!g_fTestMode && !fBootLoad)
                 rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
             zfree(szT);
         });
@@ -1302,7 +1303,7 @@ void acceptOnThread(connection *conn, int flags, char *cip)
             return;
         // If res != AE_OK we can still try to accept on the local thread
     }
-    if (!g_fTestMode && !g_pserver->loading)
+    if (!g_fTestMode && !fBootLoad)
         rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
 
     aeAcquireLock();

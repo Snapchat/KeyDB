@@ -104,6 +104,9 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "endianconv.h"
 #include "crc64.h"
 
+#define LOADING_BOOT 1
+#define LOADING_REPLICATION 2
+
 extern int g_fTestMode;
 
 struct redisObject;
@@ -2002,6 +2005,7 @@ struct redisServer {
     int watchdog_period;  /* Software watchdog period in ms. 0 = off */
 
     int fActiveReplica;                          /* Can this replica also be a master? */
+    int fWriteDuringActiveLoad;                  /* Can this active-replica write during an RDB load? */
 
     // Format:
     //  Lower 20 bits: a counter incrementing for each command executed in the same millisecond

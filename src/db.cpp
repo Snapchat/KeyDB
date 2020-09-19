@@ -92,11 +92,9 @@ static robj *lookupKey(redisDb *db, robj *key, int flags) {
 
         updateDbValAccess(de, flags);
 
-#ifdef ENABLE_MVCC
         if (flags & LOOKUP_UPDATEMVCC) {
-            val->mvcc_tstamp = getMvccTstamp();
+            setMvccTstamp(val, getMvccTstamp());
         }
-#endif
         return val;
     } else {
         return NULL;
@@ -208,9 +206,9 @@ int dbAddCore(redisDb *db, robj *key, robj *val) {
     serverAssert(!val->FExpires());
     sds copy = sdsdup(szFromObj(key));
     int retval = dictAdd(db->pdict, copy, val);
-#ifdef ENABLE_MVCC
-    val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
-#endif
+    uint64_t mvcc = getMvccTstamp();
+    setMvccTstamp(key, mvcc);
+    setMvccTstamp(val, mvcc);
 
     if (retval == DICT_OK)
     {
@@ -260,9 +258,7 @@ void dbOverwriteCore(redisDb *db, dictEntry *de, robj *key, robj *val, bool fUpd
     if (fUpdateMvcc) {
         if (val->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
             val = dupStringObject(val);
-#ifdef ENABLE_MVCC
-        val->mvcc_tstamp = getMvccTstamp();
-#endif
+        setMvccTstamp(val, getMvccTstamp());
     }
 
     dictSetVal(db->pdict, de, val);
@@ -296,14 +292,12 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
         if (de == nullptr)
             return (dbAddCore(db, key, val) == DICT_OK);
 
-#ifdef ENABLE_MVCC
         robj *old = (robj*)dictGetVal(de);
-        if (old->mvcc_tstamp <= val->mvcc_tstamp)
+        if (mvccFromObj(old) <= mvccFromObj(val))
         {
             dbOverwriteCore(db, de, key, val, false, true);
             return true;
         }
-#endif
 
         return false;
     }
@@ -1494,7 +1488,6 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
 void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey)
 {
     robj *argv[3];
-    robj objT;
     redisCommand *cmd = nullptr;
     switch (type)
     {

@@ -1426,7 +1426,8 @@ int rewriteAppendOnlyFileRio(rio *aof) {
         /* Iterate this DB writing every entry */
         while((de = dictNext(di)) != NULL) {
             sds keystr;
-            robj key, *o;
+            redisObjectStack key;
+            robj *o = nullptr;
 
             keystr = (sds)dictGetKey(de);
             o = (robj*)dictGetVal(de);

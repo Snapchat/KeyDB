@@ -1089,10 +1089,10 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, expireEntry *pexpire) {
     }
 
     char szT[32];
-#ifdef ENABLE_MVCC
-    snprintf(szT, 32, "%" PRIu64, val->mvcc_tstamp);
-    if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szT) == -1) return -1;
-#endif
+    if (g_pserver->fActiveReplica) {
+        snprintf(szT, 32, "%" PRIu64, mvccFromObj(val));
+        if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szT) == -1) return -1;
+    }
 
     /* Save type, key, value */
     if (rdbSaveObjectType(rdb,val) == -1) return -1;
@@ -1146,7 +1146,7 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
 int saveKey(rio *rdb, redisDb *db, int flags, size_t *processed, const char *keystr, robj *o)
 {    
-    robj key;
+    redisObjectStack key;
 
     initStaticStringObject(key,(char*)keystr);
     expireEntry *pexpire = getExpire(db, &key);
@@ -1999,7 +1999,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
             exit(1);
         }
         RedisModuleIO io;
-        robj keyobj;
+        redisObjectStack keyobj;
         initStaticStringObject(keyobj,key);
         moduleInitIOContext(io,mt,rdb,&keyobj);
         io.ver = (rdbtype == RDB_TYPE_MODULE) ? 1 : 2;
@@ -2048,9 +2048,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
         return NULL;
     }
 
-#ifdef ENABLE_MVCC
-    o->mvcc_tstamp = mvcc_tstamp;
-#endif
+    setMvccTstamp(o, mvcc_tstamp);
     serverAssert(!o->FExpires());
     return o;
 }
@@ -2318,7 +2316,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                     }
                 }
                 else {
-                    redisObject keyobj;
+                    redisObjectStack keyobj;
                     initStaticStringObject(keyobj,key);
                     setExpire(NULL, db, &keyobj, subexpireKey, strtoll(szFromObj(auxval), nullptr, 10));
                     decrRefCount(subexpireKey);
@@ -2402,18 +2400,14 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             key = nullptr;
             goto eoferr;
         }
-#ifdef ENABLE_MVCC
-        bool fStaleMvccKey = (rsi) ? val->mvcc_tstamp < rsi->mvccMinThreshold : false;
-#else
-        bool fStaleMvccKey = false;
-#endif
+        bool fStaleMvccKey = (rsi) ? mvccFromObj(val) < rsi->mvccMinThreshold : false;
 
         /* Check if the key already expired. This function is used when loading
          * an RDB file from disk, either at startup, or when an RDB was
          * received from the master. In the latter case, the master is
          * responsible for key expiry. If we would expire keys here, the
          * snapshot taken by the master may not be reflected on the replica. */
-        robj keyobj;
+        redisObjectStack keyobj;
         initStaticStringObject(keyobj,key);
         bool fExpiredKey = iAmMaster() && !(rdbflags&RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now;
         if (fStaleMvccKey || fExpiredKey) {

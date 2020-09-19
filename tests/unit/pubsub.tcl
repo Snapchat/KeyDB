@@ -109,6 +109,7 @@ start_server {tags {"pubsub"}} {
         unsubscribe $rd1
         # Wait for a response to the unsub
         __consume_subscribe_messages $rd1 unsubscribe {chan1 chan2 chan3}
+	after 1
         assert_equal 0 [r publish chan1 hello]
         assert_equal 0 [r publish chan2 hello]
         assert_equal 0 [r publish chan3 hello]

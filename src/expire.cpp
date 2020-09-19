@@ -80,7 +80,7 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
     robj *val = (robj*)dictGetVal(de);
     int deleted = 0;
 
-    robj objKey;
+    redisObjectStack objKey;
     initStaticStringObject(objKey, (char*)e.key());
     bool fTtlChanged = false;
 
@@ -145,7 +145,7 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
             serverAssert(false);
         }
         
-        robj objSubkey;
+        redisObjectStack objSubkey;
         initStaticStringObject(objSubkey, (char*)pfat->nextExpireEntry().spsubkey.get());
         propagateSubkeyExpire(db, val->type, &objKey, &objSubkey);
         

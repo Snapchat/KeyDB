@@ -4654,46 +4654,50 @@ sds genRedisInfoString(const char *section) {
             {
                 long long slave_repl_offset = 1;
                 redisMaster *mi = (redisMaster*)listNodeValue(ln);
-                info = sdscatprintf(info, "Master %d: \r\n", cmasters);
-                ++cmasters;
 
                 if (mi->master)
                     slave_repl_offset = mi->master->reploff;
                 else if (mi->cached_master)
                     slave_repl_offset = mi->cached_master->reploff;
 
+                char master_prefix[128] = "";
+                if (cmasters != 0) {
+                    snprintf(master_prefix, sizeof(master_prefix), "_%d", cmasters);
+                }
+
                 info = sdscatprintf(info,
-                    "master_host:%s\r\n"
-                    "master_port:%d\r\n"
-                    "master_link_status:%s\r\n"
-                    "master_last_io_seconds_ago:%d\r\n"
-                    "master_sync_in_progress:%d\r\n"
+                    "master%s_host:%s\r\n"
+                    "master%s_port:%d\r\n"
+                    "master%s_link_status:%s\r\n"
+                    "master%s_last_io_seconds_ago:%d\r\n"
+                    "master%s_sync_in_progress:%d\r\n"
                     "slave_repl_offset:%lld\r\n"
-                    ,mi->masterhost,
-                    mi->masterport,
-                    (mi->repl_state == REPL_STATE_CONNECTED) ?
+                    ,master_prefix, mi->masterhost,
+                    master_prefix, mi->masterport,
+                    master_prefix, (mi->repl_state == REPL_STATE_CONNECTED) ?
                         "up" : "down",
-                    mi->master ?
+                    master_prefix, mi->master ?
                     ((int)(g_pserver->unixtime-mi->master->lastinteraction)) : -1,
-                    mi->repl_state == REPL_STATE_TRANSFER,
+                    master_prefix, mi->repl_state == REPL_STATE_TRANSFER,
                     slave_repl_offset
                 );
 
                 if (mi->repl_state == REPL_STATE_TRANSFER) {
                     info = sdscatprintf(info,
-                        "master_sync_left_bytes:%lld\r\n"
-                        "master_sync_last_io_seconds_ago:%d\r\n"
-                        , (long long)
+                        "master%s_sync_left_bytes:%lld\r\n"
+                        "master%s_sync_last_io_seconds_ago:%d\r\n"
+                        , master_prefix, (long long)
                             (mi->repl_transfer_size - mi->repl_transfer_read),
-                        (int)(g_pserver->unixtime-mi->repl_transfer_lastio)
+                        master_prefix, (int)(g_pserver->unixtime-mi->repl_transfer_lastio)
                     );
                 }
 
                 if (mi->repl_state != REPL_STATE_CONNECTED) {
                     info = sdscatprintf(info,
-                        "master_link_down_since_seconds:%jd\r\n",
-                        (intmax_t)g_pserver->unixtime-mi->repl_down_since);
+                        "master%s_link_down_since_seconds:%jd\r\n",
+                        master_prefix, (intmax_t)g_pserver->unixtime-mi->repl_down_since);
                 }
+                ++cmasters;
             }
             info = sdscatprintf(info,
                 "slave_priority:%d\r\n"

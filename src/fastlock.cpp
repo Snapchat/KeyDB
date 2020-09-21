@@ -35,7 +35,11 @@
 #include <sched.h>
 #include <atomic>
 #include <assert.h>
+#ifdef __FreeBSD__
+#include <pthread_np.h>
+#else
 #include <pthread.h>
+#endif
 #include <limits.h>
 #include <map>
 #ifdef __linux__
@@ -167,7 +171,12 @@ extern "C" pid_t gettid()
 #else
 	if (pidCache == -1) {
 		uint64_t tidT;
+#ifdef __FreeBSD__
+// Check https://github.com/ClickHouse/ClickHouse/commit/8d51824ddcb604b6f179a0216f0d32ba5612bd2e
+                tidT = pthread_getthreadid_np();
+#else
 		pthread_threadid_np(nullptr, &tidT);
+#endif
 		serverAssert(tidT < UINT_MAX);
 		pidCache = (int)tidT;
 	}

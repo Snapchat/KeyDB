@@ -343,7 +343,9 @@ extern "C" void fastlock_lock(struct fastlock *lock)
     unsigned myticket = __atomic_fetch_add(&lock->m_ticket.m_avail, 1, __ATOMIC_RELEASE);
     unsigned cloops = 0;
     ticket ticketT;
-    unsigned loopLimit = g_fHighCpuPressure ? 0x10000 : 0x100000;
+    int fHighPressure;
+    __atomic_load(&g_fHighCpuPressure, &fHighPressure, __ATOMIC_RELAXED);
+    unsigned loopLimit = fHighPressure ? 0x10000 : 0x100000;
 
     for (;;)
     {
@@ -478,16 +480,19 @@ void fastlock_auto_adjust_waits()
 {
 #ifdef __linux__
     struct sysinfo sysinf;
-    auto fHighPressurePrev = g_fHighCpuPressure;
+    int fHighPressurePrev, fHighPressureNew;
+    __atomic_load(&g_fHighCpuPressure, &fHighPressurePrev, __ATOMIC_RELAXED);
+    fHighPressureNew = fHighPressurePrev;
     memset(&sysinf, 0, sizeof sysinf);
     if (!sysinfo(&sysinf)) {
         auto avgCoreLoad = sysinf.loads[0] / get_nprocs();
-        g_fHighCpuPressure = (avgCoreLoad > ((1 << SI_LOAD_SHIFT) * 0.9));
-        if (g_fHighCpuPressure)
+        int fHighPressureNew = (avgCoreLoad > ((1 << SI_LOAD_SHIFT) * 0.9));
+        __atomic_store(&g_fHighCpuPressure, &fHighPressureNew, __ATOMIC_RELEASE);
+        if (fHighPressureNew)
             serverLog(!fHighPressurePrev ?  3 /*LL_WARNING*/ : 1 /* LL_VERBOSE */, "NOTICE: Detuning locks due to high load per core: %.2f%%", avgCoreLoad / (double)(1 << SI_LOAD_SHIFT)*100.0);
     }
 
-    if (!g_fHighCpuPressure && fHighPressurePrev) {
+    if (!fHighPressureNew && fHighPressurePrev) {
         serverLog(3 /*LL_WARNING*/, "NOTICE: CPU pressure reduced");
     }
 #else

@@ -1395,7 +1395,7 @@ void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when) 
         db->setexpire->insert(e);
     }
 
-    int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
+    int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0 && !g_pserver->fActiveReplica;
     if (c && writable_slave && !(c->flags & CLIENT_MASTER))
         rememberSlaveKeyWithExpire(db,key);
 }
@@ -1432,7 +1432,7 @@ void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
     ((robj*)dictGetVal(kde))->SetFExpires(true);
 
 
-    int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
+    int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0 && !g_pserver->fActiveReplica;
     if (c && writable_slave && !(c->flags & CLIENT_MASTER))
         rememberSlaveKeyWithExpire(db,key);
 }

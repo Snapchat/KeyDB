@@ -1371,6 +1371,7 @@ struct redisMaster {
     char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid. */
     long long master_initial_offset;           /* Master PSYNC offset. */
 
+    bool isActive = false;
     int repl_state;          /* Replication status if the instance is a replica */
     off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
     off_t repl_transfer_read; /* Amount of RDB read from master during sync. */

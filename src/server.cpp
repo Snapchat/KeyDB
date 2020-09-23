@@ -1735,6 +1735,18 @@ void clientsCron(int iel) {
     freeClientsInAsyncFreeQueue(iel);
 }
 
+bool expireOwnKeys()
+{
+    if (iAmMaster()) {
+        return true;
+    } else if (!g_pserver->fActiveReplica && (listLength(g_pserver->masters) == 1)) {
+        redisMaster *mi = (redisMaster*)listNodeValue(listFirst(g_pserver->masters));
+        if (mi->isActive)
+            return true;
+    }
+    return false;
+}
+
 /* This function handles 'background' operations we are required to do
  * incrementally in Redis databases, such as active key expiring, resizing,
  * rehashing. */
@@ -1742,7 +1754,7 @@ void databasesCron(void) {
     /* Expire keys by random sampling. Not required for slaves
      * as master will synthesize DELs for us. */
     if (g_pserver->active_expire_enabled) {
-        if (iAmMaster()) {
+        if (expireOwnKeys()) {
             activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
         } else {
             expireSlaveKeys();
@@ -2461,6 +2473,7 @@ void initMasterInfo(redisMaster *master)
     master->cached_master = NULL;
     master->master_initial_offset = -1;
     
+    master->isActive = false;
 
     master->repl_state = REPL_STATE_NONE;
     master->repl_down_since = 0; /* Never connected, repl is down since EVER. */
@@ -3551,7 +3564,7 @@ void call(client *c, int flags) {
             !(flags & CMD_CALL_PROPAGATE_AOF))
                 propagate_flags &= ~PROPAGATE_AOF;
 
-        if (c->cmd->flags & CMD_SKIP_PROPOGATE)
+        if ((c->cmd->flags & CMD_SKIP_PROPOGATE) && g_pserver->fActiveReplica)
             propagate_flags &= ~PROPAGATE_REPL;
 
         /* Call propagate() only if at least one of AOF / replication

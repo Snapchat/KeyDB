@@ -2260,7 +2260,7 @@ int processMultibulkBuffer(client *c) {
  * 1. The client is reset unless there are reasons to avoid doing it.
  * 2. In the case of master clients, the replication offset is updated.
  * 3. Propagate commands we got from our master to replicas down the line. */
-void commandProcessed(client *c) {
+void commandProcessed(client *c, int flags) {
     long long prev_offset = c->reploff;
     if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
         /* Update the applied replication offset of our master. */
@@ -2288,7 +2288,7 @@ void commandProcessed(client *c) {
             ae.arm(c);
         long long applied = c->reploff - prev_offset;
         if (applied) {
-            if (!g_pserver->fActiveReplica)
+            if (!g_pserver->fActiveReplica && (flags & CMD_CALL_PROPAGATE))
             {
                 replicationFeedSlavesFromMasterStream(g_pserver->slaves,
                     c->pending_querybuf, applied);
@@ -2312,7 +2312,7 @@ int processCommandAndResetClient(client *c, int flags) {
     serverAssert(GlobalLocksAcquired());
     
     if (processCommand(c, flags) == C_OK) {
-        commandProcessed(c);
+        commandProcessed(c, flags);
     }
     if (serverTL->current_client == NULL) deadclient = 1;
     serverTL->current_client = NULL;

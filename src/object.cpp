@@ -41,14 +41,15 @@
 /* ===================== Creation and parsing of objects ==================== */
 
 robj *createObject(int type, void *ptr) {
-    robj *o = (robj*)zcalloc(sizeof(*o), MALLOC_SHARED);
+    size_t mvccExtraBytes = g_pserver->fActiveReplica ? sizeof(redisObjectExtended) : 0;
+    char *oB = (char*)zcalloc(sizeof(robj)+mvccExtraBytes, MALLOC_SHARED);
+    robj *o = reinterpret_cast<robj*>(oB + mvccExtraBytes);
+    
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
     o->m_ptr = ptr;
     o->setrefcount(1);
-#ifdef ENABLE_MVCC
-    o->mvcc_tstamp = OBJ_MVCC_INVALID;
-#endif
+    setMvccTstamp(o, OBJ_MVCC_INVALID);
 
     /* Set the LRU to the current lruclock (minutes resolution), or
      * alternatively the LFU counter. */
@@ -98,15 +99,16 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     size_t allocsize = sizeof(struct sdshdr8)+len+1;
     if (allocsize < sizeof(void*))
         allocsize = sizeof(void*);
-    robj *o = (robj*)zcalloc(sizeof(robj)+allocsize-sizeof(o->m_ptr), MALLOC_SHARED);
+
+    size_t mvccExtraBytes = g_pserver->fActiveReplica ? sizeof(redisObjectExtended) : 0;
+    char *oB = (char*)zcalloc(sizeof(robj)+allocsize-sizeof(redisObject::m_ptr)+mvccExtraBytes, MALLOC_SHARED);
+    robj *o = reinterpret_cast<robj*>(oB + mvccExtraBytes);
     struct sdshdr8 *sh = (sdshdr8*)(&o->m_ptr);
 
     o->type = OBJ_STRING;
     o->encoding = OBJ_ENCODING_EMBSTR;
     o->setrefcount(1);
-#ifdef ENABLE_MVCC
-    o->mvcc_tstamp = OBJ_MVCC_INVALID;
-#endif
+    setMvccTstamp(o, OBJ_MVCC_INVALID);
 
     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
@@ -134,13 +136,8 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
  *
  * The current limit of 52 is chosen so that the biggest string object
  * we allocate as EMBSTR will still fit into the 64 byte arena of jemalloc. */
-#ifdef ENABLE_MVCC
-#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 48
-#else
-#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 56
-#endif
+#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 52
 
-static_assert((sizeof(redisObject)+OBJ_ENCODING_EMBSTR_SIZE_LIMIT-8) == 64, "Max EMBSTR obj should be 64 bytes total");
 robj *createStringObject(const char *ptr, size_t len) {
     if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT)
         return createEmbeddedStringObject(ptr,len);
@@ -400,7 +397,11 @@ void decrRefCount(robj_roptr o) {
         case OBJ_CRON: freeCronObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
-        zfree(o.unsafe_robjcast());
+        if (g_pserver->fActiveReplica) {
+            zfree(reinterpret_cast<redisObjectExtended*>(o.unsafe_robjcast())-1);
+        } else {
+            zfree(o.unsafe_robjcast());
+        }
     } else {
         if (prev <= 0) serverPanic("decrRefCount against refcount <= 0");
     }
@@ -1325,13 +1326,12 @@ NULL
          * in case of the key has not been accessed for a long time,
          * because we update the access time only
          * when the key is read or overwritten. */
-        addReplyLongLong(c,LFUDecrAndReturn(o.unsafe_robjcast()));
-#ifdef ENABLE_MVCC
+        addReplyLongLong(c,LFUDecrAndReturn(o));
     } else if (!strcasecmp(szFromObj(c->argv[1]), "lastmodified") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
                 == nullptr) return;
-        addReplyLongLong(c, (g_pserver->mstime - (o->mvcc_tstamp >> MVCC_MS_SHIFT)) / 1000);
-#endif
+        uint64_t mvcc = mvccFromObj(o);
+        addReplyLongLong(c, (g_pserver->mstime - (mvcc >> MVCC_MS_SHIFT)) / 1000);
     } else {
         addReplySubcommandSyntaxError(c);
     }
@@ -1374,7 +1374,7 @@ NULL
 
         auto itr = c->db->find(c->argv[2]);
         if (itr == nullptr) {
-            addReplyNull(c, shared.nullbulk);
+            addReplyNull(c);
             return;
         }
         size_t usage = objectComputeSize(itr.val(),samples);
@@ -1515,7 +1515,11 @@ void redisObject::setrefcount(unsigned ref)
 
 sds serializeStoredStringObject(sds str, robj_roptr o)
 {
+    uint64_t mvcc;
+    mvcc = mvccFromObj(o);
+    str = sdscatlen(str, &mvcc, sizeof(mvcc));
     str = sdscatlen(str, &(*o), sizeof(robj));
+    static_assert((sizeof(robj) + sizeof(mvcc)) == sizeof(redisObjectStack), "");
     switch (o->encoding)
     {
     case OBJ_ENCODING_RAW:
@@ -1539,31 +1543,34 @@ sds serializeStoredStringObject(sds str, robj_roptr o)
 
 robj *deserializeStoredStringObject(const char *data, size_t cb)
 {
-    const robj *oT = (const robj*)data;
+    uint64_t mvcc = *reinterpret_cast<const uint64_t*>(data);
+    const robj *oT = (const robj*)(data+sizeof(uint64_t));
     robj *newObject = nullptr;
     switch (oT->encoding)
     {
     case OBJ_ENCODING_INT:
-        serverAssert(cb == sizeof(robj));
-        [[fallthrough]];
+        newObject = createObject(OBJ_STRING, nullptr);
+        newObject->encoding = oT->encoding;
+        newObject->m_ptr = oT->m_ptr;
+        return newObject;
+
     case OBJ_ENCODING_EMBSTR:
-        newObject = (robj*)zmalloc(cb, MALLOC_LOCAL);
-        memcpy(newObject, data, cb);
-        newObject->SetFExpires(false);
-        newObject->setrefcount(1);
+        newObject = createEmbeddedStringObject(szFromObj(oT), sdslen(szFromObj(oT)));
         return newObject;
 
     case OBJ_ENCODING_RAW:
-        newObject = (robj*)zmalloc(sizeof(robj), MALLOC_SHARED);
-        memcpy(newObject, data, sizeof(robj));
-        newObject->m_ptr = sdsnewlen(SDS_NOINIT,cb-sizeof(robj));
-        memcpy(newObject->m_ptr, data+sizeof(robj), cb-sizeof(robj));
-        newObject->SetFExpires(false);
-        newObject->setrefcount(1);
+        newObject = createObject(OBJ_STRING, sdsnewlen(SDS_NOINIT,cb-sizeof(robj)-sizeof(uint64_t)));
+        newObject->lru = oT->lru;
+        memcpy(newObject->m_ptr, data+sizeof(robj)+sizeof(mvcc), cb-sizeof(robj)-sizeof(mvcc));
         return newObject;
+
+    default:
+        serverPanic("Unknown string object encoding from storage");
     }
-    serverPanic("Unknown string object encoding from storage");
-    return nullptr;
+    setMvccTstamp(newObject, mvcc);
+    newObject->setrefcount(1);
+
+    return newObject;
 }
 
 robj *deserializeStoredObjectCore(const void *data, size_t cb)
@@ -1591,11 +1598,9 @@ robj *deserializeStoredObjectCore(const void *data, size_t cb)
                     decrRefCount(auxkey);
                     goto eoferr;
                 }
-#ifdef ENABLE_MVCC
                 if (strcasecmp(szFromObj(auxkey), "mvcc-tstamp") == 0) {
-                    obj->mvcc_tstamp = strtoull(szFromObj(auxval), nullptr, 10);
+                    setMvccTstamp(obj, strtoull(szFromObj(auxval), nullptr, 10));
                 }
-#endif
                 decrRefCount(auxkey);
                 decrRefCount(auxval);
             }
@@ -1639,4 +1644,40 @@ sds serializeStoredObject(robj_roptr o, sds sdsPrefix)
             return (sds)rdb.io.buffer.ptr;
     }
     serverPanic("Attempting to store unknown object type");
+}
+
+redisObjectStack::redisObjectStack()
+{
+    // We need to ensure the Extended Object is first in the class layout
+    serverAssert(reinterpret_cast<ptrdiff_t>(static_cast<redisObject*>(this)) != reinterpret_cast<ptrdiff_t>(this));
+}
+
+void *allocPtrFromObj(robj_roptr o) {
+    if (g_pserver->fActiveReplica)
+        return reinterpret_cast<redisObjectExtended*>(o.unsafe_robjcast()) - 1;
+    return o.unsafe_robjcast();
+}
+
+robj *objFromAllocPtr(void *pv) {
+    if (g_pserver->fActiveReplica) {
+        return reinterpret_cast<robj*>(reinterpret_cast<redisObjectExtended*>(pv)+1);
+    } 
+    return reinterpret_cast<robj*>(pv);
+}
+
+uint64_t mvccFromObj(robj_roptr o)
+{
+    if (g_pserver->fActiveReplica) {
+        redisObjectExtended *oe = reinterpret_cast<redisObjectExtended*>(o.unsafe_robjcast()) - 1;
+        return oe->mvcc_tstamp;
+    }
+    return OBJ_MVCC_INVALID;
+}
+
+void setMvccTstamp(robj *o, uint64_t mvcc)
+{
+    if (!g_pserver->fActiveReplica)
+        return;
+    redisObjectExtended *oe = reinterpret_cast<redisObjectExtended*>(o) - 1;
+    oe->mvcc_tstamp = mvcc;
 }

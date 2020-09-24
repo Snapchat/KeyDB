@@ -55,7 +55,8 @@ bool replaceSateliteOSetKeyPtr(expireset &set, sds oldkey, sds newkey);
  * returns NULL in case the allocatoin wasn't moved.
  * when it returns a non-null value, the old pointer was already released
  * and should NOT be accessed. */
-void* activeDefragAlloc(void *ptr) {
+template<typename TPTR>
+TPTR* activeDefragAlloc(TPTR *ptr) {
     size_t size;
     void *newptr;
     if(!je_get_defrag_hint(ptr)) {
@@ -70,7 +71,14 @@ void* activeDefragAlloc(void *ptr) {
     newptr = zmalloc_no_tcache(size);
     memcpy(newptr, ptr, size);
     zfree_no_tcache(ptr);
-    return newptr;
+    return (TPTR*)newptr;
+}
+
+template<>
+robj* activeDefragAlloc(robj *o) {
+    void *pvSrc = allocPtrFromObj(o);
+    void *pvDst = activeDefragAlloc(pvSrc);
+    return objFromAllocPtr(pvDst);
 }
 
 /*Defrag helper for sds strings

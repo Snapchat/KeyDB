@@ -91,9 +91,7 @@ static robj* lookupKey(redisDb *db, robj *key, int flags) {
         robj *val = itr.val();
         lookupKeyUpdateObj(val, flags);
         if (flags & LOOKUP_UPDATEMVCC) {
-#ifdef ENABLE_MVCC
-            val->mvcc_tstamp = getMvccTstamp();
-#endif
+            setMvccTstamp(val, getMvccTstamp());
             db->trackkey(key, true /* fUpdate */);
         }
         return val;
@@ -220,10 +218,10 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
 bool dbAddCore(redisDb *db, robj *key, robj *val, bool fAssumeNew = false) {
     serverAssert(!val->FExpires());
     sds copy = sdsdupshared(szFromObj(key));
-#ifdef ENABLE_MVCC
-    if (g_pserver->fActiveReplica)
-        val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
-#endif
+    
+    uint64_t mvcc = getMvccTstamp();
+    setMvccTstamp(key, mvcc);
+    setMvccTstamp(val, mvcc);
 
     bool fInserted = db->insert(copy, val, fAssumeNew);
 
@@ -274,9 +272,7 @@ void redisDb::dbOverwriteCore(redisDb::iter itr, robj *key, robj *val, bool fUpd
     if (fUpdateMvcc) {
         if (val->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
             val = dupStringObject(val);
-#ifdef ENABLE_MVCC
-        val->mvcc_tstamp = getMvccTstamp();
-#endif
+        setMvccTstamp(val, getMvccTstamp());
     }
 
     if (g_pserver->lazyfree_lazy_server_del)
@@ -309,14 +305,12 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
         if (itr == nullptr)
             return (dbAddCore(db, key, val) == true);
 
-#ifdef ENABLE_MVCC
         robj *old = itr.val();
-        if (old->mvcc_tstamp <= val->mvcc_tstamp)
+        if (mvccFromObj(old) <= mvccFromObj(val))
         {
             db->dbOverwriteCore(itr, key, val, false, true);
             return true;
         }
-#endif
 
         return false;
     }
@@ -1635,7 +1629,7 @@ void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when) 
     /* Update the expire set */
     db->setExpire(key, subkey, when);
 
-    int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
+    int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0 && !g_pserver->fActiveReplica;
     if (c && writable_slave && !(c->flags & CLIENT_MASTER))
         rememberSlaveKeyWithExpire(db,key);
 }
@@ -1670,7 +1664,7 @@ void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
     kde.val()->SetFExpires(true);
 
 
-    int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
+    int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0 && !g_pserver->fActiveReplica;
     if (c && writable_slave && !(c->flags & CLIENT_MASTER))
         rememberSlaveKeyWithExpire(db,key);
 }
@@ -1724,7 +1718,6 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
 void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey)
 {
     robj *argv[3];
-    robj objT;
     redisCommand *cmd = nullptr;
     switch (type)
     {
@@ -2498,9 +2491,7 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
                     sdsfree(strT);
                     dictAdd(m_pdict, keyNew, objNew);
                     serverAssert(objNew->getrefcount(std::memory_order_relaxed) == 1);
-#ifdef ENABLE_MVCC
-                    serverAssert(objNew->mvcc_tstamp == itr.val()->mvcc_tstamp);
-#endif
+                    serverAssert(mvccFromObj(objNew) == mvccFromObj(itr.val()));
                 }
             }
             else

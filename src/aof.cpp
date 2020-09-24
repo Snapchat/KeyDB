@@ -1432,8 +1432,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
 
         /* Iterate this DB writing every entry */
         bool fComplete = db->iterate([&](const char *keystr, robj *o)->bool{
-            robj key;
-
+            redisObjectStack key;
             initStaticStringObject(key,(sds)keystr);
 
             /* Save the key and associated value */

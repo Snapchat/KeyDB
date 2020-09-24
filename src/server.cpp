@@ -1847,6 +1847,18 @@ void clientsCron(int iel) {
     freeClientsInAsyncFreeQueue(iel);
 }
 
+bool expireOwnKeys()
+{
+    if (iAmMaster()) {
+        return true;
+    } else if (!g_pserver->fActiveReplica && (listLength(g_pserver->masters) == 1)) {
+        redisMaster *mi = (redisMaster*)listNodeValue(listFirst(g_pserver->masters));
+        if (mi->isActive)
+            return true;
+    }
+    return false;
+}
+
 /* This function handles 'background' operations we are required to do
  * incrementally in Redis databases, such as active key expiring, resizing,
  * rehashing. */
@@ -1854,7 +1866,7 @@ void databasesCron(void) {
     /* Expire keys by random sampling. Not required for slaves
      * as master will synthesize DELs for us. */
     if (g_pserver->active_expire_enabled) {
-        if (iAmMaster()) {
+        if (expireOwnKeys()) {
             activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
         } else {
             expireSlaveKeys();
@@ -2383,6 +2395,7 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
 }
 
 extern int ProcessingEventsWhileBlocked;
+void processClients();
 
 /* This function gets called every time Redis is entering the
  * main loop of the event driven library, that is, before to sleep
@@ -2408,7 +2421,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     aeSetDontWait(eventLoop, tlsHasPendingData());
 
     aeAcquireLock();
-
+    processClients();
+    
     /* Handle precise timeouts of blocked clients. */
     handleBlockedClientsTimeout();
 
@@ -2669,6 +2683,7 @@ void initMasterInfo(redisMaster *master)
     master->cached_master = NULL;
     master->master_initial_offset = -1;
     
+    master->isActive = false;
 
     master->repl_state = REPL_STATE_NONE;
     master->repl_down_since = 0; /* Never connected, repl is down since EVER. */
@@ -3830,7 +3845,7 @@ void call(client *c, int flags) {
             !(flags & CMD_CALL_PROPAGATE_AOF))
                 propagate_flags &= ~PROPAGATE_AOF;
 
-        if (c->cmd->flags & CMD_SKIP_PROPOGATE)
+        if ((c->cmd->flags & CMD_SKIP_PROPOGATE) && g_pserver->fActiveReplica)
             propagate_flags &= ~PROPAGATE_REPL;
 
         /* Call propagate() only if at least one of AOF / replication
@@ -3915,12 +3930,12 @@ void call(client *c, int flags) {
  * If C_OK is returned the client is still alive and valid and
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
-int processCommand(client *c, int callFlags, AeLocker &locker) {
+int processCommand(client *c, int callFlags) {
     AssertCorrectThread(c);
+    serverAssert(GlobalLocksAcquired());
 
     if (moduleHasCommandFilters())
     {
-        locker.arm(c);
         moduleCallCommandFilters(c);
     }
 
@@ -3955,9 +3970,6 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
         return C_OK;
     }
 
-    if (!locker.isArmed())
-        c->db->prefetchKeysAsync(locker, c);
-
     /* Check if the user is authenticated. This check is skipped in case
      * the default user is flagged as "nopass" and is active. */
     int auth_required = (!(DefaultUser->flags & USER_FLAG_NOPASS) ||
@@ -3975,9 +3987,6 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
 
     /* Check if the user can run this command according to the current
      * ACLs. */
-    if (c->puser && !(c->puser->flags & USER_FLAG_ALLCOMMANDS))
-        locker.arm(c);  // ACLs require the lock
-
     int acl_keypos;
     int acl_retval = ACLCheckCommandPerm(c,&acl_keypos);
     if (acl_retval != ACL_OK) {
@@ -4005,7 +4014,6 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
         !(c->cmd->getkeys_proc == NULL && c->cmd->firstkey == 0 &&
           c->cmd->proc != execCommand))
     {
-        locker.arm(c);
         int hashslot;
         int error_code;
         clusterNode *n = getNodeByQuery(c,c->cmd,c->argv,c->argc,
@@ -4021,6 +4029,8 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
         }
     }
 
+    incrementMvccTstamp();
+
     /* Handle the maxmemory directive.
      *
      * Note that we do not want to reclaim memory if we are here re-entering
@@ -4028,7 +4038,6 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
      * condition, to avoid mixing the propagation of scripts with the
      * propagation of DELs due to eviction. */
     if (g_pserver->maxmemory && !g_pserver->lua_timedout) {
-        locker.arm(c);
         int out_of_memory = freeMemoryIfNeededAndSafe(true /*fQuickCycle*/, false /*fPreSnapshot*/) == C_ERR;
         /* freeMemoryIfNeeded may flush replica output buffers. This may result
          * into a replica, that may be the active client, to be freed. */
@@ -4064,7 +4073,6 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
      * and if this is a master instance. */
     if (c->cmd->flags & CMD_WRITE || c->cmd->proc == pingCommand)
     {
-        locker.arm(c);
         int deny_write_type = writeCommandsDeniedByDiskError();
         if (deny_write_type != DISK_ERROR_TYPE_NONE &&
             listLength(g_pserver->masters) == 0 &&
@@ -4124,7 +4132,6 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
 
     if (listLength(g_pserver->masters))
     {
-        locker.arm(c);
         /* Only allow commands with flag "t", such as INFO, SLAVEOF and so on,
         * when replica-serve-stale-data is no and we are a replica with a broken
         * link with master. */
@@ -4142,8 +4149,12 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
     /* Loading DB? Return an error if the command has not the
      * CMD_LOADING flag. */
     if (g_pserver->loading && !(c->cmd->flags & CMD_LOADING)) {
-        addReply(c, shared.loadingerr);
-        return C_OK;
+        /* Active Replicas can execute read only commands, and optionally write commands */
+        if (!(g_pserver->loading == LOADING_REPLICATION && g_pserver->fActiveReplica && ((c->cmd->flags & CMD_READONLY) || g_pserver->fWriteDuringActiveLoad)))
+        {
+            addReply(c, shared.loadingerr);
+            return C_OK;
+        }
     }
 
     /* Lua script too slow? Only allow a limited number of commands.
@@ -4181,8 +4192,6 @@ int processCommand(client *c, int callFlags, AeLocker &locker) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
-        locker.arm(c);
-        incrementMvccTstamp();
         call(c,callFlags);
         c->woff = g_pserver->master_repl_offset;
         if (listLength(g_pserver->ready_keys))
@@ -4809,7 +4818,7 @@ sds genRedisInfoString(const char *section) {
             "aof_last_cow_size:%zu\r\n"
             "module_fork_in_progress:%d\r\n"
             "module_fork_last_cow_size:%zu\r\n",
-            g_pserver->loading.load(std::memory_order_relaxed),
+            !!g_pserver->loading.load(std::memory_order_relaxed),   /* Note: libraries expect 1 or 0 here so coerce our enum */
             g_pserver->dirty,
             g_pserver->FRdbSaveInProgress(),
             (intmax_t)g_pserver->lastsave,
@@ -4958,64 +4967,61 @@ sds genRedisInfoString(const char *section) {
             listLength(g_pserver->masters) == 0 ? "master" 
                 : g_pserver->fActiveReplica ? "active-replica" : "slave");
         if (listLength(g_pserver->masters)) {
-            listIter li;
-            listNode *ln;
-            listRewind(g_pserver->masters, &li);
-            bool fAllUp = true;
-            while ((ln = listNext(&li))) {
-                redisMaster *mi = (redisMaster*)listNodeValue(ln);
-                fAllUp = fAllUp && mi->repl_state == REPL_STATE_CONNECTED;
-            }
-
             info = sdscatprintf(info, "master_global_link_status:%s\r\n",
-                fAllUp ? "up" : "down");
+                FBrokenLinkToMaster() ? "down" : "up");
 
             int cmasters = 0;
+            listIter li;
+            listNode *ln;
             listRewind(g_pserver->masters, &li);
             while ((ln = listNext(&li)))
             {
                 long long slave_repl_offset = 1;
                 redisMaster *mi = (redisMaster*)listNodeValue(ln);
-                info = sdscatprintf(info, "Master %d: \r\n", cmasters);
-                ++cmasters;
 
                 if (mi->master)
                     slave_repl_offset = mi->master->reploff;
                 else if (mi->cached_master)
                     slave_repl_offset = mi->cached_master->reploff;
 
+                char master_prefix[128] = "";
+                if (cmasters != 0) {
+                    snprintf(master_prefix, sizeof(master_prefix), "_%d", cmasters);
+                }
+
                 info = sdscatprintf(info,
-                    "master_host:%s\r\n"
-                    "master_port:%d\r\n"
-                    "master_link_status:%s\r\n"
-                    "master_last_io_seconds_ago:%d\r\n"
-                    "master_sync_in_progress:%d\r\n"
+                    "master%s_host:%s\r\n"
+                    "master%s_port:%d\r\n"
+                    "master%s_link_status:%s\r\n"
+                    "master%s_last_io_seconds_ago:%d\r\n"
+                    "master%s_sync_in_progress:%d\r\n"
                     "slave_repl_offset:%lld\r\n"
-                    ,mi->masterhost,
-                    mi->masterport,
-                    (mi->repl_state == REPL_STATE_CONNECTED) ?
+                    ,master_prefix, mi->masterhost,
+                    master_prefix, mi->masterport,
+                    master_prefix, (mi->repl_state == REPL_STATE_CONNECTED) ?
                         "up" : "down",
-                    mi->master ?
+                    master_prefix, mi->master ?
                     ((int)(g_pserver->unixtime-mi->master->lastinteraction)) : -1,
-                    mi->repl_state == REPL_STATE_TRANSFER,
+                    master_prefix, mi->repl_state == REPL_STATE_TRANSFER,
                     slave_repl_offset
                 );
 
                 if (mi->repl_state == REPL_STATE_TRANSFER) {
                     info = sdscatprintf(info,
-                        "master_sync_left_bytes:%lld\r\n"
-                        "master_sync_last_io_seconds_ago:%d\r\n"
-                        , (long long)
+                        "master%s_sync_left_bytes:%lld\r\n"
+                        "master%s_sync_last_io_seconds_ago:%d\r\n"
+                        , master_prefix, (long long)
                             (mi->repl_transfer_size - mi->repl_transfer_read),
-                        (int)(g_pserver->unixtime-mi->repl_transfer_lastio)
+                        master_prefix, (int)(g_pserver->unixtime-mi->repl_transfer_lastio)
                     );
                 }
 
                 if (mi->repl_state != REPL_STATE_CONNECTED) {
                     info = sdscatprintf(info,
-                        "master_link_down_since_seconds:%jd\r\n",
-                        (intmax_t)g_pserver->unixtime-mi->repl_down_since);
+                        "master%s_link_down_since_seconds:%jd\r\n",
+                        master_prefix, (intmax_t)g_pserver->unixtime-mi->repl_down_since);
                 }
+                ++cmasters;
             }
             info = sdscatprintf(info,
                 "slave_priority:%d\r\n"

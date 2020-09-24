@@ -9,11 +9,14 @@ public:
     {
     }
 
-    void arm(client *c) // if a client is passed, then the client is already locked
+    void arm(client *c, bool fIfNeeded = false) // if a client is passed, then the client is already locked
     {
         if (m_fArmed)
             return;
         
+        if (fIfNeeded && aeThreadOwnsLock())
+            return;
+
         serverAssertDebug(!GlobalLocksAcquired());
 
         if (c != nullptr)

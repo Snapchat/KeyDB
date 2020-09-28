@@ -7,7 +7,7 @@ keydb (6:6.0.16-1distribution_placeholder) codename_placeholder; urgency=medium
   * replica-quorum config for multi-master.Intended to be used with "replica-serve-stale-data no", if at least N replicas are connected we will consider our master link up and serve data.
   * Subkey expires performance improvement for big sets
 
- -- Ben Schermel <ben@eqalpha.com>  Mon, 28 Sept 2020 16:00:00 +0000
+ -- Ben Schermel <ben@eqalpha.com>  Mon, 28 Sep 2020 16:00:00 +0000
 
 keydb (6:6.0.13-1distribution_placeholder) codename_placeholder; urgency=medium
 

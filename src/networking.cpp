@@ -56,7 +56,7 @@ size_t getStringObjectSdsUsedMemory(robj *o) {
     serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
     switch(o->encoding) {
     case OBJ_ENCODING_RAW: return sdsZmallocSize((sds)ptrFromObj(o));
-    case OBJ_ENCODING_EMBSTR: return zmalloc_size(o)-sizeof(robj);
+    case OBJ_ENCODING_EMBSTR: return zmalloc_size(allocPtrFromObj(o))-sizeof(robj);
     default: return 0; /* Just integer encoding for now. */
     }
 }
@@ -1264,9 +1264,10 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) 
 void acceptOnThread(connection *conn, int flags, char *cip)
 {
     int ielCur = ielFromEventLoop(serverTL->el);
+    bool fBootLoad = (g_pserver->loading == LOADING_BOOT);
 
     int ielTarget = 0;
-    if (g_pserver->loading)
+    if (fBootLoad)
     {
         ielTarget = IDX_EVENT_LOOP_MAIN;    // During load only the main thread is active
     }
@@ -1290,10 +1291,10 @@ void acceptOnThread(connection *conn, int flags, char *cip)
             szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
             memcpy(szT, cip, NET_IP_STR_LEN);
         }
-        int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [conn, flags, ielTarget, szT] {
+        int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [conn, flags, ielTarget, szT, fBootLoad] {
             connMarshalThread(conn);
             acceptCommonHandler(conn,flags,szT,ielTarget);
-            if (!g_fTestMode && !g_pserver->loading)
+            if (!g_fTestMode && !fBootLoad)
                 rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
             zfree(szT);
         });
@@ -1302,7 +1303,7 @@ void acceptOnThread(connection *conn, int flags, char *cip)
             return;
         // If res != AE_OK we can still try to accept on the local thread
     }
-    if (!g_fTestMode && !g_pserver->loading)
+    if (!g_fTestMode && !fBootLoad)
         rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
 
     aeAcquireLock();
@@ -2259,7 +2260,7 @@ int processMultibulkBuffer(client *c) {
  * 1. The client is reset unless there are reasons to avoid doing it.
  * 2. In the case of master clients, the replication offset is updated.
  * 3. Propagate commands we got from our master to replicas down the line. */
-void commandProcessed(client *c) {
+void commandProcessed(client *c, int flags) {
     long long prev_offset = c->reploff;
     if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
         /* Update the applied replication offset of our master. */
@@ -2287,7 +2288,7 @@ void commandProcessed(client *c) {
             ae.arm(c);
         long long applied = c->reploff - prev_offset;
         if (applied) {
-            if (!g_pserver->fActiveReplica)
+            if (!g_pserver->fActiveReplica && (flags & CMD_CALL_PROPAGATE))
             {
                 replicationFeedSlavesFromMasterStream(g_pserver->slaves,
                     c->pending_querybuf, applied);
@@ -2308,9 +2309,10 @@ void commandProcessed(client *c) {
 int processCommandAndResetClient(client *c, int flags) {
     int deadclient = 0;
     serverTL->current_client = c;
-    AeLocker locker;
-    if (processCommand(c, flags, locker) == C_OK) {
-        commandProcessed(c);
+    serverAssert(GlobalLocksAcquired());
+    
+    if (processCommand(c, flags) == C_OK) {
+        commandProcessed(c, flags);
     }
     if (serverTL->current_client == NULL) deadclient = 1;
     serverTL->current_client = NULL;
@@ -2460,14 +2462,26 @@ void readQueryFromClient(connection *conn) {
         return;
     }
 
-    /* There is more data in the client input buffer, continue parsing it
-     * in case to check if there is a full command to execute. */
-    processInputBuffer(c, CMD_CALL_FULL);
+    serverTL->vecclientsProcess.push_back(c);
+}
+
+void processClients()
+{
+    serverAssert(GlobalLocksAcquired());
+
+    for (client *c : serverTL->vecclientsProcess) {
+        /* There is more data in the client input buffer, continue parsing it
+        * in case to check if there is a full command to execute. */
+        std::unique_lock<fastlock> ul(c->lock);
+        processInputBuffer(c, CMD_CALL_FULL);
+    }
+
     if (listLength(serverTL->clients_pending_asyncwrite))
     {
-        aelock.arm(c);
         ProcessPendingAsyncWrites();
     }
+    
+    serverTL->vecclientsProcess.clear();
 }
 
 void getClientsMaxBuffers(unsigned long *longest_output_list,
@@ -2843,7 +2857,7 @@ NULL
         if (c->name)
             addReplyBulk(c,c->name);
         else
-            addReplyNull(c, shared.nullbulk);
+            addReplyNull(c);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"pause") && c->argc == 3) {
         /* CLIENT PAUSE */
         long long duration;
@@ -3425,7 +3439,7 @@ void processEventsWhileBlocked(int iel) {
     
 
     aeReleaseLock();
-    serverAssertDebug(!GlobalLocksAcquired());
+    serverAssert(!GlobalLocksAcquired());
     try
     {
         while (iterations--) {

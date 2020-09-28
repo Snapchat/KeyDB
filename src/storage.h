@@ -1,8 +1,6 @@
 #ifndef __STORAGE_H__
 #define __STORAGE_H__
 
-#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 48   // Note: also defined in object.c - should always match
-
 #ifdef __cplusplus
 extern "C" {
 #endif

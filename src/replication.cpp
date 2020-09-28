@@ -1166,6 +1166,7 @@ LError:
  * full resync. */
 void replconfCommand(client *c) {
     int j;
+    bool fCapaCommand = false;
 
     if ((c->argc % 2) == 0) {
         /* Number of arguments must be odd to make sure that every
@@ -1176,6 +1177,7 @@ void replconfCommand(client *c) {
 
     /* Process every option-value pair. */
     for (j = 1; j < c->argc; j+=2) {
+        fCapaCommand = false;
         if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"listening-port")) {
             long port;
 
@@ -1200,6 +1202,8 @@ void replconfCommand(client *c) {
                 c->slave_capa |= SLAVE_CAPA_PSYNC2;
             else if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]), "activeExpire"))
                 c->slave_capa |= SLAVE_CAPA_ACTIVE_EXPIRE;
+
+            fCapaCommand = true;
         } else if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"ack")) {
             /* REPLCONF ACK is used by replica to inform the master the amount
              * of replication stream that it processed so far. It is an
@@ -1242,7 +1246,16 @@ void replconfCommand(client *c) {
             return;
         }
     }
-    addReply(c,shared.ok);
+
+    if (fCapaCommand) {
+        sds reply = sdsnew("+OK");
+        if (g_pserver->fActiveReplica)
+            reply = sdscat(reply, " active-replica");
+        reply = sdscat(reply, "\r\n");
+        addReplySds(c, reply);
+    } else {
+        addReply(c,shared.ok);
+    }
 }
 
 /* This function puts a replica in the online state, and should be called just
@@ -2557,6 +2570,30 @@ int slaveTryPartialResynchronization(redisMaster *mi, connection *conn, int read
     return PSYNC_NOT_SUPPORTED;
 }
 
+void parseMasterCapa(redisMaster *mi, sds strcapa)
+{
+    if (sdslen(strcapa) < 1 || strcapa[0] != '+')
+        return;
+
+    char *szStart = strcapa + 1;    // skip the +
+    char *pchEnd = szStart;
+
+    mi->isActive = false;
+    for (;;)
+    {
+        if (*pchEnd == ' ' || *pchEnd == '\0') {
+            // Parse the word
+            if (strncmp(szStart, "active-replica", pchEnd - szStart) == 0) {
+                mi->isActive = true;
+            }
+            szStart = pchEnd + 1;
+        }
+        if (*pchEnd == '\0')
+            break;
+        ++pchEnd;
+    }
+}
+
 /* This handler fires when the non blocking connect was able to
  * establish a connection with the master. */
 void syncWithMaster(connection *conn) {
@@ -2750,16 +2787,8 @@ void syncWithMaster(connection *conn) {
      *
      * The master will ignore capabilities it does not understand. */
     if (mi->repl_state == REPL_STATE_SEND_CAPA) {
-        if (g_pserver->fActiveReplica)
-        {
-            err = sendSynchronousCommand(mi, SYNC_CMD_WRITE,conn,"REPLCONF",
-                    "capa","eof","capa","psync2","capa","activeExpire",NULL);
-        }
-        else
-        {
-            err = sendSynchronousCommand(mi, SYNC_CMD_WRITE,conn,"REPLCONF",
-                    "capa","eof","capa","psync2",NULL);
-        }
+        err = sendSynchronousCommand(mi, SYNC_CMD_WRITE,conn,"REPLCONF",
+                "capa","eof","capa","psync2","capa","activeExpire",NULL);
         if (err) goto write_error;
         sdsfree(err);
         mi->repl_state = REPL_STATE_RECEIVE_CAPA;
@@ -2774,6 +2803,8 @@ void syncWithMaster(connection *conn) {
         if (err[0] == '-') {
             serverLog(LL_NOTICE,"(Non critical) Master does not understand "
                                   "REPLCONF capa: %s", err);
+        } else {
+            parseMasterCapa(mi, err);
         }
         sdsfree(err);
         mi->repl_state = REPL_STATE_SEND_PSYNC;
@@ -4007,12 +4038,20 @@ int FBrokenLinkToMaster()
     listNode *ln;
     listRewind(g_pserver->masters, &li);
 
+    int connected = 0;
     while ((ln = listNext(&li)))
     {
         redisMaster *mi = (redisMaster*)listNodeValue(ln);
-        if (mi->repl_state != REPL_STATE_CONNECTED)
-            return true;
+        if (mi->repl_state == REPL_STATE_CONNECTED)
+            ++connected;
     }
+
+    if (g_pserver->repl_quorum < 0) {
+        return connected < (int)listLength(g_pserver->masters);
+    } else {
+        return connected < g_pserver->repl_quorum;
+    }
+
     return false;
 }
 

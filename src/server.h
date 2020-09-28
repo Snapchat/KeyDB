@@ -94,6 +94,7 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "semiorderedset.h"
 #include "connection.h" /* Connection abstraction */
 #include "serverassert.h"
+#include "expire.h"
 
 #define REDISMODULE_CORE 1
 #include "redismodule.h"    /* Redis modules API defines. */
@@ -103,6 +104,9 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "sha1.h"
 #include "endianconv.h"
 #include "crc64.h"
+
+#define LOADING_BOOT 1
+#define LOADING_REPLICATION 2
 
 extern int g_fTestMode;
 
@@ -796,7 +800,16 @@ typedef struct RedisModuleDigest {
 
 #define MVCC_MS_SHIFT 20
 
-typedef struct redisObject {
+// This struct will be allocated ahead of the ROBJ when needed
+struct redisObjectExtended {
+    uint64_t mvcc_tstamp;
+};
+
+typedef class redisObject {
+protected:
+    redisObject() {}
+
+public:
     unsigned type:4;
     unsigned encoding:4;
     unsigned lru:LRU_BITS; /* LRU time (relative to global lru_clock) or
@@ -805,7 +818,6 @@ typedef struct redisObject {
 private:
     mutable std::atomic<unsigned> refcount {0};
 public:
-    uint64_t mvcc_tstamp;
     void *m_ptr;
 
     inline bool FExpires() const { return refcount.load(std::memory_order_relaxed) >> 31; }
@@ -816,7 +828,18 @@ public:
     void addref() const { refcount.fetch_add(1, std::memory_order_relaxed); }
     unsigned release() const { return refcount.fetch_sub(1, std::memory_order_seq_cst) & ~(1U << 31); }
 } robj;
-static_assert(sizeof(redisObject) == 24, "object size is critical, don't increase");
+static_assert(sizeof(redisObject) == 16, "object size is critical, don't increase");
+
+class redisObjectStack : public redisObjectExtended, public redisObject
+{
+public:
+    redisObjectStack();
+};
+
+uint64_t mvccFromObj(robj_roptr o);
+void setMvccTstamp(redisObject *o, uint64_t mvcc);
+void *allocPtrFromObj(robj_roptr o);
+robj *objFromAllocPtr(void *pv);
 
 __attribute__((always_inline)) inline const void *ptrFromObj(robj_roptr &o)
 {
@@ -841,243 +864,6 @@ __attribute__((always_inline)) inline char *szFromObj(const robj *o)
 {
     return (char*)ptrFromObj(o);
 }
-
-class expireEntryFat
-{
-    friend class expireEntry;
-public:
-    struct subexpireEntry
-    {
-        long long when;
-        std::unique_ptr<const char, void(*)(const char*)> spsubkey;
-
-        subexpireEntry(long long when, const char *subkey)
-            : when(when), spsubkey(subkey, sdsfree)
-        {}
-
-        bool operator<(long long when) const noexcept { return this->when < when; }
-        bool operator<(const subexpireEntry &se) { return this->when < se.when; }
-    };
-
-private:
-    sds m_keyPrimary;
-    std::vector<subexpireEntry> m_vecexpireEntries;  // Note a NULL for the sds portion means the expire is for the primary key
-
-public:
-    expireEntryFat(sds keyPrimary)
-        : m_keyPrimary(keyPrimary)
-        {}
-    long long when() const noexcept { return m_vecexpireEntries.front().when; }
-    const char *key() const noexcept { return m_keyPrimary; }
-
-    bool operator<(long long when) const noexcept { return this->when() <  when; }
-
-    void expireSubKey(const char *szSubkey, long long when)
-    {
-        // First check if the subkey already has an expiration
-        for (auto &entry : m_vecexpireEntries)
-        {
-            if (szSubkey != nullptr)
-            {
-                // if this is a subkey expiry then its not a match if the expireEntry is either for the
-                //  primary key or a different subkey
-                if (entry.spsubkey == nullptr || sdscmp((sds)entry.spsubkey.get(), (sds)szSubkey) != 0)
-                    continue;
-            }
-            else
-            {
-                if (entry.spsubkey != nullptr)
-                    continue;
-            }
-            m_vecexpireEntries.erase(m_vecexpireEntries.begin() + (&entry - m_vecexpireEntries.data()));
-            break;
-        }
-        auto itrInsert = std::lower_bound(m_vecexpireEntries.begin(), m_vecexpireEntries.end(), when);
-        const char *subkey = (szSubkey) ? sdsdup(szSubkey) : nullptr;
-        m_vecexpireEntries.emplace(itrInsert, when, subkey);
-    }
-
-    bool FEmpty() const noexcept { return m_vecexpireEntries.empty(); }
-    const subexpireEntry &nextExpireEntry() const noexcept { return m_vecexpireEntries.front(); }
-    void popfrontExpireEntry() { m_vecexpireEntries.erase(m_vecexpireEntries.begin()); }
-    const subexpireEntry &operator[](size_t idx) { return m_vecexpireEntries[idx]; }
-    size_t size() const noexcept { return m_vecexpireEntries.size(); }
-};
-
-class expireEntry {
-    union
-    {
-        sds m_key;
-        expireEntryFat *m_pfatentry;
-    } u;
-    long long m_when;   // LLONG_MIN means this is a fat entry and we should use the pointer
-
-public:
-    class iter
-    {
-        friend class expireEntry;
-        expireEntry *m_pentry = nullptr;
-        size_t m_idx = 0;
-
-    public:
-        iter(expireEntry *pentry, size_t idx)
-            : m_pentry(pentry), m_idx(idx)
-        {}
-
-        iter &operator++() { ++m_idx; return *this; }
-        
-        const char *subkey() const
-        {
-            if (m_pentry->FFat())
-                return (*m_pentry->pfatentry())[m_idx].spsubkey.get();
-            return nullptr;
-        }
-        long long when() const
-        {
-            if (m_pentry->FFat())
-                return (*m_pentry->pfatentry())[m_idx].when;
-            return m_pentry->when();
-        }
-
-        bool operator!=(const iter &other)
-        {
-            return m_idx != other.m_idx;
-        }
-
-        const iter &operator*() const { return *this; }
-    };
-
-    expireEntry(sds key, const char *subkey, long long when)
-    {
-        if (subkey != nullptr)
-        {
-            m_when = LLONG_MIN;
-            u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(key);
-            u.m_pfatentry->expireSubKey(subkey, when);
-        }
-        else
-        {
-            u.m_key = key;
-            m_when = when;
-        }
-    }
-
-    expireEntry(expireEntryFat *pfatentry)
-    {
-        u.m_pfatentry = pfatentry;
-        m_when = LLONG_MIN;
-    }
-
-    expireEntry(expireEntry &&e)
-    {
-        u.m_key = e.u.m_key;
-        m_when = e.m_when;
-        e.u.m_key = (char*)key();  // we do this so it can still be found in the set
-        e.m_when = 0;
-    }
-
-    ~expireEntry()
-    {
-        if (FFat())
-            delete u.m_pfatentry;
-    }
-
-    void setKeyUnsafe(sds key)
-    {
-        if (FFat())
-            u.m_pfatentry->m_keyPrimary = key;
-        else
-            u.m_key = key;
-    }
-
-    inline bool FFat() const noexcept { return m_when == LLONG_MIN; }
-    expireEntryFat *pfatentry() { assert(FFat()); return u.m_pfatentry; }
-
-
-    bool operator==(const char *key) const noexcept
-    { 
-        return this->key() == key; 
-    }
-
-    bool operator<(const expireEntry &e) const noexcept
-    { 
-        return when() < e.when(); 
-    }
-    bool operator<(long long when) const noexcept
-    { 
-        return this->when() < when;
-    }
-
-    const char *key() const noexcept
-    { 
-        if (FFat())
-            return u.m_pfatentry->key();
-        return u.m_key;
-    }
-    long long when() const noexcept
-    { 
-        if (FFat())
-            return u.m_pfatentry->when();
-        return m_when; 
-    }
-
-    void update(const char *subkey, long long when)
-    {
-        if (!FFat())
-        {
-            if (subkey == nullptr)
-            {
-                m_when = when;
-                return;
-            }
-            else
-            {
-                // we have to upgrade to a fat entry
-                long long whenT = m_when;
-                sds keyPrimary = u.m_key;
-                m_when = LLONG_MIN;
-                u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(keyPrimary);
-                u.m_pfatentry->expireSubKey(nullptr, whenT);
-                // at this point we're fat so fall through
-            }
-        }
-        u.m_pfatentry->expireSubKey(subkey, when);
-    }
-    
-    iter begin() { return iter(this, 0); }
-    iter end()
-    {
-        if (FFat())
-            return iter(this, u.m_pfatentry->size());
-        return iter(this, 1);
-    }
-    
-    void erase(iter &itr)
-    {
-        if (!FFat())
-            throw -1;   // assert
-        pfatentry()->m_vecexpireEntries.erase(
-            pfatentry()->m_vecexpireEntries.begin() + itr.m_idx);
-    }
-
-    bool FGetPrimaryExpire(long long *pwhen)
-    {
-        *pwhen = -1;
-        for (auto itr : *this)
-        {
-            if (itr.subkey() == nullptr)
-            {
-                *pwhen = itr.when();
-                return true;
-            }
-        }
-        return false;
-    }
-
-    explicit operator const char*() const noexcept { return key(); }
-    explicit operator long long() const noexcept { return when(); }
-};
-typedef semiorderedset<expireEntry, const char *, true /*expireEntry can be memmoved*/> expireset;
 
 /* The a string name for an object's type as listed above
  * Native types are checked against the OBJ_STRING, OBJ_LIST, OBJ_* defines,
@@ -1522,6 +1308,9 @@ typedef struct redisTLSContextConfig {
     char *ciphers;
     char *ciphersuites;
     int prefer_server_ciphers;
+    int session_caching;
+    int session_cache_size;
+    int session_cache_timeout;
 } redisTLSContextConfig;
 
 /*-----------------------------------------------------------------------------
@@ -1566,6 +1355,7 @@ struct redisServerThreadVars {
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     long unsigned commandsExecuted = 0;
     bool fRetrySetAofEvent = false;
+    std::vector<client*> vecclientsProcess;
 };
 
 struct redisMaster {
@@ -1581,6 +1371,7 @@ struct redisMaster {
     char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid. */
     long long master_initial_offset;           /* Master PSYNC offset. */
 
+    bool isActive = false;
     int repl_state;          /* Replication status if the instance is a replica */
     off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
     off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
@@ -1871,6 +1662,7 @@ struct redisServer {
     int repl_syncio_timeout; /* Timeout for synchronous I/O calls */
     int repl_disable_tcp_nodelay;   /* Disable TCP_NODELAY after SYNC? */
     int repl_serve_stale_data; /* Serve stale data when link is down? */
+    int repl_quorum;           /* For multimaster what do we consider a quorum? -1 means all master must be online */
     int repl_slave_ro;          /* Slave is read only? */
     int repl_slave_ignore_maxmemory;    /* If true slaves do not evict. */
     int slave_priority;             /* Reported in INFO and used by Sentinel. */
@@ -1991,6 +1783,7 @@ struct redisServer {
     int watchdog_period;  /* Software watchdog period in ms. 0 = off */
 
     int fActiveReplica;                          /* Can this replica also be a master? */
+    int fWriteDuringActiveLoad;                  /* Can this active-replica write during an RDB load? */
 
     // Format:
     //  Lower 20 bits: a counter incrementing for each command executed in the same millisecond
@@ -2557,7 +2350,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 size_t freeMemoryGetNotCountedMemory();
 int freeMemoryIfNeeded(void);
 int freeMemoryIfNeededAndSafe(void);
-int processCommand(client *c, int callFlags, class AeLocker &locker);
+int processCommand(client *c, int callFlags);
 void setupSignalHandlers(void);
 struct redisCommand *lookupCommand(sds name);
 struct redisCommand *lookupCommandByCString(const char *s);

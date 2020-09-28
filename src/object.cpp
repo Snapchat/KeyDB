@@ -41,12 +41,15 @@
 /* ===================== Creation and parsing of objects ==================== */
 
 robj *createObject(int type, void *ptr) {
-    robj *o = (robj*)zcalloc(sizeof(*o), MALLOC_SHARED);
+    size_t mvccExtraBytes = g_pserver->fActiveReplica ? sizeof(redisObjectExtended) : 0;
+    char *oB = (char*)zcalloc(sizeof(robj)+mvccExtraBytes, MALLOC_SHARED);
+    robj *o = reinterpret_cast<robj*>(oB + mvccExtraBytes);
+    
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
     o->m_ptr = ptr;
     o->setrefcount(1);
-    o->mvcc_tstamp = OBJ_MVCC_INVALID;
+    setMvccTstamp(o, OBJ_MVCC_INVALID);
 
     /* Set the LRU to the current lruclock (minutes resolution), or
      * alternatively the LFU counter. */
@@ -95,13 +98,16 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     size_t allocsize = sizeof(struct sdshdr8)+len+1;
     if (allocsize < sizeof(void*))
         allocsize = sizeof(void*);
-    robj *o = (robj*)zcalloc(sizeof(robj)+allocsize-sizeof(o->m_ptr), MALLOC_SHARED);
+
+    size_t mvccExtraBytes = g_pserver->fActiveReplica ? sizeof(redisObjectExtended) : 0;
+    char *oB = (char*)zcalloc(sizeof(robj)+allocsize-sizeof(redisObject::m_ptr)+mvccExtraBytes, MALLOC_SHARED);
+    robj *o = reinterpret_cast<robj*>(oB + mvccExtraBytes);
     struct sdshdr8 *sh = (sdshdr8*)(&o->m_ptr);
 
     o->type = OBJ_STRING;
     o->encoding = OBJ_ENCODING_EMBSTR;
     o->setrefcount(1);
-    o->mvcc_tstamp = OBJ_MVCC_INVALID;
+    setMvccTstamp(o, OBJ_MVCC_INVALID);
 
     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
@@ -129,8 +135,9 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
  *
  * The current limit of 52 is chosen so that the biggest string object
  * we allocate as EMBSTR will still fit into the 64 byte arena of jemalloc. */
-#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 48
-static_assert((sizeof(redisObject)+OBJ_ENCODING_EMBSTR_SIZE_LIMIT-8) == 64, "Max EMBSTR obj should be 64 bytes total");
+#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 52
+
+//static_assert((sizeof(redisObject)+OBJ_ENCODING_EMBSTR_SIZE_LIMIT-8) == 64, "Max EMBSTR obj should be 64 bytes total");
 robj *createStringObject(const char *ptr, size_t len) {
     if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT)
         return createEmbeddedStringObject(ptr,len);
@@ -390,7 +397,11 @@ void decrRefCount(robj_roptr o) {
         case OBJ_CRON: freeCronObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
-        zfree(o.unsafe_robjcast());
+        if (g_pserver->fActiveReplica) {
+            zfree(reinterpret_cast<redisObjectExtended*>(o.unsafe_robjcast())-1);
+        } else {
+            zfree(o.unsafe_robjcast());
+        }
     } else {
         if (prev <= 0) serverPanic("decrRefCount against refcount <= 0");
     }
@@ -1320,7 +1331,8 @@ NULL
     } else if (!strcasecmp(szFromObj(c->argv[1]), "lastmodified") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
                 == NULL) return;
-        addReplyLongLong(c, (g_pserver->mstime - (o->mvcc_tstamp >> MVCC_MS_SHIFT)) / 1000);
+        uint64_t mvcc = mvccFromObj(o);
+        addReplyLongLong(c, (g_pserver->mstime - (mvcc >> MVCC_MS_SHIFT)) / 1000);
     } else {
         addReplySubcommandSyntaxError(c);
     }
@@ -1362,7 +1374,7 @@ NULL
             }
         }
         if ((de = dictFind(c->db->pdict,ptrFromObj(c->argv[2]))) == NULL) {
-            addReplyNull(c, shared.nullbulk);
+            addReplyNull(c);
             return;
         }
         size_t usage = objectComputeSize((robj*)dictGetVal(de),samples);
@@ -1499,4 +1511,40 @@ void redisObject::setrefcount(unsigned ref)
 { 
     serverAssert(!FExpires());
     refcount.store(ref, std::memory_order_relaxed); 
+}
+
+redisObjectStack::redisObjectStack()
+{
+    // We need to ensure the Extended Object is first in the class layout
+    serverAssert(reinterpret_cast<ptrdiff_t>(static_cast<redisObject*>(this)) != reinterpret_cast<ptrdiff_t>(this));
+}
+
+void *allocPtrFromObj(robj_roptr o) {
+    if (g_pserver->fActiveReplica)
+        return reinterpret_cast<redisObjectExtended*>(o.unsafe_robjcast()) - 1;
+    return o.unsafe_robjcast();
+}
+
+robj *objFromAllocPtr(void *pv) {
+    if (g_pserver->fActiveReplica) {
+        return reinterpret_cast<robj*>(reinterpret_cast<redisObjectExtended*>(pv)+1);
+    } 
+    return reinterpret_cast<robj*>(pv);
+}
+
+uint64_t mvccFromObj(robj_roptr o)
+{
+    if (g_pserver->fActiveReplica) {
+        redisObjectExtended *oe = reinterpret_cast<redisObjectExtended*>(o.unsafe_robjcast()) - 1;
+        return oe->mvcc_tstamp;
+    }
+    return OBJ_MVCC_INVALID;
+}
+
+void setMvccTstamp(robj *o, uint64_t mvcc)
+{
+    if (!g_pserver->fActiveReplica)
+        return;
+    redisObjectExtended *oe = reinterpret_cast<redisObjectExtended*>(o) - 1;
+    oe->mvcc_tstamp = mvcc;
 }

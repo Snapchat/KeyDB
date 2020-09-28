@@ -93,7 +93,7 @@ static robj *lookupKey(redisDb *db, robj *key, int flags) {
         updateDbValAccess(de, flags);
 
         if (flags & LOOKUP_UPDATEMVCC) {
-            val->mvcc_tstamp = getMvccTstamp();
+            setMvccTstamp(val, getMvccTstamp());
         }
         return val;
     } else {
@@ -206,7 +206,9 @@ int dbAddCore(redisDb *db, robj *key, robj *val) {
     serverAssert(!val->FExpires());
     sds copy = sdsdup(szFromObj(key));
     int retval = dictAdd(db->pdict, copy, val);
-    val->mvcc_tstamp = key->mvcc_tstamp = getMvccTstamp();
+    uint64_t mvcc = getMvccTstamp();
+    setMvccTstamp(key, mvcc);
+    setMvccTstamp(val, mvcc);
 
     if (retval == DICT_OK)
     {
@@ -256,7 +258,7 @@ void dbOverwriteCore(redisDb *db, dictEntry *de, robj *key, robj *val, bool fUpd
     if (fUpdateMvcc) {
         if (val->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
             val = dupStringObject(val);
-        val->mvcc_tstamp = getMvccTstamp();
+        setMvccTstamp(val, getMvccTstamp());
     }
 
     dictSetVal(db->pdict, de, val);
@@ -291,12 +293,12 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
             return (dbAddCore(db, key, val) == DICT_OK);
 
         robj *old = (robj*)dictGetVal(de);
-        if (old->mvcc_tstamp <= val->mvcc_tstamp)
+        if (mvccFromObj(old) <= mvccFromObj(val))
         {
             dbOverwriteCore(db, de, key, val, false, true);
             return true;
         }
-        
+
         return false;
     }
     else
@@ -1393,7 +1395,7 @@ void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when) 
         db->setexpire->insert(e);
     }
 
-    int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
+    int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0 && !g_pserver->fActiveReplica;
     if (c && writable_slave && !(c->flags & CLIENT_MASTER))
         rememberSlaveKeyWithExpire(db,key);
 }
@@ -1430,7 +1432,7 @@ void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
     ((robj*)dictGetVal(kde))->SetFExpires(true);
 
 
-    int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0;
+    int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0 && !g_pserver->fActiveReplica;
     if (c && writable_slave && !(c->flags & CLIENT_MASTER))
         rememberSlaveKeyWithExpire(db,key);
 }
@@ -1486,7 +1488,6 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
 void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey)
 {
     robj *argv[3];
-    robj objT;
     redisCommand *cmd = nullptr;
     switch (type)
     {

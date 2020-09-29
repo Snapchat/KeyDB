@@ -215,13 +215,37 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
         assert_equal {1} [$slave wait 1 500] { "value should propogate
                     within 0.5 seconds" }
         exec kill -SIGSTOP $slave_pid
-            after 3000
+        after 3000
         # Ensure testkey1 is gone.  Note, we can't do this directly as the normal commands lie to us
         # about what is actually in the dict.  The only way to know is with a count from info
-            assert_equal {1} [expr [string first {keys=1} [$master info keyspace]] >= 0]  {"slave expired"}
+        assert_equal {1} [expr [string first {keys=1} [$master info keyspace]] >= 0]  {"slave expired"}
     }
-
+    
     exec kill -SIGCONT $slave_pid
+
+    test {Active replica merge works when reconnecting} {
+        $slave flushall
+        $slave set testkey foo
+        wait_for_condition 50 1000 {
+            [string match *foo* [$master get testkey]]
+        } else {
+            fail "Replication failed to propogate"
+        }
+        $slave replicaof no one
+        $master replicaof no one
+        after 100
+        $master set testkey baz
+        after 100
+        $slave set testkey bar
+        after 100
+        $slave replicaof $master_host $master_port
+        after 1000
+        $master replicaof $slave_host $slave_port
+        after 1000
+
+        assert_equal {bar} [$slave get testkey]
+        assert_equal {bar} [$master get testkey]
+    }
 
     test {Active replica different databases} {
         $master select 3

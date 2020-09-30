@@ -1330,6 +1330,7 @@ sds ACLLoadFromFile(const char *filename) {
             errors = sdscatprintf(errors,
                      "'%s:%d: username '%s' contains invalid characters. ",
                      g_pserver->acl_filename, linenum, argv[1]);
+            sdsfreesplitres(argv,argc);
             continue;
         }
 
@@ -1914,7 +1915,7 @@ void aclCommand(client *c) {
             addReplyBulkCString(c,"client-info");
             addReplyBulkCBuffer(c,le->cinfo,sdslen(le->cinfo));
         }
-    } else if (!strcasecmp(sub,"help")) {
+    } else if (c->argc == 2 && !strcasecmp(sub,"help")) {
         const char *help[] = {
 "LOAD                             -- Reload users from the ACL file.",
 "SAVE                             -- Save the current config to the ACL file.",

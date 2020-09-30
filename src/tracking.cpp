@@ -101,7 +101,7 @@ void disableTracking(client *c) {
 
 /* Set the client 'c' to track the prefix 'prefix'. If the client 'c' is
  * already registered for the specified prefix, no operation is performed. */
-static void enableBcastTrackingForPrefix(client *c, const char *prefix, size_t plen) {
+void enableBcastTrackingForPrefix(client *c, const char *prefix, size_t plen) {
     bcastState *bs = (bcastState*)raxFind(PrefixTable,(unsigned char*)prefix,plen);
     /* If this is the first client subscribing to such prefix, create
      * the prefix in the table. */
@@ -198,12 +198,13 @@ void trackingRememberKeys(client *c) {
  *
  * In case the 'proto' argument is non zero, the function will assume that
  * 'keyname' points to a buffer of 'keylen' bytes already expressed in the
- * form of Redis RESP protocol, representing an array of keys to send
- * to the client as value of the invalidation. This is used in BCAST mode
- * in order to optimized the implementation to use less CPU time. */
-void sendTrackingMessage(client *c, const char *keyname, size_t keylen, int proto) {
+ * form of Redis RESP protocol. This is used for:
+ * - In BCAST mode, to send an array of invalidated keys to all
+ *   applicable clients
+ * - Following a flush command, to send a single RESP NULL to indicate
+ *   that all keys are now invalid. */
+void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
     std::unique_lock<fastlock> ul(c->lock);
-    serverAssert(c->lock.fOwnLock());
 
     int using_redirection = 0;
     if (c->client_tracking_redirection) {
@@ -347,17 +348,19 @@ void trackingInvalidateKey(client *c, robj *keyobj) {
     trackingInvalidateKeyRaw(c,szFromObj(keyobj),sdslen(szFromObj(keyobj)),1);
 }
 
-/* This function is called when one or all the Redis databases are flushed
- * (dbid == -1 in case of FLUSHALL). Caching keys are not specific for
- * each DB but are global: currently what we do is send a special
- * notification to clients with tracking enabled, invalidating the caching
- * key "", which means, "all the keys", in order to avoid flooding clients
- * with many invalidation messages for all the keys they may hold.
+/* This function is called when one or all the Redis databases are
+ * flushed (dbid == -1 in case of FLUSHALL). Caching keys are not
+ * specific for each DB but are global: currently what we do is send a
+ * special notification to clients with tracking enabled, sending a
+ * RESP NULL, which means, "all the keys", in order to avoid flooding
+ * clients with many invalidation messages for all the keys they may
+ * hold.
  */
 void freeTrackingRadixTree(void *rt) {
     raxFree((rax*)rt);
 }
 
+/* A RESP NULL is sent to indicate that all keys are invalid */
 void trackingInvalidateKeysOnFlush(int dbid) {
     if (g_pserver->tracking_clients) {
         listNode *ln;
@@ -366,7 +369,7 @@ void trackingInvalidateKeysOnFlush(int dbid) {
         while ((ln = listNext(&li)) != NULL) {
             client *c = (client*)listNodeValue(ln);
             if (c->flags & CLIENT_TRACKING) {
-                sendTrackingMessage(c,"",1,0);
+                sendTrackingMessage(c,szFromObj(shared.null[c->resp]),sdslen(szFromObj(shared.null[c->resp])),1);
             }
         }
     }

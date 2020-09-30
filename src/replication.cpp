@@ -1609,6 +1609,16 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
         } else if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
             struct redis_stat buf;
 
+            if (bgsaveerr != C_OK) {
+                ul.unlock();
+                if (FCorrectThread(replica))
+                    freeClient(replica);
+                else
+                    freeClientAsync(replica);
+                serverLog(LL_WARNING,"SYNC failed. BGSAVE child returned an error");
+                continue;
+            }
+
             /* If this was an RDB on disk save, we have to prepare to send
              * the RDB from disk to the replica socket. Otherwise if this was
              * already an RDB -> Slaves socket transfer, used in the case of
@@ -1647,15 +1657,6 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
                 replica->repl_put_online_on_ack = 1;
                 replica->repl_ack_time = g_pserver->unixtime; /* Timeout otherwise. */
             } else {
-                if (bgsaveerr != C_OK) {
-                    ul.unlock();
-                    if (FCorrectThread(replica))
-                        freeClient(replica);
-                    else
-                        freeClientAsync(replica);
-                    serverLog(LL_WARNING,"SYNC failed. BGSAVE child returned an error");
-                    continue;
-                }
                 if ((replica->repldbfd = open(g_pserver->rdb_filename,O_RDONLY)) == -1 ||
                     redis_fstat(replica->repldbfd,&buf) == -1) {
                     ul.unlock();
@@ -2645,6 +2646,7 @@ void syncWithMaster(connection *conn) {
          * both. */
         if (err[0] != '+' &&
             strncmp(err,"-NOAUTH",7) != 0 &&
+            strncmp(err,"-NOPERM",7) != 0 &&
             strncmp(err,"-ERR operation not permitted",28) != 0)
         {
             serverLog(LL_WARNING,"Error reply to PING from master: '%s'",err);
@@ -3049,6 +3051,9 @@ struct redisMaster *replicationAddMaster(char *ip, int port) {
     }
     disconnectAllBlockedClients(); /* Clients blocked in master, now replica. */
 
+    /* Update oom_score_adj */
+    setOOMScoreAdj(-1);
+
     /* Force our slaves to resync with us as well. They may hopefully be able
      * to partially resync with us, but we can notify the replid change. */
     if (!g_pserver->fActiveReplica)
@@ -3144,6 +3149,9 @@ void replicationUnsetMaster(redisMaster *mi) {
     serverAssert(ln != nullptr);
     listDelNode(g_pserver->masters, ln);
     freeMasterInfo(mi);
+
+    /* Update oom_score_adj */
+    setOOMScoreAdj(-1);
 
     /* Fire the role change modules event. */
     moduleFireServerEvent(REDISMODULE_EVENT_REPLICATION_ROLE_CHANGED,
@@ -3486,6 +3494,11 @@ void replicationResurrectCachedMaster(redisMaster *mi, connection *conn) {
     /* Normally changing the thread of a client is a BIG NONO,
         but this client was unlinked so its OK here */
     mi->master->iel = serverTL - g_pserver->rgthreadvar; // martial to this thread
+
+    /* Fire the master link modules event. */
+    moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
+                          REDISMODULE_SUBEVENT_MASTER_LINK_UP,
+                          NULL);
 
     /* Re-add to the list of clients. */
     linkClient(mi->master);

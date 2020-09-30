@@ -1847,6 +1847,7 @@ NULL
             o = createStreamObject();
             dbAdd(c->db,c->argv[2],o);
             s = (stream*)ptrFromObj(o);
+            signalModifiedKey(c,c->db,c->argv[2]);
         }
 
         streamCG *cg = streamCreateCG(s,grpname,sdslen(grpname),&id);
@@ -1891,7 +1892,7 @@ NULL
         g_pserver->dirty++;
         notifyKeyspaceEvent(NOTIFY_STREAM,"xgroup-delconsumer",
                             c->argv[2],c->db->id);
-    } else if (!strcasecmp(opt,"HELP")) {
+    } else if (c->argc == 2 && !strcasecmp(opt,"HELP")) {
         addReplyHelp(c, help);
     } else {
         addReplySubcommandSyntaxError(c);

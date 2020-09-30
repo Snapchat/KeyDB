@@ -52,6 +52,9 @@ typedef enum {
 #define CONN_FLAG_READ_THREADSAFE        (1<<2)
 #define CONN_FLAG_WRITE_THREADSAFE       (1<<3)
 
+#define CONN_TYPE_SOCKET            1
+#define CONN_TYPE_TLS               2
+
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
 typedef struct ConnectionType {
@@ -69,6 +72,7 @@ typedef struct ConnectionType {
     ssize_t (*sync_read)(struct connection *conn, char *ptr, ssize_t size, long long timeout);
     ssize_t (*sync_readline)(struct connection *conn, char *ptr, ssize_t size, long long timeout);
     void (*marshal_thread)(struct connection *conn);
+    int (*get_type)(struct connection *conn);
 } ConnectionType;
 
 struct connection {
@@ -202,6 +206,11 @@ static inline ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size
 static inline void connMarshalThread(connection *conn) {
     if (conn->type->marshal_thread != nullptr)
         conn->type->marshal_thread(conn);
+}
+
+/* Return CONN_TYPE_* for the specified connection */
+static inline int connGetType(connection *conn) {
+    return conn->type->get_type(conn);
 }
 
 connection *connCreateSocket();

@@ -152,6 +152,7 @@ void handleBlockedClientsTimeout(void) {
         raxRemove(g_pserver->clients_timeout_table,ri.key,ri.key_len,NULL);
         raxSeek(&ri,"^",NULL,0);
     }
+    raxStop(&ri);
 }
 
 /* Get a timeout value from an object and store it into 'timeout'.

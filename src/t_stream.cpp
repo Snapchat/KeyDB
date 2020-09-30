@@ -43,6 +43,7 @@
 void streamFreeCG(streamCG *cg);
 void streamFreeNACK(streamNACK *na);
 size_t streamReplyWithRangeFromConsumerPEL(client *c, stream *s, streamID *start, streamID *end, size_t count, streamConsumer *consumer);
+bool FInReplicaReplay();
 
 /* -----------------------------------------------------------------------
  * Low level stream encoding: a radix tree of listpacks.
@@ -838,6 +839,9 @@ void streamPropagateXCLAIM(client *c, robj *key, streamCG *group, robj *groupnam
      *
      * Note that JUSTID is useful in order to avoid that XCLAIM will do
      * useless work in the replica side, trying to fetch the stream item. */
+    if (FInReplicaReplay())
+        return;
+
     robj *argv[14];
     argv[0] = createStringObject("XCLAIM",6);
     argv[1] = key;

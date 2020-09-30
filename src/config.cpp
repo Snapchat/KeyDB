@@ -2477,7 +2477,7 @@ standardConfig configs[] = {
     createIntConfig("tls-session-cache-timeout", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->tls_ctx_config.session_cache_timeout, 300, INTEGER_CONFIG, NULL, updateTlsCfgInt),
     createBoolConfig("tls-cluster", NULL, MODIFIABLE_CONFIG, g_pserver->tls_cluster, 0, NULL, NULL),
     createBoolConfig("tls-replication", NULL, MODIFIABLE_CONFIG, g_pserver->tls_replication, 0, NULL, NULL),
-    createBoolConfig("tls-auth-clients", NULL, MODIFIABLE_CONFIG, g_pserver->tls_auth_clients, 1, NULL, NULL),
+    createEnumConfig("tls-auth-clients", NULL, MODIFIABLE_CONFIG, tls_auth_clients_enum, g_pserver->tls_auth_clients, TLS_CLIENT_AUTH_YES, NULL, NULL),
     createBoolConfig("tls-prefer-server-ciphers", NULL, MODIFIABLE_CONFIG, g_pserver->tls_ctx_config.prefer_server_ciphers, 0, NULL, updateTlsCfgBool),
     createBoolConfig("tls-session-caching", NULL, MODIFIABLE_CONFIG, g_pserver->tls_ctx_config.session_caching, 1, NULL, updateTlsCfgBool),
     createStringConfig("tls-cert-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->tls_ctx_config.cert_file, NULL, NULL, updateTlsCfg),

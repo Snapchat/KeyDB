@@ -236,10 +236,23 @@ ifeq ($(MALLOC),memkind)
 endif
 
 ifeq ($(BUILD_TLS),yes)
-    FINAL_CFLAGS+=-DUSE_OPENSSL $(OPENSSL_CXXFLAGS)
-    FINAL_CXXFLAGS+=-DUSE_OPENSSL $(OPENSSL_CXXFLAGS)
-    FINAL_LDFLAGS+=$(OPENSSL_LDFLAGS)
-    FINAL_LIBS += ../deps/hiredis/libhiredis_ssl.a -lssl -lcrypto
+    	FINAL_CFLAGS+=-DUSE_OPENSSL $(OPENSSL_CXXFLAGS)
+    	FINAL_CXXFLAGS+=-DUSE_OPENSSL $(OPENSSL_CXXFLAGS)
+    	FINAL_LDFLAGS+=$(OPENSSL_LDFLAGS)
+    	FINAL_LIBS += ../deps/hiredis/libhiredis_ssl.a -lssl -lcrypto
+	LIBSSL_PKGCONFIG := $(shell $(PKG_CONFIG) --exists libssl && echo $$?)
+ifeq ($(LIBSSL_PKGCONFIG),0)
+	LIBSSL_LIBS=$(shell $(PKG_CONFIG) --libs libssl)
+else
+	LIBSSL_LIBS=-lssl
+endif
+	LIBCRYPTO_PKGCONFIG := $(shell $(PKG_CONFIG) --exists libcrypto && echo $$?)
+ifeq ($(LIBCRYPTO_PKGCONFIG),0)
+	LIBCRYPTO_LIBS=$(shell $(PKG_CONFIG) --libs libcrypto)
+else
+	LIBCRYPTO_LIBS=-lcrypto
+endif
+	FINAL_LIBS += ../deps/hiredis/libhiredis_ssl.a $(LIBSSL_LIBS) $(LIBCRYPTO_LIBS)
 endif
 
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
@@ -290,6 +303,8 @@ persist-settings: distclean
 	echo WARN=$(WARN) >> .make-settings
 	echo OPT=$(OPT) >> .make-settings
 	echo MALLOC=$(MALLOC) >> .make-settings
+	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
+	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings
 	echo CXXFLAGS=$(CXXFLAGS) >> .make-settings
 	echo LDFLAGS=$(LDFLAGS) >> .make-settings

@@ -30,6 +30,7 @@
 
 #include "server.h"
 #include "atomicvar.h"
+#include "cluster.h"
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <math.h>
@@ -473,14 +474,18 @@ std::string escapeString(sds str)
  *
  * If the error code is already passed in the string 's', the error
  * code provided is used, otherwise the string "-ERR " for the generic
- * error code is automatically added. */
+ * error code is automatically added.
+ * Note that 's' must NOT end with \r\n. */
 void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) {
     /* If the string already starts with "-..." then the error code
      * is provided by the caller. Otherwise we use "-ERR". */
     if (!len || s[0] != '-') addReplyProtoCore(c,"-ERR ",5,fAsync);
     addReplyProtoCore(c,s,len,fAsync);
     addReplyProtoCore(c,"\r\n",2,fAsync);
+}
 
+/* Do some actions after an error reply was sent (Log if needed, updates stats, etc.) */
+void afterErrorReply(client *c, const char *s, size_t len) {
     /* Sometimes it could be normal that a replica replies to a master with
      * an error and this function gets called. Actually the error will never
      * be sent because addReply*() against master clients has no effect...
@@ -506,10 +511,11 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
             from = "master";
         }
 
+        if (len > 4096) len = 4096;
         const char *cmdname = c->lastcmd ? c->lastcmd->name : "<unknown>";
         serverLog(LL_WARNING,"== CRITICAL == This %s is sending an error "
-                             "to its %s: '%s' after processing the command "
-                             "'%s'", from, to, s, cmdname);
+                             "to its %s: '%.*s' after processing the command "
+                             "'%s'", from, to, (int)len, s, cmdname);
         if (ctype == CLIENT_TYPE_MASTER && g_pserver->repl_backlog &&
             g_pserver->repl_backlog_histlen > 0)
         {
@@ -524,27 +530,43 @@ void addReplyErrorLength(client *c, const char *s, size_t len)
     addReplyErrorLengthCore(c, s, len, false);
 }
 
+/* The 'err' object is expected to start with -ERRORCODE and end with \r\n.
+ * Unlike addReplyErrorSds and others alike which rely on addReplyErrorLength. */
+void addReplyErrorObject(client *c, robj *err) {
+    addReply(c, err);
+    afterErrorReply(c, szFromObj(err), sdslen(szFromObj(err))-2); /* Ignore trailing \r\n */
+}
+
+/* See addReplyErrorLength for expectations from the input string. */
 void addReplyError(client *c, const char *err) {
     addReplyErrorLengthCore(c,err,strlen(err), false);
 }
 
 void addReplyErrorAsync(client *c, const char *err) {
     addReplyErrorLengthCore(c, err, strlen(err), true);
+    afterErrorReply(c,err,strlen(err));
 }
 
+/* See addReplyErrorLength for expectations from the input string. */
+void addReplyErrorSds(client *c, sds err) {
+    addReplyErrorLength(c,err,sdslen(err));
+    afterErrorReply(c,err,sdslen(err));
+}
+
+/* See addReplyErrorLength for expectations from the formatted string.
+ * The formatted string is safe to contain \r and \n anywhere. */
 void addReplyErrorFormat(client *c, const char *fmt, ...) {
-    size_t l, j;
     va_list ap;
     va_start(ap,fmt);
     sds s = sdscatvprintf(sdsempty(),fmt,ap);
     va_end(ap);
-    /* Make sure there are no newlines in the string, otherwise invalid protocol
-     * is emitted. */
-    l = sdslen(s);
-    for (j = 0; j < l; j++) {
-        if (s[j] == '\r' || s[j] == '\n') s[j] = ' ';
-    }
+    /* Trim any newlines at the end (ones will be added by addReplyErrorLength) */
+    s = sdstrim(s, "\r\n");
+    /* Make sure there are no newlines in the middle of the string, otherwise
+     * invalid protocol is emitted. */
+    s = sdsmapchars(s, "\r\n", "  ",  2);
     addReplyErrorLength(c,s,sdslen(s));
+    afterErrorReply(c,s,sdslen(s));
     sdsfree(s);
 }
 
@@ -616,6 +638,7 @@ void *addReplyDeferredLenAsync(client *c) {
 
 /* Populate the length object and try gluing it to the next chunk. */
 void setDeferredAggregateLen(client *c, void *node, long length, char prefix) {
+    serverAssert(length >= 0);
     listNode *ln = (listNode*)node;
     clientReplyBlock *next;
     char lenstr[128];
@@ -1205,21 +1228,38 @@ void clientAcceptHandler(connection *conn) {
 #define MAX_ACCEPTS_PER_CALL 1000
 static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) {
     client *c;
+    char conninfo[100];
     UNUSED(ip);
     AeLocker locker;
     locker.arm(nullptr);
 
-    /* Admission control will happen before a client is created and connAccept()
+    if (connGetState(conn) != CONN_STATE_ACCEPTING) {
+        serverLog(LL_VERBOSE,
+            "Accepted client connection in error state: %s (conn: %s)",
+            connGetLastError(conn),
+            connGetInfo(conn, conninfo, sizeof(conninfo)));
+        connClose(conn);
+        return;
+    }
+
+    /* Limit the number of connections we take at the same time.
+     *
+     * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
-     * if rejected.
-     */
-    if (listLength(g_pserver->clients) >= g_pserver->maxclients) {
-        const char *err = "-ERR max number of clients reached\r\n";
+     * if rejected. */
+    if (listLength(g_pserver->clients) + getClusterConnectionsCount()
+        >= g_pserver->maxclients)
+    {
+        const char *err;
+        if (g_pserver->cluster_enabled)
+            err = "-ERR max number of clients + cluster "
+                  "connections reached\r\n";
+        else
+            err = "-ERR max number of clients reached\r\n";
 
         /* That's a best effort error message, don't check write errors.
-         * Note that for TLS connections, no handshake was done yet so nothing is written
-         * and the connection will just drop.
-         */
+         * Note that for TLS connections, no handshake was done yet so nothing
+         * is written and the connection will just drop. */
         if (connWrite(conn,err,strlen(err)) == -1) {
             /* Nothing to do, Just to avoid the warning... */
         }
@@ -1230,7 +1270,6 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) 
 
     /* Create connection and client */
     if ((c = createClient(conn, iel)) == NULL) {
-        char conninfo[100];
         serverLog(LL_WARNING,
             "Error registering fd event for the new client: %s (conn: %s)",
             connGetLastError(conn),
@@ -1680,6 +1719,9 @@ client *lookupClientByID(uint64_t id) {
  * set to 0. So when handler_installed is set to 0 the function must be
  * thread safe. */
 int writeToClient(client *c, int handler_installed) {
+    /* Update total number of writes on server */
+    g_pserver->stat_total_writes_processed.fetch_add(1, std::memory_order_relaxed);
+
     ssize_t nwritten = 0, totwritten = 0;
     clientReplyBlock *o;
     AssertCorrectThread(c);
@@ -2192,7 +2234,8 @@ int processMultibulkBuffer(client *c) {
             }
 
             ok = string2ll(c->querybuf+c->qb_pos+1,newline-(c->querybuf+c->qb_pos+1),&ll);
-            if (!ok || ll < 0 || ll > g_pserver->proto_max_bulk_len) {
+            if (!ok || ll < 0 ||
+                (!(c->flags & CLIENT_MASTER) && ll > g_pserver->proto_max_bulk_len)) {
                 addReplyError(c,"Protocol error: invalid bulk length");
                 setProtocolError("invalid bulk length",c);
                 return C_ERR;
@@ -2401,6 +2444,9 @@ void readQueryFromClient(connection *conn) {
     std::unique_lock<decltype(c->lock)> lock(c->lock, std::defer_lock);
     if (!lock.try_lock())
         return; // Process something else while we wait
+
+    /* Update total number of reads on server */
+    g_pserver->stat_total_reads_processed.fetch_add(1, std::memory_order_relaxed);
 
     readlen = PROTO_IOBUF_LEN;
     /* If this is a multi bulk request, and we are processing a bulk reply
@@ -2670,6 +2716,7 @@ void clientCommand(client *c) {
 "SETNAME <name>         -- Assign the name <name> to the current connection.",
 "UNBLOCK <clientid> [TIMEOUT|ERROR] -- Unblock the specified blocked client.",
 "TRACKING (on|off) [REDIRECT <id>] [BCAST] [PREFIX first] [PREFIX second] [OPTIN] [OPTOUT]... -- Enable client keys tracking for client side caching.",
+"CACHING  (yes|no)      -- Enable/Disable tracking of the keys for next command in OPTIN/OPTOUT mode.",
 "GETREDIR               -- Return the client ID we are redirecting to when tracking is enabled.",
 NULL
         };

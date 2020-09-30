@@ -1442,7 +1442,7 @@ static int parseOptions(int argc, char **argv) {
             sdsfree(version);
             exit(0);
         } else if (!strcmp(argv[i],"--no-motd")) {
-            config.disable_motd = true;
+            config.disable_motd = 1;
         } else if (!strcmp(argv[i],"-3")) {
             config.resp3 = 1;
         } else if (CLUSTER_MANAGER_MODE() && argv[i][0] != '-') {

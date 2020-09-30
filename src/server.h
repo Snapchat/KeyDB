@@ -819,7 +819,7 @@ struct redisObjectExtended {
     uint64_t mvcc_tstamp;
 };
 
-typedef class redisObject {
+typedef struct redisObject {
 protected:
     redisObject() {}
 

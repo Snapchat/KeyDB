@@ -329,6 +329,7 @@ static int s_cAcquisitionsServer = 0;
 static int s_cAcquisitionsModule = 0;
 static std::mutex s_mutex;
 static std::condition_variable s_cv;
+static std::recursive_mutex s_mutexModule;
 
 typedef void (*RedisModuleForkDoneHandler) (int exitcode, int bysignal, void *user_data);
 
@@ -5055,6 +5056,7 @@ void moduleAcquireGIL(int fServerThread) {
     }
     else
     {
+        s_mutexModule.lock();
         ++s_cAcquisitionsModule;
         fModuleGILWlocked++;
     }
@@ -5079,6 +5081,8 @@ int moduleTryAcquireGIL(bool fServerThread) {
     }
     else
     {
+        if (!s_mutexModule.try_lock())
+            return 1;
         ++s_cAcquisitionsModule;
         fModuleGILWlocked++;
     }
@@ -5098,6 +5102,7 @@ void moduleReleaseGIL(int fServerThread) {
     }
     else
     {
+        s_mutexModule.unlock();
         --s_cAcquisitionsModule;
         fModuleGILWlocked--;
     }

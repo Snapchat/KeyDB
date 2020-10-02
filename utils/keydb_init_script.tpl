@@ -16,7 +16,7 @@ case "$1" in
         else
             PID=$(cat $PIDFILE)
             echo "Stopping ..."
-            $CLIEXEC -p $REDISPORT shutdown
+            $CLIEXEC -p $KeyDBPORT shutdown
             while [ -x /proc/${PID} ]
             do
                 echo "Waiting for Redis to shutdown ..."

@@ -377,6 +377,11 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     serverAssert(GlobalLocksAcquired());
     static client *fake = nullptr;
 
+    if (cserver.setDbReplicateDisable.find(dictid) != cserver.setDbReplicateDisable.end()) {
+        if (strcasecmp(szFromObj(argv[0]), "ping") != 0)
+            return;
+    }
+
     if (dictid < 0)
         dictid = 0; // this can happen if we send a PING before any real operation
 

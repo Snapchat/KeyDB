@@ -57,6 +57,7 @@
 #include <map>
 #include <string>
 #include <mutex>
+#include <unordered_set>
 #ifdef __cplusplus
 extern "C" {
 #include <lua.h>
@@ -1457,6 +1458,8 @@ struct redisServerConst {
     bool fUsePro = false;
     int thread_min_client_threshold = 50;
     int multimaster_no_forward;
+
+    std::unordered_set<int> setDbReplicateDisable;
 };
 
 struct redisServer {

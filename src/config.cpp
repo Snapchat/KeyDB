@@ -35,6 +35,7 @@
 #include <sys/stat.h>
 
 const char *KEYDB_SET_VERSION = KEYDB_REAL_VERSION;
+char *replicateDbDisableString = nullptr; // The raw string the user provided so we can rewrite the same way
 
 /*-----------------------------------------------------------------------------
  * Config file name-value maps.
@@ -2192,6 +2193,79 @@ static int isValidAOFfilename(char *val, const char **err) {
     return 1;
 }
 
+static int updateDbDisable(char *val, const char **err) {
+    cserver.setDbReplicateDisable.clear();
+    serverLog(LL_WARNING, "UPDATE");
+    if (val == nullptr)
+        return 1;
+    
+    char *pchCur = val;
+    char *pchStart = val;
+    int dbStart = -1;
+
+    for (;;) {
+        char *endptr;
+        switch (*pchCur)
+        {
+            case '-':
+                if (pchStart < pchCur && dbStart < 0) {
+                    errno = 0;
+                    dbStart = strtol(pchStart, &endptr, 10);
+                    if (errno || endptr != pchCur || dbStart < 0) {
+                        *err = "Invalid database in list";
+                        return 0;
+                    }
+                } else {
+                    *err = "Invalid database range in list";
+                    return 0;
+                }
+                pchStart = pchCur + 1;
+                break;
+
+            case ' ':
+            case '\0':
+                if (pchStart < pchCur) {
+                    errno = 0;
+                    int db = strtol(pchStart, &endptr, 10);
+                    if (errno || endptr != pchCur || db < 0) {
+                        *err = "Invalid database in list";
+                        return 0;
+                    }
+                    if (dbStart < 0)
+                        dbStart = db;
+                    for (;dbStart <= db; ++dbStart) {
+                        if (cserver.setDbReplicateDisable.find(dbStart) == cserver.setDbReplicateDisable.end()) {
+                            cserver.setDbReplicateDisable.insert(dbStart);
+                        }
+                    }
+                    dbStart = -1;
+                }
+                pchStart = pchCur + 1;
+                break;
+        }
+        if (*pchCur == '\0')
+            break;
+        ++pchCur;
+    }
+
+    if (dbStart >= 0) {
+        *err = "Incomplete database range";
+        return 0;
+    }
+
+    // Display the disabled databases in the log (sorted ascending)
+    std::vector<int> vecdb;
+    for (int db : cserver.setDbReplicateDisable) {
+        vecdb.push_back(db);
+    }
+    std::sort(vecdb.begin(), vecdb.end());
+    for (int db : vecdb) {
+        serverLog(LL_WARNING, "Replicate disabled for DB: %d", db);
+    }
+
+    return 1;
+}
+
 static int updateHZ(long long val, long long prev, const char **err) {
     UNUSED(prev);
     UNUSED(err);
@@ -2394,6 +2468,7 @@ standardConfig configs[] = {
     createStringConfig("bio_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->bio_cpulist, NULL, NULL, NULL),
     createStringConfig("aof_rewrite_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->aof_rewrite_cpulist, NULL, NULL, NULL),
     createStringConfig("bgsave_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->bgsave_cpulist, NULL, NULL, NULL),
+    createStringConfig("replicate-db-disable", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, replicateDbDisableString, nullptr, updateDbDisable, nullptr),
 
     /* Enum Configs */
     createEnumConfig("supervised", NULL, IMMUTABLE_CONFIG, supervised_mode_enum, cserver.supervised_mode, SUPERVISED_NONE, NULL, NULL),

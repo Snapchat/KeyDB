@@ -91,6 +91,7 @@ start_server {tags {"introspection"}} {
             aof_rewrite_cpulist
             bgsave_cpulist
             active-replica
+	    replicate-db-disable
         }
 
         if {!$::tls} {

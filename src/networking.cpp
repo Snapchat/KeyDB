@@ -2496,7 +2496,7 @@ void readQueryFromClient(connection *conn) {
     sdsIncrLen(c->querybuf,nread);
     c->lastinteraction = g_pserver->unixtime;
     if (c->flags & CLIENT_MASTER) c->read_reploff += nread;
-    g_pserver->stat_net_input_bytes += nread;
+    g_pserver->stat_net_input_bytes.fetch_add(nread, std::memory_order_relaxed);
     if (sdslen(c->querybuf) > cserver.client_max_querybuf_len) {
         sds ci = catClientInfoString(sdsempty(),c), bytes = sdsempty();
 

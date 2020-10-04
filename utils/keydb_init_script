@@ -8,7 +8,7 @@
 # Default-Start:        2 3 4 5
 # Default-Stop:         0 1 6
 # Short-Description:    KeyDB data structure server
-# Description:          KeyDB data structure server. See https://redis.io
+# Description:          KeyDB data structure server. See https://keydb.dev
 ### END INIT INFO
 
 KEYDBPORT=6379

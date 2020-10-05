@@ -40,5 +40,5 @@
 #include "zmalloc.h"
 #define rax_malloc(size) zmalloc(size, MALLOC_SHARED)
 #define rax_realloc(ptr, size) zrealloc(ptr, size, MALLOC_SHARED)
-#define rax_free zfree
+#define rax_free(ptr) zfree((ptr))
 #endif

@@ -47,7 +47,7 @@ endif
 
 USEASM?=true
 
-ifneq ($(SANITIZE),)
+ifneq ($(strip $(SANITIZE)),)
 	CFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE
 	CXXFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE
 	LDFLAGS+= -fsanitize=$(SANITIZE)

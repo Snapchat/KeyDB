@@ -246,6 +246,13 @@ ifeq ($(MIMALLOC),memkind)
 	FINAL_LIBS := ../deps/memkind/src/.libs/libmemkind.a -lnuma $(FINAL_LIBS)
 endif
 
+ifeq ($(MALLOC),mimalloc)
+	DEPENDENCY_TARGETS+= mimalloc
+	FINAL_CFLAGS+= -DUSE_MIMALLOC -I../deps/mimalloc/include
+	FINAL_CXXFLAGS+= -DUSE_MIMALLOC -I../deps/mimalloc/include
+	FINAL_LIBS := ../deps/mimalloc/bin/libmimalloc.a $(FINAL_LIBS)
+endif
+
 ifeq ($(BUILD_TLS),yes)
     	FINAL_CFLAGS+=-DUSE_OPENSSL $(OPENSSL_CXXFLAGS)
     	FINAL_CXXFLAGS+=-DUSE_OPENSSL $(OPENSSL_CXXFLAGS)

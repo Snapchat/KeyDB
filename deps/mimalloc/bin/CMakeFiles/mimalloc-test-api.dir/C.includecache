@@ -1,0 +1,36 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+../include/mimalloc.h
+stddef.h
+-
+stdbool.h
+-
+cstdint
+-
+type_traits
+-
+utility
+-
+
+/home/hbina/git/KeyDB/deps/mimalloc/test/test-api.c
+stdio.h
+-
+assert.h
+-
+stdbool.h
+-
+stdint.h
+-
+errno.h
+-
+vector
+-
+mimalloc.h
+/home/hbina/git/KeyDB/deps/mimalloc/test/mimalloc.h
+

@@ -101,6 +101,10 @@ ifeq ($(USE_JEMALLOC),no)
 	MALLOC=libc
 endif
 
+ifeq ($(USE_MIMALLOC),no)
+	MALLOC=mimalloc
+endif
+
 # Override default settings if possible
 -include .make-settings
 
@@ -229,6 +233,13 @@ ifeq ($(MALLOC),jemalloc)
 endif
 
 ifeq ($(MALLOC),memkind)
+	DEPENDENCY_TARGETS+= memkind
+	FINAL_CFLAGS+= -DUSE_MEMKIND -I../deps/memkind/src/include
+	FINAL_CXXFLAGS+= -DUSE_MEMKIND -I../deps/memkind/src/include
+	FINAL_LIBS := ../deps/memkind/src/.libs/libmemkind.a -lnuma $(FINAL_LIBS)
+endif
+
+ifeq ($(MIMALLOC),memkind)
 	DEPENDENCY_TARGETS+= memkind
 	FINAL_CFLAGS+= -DUSE_MEMKIND -I../deps/memkind/src/include
 	FINAL_CXXFLAGS+= -DUSE_MEMKIND -I../deps/memkind/src/include

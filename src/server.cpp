@@ -2302,37 +2302,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (moduleCount()) moduleReleaseGIL(TRUE /*fServerThread*/);
 }
 
-void beforeSleepLite(struct aeEventLoop *eventLoop)
-{
-    int iel = ielFromEventLoop(eventLoop);
-    
-    /* Try to process pending commands for clients that were just unblocked. */
-    aeAcquireLock();
-    processClients();
-    if (listLength(g_pserver->rgthreadvar[iel].unblocked_clients)) {
-        processUnblockedClients(iel);
-    }
-
-    /* Check if there are clients unblocked by modules that implement
-     * blocking commands. */
-    if (moduleCount()) moduleHandleBlockedClients(ielFromEventLoop(eventLoop));
-    int aof_state = g_pserver->aof_state;
-    aeReleaseLock();
-
-    /* Handle writes with pending output buffers. */
-    handleClientsWithPendingWrites(iel, aof_state);
-
-    aeAcquireLock();
-    /* Close clients that need to be closed asynchronous */
-    freeClientsInAsyncFreeQueue(iel);
-    aeReleaseLock();
-
-    /* Before we are going to sleep, let the threads access the dataset by
-     * releasing the GIL. Redis main thread will not touch anything at this
-     * time. */
-    if (moduleCount()) moduleReleaseGIL(TRUE /*fServerThread*/);
-}
-
 /* This function is called immadiately after the event loop multiplexing
  * API returned, and the control is going to soon return to Redis by invoking
  * the different events callbacks. */

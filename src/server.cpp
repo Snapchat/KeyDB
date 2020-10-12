@@ -2223,15 +2223,19 @@ void processClients();
 void beforeSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
     int iel = ielFromEventLoop(eventLoop);
+    
+    aeAcquireLock();
     processClients();
 
     /* Handle precise timeouts of blocked clients. */
     handleBlockedClientsTimeout();
 
     /* Handle TLS pending data. (must be done before flushAppendOnlyFile) */
-    aeReleaseLock();
-    tlsProcessPendingData();
-    aeAcquireLock();
+    if (tlsHasPendingData()) {
+        aeReleaseLock();
+        tlsProcessPendingData();
+        aeAcquireLock();
+    }
 
     /* If tls still has pending unread data don't sleep at all. */
     aeSetDontWait(eventLoop, tlsHasPendingData());
@@ -2289,9 +2293,17 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Handle writes with pending output buffers. */
     int aof_state = g_pserver->aof_state;
-    aeReleaseLock();
-    handleClientsWithPendingWrites(iel, aof_state);
-    aeAcquireLock();
+
+    /* We try to handle writes at the end so we don't have to reacquire the lock,
+        but if there is a pending async close we need to ensure the writes happen
+        first so perform it here */
+    bool fSentReplies = false;
+    if (listLength(g_pserver->clients_to_close)) {
+        aeReleaseLock();
+        handleClientsWithPendingWrites(iel, aof_state);
+        aeAcquireLock();
+        fSentReplies = true;
+    }
 
     /* Close clients that need to be closed asynchronous */
     freeClientsInAsyncFreeQueue(iel);
@@ -2299,6 +2311,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
      * time. */
+    aeReleaseLock();
+    if (!fSentReplies)
+        handleClientsWithPendingWrites(iel, aof_state);
     if (moduleCount()) moduleReleaseGIL(TRUE /*fServerThread*/);
 }
 
@@ -3018,7 +3033,7 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     pvar->tlsfd_count = 0;
     pvar->cclients = 0;
     pvar->el = aeCreateEventLoop(g_pserver->maxclients+CONFIG_FDSET_INCR);
-    aeSetBeforeSleepProc(pvar->el, beforeSleep, 0);
+    aeSetBeforeSleepProc(pvar->el, beforeSleep, AE_SLEEP_THREADSAFE);
     aeSetAfterSleepProc(pvar->el, afterSleep, AE_SLEEP_THREADSAFE);
     pvar->current_client = nullptr;
     pvar->clients_paused = 0;
@@ -3519,7 +3534,7 @@ void call(client *c, int flags) {
     /* Send the command to clients in MONITOR mode if applicable.
      * Administrative commands are considered too dangerous to be shown. */
     if (listLength(g_pserver->monitors) &&
-        !g_pserver->loading &&
+        !g_pserver->loading.load(std::memory_order_relaxed) &&
         !(c->cmd->flags & (CMD_SKIP_MONITOR|CMD_ADMIN)))
     {
         replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);

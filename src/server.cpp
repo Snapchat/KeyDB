@@ -3669,8 +3669,6 @@ void call(client *c, int flags) {
         }
         redisOpArrayFree(&g_pserver->also_propagate);
     }
-
-    ProcessPendingAsyncWrites();
     
     g_pserver->also_propagate = prev_also_propagate;
 

@@ -293,7 +293,7 @@ int prepareClientToWrite(client *c, bool fAsync) {
  * -------------------------------------------------------------------------- */
 
 int _addReplyToBuffer(client *c, const char *s, size_t len, bool fAsync) {
-    if (c->flags & CLIENT_CLOSE_AFTER_REPLY) return C_OK;
+    if (c->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_AFTER_REPLY) return C_OK;
 
     fAsync = fAsync && !FCorrectThread(c);  // Not async if we're on the right thread
     if (fAsync)
@@ -327,7 +327,7 @@ int _addReplyToBuffer(client *c, const char *s, size_t len, bool fAsync) {
 }
 
 void _addReplyProtoToList(client *c, const char *s, size_t len) {
-    if (c->flags & CLIENT_CLOSE_AFTER_REPLY) return;
+    if (c->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_AFTER_REPLY) return;
     AssertCorrectThread(c);
 
     listNode *ln = listLast(c->reply);

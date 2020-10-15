@@ -641,7 +641,7 @@ void loadServerConfigFromString(char *config) {
     return;
 
 loaderr:
-    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Redis %s) ***\n",
+    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (KeyDB %s) ***\n",
         KEYDB_REAL_VERSION);
     fprintf(stderr, "Reading the configuration file, at line %d\n", linenum);
     fprintf(stderr, ">>> '%s'\n", lines[i]);

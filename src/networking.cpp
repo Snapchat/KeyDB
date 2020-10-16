@@ -1911,12 +1911,13 @@ void ProcessPendingAsyncWrites()
         }
         else
         {
-            if (!c->fPendingAsyncWriteHandler) {
-                c->fPendingAsyncWriteHandler = true;
+            bool expected = false;
+            if (c->fPendingAsyncWriteHandler.compare_exchange_strong(expected, true)) {
                 bool fResult = c->postFunction([](client *c) {
                     c->fPendingAsyncWriteHandler = false;
-                    connSetWriteHandler(c->conn, sendReplyToClient, true);
-                });
+                    clientInstallWriteHandler(c);
+                    handleClientsWithPendingWrites(c->iel, g_pserver->aof_state);
+                }, false);
 
                 if (!fResult)
                     c->fPendingAsyncWriteHandler = false;   // if we failed to set the handler then prevent this from never being reset

@@ -589,7 +589,7 @@ static aeTimeEvent *aeSearchNearestTimer(aeEventLoop *eventLoop)
 
 /* Process time events */
 static int processTimeEvents(aeEventLoop *eventLoop) {
-    std::unique_lock<decltype(g_lock)> ulock(g_lock);
+    std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
     int processed = 0;
     aeTimeEvent *te;
     long long maxId;
@@ -634,8 +634,10 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
                 eventLoop->timeEventHead = te->next;
             if (te->next)
                 te->next->prev = te->prev;
-            if (te->finalizerProc)
+            if (te->finalizerProc) {
+                if (!ulock.owns_lock()) ulock.lock();
                 te->finalizerProc(eventLoop, te->clientData);
+            }
             zfree(te);
             te = next;
             continue;
@@ -654,6 +656,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
         if (now_sec > te->when_sec ||
             (now_sec == te->when_sec && now_ms >= te->when_ms))
         {
+            if (!ulock.owns_lock()) ulock.lock();
             int retval;
 
             id = te->id;

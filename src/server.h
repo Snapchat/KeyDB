@@ -1083,7 +1083,7 @@ typedef struct client {
     std::atomic<uint64_t> flags;              /* Client flags: CLIENT_* macros. */
     int casyncOpsPending;
     int fPendingAsyncWrite; /* NOTE: Not a flag because it is written to outside of the client lock (locked by the global lock instead) */
-    int fPendingAsyncWriteHandler;
+    std::atomic<bool> fPendingAsyncWriteHandler;
     int authenticated;      /* Needed when the default user requires auth. */
     int replstate;          /* Replication state if this is a replica. */
     int repl_put_online_on_ack; /* Install replica write handler on ACK. */
@@ -1153,7 +1153,7 @@ typedef struct client {
     int master_error;
 
     // post a function from a non-client thread to run on its client thread
-    bool postFunction(std::function<void(client *)> fn);
+    bool postFunction(std::function<void(client *)> fn, bool fLock = true);
 } client;
 
 struct saveparam {

@@ -1219,7 +1219,7 @@ void clientAcceptHandler(connection *conn) {
                 "change permanent. "
                 "2) Alternatively you can just disable the protected mode by "
                 "editing the Redis configuration file, and setting the protected "
-                "mode option to 'no', and then restarting the g_pserver-> "
+                "mode option to 'no', and then restarting the server "
                 "3) If you started the server manually just for testing, restart "
                 "it with the '--protected-mode no' option. "
                 "4) Setup a bind address or an authentication password. "

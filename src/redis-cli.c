@@ -1878,14 +1878,15 @@ static void repl(void) {
     exit(0);
 }
 
-static int noninteractive(int argc, char **argv) {
+static int noninteractive(int argc, char ***argv) {
     int retval = 0;
     if (config.stdinarg) {
-        argv = zrealloc(argv, (argc+1)*sizeof(char*), MALLOC_LOCAL);
-        argv[argc] = readArgFromStdin();
-        retval = issueCommand(argc+1, argv);
+        *argv = zrealloc(*argv, (argc+1)*sizeof(char*), MALLOC_LOCAL);
+        (*argv)[argc] = readArgFromStdin();
+        retval = issueCommand(argc+1, *argv);
+        sdsfree((*argv)[argc]);
     } else {
-        retval = issueCommand(argc, argv);
+        retval = issueCommand(argc, *argv);
     }
     return retval;
 }
@@ -7134,6 +7135,11 @@ int main(int argc, char **argv) {
     if (config.eval) {
         return evalMode(argc,argv);
     } else {
-        return noninteractive(argc,convertToSds(argc,argv));
+        sds *sdsArgs = convertToSds(argc,argv);
+        int rval = noninteractive(argc,&sdsArgs);
+        for (int i = 0; i < argc; ++i)
+            sdsfree(sdsArgs[i]);
+        zfree(sdsArgs);
+        return rval;
     }
 }

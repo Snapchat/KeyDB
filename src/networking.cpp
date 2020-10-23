@@ -1915,10 +1915,8 @@ void ProcessPendingAsyncWrites()
             if (c->fPendingAsyncWriteHandler.compare_exchange_strong(expected, true)) {
                 bool fResult = c->postFunction([](client *c) {
                     c->fPendingAsyncWriteHandler = false;
-                    if (c->bufpos || listLength(c->reply) || (c->flags & CLIENT_PENDING_WRITE)) {
-                        clientInstallWriteHandler(c);
-                        handleClientsWithPendingWrites(c->iel, g_pserver->aof_state);
-                    }
+                    clientInstallWriteHandler(c);
+                    handleClientsWithPendingWrites(c->iel, g_pserver->aof_state);
                 }, false);
 
                 if (!fResult)

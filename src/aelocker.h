@@ -9,7 +9,7 @@ public:
     {
     }
 
-    void arm(client *c, bool fIfNeeded = false) // if a client is passed, then the client is already locked
+    void arm(client *c = nullptr, bool fIfNeeded = false) // if a client is passed, then the client is already locked
     {
         if (m_fArmed)
             return;

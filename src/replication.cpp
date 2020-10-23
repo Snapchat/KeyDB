@@ -196,6 +196,10 @@ void createReplicationBacklog(void) {
      * byte we have is the next byte that will be generated for the
      * replication stream. */
     g_pserver->repl_backlog_off = g_pserver->master_repl_offset+1;
+
+    /* Allow transmission to clients */
+    serverTL->repl_batch_idxStart = 0;
+    serverTL->repl_batch_offStart = g_pserver->master_repl_offset;
 }
 
 /* This function is called when the user modifies the replication backlog
@@ -209,20 +213,44 @@ void resizeReplicationBacklog(long long newsize) {
         newsize = CONFIG_REPL_BACKLOG_MIN_SIZE;
     if (g_pserver->repl_backlog_size == newsize) return;
 
-    g_pserver->repl_backlog_size = newsize;
     if (g_pserver->repl_backlog != NULL) {
         /* What we actually do is to flush the old buffer and realloc a new
          * empty one. It will refill with new data incrementally.
          * The reason is that copying a few gigabytes adds latency and even
          * worse often we need to alloc additional space before freeing the
          * old buffer. */
-        zfree(g_pserver->repl_backlog);
-        g_pserver->repl_backlog = (char*)zmalloc(g_pserver->repl_backlog_size, MALLOC_LOCAL);
-        g_pserver->repl_backlog_histlen = 0;
-        g_pserver->repl_backlog_idx = 0;
-        /* Next byte we have is... the next since the buffer is empty. */
-        g_pserver->repl_backlog_off = g_pserver->master_repl_offset+1;
+
+        if (serverTL->repl_batch_idxStart >= 0) {
+            // We need to keep critical data so we can't shrink less than the hot data in the buffer
+            newsize = std::max(newsize, g_pserver->master_repl_offset - serverTL->repl_batch_offStart);
+            char *backlog = (char*)zmalloc(newsize);
+            g_pserver->repl_backlog_histlen = g_pserver->master_repl_offset - serverTL->repl_batch_offStart;
+
+            if (g_pserver->repl_backlog_idx >= serverTL->repl_batch_idxStart) {
+                auto cbActiveBacklog = g_pserver->repl_backlog_idx - serverTL->repl_batch_idxStart;
+                memcpy(backlog, g_pserver->repl_backlog + serverTL->repl_batch_idxStart, cbActiveBacklog);
+                serverAssert(g_pserver->repl_backlog_histlen == cbActiveBacklog);
+            } else {
+                auto cbPhase1 = g_pserver->repl_backlog_size - serverTL->repl_batch_idxStart;
+                memcpy(backlog, g_pserver->repl_backlog + serverTL->repl_batch_idxStart, cbPhase1);
+                memcpy(backlog + cbPhase1, g_pserver->repl_backlog, g_pserver->repl_backlog_idx);
+                auto cbActiveBacklog = cbPhase1 + g_pserver->repl_backlog_idx;
+                serverAssert(g_pserver->repl_backlog_histlen == cbActiveBacklog);
+            }
+            zfree(g_pserver->repl_backlog);
+            g_pserver->repl_backlog = backlog;
+            g_pserver->repl_backlog_idx = g_pserver->repl_backlog_histlen;
+            serverTL->repl_batch_idxStart = 0;
+        } else {
+            zfree(g_pserver->repl_backlog);
+            g_pserver->repl_backlog = (char*)zmalloc(newsize);
+            g_pserver->repl_backlog_histlen = 0;
+            g_pserver->repl_backlog_idx = 0;
+            /* Next byte we have is... the next since the buffer is empty. */
+            g_pserver->repl_backlog_off = g_pserver->master_repl_offset+1;
+        }
     }
+    g_pserver->repl_backlog_size = newsize;
 }
 
 void freeReplicationBacklog(void) {
@@ -246,6 +274,21 @@ void freeReplicationBacklog(void) {
 void feedReplicationBacklog(const void *ptr, size_t len) {
     serverAssert(GlobalLocksAcquired());
     const unsigned char *p = (const unsigned char*)ptr;
+
+    if (serverTL->repl_batch_idxStart >= 0) {
+        long long minimumsize = g_pserver->master_repl_offset + len - serverTL->repl_batch_offStart+1;
+        if (minimumsize > g_pserver->repl_backlog_size) {
+            flushReplBacklogToClients();
+            minimumsize = g_pserver->master_repl_offset + len - serverTL->repl_batch_offStart+1;
+
+            if (minimumsize > g_pserver->repl_backlog_size) {
+                // This is an emergency overflow, we better resize to fit
+                long long newsize = std::max(g_pserver->repl_backlog_size*2, minimumsize);
+                serverLog(LL_WARNING, "Replication backlog is too small, resizing to: %lld", newsize);
+                resizeReplicationBacklog(newsize);
+            }
+        }
+    }
 
     g_pserver->master_repl_offset += len;
 
@@ -370,12 +413,10 @@ static int writeProtoNum(char *dst, const size_t cchdst, long long num)
  * the commands received by our clients in order to create the replication
  * stream. Instead if the instance is a replica and has sub-slaves attached,
  * we use replicationFeedSlavesFromMaster() */
-void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
-    listNode *ln, *lnReply;
-    listIter li, liReply;
-    int j, len;
+void replicationFeedSlavesCore(list *slaves, int dictid, robj **argv, int argc) {
+    int j;
     serverAssert(GlobalLocksAcquired());
-    static client *fake = nullptr;
+    serverAssert(serverTL->repl_batch_offStart >= 0);
 
     if (dictid < 0)
         dictid = 0; // this can happen if we send a PING before any real operation
@@ -394,58 +435,34 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     /* We can't have slaves attached and no backlog. */
     serverAssert(!(listLength(slaves) != 0 && g_pserver->repl_backlog == NULL));
 
-    if (fake == nullptr)
-    {
-        fake = createClient(nullptr, serverTL - g_pserver->rgthreadvar);
-        fake->flags |= CLIENT_FORCE_REPLY;
-    }
-
     bool fSendRaw = !g_pserver->fActiveReplica;
-    replicationFeedSlave(fake, dictid, argv, argc, fSendRaw); // Note: updates the repl log, keep above the repl update code below
 
+    /* Send SELECT command to every replica if needed. */
+    if (g_pserver->replicaseldb != dictid) {
+        char llstr[LONG_STR_SIZE];
+        robj *selectcmd;
 
-    long long cchbuf = fake->bufpos;
-    listRewind(fake->reply, &liReply);
-    while ((lnReply = listNext(&liReply)))
-    {
-        clientReplyBlock* reply = (clientReplyBlock*)listNodeValue(lnReply);
-        cchbuf += reply->used;
+        /* For a few DBs we have pre-computed SELECT command. */
+        if (dictid >= 0 && dictid < PROTO_SHARED_SELECT_CMDS) {
+            selectcmd = shared.select[dictid];
+        } else {
+            int dictid_len;
+
+            dictid_len = ll2string(llstr,sizeof(llstr),dictid);
+            selectcmd = createObject(OBJ_STRING,
+                sdscatprintf(sdsempty(),
+                "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n",
+                dictid_len, llstr));
+        }
+
+        /* Add the SELECT command into the backlog. */
+        /* We don't do this for advanced replication because this will be done later when it adds the whole RREPLAY command */
+        if (g_pserver->repl_backlog && fSendRaw) feedReplicationBacklogWithObject(selectcmd);
+
+        if (dictid < 0 || dictid >= PROTO_SHARED_SELECT_CMDS)
+            decrRefCount(selectcmd);
     }
-
-    serverAssert(argc > 0);
-    serverAssert(cchbuf > 0);
-
-    // The code below used to be: snprintf(proto, sizeof(proto), "*5\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
-    //  but that was much too slow
-    static const char *protoRREPLAY = "*5\r\n$7\r\nRREPLAY\r\n$36\r\n00000000-0000-0000-0000-000000000000\r\n$";
-    char proto[1024];
-    int cchProto = 0;
-    if (!fSendRaw)
-    {
-        char uuid[37];
-        uuid_unparse(cserver.uuid, uuid);
-
-        cchProto = strlen(protoRREPLAY);
-        memcpy(proto, protoRREPLAY, strlen(protoRREPLAY));
-        memcpy(proto + 22, uuid, 36); // Note UUID_STR_LEN includes the \0 trailing byte which we don't want
-        cchProto += ll2string(proto + cchProto, sizeof(proto)-cchProto, cchbuf);
-        memcpy(proto + cchProto, "\r\n", 3);
-        cchProto += 2;
-    }
-
-    long long master_repl_offset_start = g_pserver->master_repl_offset;
-    
-    char szDbNum[128];
-    int cchDbNum = 0;
-    if (!fSendRaw)
-    	cchDbNum = writeProtoNum(szDbNum, sizeof(szDbNum), dictid);
-    
-
-    char szMvcc[128];
-    int cchMvcc = 0;
-    incrementMvccTstamp();	// Always increment MVCC tstamp so we're consistent with active and normal replication
-    if (!fSendRaw)
-    	cchMvcc = writeProtoNum(szMvcc, sizeof(szMvcc), getMvccTstamp());
+    g_pserver->replicaseldb = dictid;
 
     /* Write the command to the replication backlog if any. */
     if (g_pserver->repl_backlog) 
@@ -456,10 +473,11 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
             /* Add the multi bulk reply length. */
             aux[0] = '*';
-            len = ll2string(aux+1,sizeof(aux)-1,argc);
-            aux[len+1] = '\r';
-            aux[len+2] = '\n';
-            feedReplicationBacklog(aux,len+3);
+            int multilen = ll2string(aux+1,sizeof(aux)-1,argc);
+            aux[multilen+1] = '\r';
+            aux[multilen+2] = '\n';
+
+            feedReplicationBacklog(aux,multilen+3);
 
             for (j = 0; j < argc; j++) {
                 long objlen = stringObjectLen(argv[j]);
@@ -468,7 +486,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
                 * not just as a plain string, so create the $..CRLF payload len
                 * and add the final CRLF */
                 aux[0] = '$';
-                len = ll2string(aux+1,sizeof(aux)-1,objlen);
+                int len = ll2string(aux+1,sizeof(aux)-1,objlen);
                 aux[len+1] = '\r';
                 aux[len+2] = '\n';
                 feedReplicationBacklog(aux,len+3);
@@ -478,67 +496,57 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         }
         else
         {
-            feedReplicationBacklog(proto, cchProto);
-            feedReplicationBacklog(fake->buf, fake->bufpos);
-            listRewind(fake->reply, &liReply);
-            while ((lnReply = listNext(&liReply)))
+            char szDbNum[128];
+            int cchDbNum = 0;
+            if (!fSendRaw)
+                cchDbNum = writeProtoNum(szDbNum, sizeof(szDbNum), dictid);
+            
+
+            char szMvcc[128];
+            int cchMvcc = 0;
+            incrementMvccTstamp();	// Always increment MVCC tstamp so we're consistent with active and normal replication
+            if (!fSendRaw)
+                cchMvcc = writeProtoNum(szMvcc, sizeof(szMvcc), getMvccTstamp());
+
+            //size_t cchlen = multilen+3;
+            struct redisCommand *cmd = lookupCommand(szFromObj(argv[0]));
+            sds buf = catCommandForAofAndActiveReplication(sdsempty(), cmd, argv, argc);
+            size_t cchlen = sdslen(buf);
+
+            // The code below used to be: snprintf(proto, sizeof(proto), "*5\r\n$7\r\nRREPLAY\r\n$%d\r\n%s\r\n$%lld\r\n", (int)strlen(uuid), uuid, cchbuf);
+            //  but that was much too slow
+            static const char *protoRREPLAY = "*5\r\n$7\r\nRREPLAY\r\n$36\r\n00000000-0000-0000-0000-000000000000\r\n$";
+            char proto[1024];
+            int cchProto = 0;
+            if (!fSendRaw)
             {
-                clientReplyBlock* reply = (clientReplyBlock*)listNodeValue(lnReply);
-                feedReplicationBacklog(reply->buf(), reply->used);
+                char uuid[37];
+                uuid_unparse(cserver.uuid, uuid);
+
+                cchProto = strlen(protoRREPLAY);
+                memcpy(proto, protoRREPLAY, strlen(protoRREPLAY));
+                memcpy(proto + 22, uuid, 36); // Note UUID_STR_LEN includes the \0 trailing byte which we don't want
+                cchProto += ll2string(proto + cchProto, sizeof(proto)-cchProto, cchlen);
+                memcpy(proto + cchProto, "\r\n", 3);
+                cchProto += 2;
             }
+
+
+            feedReplicationBacklog(proto, cchProto);            
+            feedReplicationBacklog(buf, sdslen(buf));
+
             const char *crlf = "\r\n";
             feedReplicationBacklog(crlf, 2);
             feedReplicationBacklog(szDbNum, cchDbNum);
             feedReplicationBacklog(szMvcc, cchMvcc);
+
+            sdsfree(buf);
         }
     }
+}
 
-    /* Write the command to every replica. */
-    listRewind(slaves,&li);
-    while((ln = listNext(&li))) {
-        client *replica = (client*)ln->value;
-
-        /* Don't feed slaves that are still waiting for BGSAVE to start */
-        if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
-        if (replica->flags & CLIENT_CLOSE_ASAP) continue;
-        std::unique_lock<decltype(replica->lock)> lock(replica->lock, std::defer_lock);
-		// When writing to clients on other threads the global lock is sufficient provided we only use AddReply*Async()
-		if (FCorrectThread(replica))
-			lock.lock();
-        if (serverTL->current_client && FSameHost(serverTL->current_client, replica))
-        {
-            replica->reploff_skipped += g_pserver->master_repl_offset - master_repl_offset_start;
-            continue;
-        }
-
-        /* Feed slaves that are waiting for the initial SYNC (so these commands
-         * are queued in the output buffer until the initial SYNC completes),
-         * or are already in sync with the master. */
-
-        if (!fSendRaw)
-            addReplyProto(replica, proto, cchProto);
-
-        addReplyProto(replica,fake->buf,fake->bufpos);
-        listRewind(fake->reply, &liReply);
-        while ((lnReply = listNext(&liReply)))
-        {
-            clientReplyBlock* reply = (clientReplyBlock*)listNodeValue(lnReply);
-            addReplyProto(replica, reply->buf(), reply->used);
-        }
-
-        if (!fSendRaw)
-        {
-            addReply(replica,shared.crlf);
-            addReplyProto(replica, szDbNum, cchDbNum);
-            addReplyProto(replica, szMvcc, cchMvcc);
-        }
-    }
-
-    // Cleanup cached fake client output buffers
-    fake->bufpos = 0;
-    fake->sentlen = 0;
-    fake->reply_bytes = 0;
-    listEmpty(fake->reply);
+void replicationFeedSlaves(list *replicas, int dictid, robj **argv, int argc) {
+    runAndPropogateToReplicas(replicationFeedSlavesCore, replicas, dictid, argv, argc);
 }
 
 /* This is a debugging function that gets called when we detect something
@@ -578,10 +586,7 @@ void showLatestBacklog(void) {
 /* This function is used in order to proxy what we receive from our master
  * to our sub-slaves. */
 #include <ctype.h>
-void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t buflen) {
-    listNode *ln;
-    listIter li;
-
+void replicationFeedSlavesFromMasterStream(char *buf, size_t buflen) {
     /* Debugging: this is handy to see the stream sent from master
      * to slaves. Disabled with if(0). */
     if (0) {
@@ -593,23 +598,6 @@ void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t bufle
     }
 
     if (g_pserver->repl_backlog) feedReplicationBacklog(buf,buflen);
-    listRewind(slaves,&li);
-
-    while((ln = listNext(&li))) {
-        client *replica = (client*)ln->value;
-        std::unique_lock<decltype(replica->lock)> ulock(replica->lock, std::defer_lock);
-		if (FCorrectThread(replica))
-			ulock.lock();
-        if (FMasterHost(replica))
-            continue;   // Active Active case, don't feed back
-
-        /* Don't feed slaves that are still waiting for BGSAVE to start */
-        if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
-        addReplyProto(replica,buf,buflen);
-    }
-    
-    if (listLength(slaves))
-        ProcessPendingAsyncWrites();    // flush them to their respective threads
 }
 
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc) {
@@ -2269,6 +2257,8 @@ void readSyncBulkPayload(connection *conn) {
         * we are starting a new history. */
         memcpy(g_pserver->replid,mi->master->replid,sizeof(g_pserver->replid));
         g_pserver->master_repl_offset = mi->master->reploff;
+        if (serverTL->repl_batch_offStart >= 0)
+            serverTL->repl_batch_offStart = g_pserver->master_repl_offset;
     }
     clearReplicationId2();
 
@@ -4365,4 +4355,53 @@ static void propagateMasterStaleKeys()
     }
 
     decrRefCount(rgobj[0]);
+}
+
+void flushReplBacklogToClients()
+{
+    serverAssert(GlobalLocksAcquired());
+    
+    if (serverTL->repl_batch_offStart != g_pserver->master_repl_offset) {
+        bool fAsyncWrite = false;
+        // Ensure no overflow
+        serverAssert(serverTL->repl_batch_offStart < g_pserver->master_repl_offset);
+        serverAssert(g_pserver->master_repl_offset - serverTL->repl_batch_offStart <= g_pserver->repl_backlog_size);
+        serverAssert(serverTL->repl_batch_idxStart != g_pserver->repl_backlog_idx);
+
+        listIter li;
+        listNode *ln;
+        listRewind(g_pserver->slaves, &li);
+        while ((ln = listNext(&li))) {
+            client *replica = (client*)listNodeValue(ln);
+
+            if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
+            if (replica->flags & CLIENT_CLOSE_ASAP) continue;
+
+            std::unique_lock<fastlock> ul(replica->lock, std::defer_lock);
+            if (FCorrectThread(replica))
+                ul.lock();
+            else
+                fAsyncWrite = true;
+            
+            if (g_pserver->repl_backlog_idx >= serverTL->repl_batch_idxStart) {
+                long long cbCopy = g_pserver->repl_backlog_idx - serverTL->repl_batch_idxStart;
+                serverAssert((g_pserver->master_repl_offset - serverTL->repl_batch_offStart) == cbCopy);
+                serverAssert((g_pserver->repl_backlog_size - serverTL->repl_batch_idxStart) >= (cbCopy));
+                serverAssert((serverTL->repl_batch_idxStart + cbCopy) <= g_pserver->repl_backlog_size);
+                
+                addReplyProto(replica, g_pserver->repl_backlog + serverTL->repl_batch_idxStart, cbCopy);
+            } else {
+                auto cbPhase1 = g_pserver->repl_backlog_size - serverTL->repl_batch_idxStart;
+                addReplyProto(replica, g_pserver->repl_backlog + serverTL->repl_batch_idxStart, cbPhase1);
+                addReplyProto(replica, g_pserver->repl_backlog, g_pserver->repl_backlog_idx);
+                serverAssert((cbPhase1 + g_pserver->repl_backlog_idx) == (g_pserver->master_repl_offset - serverTL->repl_batch_offStart));
+            }
+        }
+        if (fAsyncWrite)
+            ProcessPendingAsyncWrites();
+
+        // This may be called multiple times per "frame" so update with our progress flushing to clients
+        serverTL->repl_batch_idxStart = g_pserver->repl_backlog_idx;
+        serverTL->repl_batch_offStart = g_pserver->master_repl_offset;
+    }
 }

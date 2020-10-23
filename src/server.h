@@ -1371,6 +1371,8 @@ struct redisServerThreadVars {
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     long unsigned commandsExecuted = 0;
     bool fRetrySetAofEvent = false;
+    long long repl_batch_offStart = -1;
+    long long repl_batch_idxStart = -1;
     std::vector<client*> vecclientsProcess;
 };
 
@@ -2185,7 +2187,7 @@ ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout);
 /* Replication */
 void initMasterInfo(struct redisMaster *master);
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc);
-void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t buflen);
+void replicationFeedSlavesFromMasterStream(char *buf, size_t buflen);
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc);
 void updateSlavesWaitingBgsave(int bgsaveerr, int type);
 void replicationCron(void);
@@ -2878,6 +2880,28 @@ inline int FCorrectThread(client *c)
         || (c->conn == nullptr);
 }
 #define AssertCorrectThread(c) serverAssert(FCorrectThread(c))
+
+void flushReplBacklogToClients();
+
+template<typename FN_PTR, class ...TARGS>
+void runAndPropogateToReplicas(FN_PTR *pfn, TARGS... args) {
+    // Store the replication backlog starting params, we use this to know how much data was written.
+    //  these are TLS in case we need to expand the buffer and therefore need to update them
+    bool fNestedProcess = (serverTL->repl_batch_idxStart >= 0);
+    if (!fNestedProcess) {
+        serverTL->repl_batch_offStart = g_pserver->master_repl_offset;
+        serverTL->repl_batch_idxStart = g_pserver->repl_backlog_idx;
+    }
+
+    pfn(args...);
+
+    if (!fNestedProcess) {
+        flushReplBacklogToClients();
+        serverTL->repl_batch_offStart = -1;
+        serverTL->repl_batch_idxStart = -1;
+    }
+}
+
 
 /* TLS stuff */
 void tlsInit(void);

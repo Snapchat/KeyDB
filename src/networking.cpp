@@ -2187,8 +2187,7 @@ void commandProcessed(client *c, int flags) {
         if (applied) {
             if (!g_pserver->fActiveReplica && (flags & CMD_CALL_PROPAGATE))
             {
-                replicationFeedSlavesFromMasterStream(g_pserver->slaves,
-                    c->pending_querybuf, applied);
+                replicationFeedSlavesFromMasterStream(c->pending_querybuf, applied);
             }
             sdsrange(c->pending_querybuf,applied,-1);
         }

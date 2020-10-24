@@ -677,7 +677,7 @@ static void rpoplpushHandlePush(client *c, robj *dstkey, robj *dstobj, robj *val
     listTypePush(dstobj,value,LIST_HEAD);
     notifyKeyspaceEvent(NOTIFY_LIST,"lpush",dstkey,c->db->id);
     /* Always send the pushed value to the client. */
-    addReplyBulkAsync(c,value);
+    addReplyBulk(c,value);
 }
 
 void rpoplpushCommand(client *c) {
@@ -758,9 +758,9 @@ int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb 
             db->id,argv,2,PROPAGATE_AOF|PROPAGATE_REPL);
        
         /* BRPOP/BLPOP */
-        addReplyArrayLenAsync(receiver,2);
-        addReplyBulkAsync(receiver,key);
-        addReplyBulkAsync(receiver,value);
+        addReplyArrayLen(receiver,2);
+        addReplyBulk(receiver,key);
+        addReplyBulk(receiver,value);
 
         /* Notify event. */
         const char *event = (where == LIST_HEAD) ? "lpop" : "rpop";

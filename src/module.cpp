@@ -1358,7 +1358,7 @@ int RM_ReplyWithLongLong(RedisModuleCtx *ctx, long long ll) {
     AeLocker locker;
     std::unique_lock<fastlock> lock(c->lock);
     locker.arm(c);
-    addReplyLongLongAsync(c,ll);
+    addReplyLongLong(c,ll);
     return REDISMODULE_OK;
 }
 
@@ -1371,9 +1371,9 @@ int replyWithStatus(RedisModuleCtx *ctx, const char *msg, const char *prefix) {
     AeLocker locker;
     std::unique_lock<fastlock> lock(c->lock);
     locker.arm(c);
-    addReplyProtoAsync(c,prefix,strlen(prefix));
-    addReplyProtoAsync(c,msg,strlen(msg));
-    addReplyProtoAsync(c,"\r\n",2);
+    addReplyProto(c,prefix,strlen(prefix));
+    addReplyProto(c,msg,strlen(msg));
+    addReplyProto(c,"\r\n",2);
     return REDISMODULE_OK;
 }
 
@@ -1426,10 +1426,10 @@ int RM_ReplyWithArray(RedisModuleCtx *ctx, long len) {
         ctx->postponed_arrays = (void**)zrealloc(ctx->postponed_arrays,sizeof(void*)*
                 (ctx->postponed_arrays_count+1), MALLOC_LOCAL);
         ctx->postponed_arrays[ctx->postponed_arrays_count] =
-            addReplyDeferredLenAsync(c);
+            addReplyDeferredLen(c);
         ctx->postponed_arrays_count++;
     } else {
-        addReplyArrayLenAsync(c,len);
+        addReplyArrayLen(c,len);
     }
     return REDISMODULE_OK;
 }
@@ -1444,7 +1444,7 @@ int RM_ReplyWithNullArray(RedisModuleCtx *ctx) {
     AeLocker locker;
     std::unique_lock<fastlock> lock(c->lock);
     locker.arm(c);
-    addReplyNullArrayAsync(c);
+    addReplyNullArray(c);
     return REDISMODULE_OK;
 }
 
@@ -1457,7 +1457,7 @@ int RM_ReplyWithEmptyArray(RedisModuleCtx *ctx) {
     AeLocker locker;
     std::unique_lock<fastlock> lock(c->lock);
     locker.arm(c);
-    addReplyAsync(c,shared.emptyarray);
+    addReply(c,shared.emptyarray);
     return REDISMODULE_OK;
 }
 
@@ -1502,7 +1502,7 @@ void RM_ReplySetArrayLength(RedisModuleCtx *ctx, long len) {
             return;
     }
     ctx->postponed_arrays_count--;
-    setDeferredArrayLenAsync(c,
+    setDeferredArrayLen(c,
             ctx->postponed_arrays[ctx->postponed_arrays_count],
             len);
     if (ctx->postponed_arrays_count == 0) {
@@ -1520,7 +1520,7 @@ int RM_ReplyWithStringBuffer(RedisModuleCtx *ctx, const char *buf, size_t len) {
     AeLocker locker;
     std::unique_lock<fastlock> lock(c->lock);
     locker.arm(c);
-    addReplyBulkCBufferAsync(c,(char*)buf,len);
+    addReplyBulkCBuffer(c,(char*)buf,len);
     return REDISMODULE_OK;
 }
 
@@ -1534,7 +1534,7 @@ int RM_ReplyWithCString(RedisModuleCtx *ctx, const char *buf) {
     AeLocker locker;
     std::unique_lock<fastlock> lock(c->lock);
     locker.arm(c);
-    addReplyBulkCStringAsync(c,(char*)buf);
+    addReplyBulkCString(c,(char*)buf);
     return REDISMODULE_OK;
 }
 
@@ -1547,7 +1547,7 @@ int RM_ReplyWithString(RedisModuleCtx *ctx, RedisModuleString *str) {
     AeLocker locker;
     std::unique_lock<fastlock> lock(c->lock);
     locker.arm(c);
-    addReplyBulkAsync(c,str);
+    addReplyBulk(c,str);
     return REDISMODULE_OK;
 }
 
@@ -1560,7 +1560,7 @@ int RM_ReplyWithEmptyString(RedisModuleCtx *ctx) {
     AeLocker locker;
     std::unique_lock<fastlock> lock(c->lock);
     locker.arm(c);
-    addReplyAsync(c,shared.emptybulk);
+    addReply(c,shared.emptybulk);
     return REDISMODULE_OK;
 }
 
@@ -1574,7 +1574,7 @@ int RM_ReplyWithVerbatimString(RedisModuleCtx *ctx, const char *buf, size_t len)
     AeLocker locker;
     std::unique_lock<fastlock> lock(c->lock);
     locker.arm(c);
-    addReplyVerbatimAsync(c, buf, len, "txt");
+    addReplyVerbatim(c, buf, len, "txt");
     return REDISMODULE_OK;
 }
 
@@ -1587,7 +1587,7 @@ int RM_ReplyWithNull(RedisModuleCtx *ctx) {
     AeLocker locker;
     std::unique_lock<fastlock> lock(c->lock);
     locker.arm(c);
-    addReplyNullAsync(c);
+    addReplyNull(c);
     return REDISMODULE_OK;
 }
 
@@ -1604,7 +1604,7 @@ int RM_ReplyWithCallReply(RedisModuleCtx *ctx, RedisModuleCallReply *reply) {
     std::unique_lock<fastlock> lock(c->lock);
     locker.arm(c);
     sds proto = sdsnewlen(reply->proto, reply->protolen);
-    addReplySdsAsync(c,proto);
+    addReplySds(c,proto);
     return REDISMODULE_OK;
 }
 
@@ -1620,7 +1620,7 @@ int RM_ReplyWithDouble(RedisModuleCtx *ctx, double d) {
     AeLocker locker;
     std::unique_lock<fastlock> lock(c->lock);
     locker.arm(c);
-    addReplyDoubleAsync(c,d);
+    addReplyDouble(c,d);
     return REDISMODULE_OK;
 }
 
@@ -1638,7 +1638,7 @@ int RM_ReplyWithLongDouble(RedisModuleCtx *ctx, long double ld) {
     AeLocker locker;
     std::unique_lock<fastlock> lock(c->lock);
     locker.arm(c);
-    addReplyHumanLongDoubleAsync(c, ld);
+    addReplyHumanLongDouble(c, ld);
     return REDISMODULE_OK;
 }
 

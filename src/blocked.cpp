@@ -188,9 +188,9 @@ void replyToBlockedClientTimedOut(client *c) {
     if (c->btype == BLOCKED_LIST ||
         c->btype == BLOCKED_ZSET ||
         c->btype == BLOCKED_STREAM) {
-        addReplyNullArrayAsync(c);
+        addReplyNullArray(c);
     } else if (c->btype == BLOCKED_WAIT) {
-        addReplyLongLongAsync(c,replicationCountAcksByOffset(c->bpop.reploffset));
+        addReplyLongLong(c,replicationCountAcksByOffset(c->bpop.reploffset));
     } else if (c->btype == BLOCKED_MODULE) {
         moduleBlockedClientTimedOut(c);
     } else {
@@ -216,7 +216,7 @@ void disconnectAllBlockedClients(void) {
         
         fastlock_lock(&c->lock);
         if (c->flags & CLIENT_BLOCKED) {
-            addReplySdsAsync(c,sdsnew(
+            addReplySds(c,sdsnew(
                 "-UNBLOCKED force unblock from blocking operation, "
                 "instance state changed (master -> replica?)\r\n"));
             unblockClient(c);
@@ -373,7 +373,7 @@ void serveClientsBlockedOnStreamKey(robj *o, readyList *rl) {
                 /* If the group was not found, send an error
                  * to the consumer. */
                 if (!group) {
-                    addReplyErrorAsync(receiver,
+                    addReplyError(receiver,
                         "-NOGROUP the consumer group this client "
                         "was blocked on no longer exists");
                     unblockClient(receiver);
@@ -404,12 +404,12 @@ void serveClientsBlockedOnStreamKey(robj *o, readyList *rl) {
                  * extracted from it. Wrapped in a single-item
                  * array, since we have just one key. */
                 if (receiver->resp == 2) {
-                    addReplyArrayLenAsync(receiver,1);
-                    addReplyArrayLenAsync(receiver,2);
+                    addReplyArrayLen(receiver,1);
+                    addReplyArrayLen(receiver,2);
                 } else {
-                    addReplyMapLenAsync(receiver,1);
+                    addReplyMapLen(receiver,1);
                 }
-                addReplyBulkAsync(receiver,rl->key);
+                addReplyBulk(receiver,rl->key);
 
                 streamPropInfo pi = {
                     rl->key,

@@ -818,7 +818,7 @@ static void addReplyStreamID(client *c, streamID *id) {
 
 static void addReplyStreamIDAsync(client *c, streamID *id) {
     sds replyid = sdscatfmt(sdsempty(),"%U-%U",id->ms,id->seq);
-    addReplyBulkSdsAsync(c,replyid);
+    addReplyBulkSds(c,replyid);
 }
 
 /* Similar to the above function, but just creates an object, usually useful
@@ -968,7 +968,7 @@ size_t streamReplyWithRange(client *c, stream *s, streamID *start, streamID *end
     }
 
     if (!(flags & STREAM_RWR_RAWENTRIES))
-        arraylen_ptr = addReplyDeferredLenAsync(c);
+        arraylen_ptr = addReplyDeferredLen(c);
     streamIteratorStart(&si,s,start,end,rev);
     while(streamIteratorGetID(&si,&id,&numfields)) {
         /* Update the group last_id if needed. */
@@ -982,18 +982,18 @@ size_t streamReplyWithRange(client *c, stream *s, streamID *start, streamID *end
 
         /* Emit a two elements array for each item. The first is
          * the ID, the second is an array of field-value pairs. */
-        addReplyArrayLenAsync(c,2);
+        addReplyArrayLen(c,2);
         addReplyStreamIDAsync(c,&id);
 
-        addReplyArrayLenAsync(c,numfields*2);
+        addReplyArrayLen(c,numfields*2);
 
         /* Emit the field-value pairs. */
         while(numfields--) {
             unsigned char *key, *value;
             int64_t key_len, value_len;
             streamIteratorGetField(&si,&key,&value,&key_len,&value_len);
-            addReplyBulkCBufferAsync(c,key,key_len);
-            addReplyBulkCBufferAsync(c,value,value_len);
+            addReplyBulkCBuffer(c,key,key_len);
+            addReplyBulkCBuffer(c,value,value_len);
         }
 
         /* If a group is passed, we need to create an entry in the
@@ -1052,7 +1052,7 @@ size_t streamReplyWithRange(client *c, stream *s, streamID *start, streamID *end
         streamPropagateGroupID(c,spi->keyname,group,spi->groupname);
 
     streamIteratorStop(&si);
-    if (arraylen_ptr) setDeferredArrayLenAsync(c,arraylen_ptr,arraylen);
+    if (arraylen_ptr) setDeferredArrayLen(c,arraylen_ptr,arraylen);
     return arraylen;
 }
 

@@ -215,9 +215,9 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
              * are unable to send invalidation messages to the redirected
              * connection, because the client no longer exist. */
             if (c->resp > 2) {
-                addReplyPushLenAsync(c,3);
-                addReplyBulkCBufferAsync(c,"tracking-redir-broken",21);
-                addReplyLongLongAsync(c,c->client_tracking_redirection);
+                addReplyPushLen(c,3);
+                addReplyBulkCBuffer(c,"tracking-redir-broken",21);
+                addReplyLongLong(c,c->client_tracking_redirection);
             }
             return;
         }
@@ -232,8 +232,8 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
      * in Pub/Sub mode, we can support the feature with RESP 2 as well,
      * by sending Pub/Sub messages in the __redis__:invalidate channel. */
     if (c->resp > 2) {
-        addReplyPushLenAsync(c,2);
-        addReplyBulkCBufferAsync(c,"invalidate",10);
+        addReplyPushLen(c,2);
+        addReplyBulkCBuffer(c,"invalidate",10);
     } else if (using_redirection && c->flags & CLIENT_PUBSUB) {
         /* We use a static object to speedup things, however we assume
          * that addReplyPubsubMessage() will not take a reference. */
@@ -248,10 +248,10 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
 
     /* Send the "value" part, which is the array of keys. */
     if (proto) {
-        addReplyProtoAsync(c,keyname,keylen);
+        addReplyProto(c,keyname,keylen);
     } else {
-        addReplyArrayLenAsync(c,1);
-        addReplyBulkCBufferAsync(c,keyname,keylen);
+        addReplyArrayLen(c,1);
+        addReplyBulkCBuffer(c,keyname,keylen);
     }
 }
 

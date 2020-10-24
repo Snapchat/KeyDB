@@ -433,7 +433,7 @@ robj *resetRefCount(robj *obj) {
 
 int checkType(client *c, robj_roptr o, int type) {
     if (o->type != type) {
-        addReplyAsync(c,shared.wrongtypeerr);
+        addReply(c,shared.wrongtypeerr);
         return 1;
     }
     return 0;

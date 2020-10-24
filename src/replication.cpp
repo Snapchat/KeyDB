@@ -315,7 +315,7 @@ void replicationFeedSlave(client *replica, int dictid, robj **argv, int argc, bo
         if (g_pserver->repl_backlog && fSendRaw) feedReplicationBacklogWithObject(selectcmd);
 
         /* Send it to slaves */
-        addReplyAsync(replica,selectcmd);
+        addReply(replica,selectcmd);
 
         if (dictid < 0 || dictid >= PROTO_SHARED_SELECT_CMDS)
             decrRefCount(selectcmd);
@@ -329,18 +329,18 @@ void replicationFeedSlave(client *replica, int dictid, robj **argv, int argc, bo
     if (fSendRaw)
     {
         /* Add the multi bulk length. */
-        addReplyArrayLenAsync(replica,argc);
+        addReplyArrayLen(replica,argc);
 
         /* Finally any additional argument that was not stored inside the
             * static buffer if any (from j to argc). */
         for (int j = 0; j < argc; j++)
-            addReplyBulkAsync(replica,argv[j]);
+            addReplyBulk(replica,argv[j]);
     }
     else
     {
         struct redisCommand *cmd = lookupCommand(szFromObj(argv[0]));
         sds buf = catCommandForAofAndActiveReplication(sdsempty(), cmd, argv, argc);
-        addReplyProtoAsync(replica, buf, sdslen(buf));
+        addReplyProto(replica, buf, sdslen(buf));
         sdsfree(buf);
     }
 }
@@ -516,21 +516,21 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
          * or are already in sync with the master. */
 
         if (!fSendRaw)
-            addReplyProtoAsync(replica, proto, cchProto);
+            addReplyProto(replica, proto, cchProto);
 
-        addReplyProtoAsync(replica,fake->buf,fake->bufpos);
+        addReplyProto(replica,fake->buf,fake->bufpos);
         listRewind(fake->reply, &liReply);
         while ((lnReply = listNext(&liReply)))
         {
             clientReplyBlock* reply = (clientReplyBlock*)listNodeValue(lnReply);
-            addReplyProtoAsync(replica, reply->buf(), reply->used);
+            addReplyProto(replica, reply->buf(), reply->used);
         }
 
         if (!fSendRaw)
         {
-            addReplyAsync(replica,shared.crlf);
-            addReplyProtoAsync(replica, szDbNum, cchDbNum);
-            addReplyProtoAsync(replica, szMvcc, cchMvcc);
+            addReply(replica,shared.crlf);
+            addReplyProto(replica, szDbNum, cchDbNum);
+            addReplyProto(replica, szMvcc, cchMvcc);
         }
     }
 
@@ -605,7 +605,7 @@ void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t bufle
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
         if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
-        addReplyProtoAsync(replica,buf,buflen);
+        addReplyProto(replica,buf,buflen);
     }
     
     if (listLength(slaves))
@@ -651,7 +651,7 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
 		// When writing to clients on other threads the global lock is sufficient provided we only use AddReply*Async()
 		if (FCorrectThread(c))
 			lock.lock();
-        addReplyAsync(monitor,cmdobj);
+        addReply(monitor,cmdobj);
     }
     decrRefCount(cmdobj);
 }
@@ -3267,7 +3267,7 @@ void replicaofCommand(client *c) {
             miNew->masterhost, miNew->masterport, client);
         sdsfree(client);
     }
-    addReplyAsync(c,shared.ok);
+    addReply(c,shared.ok);
 }
 
 /* ROLE command: provide information about the role of the instance
@@ -3747,7 +3747,7 @@ void processClientsWaitingReplicas(void) {
                            last_numreplicas > c->bpop.numreplicas)
         {
             unblockClient(c);
-            addReplyLongLongAsync(c,last_numreplicas);
+            addReplyLongLong(c,last_numreplicas);
         } else {
             int numreplicas = replicationCountAcksByOffset(c->bpop.reploffset);
 
@@ -3755,7 +3755,7 @@ void processClientsWaitingReplicas(void) {
                 last_offset = c->bpop.reploffset;
                 last_numreplicas = numreplicas;
                 unblockClient(c);
-                addReplyLongLongAsync(c,numreplicas);
+                addReplyLongLong(c,numreplicas);
             }
         }
         fastlock_unlock(&c->lock);

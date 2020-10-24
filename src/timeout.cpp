@@ -179,7 +179,7 @@ int getTimeoutFromObjectOrReply(client *c, robj *object, mstime_t *timeout, int 
     }
 
     if (tval < 0) {
-        addReplyErrorAsync(c,"timeout is negative");
+        addReplyError(c,"timeout is negative");
         return C_ERR;
     }
 

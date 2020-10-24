@@ -40,8 +40,6 @@
 #include "aelocker.h"
 
 static void setProtocolError(const char *errstr, client *c);
-void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool fAsync);
-void addReplyBulkCStringCore(client *c, const char *s, bool fAsync);
 
 /* Return the size consumed from the allocator, for the specified SDS string,
  * including internal fragmentation. This function is used in order to compute
@@ -251,10 +249,10 @@ void clientInstallAsyncWriteHandler(client *c) {
  * Typically gets called every time a reply is built, before adding more
  * data to the clients output buffers. If the function returns C_ERR no
  * data should be appended to the output buffers. */
-int prepareClientToWrite(client *c, bool fAsync) {
-    fAsync = fAsync && !FCorrectThread(c);  // Not async if we're on the right thread
-    serverAssert(FCorrectThread(c) || fAsync);
-	if (FCorrectThread(c)) {
+int prepareClientToWrite(client *c) {
+    bool fAsync = !FCorrectThread(c);  // Not async if we're on the right thread
+
+	if (!fAsync) {
 		serverAssert(c->conn == nullptr || c->lock.fOwnLock());
 	} else {
 		serverAssert(GlobalLocksAcquired());
@@ -290,10 +288,10 @@ int prepareClientToWrite(client *c, bool fAsync) {
  * Low level functions to add more data to output buffers.
  * -------------------------------------------------------------------------- */
 
-int _addReplyToBuffer(client *c, const char *s, size_t len, bool fAsync) {
+int _addReplyToBuffer(client *c, const char *s, size_t len) {
     if (c->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_AFTER_REPLY) return C_OK;
 
-    fAsync = fAsync && !FCorrectThread(c);  // Not async if we're on the right thread
+    bool fAsync = !FCorrectThread(c);
     if (fAsync)
     {
         serverAssert(GlobalLocksAcquired());
@@ -377,11 +375,12 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
  * Higher level functions to queue data on the client output buffer.
  * The following functions are the ones that commands implementations will call.
  * -------------------------------------------------------------------------- */
-void addReplyCore(client *c, robj_roptr obj, bool fAsync) {
-    if (prepareClientToWrite(c, fAsync) != C_OK) return;
+/* Add the object 'obj' string representation to the client output buffer. */
+void addReply(client *c, robj_roptr obj) {
+    if (prepareClientToWrite(c) != C_OK) return;
 
     if (sdsEncodedObject(obj)) {
-        if (_addReplyToBuffer(c,(const char*)ptrFromObj(obj),sdslen((sds)ptrFromObj(obj)),fAsync) != C_OK)
+        if (_addReplyToBuffer(c,(const char*)ptrFromObj(obj),sdslen((sds)ptrFromObj(obj))) != C_OK)
             _addReplyProtoToList(c,(const char*)ptrFromObj(obj),sdslen((sds)ptrFromObj(obj)));
     } else if (obj->encoding == OBJ_ENCODING_INT) {
         /* For integer encoded strings we just convert it into a string
@@ -389,42 +388,24 @@ void addReplyCore(client *c, robj_roptr obj, bool fAsync) {
          * to the output buffer. */
         char buf[32];
         size_t len = ll2string(buf,sizeof(buf),(long)ptrFromObj(obj));
-        if (_addReplyToBuffer(c,buf,len,fAsync) != C_OK)
+        if (_addReplyToBuffer(c,buf,len) != C_OK)
             _addReplyProtoToList(c,buf,len);
     } else {
         serverPanic("Wrong obj->encoding in addReply()");
     }
 }
 
-/* Add the object 'obj' string representation to the client output buffer. */
-void addReply(client *c, robj_roptr obj)
-{
-    addReplyCore(c, obj, false);
-}
-void addReplyAsync(client *c, robj_roptr obj)
-{
-    addReplyCore(c, obj, true);
-}
-
 /* Add the SDS 's' string to the client output buffer, as a side effect
  * the SDS string is freed. */
-void addReplySdsCore(client *c, sds s, bool fAsync) {
-    if (prepareClientToWrite(c, fAsync) != C_OK) {
+void addReplySds(client *c, sds s) {
+    if (prepareClientToWrite(c) != C_OK) {
         /* The caller expects the sds to be free'd. */
         sdsfree(s);
         return;
     }
-    if (_addReplyToBuffer(c,s,sdslen(s), fAsync) != C_OK)
+    if (_addReplyToBuffer(c,s,sdslen(s)) != C_OK)
         _addReplyProtoToList(c,s,sdslen(s));
     sdsfree(s);
-}
-
-void addReplySds(client *c, sds s) {
-    addReplySdsCore(c, s, false);
-}
-
-void addReplySdsAsync(client *c, sds s) {
-    addReplySdsCore(c, s, true);
 }
 
 /* This low level function just adds whatever protocol you send it to the
@@ -435,18 +416,10 @@ void addReplySdsAsync(client *c, sds s) {
  * if not needed. The object will only be created by calling
  * _addReplyProtoToList() if we fail to extend the existing tail object
  * in the list of objects. */
-void addReplyProtoCore(client *c, const char *s, size_t len, bool fAsync) {
-    if (prepareClientToWrite(c, fAsync) != C_OK) return;
-    if (_addReplyToBuffer(c,s,len,fAsync) != C_OK)
-        _addReplyProtoToList(c,s,len);
-}
-
 void addReplyProto(client *c, const char *s, size_t len) {
-    addReplyProtoCore(c, s, len, false);
-}
-
-void addReplyProtoAsync(client *c, const char *s, size_t len) {
-    addReplyProtoCore(c, s, len, true);
+    if (prepareClientToWrite(c) != C_OK) return;
+    if (_addReplyToBuffer(c,s,len) != C_OK)
+        _addReplyProtoToList(c,s,len);
 }
 
 std::string escapeString(sds str)
@@ -486,12 +459,12 @@ std::string escapeString(sds str)
  * code provided is used, otherwise the string "-ERR " for the generic
  * error code is automatically added.
  * Note that 's' must NOT end with \r\n. */
-void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) {
+void addReplyErrorLength(client *c, const char *s, size_t len) {
     /* If the string already starts with "-..." then the error code
      * is provided by the caller. Otherwise we use "-ERR". */
-    if (!len || s[0] != '-') addReplyProtoCore(c,"-ERR ",5,fAsync);
-    addReplyProtoCore(c,s,len,fAsync);
-    addReplyProtoCore(c,"\r\n",2,fAsync);
+    if (!len || s[0] != '-') addReplyProto(c,"-ERR ",5);
+    addReplyProto(c,s,len);
+    addReplyProto(c,"\r\n",2);
 }
 
 /* Do some actions after an error reply was sent (Log if needed, updates stats, etc.) */
@@ -535,11 +508,6 @@ void afterErrorReply(client *c, const char *s, size_t len) {
     }
 }
 
-void addReplyErrorLength(client *c, const char *s, size_t len)
-{
-    addReplyErrorLengthCore(c, s, len, false);
-}
-
 /* The 'err' object is expected to start with -ERRORCODE and end with \r\n.
  * Unlike addReplyErrorSds and others alike which rely on addReplyErrorLength. */
 void addReplyErrorObject(client *c, robj *err) {
@@ -547,13 +515,8 @@ void addReplyErrorObject(client *c, robj *err) {
     afterErrorReply(c, szFromObj(err), sdslen(szFromObj(err))-2); /* Ignore trailing \r\n */
 }
 
-/* See addReplyErrorLength for expectations from the input string. */
 void addReplyError(client *c, const char *err) {
-    addReplyErrorLengthCore(c,err,strlen(err), false);
-}
-
-void addReplyErrorAsync(client *c, const char *err) {
-    addReplyErrorLengthCore(c, err, strlen(err), true);
+    addReplyErrorLength(c, err, strlen(err));
     afterErrorReply(c,err,strlen(err));
 }
 
@@ -629,19 +592,19 @@ void trimReplyUnusedTailSpace(client *c) {
 
 /* Adds an empty object to the reply list that will contain the multi bulk
  * length, which is not known when this function is called. */
-void *addReplyDeferredLen(client *c) {
+void *addReplyDeferredLenCore(client *c) {
     /* Note that we install the write event here even if the object is not
      * ready to be sent, since we are sure that before returning to the
      * event loop setDeferredAggregateLen() will be called. */
-    if (prepareClientToWrite(c, false) != C_OK) return NULL;
+    if (prepareClientToWrite(c) != C_OK) return NULL;
     trimReplyUnusedTailSpace(c);
     listAddNodeTail(c->reply,NULL); /* NULL is our placeholder. */
     return listLast(c->reply);
 }
 
-void *addReplyDeferredLenAsync(client *c) {
+void *addReplyDeferredLen(client *c) {
     if (FCorrectThread(c))
-        return addReplyDeferredLen(c);
+        return addReplyDeferredLenCore(c);
         
     return (void*)((ssize_t)(c->replyAsync ? c->replyAsync->used : 0));
 }
@@ -718,11 +681,10 @@ void setDeferredAggregateLenAsync(client *c, void *node, long length, char prefi
 }
 
 void setDeferredArrayLen(client *c, void *node, long length) {
-    setDeferredAggregateLen(c,node,length,'*');
-}
-
-void setDeferredArrayLenAsync(client *c, void *node, long length) {
-    setDeferredAggregateLenAsync(c, node, length, '*');
+    if (FCorrectThread(c))
+        setDeferredAggregateLen(c,node,length,'*');
+    else
+        setDeferredAggregateLenAsync(c, node, length, '*');
 }
 
 void setDeferredMapLen(client *c, void *node, long length) {
@@ -748,15 +710,15 @@ void setDeferredPushLen(client *c, void *node, long length) {
 }
 
 /* Add a double as a bulk reply */
-void addReplyDoubleCore(client *c, double d, bool fAsync) {
+void addReplyDouble(client *c, double d) {
     if (std::isinf(d)) {
         /* Libc in odd systems (Hi Solaris!) will format infinite in a
          * different way, so better to handle it in an explicit way. */
         if (c->resp == 2) {
-            addReplyBulkCStringCore(c, d > 0 ? "inf" : "-inf", fAsync);
+            addReplyBulkCString(c, d > 0 ? "inf" : "-inf");
         } else {
-            addReplyProtoCore(c, d > 0 ? ",inf\r\n" : ",-inf\r\n",
-                              d > 0 ? 6 : 7, fAsync);
+            addReplyProto(c, d > 0 ? ",inf\r\n" : ",-inf\r\n",
+                              d > 0 ? 6 : 7);
         }
     } else {
         char dbuf[MAX_LONG_DOUBLE_CHARS+3],
@@ -765,52 +727,34 @@ void addReplyDoubleCore(client *c, double d, bool fAsync) {
         if (c->resp == 2) {
             dlen = snprintf(dbuf,sizeof(dbuf),"%.17g",d);
             slen = snprintf(sbuf,sizeof(sbuf),"$%d\r\n%s\r\n",dlen,dbuf);
-            addReplyProtoCore(c,sbuf,slen,fAsync);
+            addReplyProto(c,sbuf,slen);
         } else {
             dlen = snprintf(dbuf,sizeof(dbuf),",%.17g\r\n",d);
-            addReplyProtoCore(c,dbuf,dlen,fAsync);
+            addReplyProto(c,dbuf,dlen);
         }
     }
 }
 
-void addReplyDouble(client *c, double d) {
-    addReplyDoubleCore(c, d, false);
-}
-
-void addReplyDoubleAsync(client *c, double d) {
-    addReplyDoubleCore(c, d, true);
-}
-
-void addReplyBulkCore(client *c, robj_roptr obj, bool fAsync);
-
 /* Add a long double as a bulk reply, but uses a human readable formatting
  * of the double instead of exposing the crude behavior of doubles to the
  * dear user. */
-void addReplyHumanLongDoubleCore(client *c, long double d, bool fAsync) {
+void addReplyHumanLongDouble(client *c, long double d) {
     if (c->resp == 2) {
         robj *o = createStringObjectFromLongDouble(d,1);
-        addReplyBulkCore(c,o,fAsync);
+        addReplyBulk(c,o);
         decrRefCount(o);
     } else {
         char buf[MAX_LONG_DOUBLE_CHARS];
         int len = ld2string(buf,sizeof(buf),d,LD_STR_HUMAN);
-        addReplyProtoCore(c,",",1,fAsync);
-        addReplyProtoCore(c,buf,len,fAsync);
-        addReplyProtoCore(c,"\r\n",2,fAsync);
+        addReplyProto(c,",",1);
+        addReplyProto(c,buf,len);
+        addReplyProto(c,"\r\n",2);
     }
-}
-
-void addReplyHumanLongDouble(client *c, long double d) {
-    addReplyHumanLongDoubleCore(c, d, false);
-}
-
-void addReplyHumanLongDoubleAsync(client *c, long double d) {
-    addReplyHumanLongDoubleCore(c, d, true);
 }
 
 /* Add a long long as integer reply or bulk len / multi bulk count.
  * Basically this is used to output <prefix><long long><crlf>. */
-void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool fAsync) {
+void addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
     char buf[128];
     int len;
 
@@ -818,10 +762,10 @@ void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool f
      * so we have a few shared objects to use if the integer is small
      * like it is most of the times. */
     if (prefix == '*' && ll < OBJ_SHARED_BULKHDR_LEN && ll >= 0) {
-        addReplyCore(c,shared.mbulkhdr[ll], fAsync);
+        addReply(c,shared.mbulkhdr[ll]);
         return;
     } else if (prefix == '$' && ll < OBJ_SHARED_BULKHDR_LEN && ll >= 0) {
-        addReplyCore(c,shared.bulkhdr[ll], fAsync);
+        addReply(c,shared.bulkhdr[ll]);
         return;
     }
 
@@ -829,65 +773,33 @@ void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool f
     len = ll2string(buf+1,sizeof(buf)-1,ll);
     buf[len+1] = '\r';
     buf[len+2] = '\n';
-    addReplyProtoCore(c,buf,len+3, fAsync);
-}
-
-void addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
-    addReplyLongLongWithPrefixCore(c, ll, prefix, false);
-}
-
-void addReplyLongLongCore(client *c, long long ll, bool fAsync) {
-    if (ll == 0)
-        addReplyCore(c,shared.czero, fAsync);
-    else if (ll == 1)
-        addReplyCore(c,shared.cone, fAsync);
-    else
-        addReplyLongLongWithPrefixCore(c,ll,':', fAsync);
+    addReplyProto(c,buf,len+3);
 }
 
 void addReplyLongLong(client *c, long long ll) {
-    addReplyLongLongCore(c, ll, false);
-}
-
-void addReplyLongLongAsync(client *c, long long ll) {
-    addReplyLongLongCore(c, ll, true);
-}
-
-void addReplyAggregateLenCore(client *c, long length, int prefix, bool fAsync) {
-    if (prefix == '*' && length < OBJ_SHARED_BULKHDR_LEN)
-        addReplyCore(c,shared.mbulkhdr[length], fAsync);
+    if (ll == 0)
+        addReply(c,shared.czero);
+    else if (ll == 1)
+        addReply(c,shared.cone);
     else
-        addReplyLongLongWithPrefixCore(c,length,prefix, fAsync);
+        addReplyLongLongWithPrefix(c,ll,':');
 }
 
 void addReplyAggregateLen(client *c, long length, int prefix) {
-    addReplyAggregateLenCore(c, length, prefix, false);
-}
-
-void addReplyArrayLenCore(client *c, long length, bool fAsync) {
-    addReplyAggregateLenCore(c,length,'*', fAsync);
+    if (prefix == '*' && length < OBJ_SHARED_BULKHDR_LEN)
+        addReply(c,shared.mbulkhdr[length]);
+    else
+        addReplyLongLongWithPrefix(c,length,prefix);
 }
 
 void addReplyArrayLen(client *c, long length) {
-    addReplyArrayLenCore(c, length, false);
-}
-
-void addReplyArrayLenAsync(client *c, long length) {
-    addReplyArrayLenCore(c, length, true);
-}
-
-void addReplyMapLenCore(client *c, long length, bool fAsync) {
-    int prefix = c->resp == 2 ? '*' : '%';
-    if (c->resp == 2) length *= 2;
-    addReplyAggregateLenCore(c,length,prefix,fAsync);
+    addReplyAggregateLen(c,length,'*');
 }
 
 void addReplyMapLen(client *c, long length) {
-    addReplyMapLenCore(c, length, false);
-}
-
-void addReplyMapLenAsync(client *c, long length) {
-    addReplyMapLenCore(c, length, true);
+    int prefix = c->resp == 2 ? '*' : '%';
+    if (c->resp == 2) length *= 2;
+    addReplyAggregateLen(c,length,prefix);
 }
 
 void addReplySetLen(client *c, long length) {
@@ -901,36 +813,17 @@ void addReplyAttributeLen(client *c, long length) {
     addReplyAggregateLen(c,length,prefix);
 }
 
-void addReplyPushLenCore(client *c, long length, bool fAsync) {
-    int prefix = c->resp == 2 ? '*' : '>';
-    addReplyAggregateLenCore(c,length,prefix, fAsync);
-}
-
 void addReplyPushLen(client *c, long length) {
-    addReplyPushLenCore(c, length, false);
+    int prefix = c->resp == 2 ? '*' : '>';
+    addReplyAggregateLen(c,length,prefix);
 }
 
-void addReplyPushLenAsync(client *c, long length) {
-    addReplyPushLenCore(c, length, true);
-}
-
-void addReplyNullCore(client *c, bool fAsync) {
+void addReplyNull(client *c) {
     if (c->resp == 2) {
-        addReplyProtoCore(c,"$-1\r\n",5,fAsync);
+        addReplyProto(c,"$-1\r\n",5);
     } else {
-        addReplyProtoCore(c,"_\r\n",3,fAsync);
+        addReplyProto(c,"_\r\n",3);
     }
-}
-
-void addReplyNull(client *c, robj_roptr objOldProtocol) {
-    if (c->resp < 3 && objOldProtocol != nullptr)
-        addReply(c, objOldProtocol);
-    else
-        addReplyNullCore(c, false);
-}
-
-void addReplyNullAsync(client *c) {
-    addReplyNullCore(c, true);
 }
 
 void addReplyBool(client *c, int b) {
@@ -945,105 +838,56 @@ void addReplyBool(client *c, int b) {
  * RESP2 had it, so API-wise we have this call, that will emit the correct
  * RESP2 protocol, however for RESP3 the reply will always be just the
  * Null type "_\r\n". */
-void addReplyNullArrayCore(client *c, bool fAsync) 
+void addReplyNullArray(client *c) 
 {
     if (c->resp == 2) {
-        addReplyProtoCore(c,"*-1\r\n",5,fAsync);
+        addReplyProto(c,"*-1\r\n",5);
     } else {
-        addReplyProtoCore(c,"_\r\n",3,fAsync);
+        addReplyProto(c,"_\r\n",3);
     }
-}
-
-void addReplyNullArray(client *c)
-{
-    addReplyNullArrayCore(c, false);
-}
-
-void addReplyNullArrayAsync(client *c)
-{
-    addReplyNullArrayCore(c, true);
 }
 
 /* Create the length prefix of a bulk reply, example: $2234 */
-void addReplyBulkLenCore(client *c, robj_roptr obj, bool fAsync) {
+void addReplyBulkLen(client *c, robj_roptr obj) {
     size_t len = stringObjectLen(obj);
 
     if (len < OBJ_SHARED_BULKHDR_LEN)
-        addReplyCore(c,shared.bulkhdr[len], fAsync);
+        addReply(c,shared.bulkhdr[len]);
     else
-        addReplyLongLongWithPrefixCore(c,len,'$', fAsync);
-}
-
-void addReplyBulkLen(client *c, robj *obj)
-{
-    addReplyBulkLenCore(c, obj, false);
+        addReplyLongLongWithPrefix(c,len,'$');
 }
 
 /* Add a Redis Object as a bulk reply */
-void addReplyBulkCore(client *c, robj_roptr obj, bool fAsync) {
-    addReplyBulkLenCore(c,obj,fAsync);
-    addReplyCore(c,obj,fAsync);
-    addReplyCore(c,shared.crlf,fAsync);
-}
-
-void addReplyBulk(client *c, robj_roptr obj)
-{
-    addReplyBulkCore(c, obj, false);
-}
-
-void addReplyBulkAsync(client *c, robj_roptr obj)
-{
-    addReplyBulkCore(c, obj, true);
+void addReplyBulk(client *c, robj_roptr obj) {
+    addReplyBulkLen(c,obj);
+    addReply(c,obj);
+    addReply(c,shared.crlf);
 }
 
 /* Add a C buffer as bulk reply */
-void addReplyBulkCBufferCore(client *c, const void *p, size_t len, bool fAsync) {
-    addReplyLongLongWithPrefixCore(c,len,'$',fAsync);
-    addReplyProtoCore(c,(const char*)p,len,fAsync);
-    addReplyCore(c,shared.crlf,fAsync);
-}
-
 void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
-    addReplyBulkCBufferCore(c, p, len, false);
-}
-
-void addReplyBulkCBufferAsync(client *c, const void *p, size_t len) {
-    addReplyBulkCBufferCore(c, p, len, true);
+    addReplyLongLongWithPrefix(c,len,'$');
+    addReplyProto(c,(const char*)p,len);
+    addReply(c,shared.crlf);
 }
 
 /* Add sds to reply (takes ownership of sds and frees it) */
-void addReplyBulkSdsCore(client *c, sds s, bool fAsync)  {
-    addReplyLongLongWithPrefixCore(c,sdslen(s),'$', fAsync);
-    addReplySdsCore(c,s,fAsync);
-    addReplyCore(c,shared.crlf,fAsync);
-}
-
-void addReplyBulkSds(client *c, sds s) {
-    addReplyBulkSdsCore(c, s, false);
-}
-
-void addReplyBulkSdsAsync(client *c, sds s) {
-    addReplyBulkSdsCore(c, s, true);
+void addReplyBulkSds(client *c, sds s)  {
+    addReplyLongLongWithPrefix(c,sdslen(s),'$');
+    addReplySds(c,s);
+    addReply(c,shared.crlf);
 }
 
 /* Add a C null term string as bulk reply */
-void addReplyBulkCStringCore(client *c, const char *s, bool fAsync) {
+void addReplyBulkCString(client *c, const char *s) {
     if (s == NULL) {
         if (c->resp < 3)
-            addReplyCore(c,shared.nullbulk, fAsync);
+            addReply(c,shared.nullbulk);
         else
-            addReplyNullCore(c,fAsync);
+            addReplyNull(c);
     } else {
-        addReplyBulkCBufferCore(c,s,strlen(s),fAsync);
+        addReplyBulkCBuffer(c,s,strlen(s));
     }
-}
-
-void addReplyBulkCString(client *c, const char *s) {
-    addReplyBulkCStringCore(c, s, false);
-}
-
-void addReplyBulkCStringAsync(client *c, const char *s) {
-    addReplyBulkCStringCore(c, s, true);
 }
 
 /* Add a long long as a bulk reply */
@@ -1064,9 +908,9 @@ void addReplyBulkLongLong(client *c, long long ll) {
  * three first characters of the extension are used, and if the
  * provided one is shorter than that, the remaining is filled with
  * spaces. */
-void addReplyVerbatimCore(client *c, const char *s, size_t len, const char *ext, bool fAsync) {
+void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext) {
     if (c->resp == 2) {
-        addReplyBulkCBufferCore(c,s,len,fAsync);
+        addReplyBulkCBuffer(c,s,len);
     } else {
         char buf[32];
         size_t preflen = snprintf(buf,sizeof(buf),"=%zu\r\nxxx:",len+4);
@@ -1078,18 +922,10 @@ void addReplyVerbatimCore(client *c, const char *s, size_t len, const char *ext,
                 p[i] = *ext++;
             }
         }
-        addReplyProtoCore(c,buf,preflen,fAsync);
-        addReplyProtoCore(c,s,len,fAsync);
-        addReplyProtoCore(c,"\r\n",2,fAsync);
+        addReplyProto(c,buf,preflen);
+        addReplyProto(c,s,len);
+        addReplyProto(c,"\r\n",2);
     }
-}
-
-void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext) {
-    addReplyVerbatimCore(c, s, len, ext, false);
-}
-
-void addReplyVerbatimAsync(client *c, const char *s, size_t len, const char *ext) {
-    addReplyVerbatimCore(c, s, len, ext, true);
 }
 
 /* Add an array of C strings as status replies with a heading.
@@ -1127,7 +963,7 @@ void addReplySubcommandSyntaxError(client *c) {
 /* Append 'src' client output buffers into 'dst' client output buffers. 
  * This function clears the output buffers of 'src' */
 void AddReplyFromClient(client *dst, client *src) {
-    if (prepareClientToWrite(dst, false) != C_OK)
+    if (prepareClientToWrite(dst) != C_OK)
         return;
     addReplyProto(dst,src->buf, src->bufpos);
     if (listLength(src->reply))
@@ -1907,7 +1743,7 @@ void ProcessPendingAsyncWrites()
         
         if (FCorrectThread(c))
         {
-            prepareClientToWrite(c, false); // queue an event
+            prepareClientToWrite(c); // queue an event
         }
         else
         {
@@ -2898,7 +2734,7 @@ NULL
         if (target && target->flags & CLIENT_BLOCKED) {
             std::unique_lock<fastlock> ul(target->lock);
             if (unblock_error)
-                addReplyErrorAsync(target,
+                addReplyError(target,
                     "-UNBLOCKED client unblocked via CLIENT UNBLOCK");
             else
                 replyToBlockedClientTimedOut(target);

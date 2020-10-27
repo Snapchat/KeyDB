@@ -3555,6 +3555,7 @@ void call(client *c, int flags) {
     /* Call the command. */
     dirty = g_pserver->dirty;
     updateCachedTime(0);
+    incrementMvccTstamp();
     start = g_pserver->ustime;
     c->cmd->proc(c);
     serverTL->commandsExecuted++;
@@ -3837,8 +3838,6 @@ int processCommand(client *c, int callFlags) {
             return C_OK;
         }
     }
-
-    incrementMvccTstamp();
 
     /* Handle the maxmemory directive.
      *

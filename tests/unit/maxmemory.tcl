@@ -215,7 +215,7 @@ proc test_slave_buffers {test_name cmd_count payload_len limit_memory pipeline} 
             set used_no_repl [expr {$new_used - $mem_not_counted_for_evict}]
             set delta [expr {($used_no_repl - $client_buf) - ($orig_used_no_repl - $orig_client_buf)}]
 
-            assert {[$master dbsize] == 100}
+            assert_equal [$master dbsize] 100
             assert {$slave_buf > 2*1024*1024} ;# some of the data may have been pushed to the OS buffers
             set delta_max [expr {$cmd_count / 2}] ;# 1 byte unaccounted for, with 1M commands will consume some 1MB
             assert {$delta < $delta_max && $delta > -$delta_max}

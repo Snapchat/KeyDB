@@ -235,7 +235,7 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
         $master replicaof no one
         after 100
         $master set testkey baz
-        after 100
+        after 200
         $slave set testkey bar
         after 100
         $slave replicaof $master_host $master_port
@@ -243,8 +243,8 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
         $master replicaof $slave_host $slave_port
         after 1000
 
-        assert_equal {bar} [$slave get testkey]
-        assert_equal {bar} [$master get testkey]
+        assert_equal {bar} [$slave get testkey]  {replica is correct}
+        assert_equal {bar} [$master get testkey] {master is correct}
     }
 
     test {Active replica different databases} {
@@ -271,6 +271,11 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
         test {Active Replica Merges Database On Sync} {
             $slave set testkeyA foo
             r replicaof $slave_host $slave_port
+	    wait_for_condition 50 1000 {
+                [string match *active-replica* [r role]]
+            } else {
+                fail [$slave role]
+            }
 	    after 1000
 	    assert_equal 2 [r dbsize]
 	}

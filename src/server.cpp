@@ -2221,10 +2221,11 @@ void processClients();
  * The most important is freeClientsInAsyncFreeQueue but we also
  * call some other low-risk functions. */
 void beforeSleep(struct aeEventLoop *eventLoop) {
+    AeLocker locker;
     UNUSED(eventLoop);
     int iel = ielFromEventLoop(eventLoop);
     
-    aeAcquireLock();
+    locker.arm();
     processClients();
 
     /* Handle precise timeouts of blocked clients. */
@@ -2232,9 +2233,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Handle TLS pending data. (must be done before flushAppendOnlyFile) */
     if (tlsHasPendingData()) {
-        aeReleaseLock();
+        locker.release();
         tlsProcessPendingData();
-        aeAcquireLock();
+        locker.arm();
     }
 
     /* If tls still has pending unread data don't sleep at all. */
@@ -2299,9 +2300,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         first so perform it here */
     bool fSentReplies = false;
     if (listLength(g_pserver->clients_to_close)) {
-        aeReleaseLock();
+        locker.disarm();
         handleClientsWithPendingWrites(iel, aof_state);
-        aeAcquireLock();
+        locker.arm();
         fSentReplies = true;
     }
 
@@ -2311,7 +2312,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
      * time. */
-    aeReleaseLock();
+    locker.disarm();
     if (!fSentReplies)
         handleClientsWithPendingWrites(iel, aof_state);
     if (moduleCount()) moduleReleaseGIL(TRUE /*fServerThread*/);

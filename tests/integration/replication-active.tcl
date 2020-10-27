@@ -78,9 +78,9 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
             $master flushall
         }
 
-		test {Replication of EXPIREMEMBER (set) command (Active)} {
+        test {Replication of EXPIREMEMBER (set) command (Active)} {
             $master sadd testkey a b c d
-            wait_for_condition 50 100 {
+            wait_for_condition 50 200 {
                 [$master debug digest] eq [$slave debug digest]
             } else {
                 fail "Failed to replicate set"
@@ -274,10 +274,13 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
 	    wait_for_condition 50 1000 {
                 [string match *active-replica* [r role]]
             } else {
-                fail [$slave role]
+                fail "Replica did not connect"
             }
-	    after 1000
-	    assert_equal 2 [r dbsize]
+	    wait_for_condition 50 1000 {
+		[string match "2" [r dbsize]]
+            } else {
+                fail "key did not propogate"
+            }
 	}
     }
 }

@@ -1,12 +1,14 @@
+<p align="center">
+  <a href="https://fluidb.icu"><img src="/img/Logo.png" alt="fluidB"></a>
+</p>
+<p align="center">
+    
 ![Current Release](https://img.shields.io/github/release/JohnSully/KeyDB.svg)
 ![CI](https://github.com/JohnSully/KeyDB/workflows/CI/badge.svg?branch=unstable)
 [![StackShare](http://img.shields.io/badge/tech-stack-0690fa.svg?style=flat)](https://stackshare.io/eq-alpha-technology-inc/eq-alpha-technology-inc)
 
-##### New! Want to extend KeyDB with Javascript?  Try [ModJS](https://github.com/JohnSully/ModJS)
-
 ##### Need Help? Check out our extensive [documentation](https://docs.keydb.dev).
 
-##### Have feedback?  Take our quick survey: https://www.surveymonkey.com/r/Y9XNS93
 
 ## What is fluidB?
 

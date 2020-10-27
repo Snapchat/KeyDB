@@ -3540,6 +3540,12 @@ void call(client *c, int flags) {
         replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
     }
 
+    /* We need to transfer async writes before a client's repl state gets changed.  Otherwise
+        we won't be able to propogate them correctly. */
+    if (c->cmd->flags & CMD_CATEGORY_REPLICATION) {
+        ProcessPendingAsyncWrites();
+    }
+
     /* Initialization: clear the flags that must be set by the command on
      * demand, and initialize the array for additional commands propagation. */
     c->flags &= ~(CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP);

@@ -25,30 +25,6 @@ Good example is to think of fluidB as a more complex version of memcached, where
 * **Oran Agra**, **Yossi Gottlieb, John Sully** I wish to express my appreciation for all your efforts!!!
 
 
-Additional Resources
---------------------
-
-Try our docker container: https://hub.docker.com/r/eqalpha/fluidB
-
-Talk on Gitter: https://gitter.im/fluidB
-
-Visit our Website: https://fluidB.dev
-
-See options for channel partners and support contracts: https://fluidB.dev/support.html
-
-Learn with fluidB’s official documentation site: https://docs.fluidB.dev
-
-[Subscribe to the fluidB mailing list](https://eqalpha.us20.list-manage.com/subscribe/post?u=978f486c2f95589b24591a9cc&id=4ab9220500)
-
-Management GUI: We recommend [FastoNoSQL](https://fastonosql.com/) which has official fluidB support.
-
-
-Benchmarking fluidB
-------------------
-
-Please note fluidB-benchmark and redis-benchmark are currently single threaded and too slow to properly benchmark fluidB.  We recommend using a redis cluster benchmark tool such as [memtier](https://github.com/RedisLabs/memtier_benchmark).  Please ensure your machine has enough cores for both fluidB and memteir if testing locally.  fluidB expects exclusive use of any cores assigned to it.
-
-For more details on how we benchmarked fluidB along with performance numbers check out our blog post: [Redis Should Be Multithreaded](https://medium.com/@john_63123/redis-should-be-multi-threaded-e28319cab744?source=friends_link&sk=7ce8e9fe3ec8224a4d27ef075d085457)
 
 New Configuration Options
 -------------------------

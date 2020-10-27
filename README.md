@@ -8,18 +8,23 @@
 
 ##### Have feedback?  Take our quick survey: https://www.surveymonkey.com/r/Y9XNS93
 
-What is KeyDB?
---------------
+## What is fluidB?
 
-KeyDB is a high performance fork of Redis with a focus on multithreading, memory efficiency, and high throughput.  In addition to multithreading, KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/Active-Replication), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3. 
 
-KeyDB maintains full compatibility with the Redis protocol, modules, and scripts.  This includes the atomicity guarantees for scripts and transactions.  Because KeyDB keeps in sync with Redis development KeyDB is a superset of Redis functionality, making KeyDB a drop in replacement for existing Redis deployments.
+Fluidb is an open source (BSD-3-Clause License), in-memory database management system, distributed uder BSD-3-Clause License using code of [Redis](https://github.com/redis/redis), which also distributed uder BSD-3-Clause License. 
+The purpose of our project is to fix fundamental flaws in Redis, such as scaling, creating a multi-threaded server.
 
-On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency. Active-Replication simplifies hot-spare failover allowing you to easily distribute writes over replicas and use simple TCP based load balancing/failover. KeyDB's higher performance allows you to do more on less hardware which reduces operation costs and complexity.
+fluidB is often referred to as a *data structures* server. What this means is that fluidB provides access to mutable data structures via a set of commands, which are sent using a *server-client* model with TCP sockets and a simple protocol. So different processes can query and modify the same data structures in a shared way.
+The storage of fluidB is implemented as follows: data can be stored according to the "key-value" model, or can be stored as a graph, which is a chain of interrelated events (which are similar to frames from an old film strip), which together represent a description of some event.
 
-<img src="https://keydb.dev/assets/img/blog/5x_opspersecVSdatasize.PNG"/>
+Good example is to think of fluidB as a more complex version of memcached, where the operations are not just SETs and GETs, but operations that work with complex data types like Lists, Sets, ordered data structures, and so forth.
+<br/><br/>
 
-See the full benchmark results and setup information here: https://docs.keydb.dev/blog/2019/10/07/blog-post/
+## Gratitudes
+
+* **Salvatore Sanfilippo (antirez)**, I would like to express our gratitude for all that you have done!!! Thank you.
+* **Oran Agra**, **Yossi Gottlieb** I wish to express my appreciation for all your efforts!!!
+
 
 Why fork Redis?
 ---------------

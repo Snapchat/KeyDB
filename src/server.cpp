@@ -2233,7 +2233,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Handle TLS pending data. (must be done before flushAppendOnlyFile) */
     if (tlsHasPendingData()) {
-        locker.release();
+        locker.disarm();
         tlsProcessPendingData();
         locker.arm();
     }

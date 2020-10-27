@@ -3,9 +3,6 @@
 </p>
 <p align="center">
     
-![Current Release](https://img.shields.io/github/release/JohnSully/fluidB.svg)
-![CI](https://github.com/JohnSully/fluidB/workflows/CI/badge.svg?branch=unstable)
-[![StackShare](http://img.shields.io/badge/tech-stack-0690fa.svg?style=flat)](https://stackshare.io/eq-alpha-technology-inc/eq-alpha-technology-inc)
 
 ##### Need Help? Check out our extensive [documentation](https://docs.fluidB.dev).
 

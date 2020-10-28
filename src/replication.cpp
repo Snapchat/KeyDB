@@ -198,8 +198,8 @@ void createReplicationBacklog(void) {
     g_pserver->repl_backlog_off = g_pserver->master_repl_offset+1;
 
     /* Allow transmission to clients */
-    serverTL->repl_batch_idxStart = 0;
-    serverTL->repl_batch_offStart = g_pserver->master_repl_offset;
+    g_pserver->repl_batch_idxStart = 0;
+    g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
 }
 
 /* This function is called when the user modifies the replication backlog
@@ -220,19 +220,19 @@ void resizeReplicationBacklog(long long newsize) {
          * worse often we need to alloc additional space before freeing the
          * old buffer. */
 
-        if (serverTL->repl_batch_idxStart >= 0) {
+        if (g_pserver->repl_batch_idxStart >= 0) {
             // We need to keep critical data so we can't shrink less than the hot data in the buffer
-            newsize = std::max(newsize, g_pserver->master_repl_offset - serverTL->repl_batch_offStart);
+            newsize = std::max(newsize, g_pserver->master_repl_offset - g_pserver->repl_batch_offStart);
             char *backlog = (char*)zmalloc(newsize);
-            g_pserver->repl_backlog_histlen = g_pserver->master_repl_offset - serverTL->repl_batch_offStart;
+            g_pserver->repl_backlog_histlen = g_pserver->master_repl_offset - g_pserver->repl_batch_offStart;
 
-            if (g_pserver->repl_backlog_idx >= serverTL->repl_batch_idxStart) {
-                auto cbActiveBacklog = g_pserver->repl_backlog_idx - serverTL->repl_batch_idxStart;
-                memcpy(backlog, g_pserver->repl_backlog + serverTL->repl_batch_idxStart, cbActiveBacklog);
+            if (g_pserver->repl_backlog_idx >= g_pserver->repl_batch_idxStart) {
+                auto cbActiveBacklog = g_pserver->repl_backlog_idx - g_pserver->repl_batch_idxStart;
+                memcpy(backlog, g_pserver->repl_backlog + g_pserver->repl_batch_idxStart, cbActiveBacklog);
                 serverAssert(g_pserver->repl_backlog_histlen == cbActiveBacklog);
             } else {
-                auto cbPhase1 = g_pserver->repl_backlog_size - serverTL->repl_batch_idxStart;
-                memcpy(backlog, g_pserver->repl_backlog + serverTL->repl_batch_idxStart, cbPhase1);
+                auto cbPhase1 = g_pserver->repl_backlog_size - g_pserver->repl_batch_idxStart;
+                memcpy(backlog, g_pserver->repl_backlog + g_pserver->repl_batch_idxStart, cbPhase1);
                 memcpy(backlog + cbPhase1, g_pserver->repl_backlog, g_pserver->repl_backlog_idx);
                 auto cbActiveBacklog = cbPhase1 + g_pserver->repl_backlog_idx;
                 serverAssert(g_pserver->repl_backlog_histlen == cbActiveBacklog);
@@ -240,7 +240,7 @@ void resizeReplicationBacklog(long long newsize) {
             zfree(g_pserver->repl_backlog);
             g_pserver->repl_backlog = backlog;
             g_pserver->repl_backlog_idx = g_pserver->repl_backlog_histlen;
-            serverTL->repl_batch_idxStart = 0;
+            g_pserver->repl_batch_idxStart = 0;
         } else {
             zfree(g_pserver->repl_backlog);
             g_pserver->repl_backlog = (char*)zmalloc(newsize);
@@ -275,11 +275,11 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
     serverAssert(GlobalLocksAcquired());
     const unsigned char *p = (const unsigned char*)ptr;
 
-    if (serverTL->repl_batch_idxStart >= 0) {
-        long long minimumsize = g_pserver->master_repl_offset + len - serverTL->repl_batch_offStart+1;
+    if (g_pserver->repl_batch_idxStart >= 0) {
+        long long minimumsize = g_pserver->master_repl_offset + len - g_pserver->repl_batch_offStart+1;
         if (minimumsize > g_pserver->repl_backlog_size) {
             flushReplBacklogToClients();
-            minimumsize = g_pserver->master_repl_offset + len - serverTL->repl_batch_offStart+1;
+            minimumsize = g_pserver->master_repl_offset + len - g_pserver->repl_batch_offStart+1;
 
             if (minimumsize > g_pserver->repl_backlog_size) {
                 // This is an emergency overflow, we better resize to fit
@@ -416,7 +416,7 @@ static int writeProtoNum(char *dst, const size_t cchdst, long long num)
 void replicationFeedSlavesCore(list *slaves, int dictid, robj **argv, int argc) {
     int j;
     serverAssert(GlobalLocksAcquired());
-    serverAssert(serverTL->repl_batch_offStart >= 0);
+    serverAssert(g_pserver->repl_batch_offStart >= 0);
 
     if (dictid < 0)
         dictid = 0; // this can happen if we send a PING before any real operation
@@ -2257,8 +2257,8 @@ void readSyncBulkPayload(connection *conn) {
         * we are starting a new history. */
         memcpy(g_pserver->replid,mi->master->replid,sizeof(g_pserver->replid));
         g_pserver->master_repl_offset = mi->master->reploff;
-        if (serverTL->repl_batch_offStart >= 0)
-            serverTL->repl_batch_offStart = g_pserver->master_repl_offset;
+        if (g_pserver->repl_batch_offStart >= 0)
+            g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
     }
     clearReplicationId2();
 
@@ -2266,7 +2266,7 @@ void readSyncBulkPayload(connection *conn) {
      * accumulate the backlog regardless of the fact they have sub-slaves
      * or not, in order to behave correctly if they are promoted to
      * masters after a failover. */
-    if (g_pserver->repl_backlog == NULL) createReplicationBacklog();
+    if (g_pserver->repl_backlog == NULL) runAndPropogateToReplicas(createReplicationBacklog);
     serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Finished with success");
 
     if (cserver.supervised_mode == SUPERVISED_SYSTEMD) {
@@ -2526,7 +2526,7 @@ int slaveTryPartialResynchronization(redisMaster *mi, connection *conn, int read
         /* If this instance was restarted and we read the metadata to
          * PSYNC from the persistence file, our replication backlog could
          * be still not initialized. Create it. */
-        if (g_pserver->repl_backlog == NULL) createReplicationBacklog();
+        if (g_pserver->repl_backlog == NULL) runAndPropogateToReplicas(createReplicationBacklog);
         return PSYNC_CONTINUE;
     }
 
@@ -4360,13 +4360,15 @@ static void propagateMasterStaleKeys()
 void flushReplBacklogToClients()
 {
     serverAssert(GlobalLocksAcquired());
+    if (g_pserver->repl_batch_offStart < 0)
+        return;
     
-    if (serverTL->repl_batch_offStart != g_pserver->master_repl_offset) {
+    if (g_pserver->repl_batch_offStart != g_pserver->master_repl_offset) {
         bool fAsyncWrite = false;
         // Ensure no overflow
-        serverAssert(serverTL->repl_batch_offStart < g_pserver->master_repl_offset);
-        serverAssert(g_pserver->master_repl_offset - serverTL->repl_batch_offStart <= g_pserver->repl_backlog_size);
-        serverAssert(serverTL->repl_batch_idxStart != g_pserver->repl_backlog_idx);
+        serverAssert(g_pserver->repl_batch_offStart < g_pserver->master_repl_offset);
+        serverAssert(g_pserver->master_repl_offset - g_pserver->repl_batch_offStart <= g_pserver->repl_backlog_size);
+        serverAssert(g_pserver->repl_batch_idxStart != g_pserver->repl_backlog_idx);
 
         listIter li;
         listNode *ln;
@@ -4383,25 +4385,25 @@ void flushReplBacklogToClients()
             else
                 fAsyncWrite = true;
             
-            if (g_pserver->repl_backlog_idx >= serverTL->repl_batch_idxStart) {
-                long long cbCopy = g_pserver->repl_backlog_idx - serverTL->repl_batch_idxStart;
-                serverAssert((g_pserver->master_repl_offset - serverTL->repl_batch_offStart) == cbCopy);
-                serverAssert((g_pserver->repl_backlog_size - serverTL->repl_batch_idxStart) >= (cbCopy));
-                serverAssert((serverTL->repl_batch_idxStart + cbCopy) <= g_pserver->repl_backlog_size);
+            if (g_pserver->repl_backlog_idx >= g_pserver->repl_batch_idxStart) {
+                long long cbCopy = g_pserver->repl_backlog_idx - g_pserver->repl_batch_idxStart;
+                serverAssert((g_pserver->master_repl_offset - g_pserver->repl_batch_offStart) == cbCopy);
+                serverAssert((g_pserver->repl_backlog_size - g_pserver->repl_batch_idxStart) >= (cbCopy));
+                serverAssert((g_pserver->repl_batch_idxStart + cbCopy) <= g_pserver->repl_backlog_size);
                 
-                addReplyProto(replica, g_pserver->repl_backlog + serverTL->repl_batch_idxStart, cbCopy);
+                addReplyProto(replica, g_pserver->repl_backlog + g_pserver->repl_batch_idxStart, cbCopy);
             } else {
-                auto cbPhase1 = g_pserver->repl_backlog_size - serverTL->repl_batch_idxStart;
-                addReplyProto(replica, g_pserver->repl_backlog + serverTL->repl_batch_idxStart, cbPhase1);
+                auto cbPhase1 = g_pserver->repl_backlog_size - g_pserver->repl_batch_idxStart;
+                addReplyProto(replica, g_pserver->repl_backlog + g_pserver->repl_batch_idxStart, cbPhase1);
                 addReplyProto(replica, g_pserver->repl_backlog, g_pserver->repl_backlog_idx);
-                serverAssert((cbPhase1 + g_pserver->repl_backlog_idx) == (g_pserver->master_repl_offset - serverTL->repl_batch_offStart));
+                serverAssert((cbPhase1 + g_pserver->repl_backlog_idx) == (g_pserver->master_repl_offset - g_pserver->repl_batch_offStart));
             }
         }
         if (fAsyncWrite)
             ProcessPendingAsyncWrites();
 
         // This may be called multiple times per "frame" so update with our progress flushing to clients
-        serverTL->repl_batch_idxStart = g_pserver->repl_backlog_idx;
-        serverTL->repl_batch_offStart = g_pserver->master_repl_offset;
+        g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
+        g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
     }
 }

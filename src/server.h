@@ -1371,8 +1371,6 @@ struct redisServerThreadVars {
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     long unsigned commandsExecuted = 0;
     bool fRetrySetAofEvent = false;
-    long long repl_batch_offStart = -1;
-    long long repl_batch_idxStart = -1;
     std::vector<client*> vecclientsProcess;
 };
 
@@ -1828,6 +1826,10 @@ struct redisServer {
     char *bio_cpulist; /* cpu affinity list of bio thread. */
     char *aof_rewrite_cpulist; /* cpu affinity list of aof rewrite process. */
     char *bgsave_cpulist; /* cpu affinity list of bgsave process. */
+
+
+    long long repl_batch_offStart = -1;
+    long long repl_batch_idxStart = -1;
 };
 
 typedef struct pubsubPattern {
@@ -2887,18 +2889,18 @@ template<typename FN_PTR, class ...TARGS>
 void runAndPropogateToReplicas(FN_PTR *pfn, TARGS... args) {
     // Store the replication backlog starting params, we use this to know how much data was written.
     //  these are TLS in case we need to expand the buffer and therefore need to update them
-    bool fNestedProcess = (serverTL->repl_batch_idxStart >= 0);
+    bool fNestedProcess = (g_pserver->repl_batch_idxStart >= 0);
     if (!fNestedProcess) {
-        serverTL->repl_batch_offStart = g_pserver->master_repl_offset;
-        serverTL->repl_batch_idxStart = g_pserver->repl_backlog_idx;
+        g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
+        g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
     }
 
     pfn(args...);
 
     if (!fNestedProcess) {
         flushReplBacklogToClients();
-        serverTL->repl_batch_offStart = -1;
-        serverTL->repl_batch_idxStart = -1;
+        g_pserver->repl_batch_offStart = -1;
+        g_pserver->repl_batch_idxStart = -1;
     }
 }
 

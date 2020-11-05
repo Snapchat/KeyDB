@@ -7,7 +7,7 @@ extern const char *motd_cache_file;
 extern "C" {
 #endif
     
-char *fetchMOTD(int fCache);
+char *fetchMOTD(int fCache, int enable_motd);
 
 #ifdef __cplusplus
 }

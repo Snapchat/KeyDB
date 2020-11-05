@@ -5130,7 +5130,7 @@ void redisAsciiArt(void) {
             mode, g_pserver->port ? g_pserver->port : g_pserver->tls_port
         );
     } else {
-        sds motd = fetchMOTD(true);
+        sds motd = fetchMOTD(true, g_pserver->enable_motd);
         snprintf(buf,1024*16,ascii_logo,
             KEYDB_REAL_VERSION,
             redisGitSHA1(),

@@ -654,11 +654,11 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 /* A redis object, that is a type able to hold a string / list / set */
 
 /* The actual Redis Object */
-#define OBJ_STRING 0    /* String object. */
-#define OBJ_LIST 1      /* List object. */
-#define OBJ_SET 2       /* Set object. */
-#define OBJ_ZSET 3      /* Sorted set object. */
-#define OBJ_HASH 4      /* Hash object. */
+#define OBJ_STRING 0     /* String object. */
+#define OBJ_LIST 1       /* List object. */
+#define OBJ_SET 2        /* Set object. */
+#define OBJ_ZSET 3       /* Sorted set object. */
+#define OBJ_HASH 4       /* Hash object. */
 
 /* The "module" object type is a special one that signals that the object
  * is one directly managed by a Redis module. In this case the value points
@@ -671,10 +671,10 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
  * by a 64 bit module type ID, which has a 54 bits module-specific signature
  * in order to dispatch the loading to the right module, plus a 10 bits
  * encoding version. */
-#define OBJ_MODULE 5    /* Module object. */
-#define OBJ_STREAM 6    /* Stream object. */
-#define OBJ_CRON 7      /* CRON job */
-
+#define OBJ_MODULE 5     /* Module object. */
+#define OBJ_STREAM 6     /* Stream object. */
+#define OBJ_CRON 7       /* CRON job */
+#define OBJ_NESTEDHASH 8 /* Nested Hash Object */
 
 /* Extract encver / signature from a module type ID. */
 #define REDISMODULE_TYPE_ENCVER_BITS 10
@@ -2009,6 +2009,7 @@ void addReplyNullArray(client *c);
 void addReplyBool(client *c, int b);
 void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext);
 void addReplyProto(client *c, const char *s, size_t len);
+void addReplyProtoCString(client *c, const char *s);
 void addReplyBulk(client *c, robj_roptr obj);
 void AddReplyFromClient(client *c, client *src);
 void addReplyBulkCString(client *c, const char *s);

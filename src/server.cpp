@@ -63,6 +63,7 @@
 #include <mutex>
 #include "aelocker.h"
 #include "motd.h"
+#include "t_nhash.h"
 #ifdef __linux__
 #include <sys/prctl.h>
 #endif
@@ -1060,7 +1061,15 @@ struct redisCommand redisCommandTable[] = {
     
     {"stralgo",stralgoCommand,-2,
      "read-only @string",
-     0,lcsGetKeys,0,0,0,0,0,0}
+     0,lcsGetKeys,0,0,0,0,0,0},
+
+    {"keydb.nhget",nhgetCommand,-2,
+     "read-only fast @hash",
+     0,NULL,1,1,1,0,0,0},
+    
+    {"keydb.nhset",nhsetCommand,-3,
+     "read-only fast @hash",
+     0,NULL,1,1,1,0,0,0},
 };
 
 /*============================ Utility functions ============================ */
@@ -3558,7 +3567,15 @@ void call(client *c, int flags) {
     updateCachedTime(0);
     incrementMvccTstamp();
     start = g_pserver->ustime;
-    c->cmd->proc(c);
+    try {
+        c->cmd->proc(c);
+    } catch (robj_roptr o) {
+        addReply(c, o);
+    } catch (robj *o) {
+        addReply(c, o);
+    } catch (const char *sz) {
+        addReplyError(c, sz);
+    }
     serverTL->commandsExecuted++;
     duration = ustime()-start;
     dirty = g_pserver->dirty-dirty;

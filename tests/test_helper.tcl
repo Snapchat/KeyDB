@@ -28,6 +28,7 @@ set ::all_tests {
     unit/type/hash
     unit/type/stream
     unit/type/stream-cgroups
+    unit/type/nestedhash
     unit/sort
     unit/expire
     unit/other

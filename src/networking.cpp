@@ -424,6 +424,10 @@ void addReplyProto(client *c, const char *s, size_t len) {
         _addReplyProtoToList(c,s,len);
 }
 
+void addReplyProtoCString(client *c, const char *s) {
+    addReplyProto(c, s, strlen(s));
+}
+
 std::string escapeString(sds str)
 {
     std::string newstr;

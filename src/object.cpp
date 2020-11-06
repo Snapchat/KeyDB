@@ -30,6 +30,7 @@
 
 #include "server.h"
 #include "cron.h"
+#include "t_nhash.h"
 #include <math.h>
 #include <ctype.h>
 #include <mutex>
@@ -395,6 +396,7 @@ void decrRefCount(robj_roptr o) {
         case OBJ_MODULE: freeModuleObject(o); break;
         case OBJ_STREAM: freeStreamObject(o); break;
         case OBJ_CRON: freeCronObject(o); break;
+        case OBJ_NESTEDHASH: freeNestedHashObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
         if (g_pserver->fActiveReplica) {

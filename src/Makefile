@@ -107,7 +107,7 @@ endif
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
 FINAL_CXXFLAGS=$(CXX_STD) $(WARN) $(OPT) $(DEBUG) $(CXXFLAGS) $(REDIS_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
-FINAL_LIBS+=-lm -lcurl
+FINAL_LIBS+=-lm
 DEBUG=-g -ggdb
 
 ifneq ($(uname_S),Darwin)
@@ -171,8 +171,11 @@ else
 	# All the other OSes (notably Linux)
 	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+=-ldl -pthread -lrt -luuid
+ifneq ($(NO_MOTD),yes)
 	FINAL_CFLAGS += -DMOTD
 	FINAL_CXXFLAGS += -DMOTD
+	FINAL_LIBS+=-lcurl
+endif
 endif
 endif
 endif

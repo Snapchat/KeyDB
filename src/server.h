@@ -1456,6 +1456,7 @@ struct redisServerConst {
     bool fUsePro = false;
     int thread_min_client_threshold = 50;
     int multimaster_no_forward;
+    int enable_motd;            /* Flag to retrieve the Message of today using CURL request*/
 };
 
 struct redisServer {
@@ -1480,7 +1481,6 @@ struct redisServer {
     int sentinel_mode;          /* True if this instance is a Sentinel. */
     size_t initial_memory_usage; /* Bytes used after initialization. */
     int always_show_logo;       /* Show logo even for non-stdout logging. */
-    int enable_motd;            /* Flag to retrieve the Message of today using CURL request*/
     /* Modules */
     dict *moduleapi;            /* Exported core APIs dictionary for modules. */
     dict *sharedapi;            /* Like moduleapi but containing the APIs that

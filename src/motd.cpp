@@ -128,7 +128,7 @@ extern "C" char *fetchMOTD(int cache, int enable_motd)
 
 #else
 
-extern "C" char *fetchMOTD(int /* cache */, int enable_motd)
+extern "C" char *fetchMOTD(int /* cache */, int /* enable_motd */)
 {
     return NULL;
 }

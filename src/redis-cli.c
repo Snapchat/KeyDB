@@ -7114,7 +7114,7 @@ int main(int argc, char **argv) {
         /* Show the message of the day if we are interactive */
         if (config.output == OUTPUT_STANDARD && !config.disable_motd) {
 	    /*enable_motd=1 will retrieve the message of today using CURL*/
-            char *szMotd = fetchMOTD(1 /* cache */, 1);
+            char *szMotd = fetchMOTD(1 /* cache */, 1 /* enable_motd */);
             if (szMotd != NULL) {
                 printf("Message of the day:\n  %s\n", szMotd);
                 sdsfree(szMotd);

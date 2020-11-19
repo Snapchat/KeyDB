@@ -3049,7 +3049,8 @@ struct redisMaster *replicationAddMaster(char *ip, int port) {
         else
             freeClientAsync(mi->master);
     }
-    disconnectAllBlockedClients(); /* Clients blocked in master, now replica. */
+    if (!g_pserver->fActiveReplica)
+        disconnectAllBlockedClients(); /* Clients blocked in master, now replica. */
 
     /* Update oom_score_adj */
     setOOMScoreAdj(-1);

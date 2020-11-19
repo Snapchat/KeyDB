@@ -247,6 +247,23 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
         assert_equal {bar} [$master get testkey] {master is correct}
     }
 
+    test {Active replica merge works with client blocked} {
+        $slave flushall
+        $slave replicaof no one
+        $master replicaof no one
+        after 100
+        set rd [redis_deferring_client]
+        $rd blpop testlist 0
+        $slave lpush testlist foo
+        
+        #OK Now reconnect
+        $slave replicaof $master_host $master_port
+        $master replicaof $slave_host $slave_port
+        after 1000
+
+        $rd read
+    } {testlist foo}
+
     test {Active replica different databases} {
         $master select 3
         $master set testkey abcd

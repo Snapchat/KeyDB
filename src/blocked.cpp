@@ -672,6 +672,13 @@ void signalKeyAsReady(redisDb *db, robj *key) {
     /* Key was already signaled? No need to queue it again. */
     if (dictFind(db->ready_keys,key) != NULL) return;
 
+    if (key->getrefcount() == OBJ_STATIC_REFCOUNT) {
+        // Sometimes a key may be stack allocated, we'll need to dupe it
+        robj *newKey = createStringObject(szFromObj(key), sdslen(szFromObj(key)));
+        newKey->setrefcount(0); // Start with 0 but don't free
+        key = newKey;
+    }
+
     /* Ok, we need to queue this key into g_pserver->ready_keys. */
     rl = (readyList*)zmalloc(sizeof(*rl), MALLOC_SHARED);
     rl->key = key;

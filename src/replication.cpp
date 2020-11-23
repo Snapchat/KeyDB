@@ -4367,3 +4367,39 @@ static void propagateMasterStaleKeys()
 
     decrRefCount(rgobj[0]);
 }
+
+void replicationNotifyLoadedKey(redisDb *db, robj_roptr key, robj_roptr val, long long expire) {
+    if (!g_pserver->fActiveReplica || listLength(g_pserver->slaves) == 0)
+        return;
+
+    // Send a digest over to the replicas
+    rio r;
+
+    createDumpPayload(&r, val, key.unsafe_robjcast());
+
+    redisObjectStack objPayload;
+    initStaticStringObject(objPayload, r.io.buffer.ptr);
+    redisObjectStack objTtl;
+    initStaticStringObject(objTtl, sdscatprintf(sdsempty(), "%lld", expire));
+    redisObjectStack objMvcc;
+    initStaticStringObject(objMvcc, sdscatprintf(sdsempty(), "%lu", mvccFromObj(val)));
+    redisObject *argv[5] = {shared.mvccrestore, key.unsafe_robjcast(), &objMvcc, &objTtl, &objPayload};
+
+    replicationFeedSlaves(g_pserver->slaves, db - g_pserver->db, argv, 5);
+
+    sdsfree(szFromObj(&objTtl));
+    sdsfree(szFromObj(&objMvcc));
+    sdsfree(r.io.buffer.ptr);
+}
+
+void replicateSubkeyExpire(redisDb *db, robj_roptr key, robj_roptr subkey, long long expire) {
+    if (!g_pserver->fActiveReplica || listLength(g_pserver->slaves) == 0)
+        return;
+
+    redisObjectStack objTtl;
+    initStaticStringObject(objTtl, sdscatprintf(sdsempty(), "%lld", expire));
+    redisObject *argv[4] = {shared.pexpirememberat, key.unsafe_robjcast(), subkey.unsafe_robjcast(), &objTtl};
+    replicationFeedSlaves(g_pserver->slaves, db - g_pserver->db, argv, 4);
+
+    sdsfree(szFromObj(&objTtl));
+}

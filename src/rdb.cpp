@@ -2353,7 +2353,9 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 else {
                     redisObjectStack keyobj;
                     initStaticStringObject(keyobj,key);
-                    setExpire(NULL, db, &keyobj, subexpireKey, strtoll(szFromObj(auxval), nullptr, 10));
+                    long long expireT = strtoll(szFromObj(auxval), nullptr, 10);
+                    setExpire(NULL, db, &keyobj, subexpireKey, expireT);
+                    replicateSubkeyExpire(db, &keyobj, subexpireKey, expireT);
                     decrRefCount(subexpireKey);
                     subexpireKey = nullptr;
                 }
@@ -2475,6 +2477,8 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
                 /* call key space notification on key loaded for modules only */
                 moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, db->id);
+
+                replicationNotifyLoadedKey(db, &keyobj, val, expiretime);
             }
             else
             {

@@ -1176,7 +1176,7 @@ struct sharedObjectsStruct {
     *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
     *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink,
     *rpop, *lpop, *lpush, *rpoplpush, *zpopmin, *zpopmax, *emptyscan,
-    *multi, *exec, *srem, *hdel, *zrem,
+    *multi, *exec, *srem, *hdel, *zrem, *mvccrestore, *pexpirememberat,
     *select[PROTO_SHARED_SELECT_CMDS],
     *integers[OBJ_SHARED_INTEGERS],
     *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
@@ -2217,6 +2217,8 @@ void updateMasterAuth();
 void showLatestBacklog();
 void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask);
 void rdbPipeWriteHandlerConnRemoved(struct connection *conn);
+void replicationNotifyLoadedKey(redisDb *db, robj_roptr key, robj_roptr val, long long expire);
+void replicateSubkeyExpire(redisDb *db, robj_roptr key, robj_roptr subkey, long long expire);
 
 /* Generic persistence functions */
 void startLoadingFile(FILE* fp, const char * filename, int rdbflags);
@@ -2547,6 +2549,7 @@ void clusterPropagatePublish(robj *channel, robj *message);
 void migrateCloseTimedoutSockets(void);
 void clusterBeforeSleep(void);
 int clusterSendModuleMessageToTarget(const char *target, uint64_t module_id, uint8_t type, unsigned char *payload, uint32_t len);
+void createDumpPayload(rio *payload, robj_roptr o, robj *key);
 
 /* Sentinel */
 void initSentinelConfig(void);
@@ -2764,6 +2767,7 @@ void watchCommand(client *c);
 void unwatchCommand(client *c);
 void clusterCommand(client *c);
 void restoreCommand(client *c);
+void mvccrestoreCommand(client *c);
 void migrateCommand(client *c);
 void askingCommand(client *c);
 void readonlyCommand(client *c);

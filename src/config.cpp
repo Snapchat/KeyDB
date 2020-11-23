@@ -2273,7 +2273,7 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
             }
             return 0;
         }
-        for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
+        for (int iel = 0; iel < cserver.cthreads; ++iel)
         {
             if ((unsigned int) aeGetSetSize(g_pserver->rgthreadvar[iel].el) <
                 g_pserver->maxclients + CONFIG_FDSET_INCR)

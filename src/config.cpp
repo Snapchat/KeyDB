@@ -2278,10 +2278,12 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
             if ((unsigned int) aeGetSetSize(g_pserver->rgthreadvar[iel].el) <
                 g_pserver->maxclients + CONFIG_FDSET_INCR)
             {
-                if (aeResizeSetSize(g_pserver->rgthreadvar[iel].el,
-                    g_pserver->maxclients + CONFIG_FDSET_INCR) == AE_ERR)
-                {
-                    *err = "The event loop API used by Redis is not able to handle the specified number of clients";
+		int res = aePostFunction(g_pserver->rgthreadvar[iel].el, [iel] {
+                    aeResizeSetSize(g_pserver->rgthreadvar[iel].el, g_pserver->maxclients + CONFIG_FDSET_INCR);
+                });
+
+                if (res != AE_OK){
+                    *err = "Failed to set the setsize for this thread.";
                     return 0;
                 }
             }

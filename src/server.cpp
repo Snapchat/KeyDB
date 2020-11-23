@@ -1070,6 +1070,10 @@ struct redisCommand redisCommandTable[] = {
     {"keydb.nhset",nhsetCommand,-3,
      "read-only fast @hash",
      0,NULL,1,1,1,0,0,0},
+
+    {"KEYDB.MVCCRESTORE",mvccrestoreCommand, 5,
+     "write use-memory @keyspace @dangerous",
+     0,NULL,1,1,1,0,0,0},
 };
 
 /*============================ Utility functions ============================ */
@@ -2438,6 +2442,8 @@ void createSharedObjects(void) {
     shared.hdel = makeObjectShared(createStringObject("HDEL", 4));
     shared.zrem = makeObjectShared(createStringObject("ZREM", 4));
     shared.srem = makeObjectShared(createStringObject("SREM", 4));
+    shared.mvccrestore = makeObjectShared(createStringObject("KEYDB.MVCCRESTORE", 17));
+    shared.pexpirememberat = makeObjectShared(createStringObject("PEXPIREMEMBERAT",15));
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =
             makeObjectShared(createObject(OBJ_STRING,(void*)(long)j));

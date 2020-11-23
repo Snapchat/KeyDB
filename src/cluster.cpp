@@ -5019,6 +5019,48 @@ void dumpCommand(client *c) {
     return;
 }
 
+/* KEYDB.MVCCRESTORE key mvcc expire serialized-value */
+void mvccrestoreCommand(client *c) {
+    long long mvcc, expire;
+    robj *key = c->argv[1], *obj = nullptr;
+    int type;
+    
+    if (getLongLongFromObjectOrReply(c, c->argv[2], &mvcc, "Invalid MVCC Tstamp") != C_OK)
+        return;
+
+    if (getLongLongFromObjectOrReply(c, c->argv[3], &expire, "Invalid expire") != C_OK)
+        return;
+
+    /* Verify RDB version and data checksum unles the client is already a replica or master */
+    if (!(c->flags & (CLIENT_SLAVE | CLIENT_MASTER))) {
+        if (verifyDumpPayload((unsigned char*)ptrFromObj(c->argv[4]),sdslen(szFromObj(c->argv[4]))) == C_ERR)
+        {
+            addReplyError(c,"DUMP payload version or checksum are wrong");
+            return;
+        }
+    }
+
+    rio payload;
+    rioInitWithBuffer(&payload,szFromObj(c->argv[4]));
+    if (((type = rdbLoadObjectType(&payload)) == -1) ||
+        ((obj = rdbLoadObject(type,&payload,szFromObj(key), OBJ_MVCC_INVALID)) == NULL))
+    {
+        addReplyError(c,"Bad data format");
+        return;
+    }
+    setMvccTstamp(obj, mvcc);
+
+    /* Create the key and set the TTL if any */
+    dbMerge(c->db,key,obj,true);
+    if (expire >= 0) {
+        setExpire(c,c->db,key,nullptr,expire);
+    }
+    signalModifiedKey(c,c->db,key);
+    notifyKeyspaceEvent(NOTIFY_GENERIC,"restore",key,c->db->id);
+    addReply(c,shared.ok);
+    g_pserver->dirty++;
+}
+
 /* RESTORE key ttl serialized-value [REPLACE] */
 void restoreCommand(client *c) {
     long long ttl, lfu_freq = -1, lru_idle = -1, lru_clock = -1;

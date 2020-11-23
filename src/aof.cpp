@@ -642,7 +642,7 @@ sds catAppendOnlyExpireMemberAtCommand(sds buf, struct redisCommand *cmd, robj *
         when += mstime();
     
     robj *argvNew[4];
-    argvNew[0] = createStringObject("PEXPIREMEMBERAT",15);
+    argvNew[0] = shared.pexpirememberat;
     argvNew[1] = argv[1];
     argvNew[2] = argv[2];
     argvNew[3] = createStringObjectFromLongLong(when);

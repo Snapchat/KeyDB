@@ -202,13 +202,15 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
-int dbAddCore(redisDb *db, robj *key, robj *val) {
+int dbAddCore(redisDb *db, robj *key, robj *val, bool fUpdateMvcc) {
     serverAssert(!val->FExpires());
     sds copy = sdsdup(szFromObj(key));
     int retval = dictAdd(db->pdict, copy, val);
     uint64_t mvcc = getMvccTstamp();
-    setMvccTstamp(key, mvcc);
-    setMvccTstamp(val, mvcc);
+    if (fUpdateMvcc) {
+        setMvccTstamp(key, mvcc);
+        setMvccTstamp(val, mvcc);
+    }
 
     if (retval == DICT_OK)
     {
@@ -232,7 +234,7 @@ int dbAddCore(redisDb *db, robj *key, robj *val) {
  * The program is aborted if the key already exists. */
 void dbAdd(redisDb *db, robj *key, robj *val)
 {
-    int retval = dbAddCore(db, key, val);
+    int retval = dbAddCore(db, key, val, true /* fUpdateMvcc */);
     serverAssertWithInfo(NULL,key,retval == DICT_OK);
 }
 
@@ -290,7 +292,7 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
     {
         dictEntry *de = dictFind(db->pdict, ptrFromObj(key));
         if (de == nullptr)
-            return (dbAddCore(db, key, val) == DICT_OK);
+            return (dbAddCore(db, key, val, false /* fUpdateMvcc */) == DICT_OK);
 
         robj *old = (robj*)dictGetVal(de);
         if (mvccFromObj(old) <= mvccFromObj(val))
@@ -303,7 +305,7 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
     }
     else
     {
-        return (dbAddCore(db, key, val) == DICT_OK);
+        return (dbAddCore(db, key, val, true /* fUpdateMvcc */) == DICT_OK);
     }
 }
 

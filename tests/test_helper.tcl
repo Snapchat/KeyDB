@@ -48,6 +48,7 @@ set ::all_tests {
     integration/replication-psync
     integration/replication-active
     integration/replication-multimaster
+    integration/replication-multimaster-connect
     integration/aof
     integration/rdb
     integration/convert-zipmap-hash-on-load

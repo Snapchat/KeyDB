@@ -1528,7 +1528,7 @@ void *allocPtrFromObj(robj_roptr o) {
 }
 
 robj *objFromAllocPtr(void *pv) {
-    if (g_pserver->fActiveReplica) {
+    if (pv && g_pserver->fActiveReplica) {
         return reinterpret_cast<robj*>(reinterpret_cast<redisObjectExtended*>(pv)+1);
     } 
     return reinterpret_cast<robj*>(pv);

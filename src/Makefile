@@ -403,7 +403,7 @@ lcov:
 	@(set -e; cd ..; ./runtest --clients 1)
 	@geninfo -o KeyDB.info --no-external .
 	@genhtml --legend -o lcov-html KeyDB.info
-	@genhtml --legend -o lcov-html KeyDB.info | grep lines | awk '{print $2;}' | sed 's/%//g'
+	@genhtml --legend -o lcov-html KeyDB.info | grep lines | awk '{print $$2;}' | sed 's/%//g'
 
 test-sds: sds.c sds.h
 	$(REDIS_CC) sds.c zmalloc.cpp -DSDS_TEST_MAIN $(FINAL_LIBS) -o /tmp/sds_test

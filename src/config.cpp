@@ -2279,7 +2279,9 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
                 g_pserver->maxclients + CONFIG_FDSET_INCR)
             {
                 int res = aePostFunction(g_pserver->rgthreadvar[iel].el, [iel] {
-                    aeResizeSetSize(g_pserver->rgthreadvar[iel].el, g_pserver->maxclients + CONFIG_FDSET_INCR);
+                    if (aeResizeSetSize(g_pserver->rgthreadvar[iel].el, g_pserver->maxclients + CONFIG_FDSET_INCR) == AE_ERR) {
+                        serverPanic("Failed to change the setsize for Thread %d", iel);
+                    }
                 });
 
                 if (res != AE_OK){

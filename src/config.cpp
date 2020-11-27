@@ -2344,6 +2344,7 @@ standardConfig configs[] = {
     createBoolConfig("daemonize", NULL, IMMUTABLE_CONFIG, cserver.daemonize, 0, NULL, NULL),
     createBoolConfig("lua-replicate-commands", NULL, MODIFIABLE_CONFIG, g_pserver->lua_always_replicate_commands, 1, NULL, NULL),
     createBoolConfig("always-show-logo", NULL, IMMUTABLE_CONFIG, g_pserver->always_show_logo, 0, NULL, NULL),
+    createBoolConfig("enable-motd", NULL, IMMUTABLE_CONFIG, cserver.enable_motd, 1, NULL, NULL),
     createBoolConfig("protected-mode", NULL, MODIFIABLE_CONFIG, g_pserver->protected_mode, 1, NULL, NULL),
     createBoolConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, g_pserver->rdb_compression, 1, NULL, NULL),
     createBoolConfig("rdb-del-sync-files", NULL, MODIFIABLE_CONFIG, g_pserver->rdb_del_sync_files, 0, NULL, NULL),

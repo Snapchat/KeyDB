@@ -71,12 +71,16 @@ static void setMOTDCache(const char *sz)
     fclose(pf);
 }
 
-extern "C" char *fetchMOTD(int cache)
+extern "C" char *fetchMOTD(int cache, int enable_motd)
 {
     sds str;
     CURL *curl;
     CURLcode res;
 
+    /* Do not try the CURL if the motd is disabled*/
+    if (!enable_motd) {
+        return NULL;
+    }
     /* First try and get the string from the cache */
     if (cache) {
         str = fetchMOTDFromCache();
@@ -124,7 +128,7 @@ extern "C" char *fetchMOTD(int cache)
 
 #else
 
-extern "C" char *fetchMOTD(int /* cache */)
+extern "C" char *fetchMOTD(int /* cache */, int /* enable_motd */)
 {
     return NULL;
 }

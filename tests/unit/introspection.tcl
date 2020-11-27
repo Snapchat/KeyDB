@@ -67,6 +67,7 @@ start_server {tags {"introspection"}} {
             io-threads-do-reads
             tcp-backlog
             always-show-logo
+            enable-motd
             syslog-enabled
             cluster-enabled
             aclfile

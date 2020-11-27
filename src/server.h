@@ -1456,6 +1456,7 @@ struct redisServerConst {
     bool fUsePro = false;
     int thread_min_client_threshold = 50;
     int multimaster_no_forward;
+    int enable_motd;            /* Flag to retrieve the Message of today using CURL request*/
 };
 
 struct redisServer {

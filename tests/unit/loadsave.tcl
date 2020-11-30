@@ -37,12 +37,10 @@ exec cp -f tests/assets/redis-save.rdb $server_path/dump.rdb
 start_server [list tags [list "loadsave"] overrides [list "dir" $server_path] keep_persistence true] {
     test "Load various data types from Redis generated .rdb file" {
         set loaded_digest [r debug digest]
+        puts loaded_digest
         if {![string match $saved_digest $loaded_digest]} {
             fail "Loaded data did not match saved data"
         }
     }
 }
-
-puts $server_path
-
 

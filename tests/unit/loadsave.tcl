@@ -1,10 +1,9 @@
 set server_path [tmpdir "server.rdb-encoding-test"]
-set testmodule [file normalize tests/modules/datatype.so]
 
 # Store a bunch of datatypes to the database,
 # compute the hash of the database,
 # and save the data to a file
-start_server  [list tags [list "loadsave"] overrides [list "dir" $server_path "loadmodule" $testmodule] keep_persistence true] {
+start_server  [list tags [list "loadsave"] overrides [list "dir" $server_path] keep_persistence true] {
 
     test "Save various data types to .rdb file" {
         r set "int" [expr {int(rand()*10000)}]
@@ -13,7 +12,6 @@ start_server  [list tags [list "loadsave"] overrides [list "dir" $server_path "l
         r sadd "set" [string repeat A [expr {int(rand()*1000)}]]
         r zadd "zset" [expr {rand()}] [string repeat A [expr {int(rand()*1000)}]]
         r lpush "list" [string repeat A [expr {int(rand()*1000)}]]
-        r datatype.set dtkey 100 stringval
         r keydb.cron "cron" single [expr {10000 + int(rand()*1000)}] "return 0" 0;# set delay long enough so it doesn't contend with saving
         set saved_digest [r debug digest];# debug digest computes the hash
         r save
@@ -22,7 +20,7 @@ start_server  [list tags [list "loadsave"] overrides [list "dir" $server_path "l
 
 # Load that data back from the file,
 # and compare its hash to the previously computed hash
-start_server [list tags [list "loadsave"] overrides [list "dir" $server_path "loadmodule" $testmodule] keep_persistence true] {
+start_server [list tags [list "loadsave"] overrides [list "dir" $server_path] keep_persistence true] {
     test "Load various data types from .rdb file" {
         set loaded_digest [r debug digest]
         if {![string match $saved_digest $loaded_digest]} {
@@ -33,10 +31,10 @@ start_server [list tags [list "loadsave"] overrides [list "dir" $server_path "lo
 
 # Load in data from a redis instance
 # The hash should match what we get in redis
-set saved_digest 26ce4a819a86355af7ec75c7a3410f5b9fad02f3
+set saved_digest 0cff3e9c86eb26ef3b5c0e6bac8315829ad6adf4
 exec cp -f tests/assets/redis-save.rdb $server_path/dump.rdb 
 
-start_server [list tags [list "loadsave"] overrides [list "dir" $server_path "loadmodule" $testmodule] keep_persistence true] {
+start_server [list tags [list "loadsave"] overrides [list "dir" $server_path] keep_persistence true] {
     test "Load various data types from Redis generated .rdb file" {
         set loaded_digest [r debug digest]
         if {![string match $saved_digest $loaded_digest]} {

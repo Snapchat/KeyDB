@@ -400,7 +400,7 @@ check: test
 
 lcov:
 	$(MAKE) gcov
-	@(set -e; cd ..; ./runtest; ./runtest-sentinel; ./runtest-cluster; ./runtest-moduleapi)
+	@(set -e; cd ..; ./runtest --config server-threads 3; ./runtest-sentinel; ./runtest-cluster; ./runtest-moduleapi)
 	@geninfo -o KeyDB.info --no-external .
 	@genhtml --legend -o lcov-html KeyDB.info
 	@genhtml --legend -o lcov-html KeyDB.info | grep lines | awk '{print $$2;}' | sed 's/%//g'

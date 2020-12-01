@@ -2273,8 +2273,8 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
             }
             return 0;
         }
-	/* Change the SetSize for the current thread first. 
-	 * If any error, return the error message to the client, otherwise, continue to do the same for other threads */
+        /* Change the SetSize for the current thread first. If any error, return the error message to the client, 
+         * otherwise, continue to do the same for other threads */
         if ((unsigned int) aeGetSetSize(aeGetCurrentEventLoop()) <
                 g_pserver->maxclients + CONFIG_FDSET_INCR)
         {

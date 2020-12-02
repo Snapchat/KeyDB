@@ -2276,7 +2276,7 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
         /* Change the SetSize for the current thread first. If any error, return the error message to the client, 
          * otherwise, continue to do the same for other threads */
         if ((unsigned int) aeGetSetSize(aeGetCurrentEventLoop()) <
-                g_pserver->maxclients + CONFIG_FDSET_INCR)
+            g_pserver->maxclients + CONFIG_FDSET_INCR)
         {
             if (aeResizeSetSize(aeGetCurrentEventLoop(),
                 g_pserver->maxclients + CONFIG_FDSET_INCR) == AE_ERR)
@@ -2284,13 +2284,12 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
                 *err = "The event loop API used by Redis is not able to handle the specified number of clients";
                 return 0;
             }
-	    serverLog(LL_DEBUG,"Successfully changed the setsize for current thread %d", ielFromEventLoop(aeGetCurrentEventLoop()));
+            serverLog(LL_DEBUG,"Successfully changed the setsize for current thread %d", ielFromEventLoop(aeGetCurrentEventLoop()));
         }
 
         for (int iel = 0; iel < cserver.cthreads; ++iel)
         {
-	    if (g_pserver->rgthreadvar[iel].el == aeGetCurrentEventLoop())
-            {
+            if (g_pserver->rgthreadvar[iel].el == aeGetCurrentEventLoop()){
                 continue;
             }
 
@@ -2309,7 +2308,7 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
                     *err = msg;
                     return 0;
                 }
-		serverLog(LL_DEBUG,"Successfully post the request to change the setsize for thread %d", iel);
+                serverLog(LL_DEBUG,"Successfully post the request to change the setsize for thread %d", iel);
             }
         }
     }

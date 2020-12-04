@@ -5695,7 +5695,7 @@ int main(int argc, char **argv) {
 
     validateConfiguration();
 
-    for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
     {
         initServerThread(g_pserver->rgthreadvar+iel, iel == IDX_EVENT_LOOP_MAIN);
     }

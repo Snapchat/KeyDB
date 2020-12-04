@@ -2986,12 +2986,6 @@ static void initNetworkingThread(int iel, int fReusePort)
             listenToPort(g_pserver->tls_port,g_pserver->rgthreadvar[iel].tlsfd,&g_pserver->rgthreadvar[iel].tlsfd_count, fReusePort, (iel == IDX_EVENT_LOOP_MAIN)) == C_ERR)
             exit(1);
     }
-    else
-    {
-        // We use the main threads file descriptors
-        memcpy(g_pserver->rgthreadvar[iel].ipfd, g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].ipfd, sizeof(int)*CONFIG_BINDADDR_MAX);
-        g_pserver->rgthreadvar[iel].ipfd_count = g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].ipfd_count;
-    }
 
     /* Create an event handler for accepting new connections in TCP */
     for (int j = 0; j < g_pserver->rgthreadvar[iel].ipfd_count; j++) {

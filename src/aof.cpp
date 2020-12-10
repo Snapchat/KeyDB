@@ -642,7 +642,7 @@ sds catAppendOnlyExpireMemberAtCommand(sds buf, struct redisCommand *cmd, robj *
         when += mstime();
     
     robj *argvNew[4];
-    argvNew[0] = createStringObject("PEXPIREMEMBERAT",15);
+    argvNew[0] = shared.pexpirememberat;
     argvNew[1] = argv[1];
     argvNew[2] = argv[2];
     argvNew[3] = createStringObjectFromLongLong(when);
@@ -1346,12 +1346,16 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
         while(raxNext(&ri)) {
             streamCG *group = (streamCG*)ri.data;
             /* Emit the XGROUP CREATE in order to create the group. */
-            if (rioWriteBulkCount(r,'*',5) == 0) return 0;
-            if (rioWriteBulkString(r,"XGROUP",6) == 0) return 0;
-            if (rioWriteBulkString(r,"CREATE",6) == 0) return 0;
-            if (rioWriteBulkObject(r,key) == 0) return 0;
-            if (rioWriteBulkString(r,(char*)ri.key,ri.key_len) == 0) return 0;
-            if (rioWriteBulkStreamID(r,&group->last_id) == 0) return 0;
+            if (!rioWriteBulkCount(r,'*',5) ||
+                !rioWriteBulkString(r,"XGROUP",6) ||
+                !rioWriteBulkString(r,"CREATE",6) ||
+                !rioWriteBulkObject(r,key) ||
+                !rioWriteBulkString(r,(char*)ri.key,ri.key_len) ||
+                !rioWriteBulkStreamID(r,&group->last_id)) 
+            {
+                raxStop(&ri);
+                return 0;
+            }
 
             /* Generate XCLAIMs for each consumer that happens to
              * have pending entries. Empty consumers have no semantical
@@ -1372,6 +1376,9 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
                                                    ri.key_len,consumer,
                                                    ri_pel.key,nack) == 0)
                     {
+                        raxStop(&ri_pel);
+                        raxStop(&ri_cons);
+                        raxStop(&ri);
                         return 0;
                     }
                 }

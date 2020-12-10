@@ -37,6 +37,7 @@ void initClientMultiState(client *c) {
     c->mstate.commands = NULL;
     c->mstate.count = 0;
     c->mstate.cmd_flags = 0;
+    c->mstate.cmd_inv_flags = 0;
 }
 
 /* Release all the resources associated with MULTI/EXEC state */
@@ -77,6 +78,7 @@ void queueMultiCommand(client *c) {
         incrRefCount(mc->argv[j]);
     c->mstate.count++;
     c->mstate.cmd_flags |= c->cmd->flags;
+    c->mstate.cmd_inv_flags |= ~c->cmd->flags;
 }
 
 void discardTransaction(client *c) {
@@ -125,6 +127,24 @@ void execCommandPropagateExec(client *c) {
               PROPAGATE_AOF|PROPAGATE_REPL);
 }
 
+/* Aborts a transaction, with a specific error message.
+ * The transaction is always aboarted with -EXECABORT so that the client knows
+ * the server exited the multi state, but the actual reason for the abort is
+ * included too.
+ * Note: 'error' may or may not end with \r\n. see addReplyErrorFormat. */
+void execCommandAbort(client *c, sds error) {
+    discardTransaction(c);
+
+    if (error[0] == '-') error++;
+    addReplyErrorFormat(c, "-EXECABORT Transaction discarded because of: %s", error);
+
+    /* Send EXEC to clients waiting data from MONITOR. We did send a MULTI
+     * already, and didn't send any of the queued commands, now we'll just send
+     * EXEC so it is clear that the transaction is over. */
+    if (listLength(g_pserver->monitors) && !g_pserver->loading)
+        replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
+}
+
 void execCommand(client *c) {
     int j;
     robj **orig_argv;
@@ -138,15 +158,6 @@ void execCommand(client *c) {
         return;
     }
 
-    /* If we are in -BUSY state, flag the transaction and return the
-     * -BUSY error, like Redis <= 5. This is a temporary fix, may be changed
-     *  ASAP, see issue #7353 on Github. */
-    if (g_pserver->lua_timedout) {
-        flagTransaction(c);
-        addReply(c, shared.slowscripterr);
-        return;
-    }
-
     /* Check if we need to abort the EXEC because:
      * 1) Some WATCHed key was touched.
      * 2) There was a previous error while queueing commands.
@@ -156,21 +167,6 @@ void execCommand(client *c) {
     if (c->flags & (CLIENT_DIRTY_CAS|CLIENT_DIRTY_EXEC)) {
         addReply(c, c->flags & CLIENT_DIRTY_EXEC ? shared.execaborterr :
                                                    shared.nullarray[c->resp]);
-        discardTransaction(c);
-        goto handle_monitor;
-    }
-
-    /* If there are write commands inside the transaction, and this is a read
-     * only replica, we want to send an error. This happens when the transaction
-     * was initiated when the instance was a master or a writable replica and
-     * then the configuration changed (for example instance was turned into
-     * a replica). */
-    if (!g_pserver->loading && listLength(g_pserver->masters) && g_pserver->repl_slave_ro &&
-        !(c->flags & CLIENT_MASTER) && c->mstate.cmd_flags & CMD_WRITE)
-    {
-        addReplyError(c,
-            "Transaction contains write commands but instance "
-            "is now a read-only replica. EXEC aborted.");
         discardTransaction(c);
         goto handle_monitor;
     }

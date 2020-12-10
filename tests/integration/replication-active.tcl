@@ -78,9 +78,9 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
             $master flushall
         }
 
-		test {Replication of EXPIREMEMBER (set) command (Active)} {
+        test {Replication of EXPIREMEMBER (set) command (Active)} {
             $master sadd testkey a b c d
-            wait_for_condition 50 100 {
+            wait_for_condition 50 200 {
                 [$master debug digest] eq [$slave debug digest]
             } else {
                 fail "Failed to replicate set"
@@ -215,13 +215,54 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
         assert_equal {1} [$slave wait 1 500] { "value should propogate
                     within 0.5 seconds" }
         exec kill -SIGSTOP $slave_pid
-            after 3000
+        after 3000
         # Ensure testkey1 is gone.  Note, we can't do this directly as the normal commands lie to us
         # about what is actually in the dict.  The only way to know is with a count from info
-            assert_equal {1} [expr [string first {keys=1} [$master info keyspace]] >= 0]  {"slave expired"}
+        assert_equal {1} [expr [string first {keys=1} [$master info keyspace]] >= 0]  {"slave expired"}
+    }
+    
+    exec kill -SIGCONT $slave_pid
+
+    test {Active replica merge works when reconnecting} {
+        $slave flushall
+        $slave set testkey foo
+        wait_for_condition 50 1000 {
+            [string match *foo* [$master get testkey]]
+        } else {
+            fail "Replication failed to propogate"
+        }
+        $slave replicaof no one
+        $master replicaof no one
+        after 100
+        $master set testkey baz
+        after 200
+        $slave set testkey bar
+        after 100
+        $slave replicaof $master_host $master_port
+        after 1000
+        $master replicaof $slave_host $slave_port
+        after 1000
+
+        assert_equal {bar} [$slave get testkey]  {replica is correct}
+        assert_equal {bar} [$master get testkey] {master is correct}
     }
 
-    exec kill -SIGCONT $slave_pid
+    test {Active replica merge works with client blocked} {
+        $slave flushall
+        $slave replicaof no one
+        $master replicaof no one
+        after 100
+        set rd [redis_deferring_client]
+        $rd blpop testlist 0
+        $slave lpush testlist foo
+        
+        #OK Now reconnect
+        $slave replicaof $master_host $master_port
+        $master replicaof $slave_host $slave_port
+        after 1000
+
+        $rd read
+    } {testlist foo}
 
     test {Active replica different databases} {
         $master select 3
@@ -275,8 +316,16 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
         test {Active Replica Merges Database On Sync} {
             $slave set testkeyA foo
             r replicaof $slave_host $slave_port
-	    after 1000
-	    assert_equal 2 [r dbsize]
+	    wait_for_condition 50 1000 {
+                [string match *active-replica* [r role]]
+            } else {
+                fail "Replica did not connect"
+            }
+	    wait_for_condition 50 1000 {
+		[string match "2" [r dbsize]]
+            } else {
+                fail "key did not propogate"
+            }
 	}
     }
 }

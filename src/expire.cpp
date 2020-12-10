@@ -573,6 +573,16 @@ void flushSlaveKeysWithExpireList(void) {
     }
 }
 
+int checkAlreadyExpired(long long when) {
+    /* EXPIRE with negative TTL, or EXPIREAT with a timestamp into the past
+     * should never be executed as a DEL when load the AOF or in the context
+     * of a slave instance.
+     *
+     * Instead we add the already expired key to the database with expire time
+     * (possibly in the past) and wait for an explicit DEL from the master. */
+    return (when <= mstime() && !g_pserver->loading && (!listLength(g_pserver->masters) || g_pserver->fActiveReplica));
+}
+
 /*-----------------------------------------------------------------------------
  * Expires Commands
  *----------------------------------------------------------------------------*/
@@ -600,13 +610,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         return;
     }
 
-    /* EXPIRE with negative TTL, or EXPIREAT with a timestamp into the past
-     * should never be executed as a DEL when load the AOF or in the context
-     * of a replica instance.
-     *
-     * Instead we take the other branch of the IF statement setting an expire
-     * (possibly in the past) and wait for an explicit DEL from the master. */
-    if (when <= mstime() && !g_pserver->loading && (!listLength(g_pserver->masters) || g_pserver->fActiveReplica)) {
+    if (checkAlreadyExpired(when)) {
         robj *aux;
 
         int deleted = g_pserver->lazyfree_lazy_expire ? dbAsyncDelete(c->db,key) :
@@ -714,6 +718,7 @@ void persistCommand(client *c) {
     if (lookupKeyWrite(c->db,c->argv[1])) {
         if (c->argc == 2) {
             if (removeExpire(c->db,c->argv[1])) {
+                signalModifiedKey(c,c->db,c->argv[1]);
                 notifyKeyspaceEvent(NOTIFY_GENERIC,"persist",c->argv[1],c->db->id);
                 addReply(c,shared.cone);
                 g_pserver->dirty++;
@@ -722,6 +727,7 @@ void persistCommand(client *c) {
             }
         } else if (c->argc == 3) {
             if (c->db->removeSubkeyExpire(c->argv[1], c->argv[2])) {
+                signalModifiedKey(c,c->db,c->argv[1]);
                 notifyKeyspaceEvent(NOTIFY_GENERIC,"persist",c->argv[1],c->db->id);
                 addReply(c,shared.cone);
                 g_pserver->dirty++;

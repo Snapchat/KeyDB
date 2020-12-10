@@ -47,7 +47,7 @@ endif
 
 USEASM?=true
 
-ifneq ($(SANITIZE),)
+ifneq ($(strip $(SANITIZE)),)
 	CFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE
 	CXXFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE
 	LDFLAGS+= -fsanitize=$(SANITIZE)
@@ -120,7 +120,7 @@ endif
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
 FINAL_CXXFLAGS=$(CXX_STD) $(WARN) $(OPT) $(DEBUG) $(CXXFLAGS) $(REDIS_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
-FINAL_LIBS+=-lm -lcurl -lz -latomic -L$(LICENSE_LIB_DIR) -lkey -lcrypto -lbz2 -lzstd -llz4 -lsnappy
+FINAL_LIBS+=-lm -lz -latomic -L$(LICENSE_LIB_DIR) -lkey -lcrypto -lbz2 -lzstd -llz4 -lsnappy
 DEBUG=-g -ggdb
 
 ifneq ($(uname_S),Darwin)
@@ -184,8 +184,11 @@ else
 	# All the other OSes (notably Linux)
 	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+=-ldl -pthread -lrt -luuid
+ifneq ($(NO_MOTD),yes)
 	FINAL_CFLAGS += -DMOTD
 	FINAL_CXXFLAGS += -DMOTD
+	FINAL_LIBS+=-lcurl
+endif
 endif
 endif
 endif
@@ -249,10 +252,23 @@ ifeq ($(MALLOC),memkind)
 endif
 
 ifeq ($(BUILD_TLS),yes)
-    FINAL_CFLAGS+=-DUSE_OPENSSL $(OPENSSL_CFLAGS)
-	FINAL_CXXFLAGS+=-DUSE_OPENSSL $(OPENSSL_CFLAGS)
-    FINAL_LDFLAGS+=$(OPENSSL_LDFLAGS)
-    FINAL_LIBS += ../deps/hiredis/libhiredis_ssl.a -lssl -lcrypto
+    	FINAL_CFLAGS+=-DUSE_OPENSSL $(OPENSSL_CXXFLAGS)
+    	FINAL_CXXFLAGS+=-DUSE_OPENSSL $(OPENSSL_CXXFLAGS)
+    	FINAL_LDFLAGS+=$(OPENSSL_LDFLAGS)
+    	FINAL_LIBS += ../deps/hiredis/libhiredis_ssl.a -lssl -lcrypto
+	LIBSSL_PKGCONFIG := $(shell $(PKG_CONFIG) --exists libssl && echo $$?)
+ifeq ($(LIBSSL_PKGCONFIG),0)
+	LIBSSL_LIBS=$(shell $(PKG_CONFIG) --libs libssl)
+else
+	LIBSSL_LIBS=-lssl
+endif
+	LIBCRYPTO_PKGCONFIG := $(shell $(PKG_CONFIG) --exists libcrypto && echo $$?)
+ifeq ($(LIBCRYPTO_PKGCONFIG),0)
+	LIBCRYPTO_LIBS=$(shell $(PKG_CONFIG) --libs libcrypto)
+else
+	LIBCRYPTO_LIBS=-lcrypto
+endif
+	FINAL_LIBS += ../deps/hiredis/libhiredis_ssl.a $(LIBSSL_LIBS) $(LIBCRYPTO_LIBS)
 endif
 
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
@@ -277,7 +293,7 @@ endif
 
 REDIS_SERVER_NAME=keydb-pro-server
 REDIS_SENTINEL_NAME=keydb-sentinel
-REDIS_SERVER_OBJ=adlist.o quicklist.o ae.o anet.o dict.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o crc16.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o acl.o storage.o rdb-s3.o fastlock.o new.o tracking.o cron.o connection.o tls.o sha256.o motd.o timeout.o setcpuaffinity.o AsyncWorkQueue.o snapshot.o storage/rocksdb.o storage/rocksdbfactory.o storage/teststorageprovider.o keydbutils.o StorageCache.o $(ASM_OBJ)
+REDIS_SERVER_OBJ=adlist.o quicklist.o ae.o anet.o dict.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o t_nhash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o crc16.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o acl.o storage.o rdb-s3.o fastlock.o new.o tracking.o cron.o connection.o tls.o sha256.o motd.o timeout.o setcpuaffinity.o AsyncWorkQueue.o snapshot.o storage/rocksdb.o storage/rocksdbfactory.o storage/teststorageprovider.o keydbutils.o StorageCache.o $(ASM_OBJ)
 REDIS_CLI_NAME=keydb-cli
 REDIS_CLI_OBJ=anet.o adlist.o dict.o redis-cli.o redis-cli-cpphelper.o zmalloc.o release.o anet.o ae.o crcspeed.o crc64.o siphash.o crc16.o storage-lite.o fastlock.o motd.o $(ASM_OBJ)
 REDIS_BENCHMARK_NAME=keydb-benchmark
@@ -304,6 +320,8 @@ persist-settings: distclean
 	echo WARN=$(WARN) >> .make-settings
 	echo OPT=$(OPT) >> .make-settings
 	echo MALLOC=$(MALLOC) >> .make-settings
+	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
+	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings
 	echo CXXFLAGS=$(CXXFLAGS) >> .make-settings
 	echo LDFLAGS=$(LDFLAGS) >> .make-settings
@@ -374,7 +392,7 @@ DEP = $(REDIS_SERVER_OBJ:%.o=%.d) $(REDIS_CLI_OBJ:%.o=%.d) $(REDIS_BENCHMARK_OBJ
 	$(KEYDB_AS) $< -o $@
 
 clean:
-	rm -rf $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) *.o *.gcda *.gcno *.gcov redis.info lcov-html Makefile.dep dict-benchmark
+	rm -rf $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) *.o *.gcda *.gcno *.gcov KeyDB.info lcov-html Makefile.dep dict-benchmark
 	rm -rf storage/*.o
 	rm -rf keydb-server
 	rm -f $(DEP)
@@ -399,9 +417,10 @@ check: test
 
 lcov:
 	$(MAKE) gcov
-	@(set -e; cd ..; ./runtest --clients 1)
-	@geninfo -o redis.info .
-	@genhtml --legend -o lcov-html redis.info
+	@(set -e; cd ..; ./runtest --config server-threads 3; ./runtest-sentinel; ./runtest-cluster; ./runtest-moduleapi)
+	@geninfo -o KeyDB.info --no-external .
+	@genhtml --legend -o lcov-html KeyDB.info
+	@genhtml --legend -o lcov-html KeyDB.info | grep lines | awk '{print $$2;}' | sed 's/%//g'
 
 test-sds: sds.c sds.h
 	$(REDIS_CC) sds.c zmalloc.cpp -DSDS_TEST_MAIN $(FINAL_LIBS) -o /tmp/sds_test

@@ -450,4 +450,91 @@ start_server {tags {"defrag"} overrides {server-threads 1} } {
         }
     }
 }
-} ;# run_solo
+start_server {tags {"defrag"} overrides {server-threads 1 active-replica yes} } { ;#test defrag with active-replica enabled
+    if {[string match {*jemalloc*} [s mem_allocator]]} {
+
+        test "Active defrag with active replica" {
+            r config set save "" ;# prevent bgsave from interfereing with save below
+            r config set hz 100
+            r config set activedefrag no
+            r config set active-defrag-threshold-lower 5
+            r config set active-defrag-cycle-min 65
+            r config set active-defrag-cycle-max 75
+            r config set active-defrag-ignore-bytes 2mb
+            r config set maxmemory 100mb
+            r config set maxmemory-policy allkeys-lru
+            r debug populate 700000 asdf1 150
+            r debug populate 170000 asdf2 300
+            r ping ;# trigger eviction following the previous population
+            after 120 ;# serverCron only updates the info once in 100ms
+            set frag [s allocator_frag_ratio]
+            if {$::verbose} {
+                puts "frag $frag"
+            }
+            assert {$frag >= 1.4}
+
+            r config set latency-monitor-threshold 5
+            r latency reset
+            r config set maxmemory 110mb ;# prevent further eviction (not to fail the digest test)
+            set digest [r debug digest]
+            catch {r config set activedefrag yes} e
+            if {![string match {DISABLED*} $e]} {
+                # Wait for the active defrag to start working (decision once a
+                # second).
+                wait_for_condition 50 100 {
+                    [s active_defrag_running] ne 0
+                } else {
+                    fail "defrag not started."
+                }
+
+                # Wait for the active defrag to stop working.
+                catch {
+                    wait_for_condition 150 100 {
+                        [s active_defrag_running] eq 0
+                    } else {
+                        after 120 ;# serverCron only updates the info once in 100ms
+                        puts [r info memory]
+                        puts [r memory malloc-stats]
+                        fail "defrag didn't stop."
+                    }
+                } e
+                if {[string match *error* $e]} {
+                    after 120
+                    fail "defrag accessed invalid address."
+                } 
+
+                # Test the the fragmentation is lower.
+                after 120 ;# serverCron only updates the info once in 100ms
+                set frag [s allocator_frag_ratio]
+                set max_latency 0
+                foreach event [r latency latest] {
+                    lassign $event eventname time latency max
+                    if {$eventname == "active-defrag-cycle"} {
+                        set max_latency $max
+                    }
+                }
+                if {$::verbose} {
+                    puts "frag $frag"
+                    set misses [s active_defrag_misses]
+                    set hits [s active_defrag_hits]
+                    puts "hits: $hits"
+                    puts "misses: $misses"
+                    puts "max latency $max_latency"
+                    puts [r latency latest]
+                    puts [r latency history active-defrag-cycle]
+                }
+                assert {$frag < 1.1}
+                # due to high fragmentation, 100hz, and active-defrag-cycle-max set to 75,
+                # we expect max latency to be not much higher than 7.5ms but due to rare slowness threshold is set higher
+                assert {$max_latency <= 30}
+            } else {
+                set _ ""
+            }
+            # verify the data isn't corrupted or changed
+            set newdigest [r debug digest]
+            assert {$digest eq $newdigest}
+            r save ;# saving an rdb iterates over all the data / pointers
+        } {OK}
+    }
+}
+} ;# run solo

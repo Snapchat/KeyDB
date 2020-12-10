@@ -30,6 +30,7 @@
 
 #include "server.h"
 #include "atomicvar.h"
+#include "cluster.h"
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <math.h>
@@ -39,8 +40,6 @@
 #include "aelocker.h"
 
 static void setProtocolError(const char *errstr, client *c);
-void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool fAsync);
-void addReplyBulkCStringCore(client *c, const char *s, bool fAsync);
 
 /* Return the size consumed from the allocator, for the specified SDS string,
  * including internal fragmentation. This function is used in order to compute
@@ -171,9 +170,7 @@ client *createClient(connection *conn, int iel) {
     c->pubsub_patterns = listCreate();
     c->peerid = NULL;
     c->client_list_node = NULL;
-    c->bufAsync = NULL;
-    c->buflenAsync = 0;
-    c->bufposAsync = 0;
+    c->replyAsync = NULL;
     c->client_tracking_redirection = 0;
     c->casyncOpsPending = 0;
     c->mvccCheckpoint = 0;
@@ -253,29 +250,31 @@ void clientInstallAsyncWriteHandler(client *c) {
  * Typically gets called every time a reply is built, before adding more
  * data to the clients output buffers. If the function returns C_ERR no
  * data should be appended to the output buffers. */
-int prepareClientToWrite(client *c, bool fAsync) {
-    fAsync = fAsync && !FCorrectThread(c);  // Not async if we're on the right thread
-    serverAssert(FCorrectThread(c) || fAsync);
-	if (FCorrectThread(c)) {
+int prepareClientToWrite(client *c) {
+    bool fAsync = !FCorrectThread(c);  // Not async if we're on the right thread
+
+	if (!fAsync) {
 		serverAssert(c->conn == nullptr || c->lock.fOwnLock());
 	} else {
 		serverAssert(GlobalLocksAcquired());
 	}
 
-    if (c->flags & CLIENT_FORCE_REPLY) return C_OK; // FORCE REPLY means we're doing something else with the buffer.
+    auto flags = c->flags.load(std::memory_order_relaxed);
+
+    if (flags & CLIENT_FORCE_REPLY) return C_OK; // FORCE REPLY means we're doing something else with the buffer.
                                                 // do not install a write handler
 
     /* If it's the Lua client we always return ok without installing any
      * handler since there is no socket at all. */
-    if (c->flags & (CLIENT_LUA|CLIENT_MODULE)) return C_OK;
+    if (flags & (CLIENT_LUA|CLIENT_MODULE)) return C_OK;
 
     /* CLIENT REPLY OFF / SKIP handling: don't send replies. */
-    if (c->flags & (CLIENT_REPLY_OFF|CLIENT_REPLY_SKIP)) return C_ERR;
+    if (flags & (CLIENT_REPLY_OFF|CLIENT_REPLY_SKIP)) return C_ERR;
 
     /* Masters don't receive replies, unless CLIENT_MASTER_FORCE_REPLY flag
      * is set. */
-    if ((c->flags & CLIENT_MASTER) &&
-        !(c->flags & CLIENT_MASTER_FORCE_REPLY)) return C_ERR;
+    if ((flags & CLIENT_MASTER) &&
+        !(flags & CLIENT_MASTER_FORCE_REPLY)) return C_ERR;
 
     if (!c->conn) return C_ERR; /* Fake client for AOF loading. */
 
@@ -292,22 +291,34 @@ int prepareClientToWrite(client *c, bool fAsync) {
  * Low level functions to add more data to output buffers.
  * -------------------------------------------------------------------------- */
 
-int _addReplyToBuffer(client *c, const char *s, size_t len, bool fAsync) {
-    if (c->flags & CLIENT_CLOSE_AFTER_REPLY) return C_OK;
+int _addReplyToBuffer(client *c, const char *s, size_t len) {
+    if (c->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_AFTER_REPLY) return C_OK;
 
-    fAsync = fAsync && !FCorrectThread(c);  // Not async if we're on the right thread
+    bool fAsync = !FCorrectThread(c);
     if (fAsync)
     {
         serverAssert(GlobalLocksAcquired());
-        if ((c->buflenAsync - c->bufposAsync) < (int)len)
+        if (c->replyAsync == nullptr || (c->replyAsync->size - c->replyAsync->used) < len)
         {
-            int minsize = len + c->bufposAsync;
-            c->buflenAsync = std::max(minsize, c->buflenAsync*2 - c->buflenAsync);
-            c->bufAsync = (char*)zrealloc(c->bufAsync, c->buflenAsync, MALLOC_LOCAL);
-            c->buflenAsync = zmalloc_usable(c->bufAsync);
+            if (c->replyAsync == nullptr) {
+                size_t newsize = std::max(len, (size_t)PROTO_ASYNC_REPLY_CHUNK_BYTES);
+                    
+                clientReplyBlock *replyNew = (clientReplyBlock*)zmalloc(sizeof(clientReplyBlock) + newsize);
+                replyNew->size = zmalloc_usable(replyNew) - sizeof(clientReplyBlock);
+                replyNew->used = 0;
+                c->replyAsync = replyNew;
+            } else {
+                size_t newsize = std::max(c->replyAsync->used + len, c->replyAsync->size*2);
+                clientReplyBlock *replyNew = (clientReplyBlock*)zmalloc(sizeof(clientReplyBlock) + newsize);
+                replyNew->size = zmalloc_usable(replyNew) - sizeof(clientReplyBlock);
+                replyNew->used = c->replyAsync->used;
+                memcpy(replyNew->buf(), c->replyAsync->buf(), c->replyAsync->used);
+                zfree(c->replyAsync);
+                c->replyAsync = replyNew;
+            }
         }
-        memcpy(c->bufAsync+c->bufposAsync,s,len);
-        c->bufposAsync += len;
+        memcpy(c->replyAsync->buf() + c->replyAsync->used,s,len);
+        c->replyAsync->used += len;
     }
     else
     {
@@ -327,7 +338,7 @@ int _addReplyToBuffer(client *c, const char *s, size_t len, bool fAsync) {
 }
 
 void _addReplyProtoToList(client *c, const char *s, size_t len) {
-    if (c->flags & CLIENT_CLOSE_AFTER_REPLY) return;
+    if (c->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_AFTER_REPLY) return;
     AssertCorrectThread(c);
 
     listNode *ln = listLast(c->reply);
@@ -367,11 +378,12 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
  * Higher level functions to queue data on the client output buffer.
  * The following functions are the ones that commands implementations will call.
  * -------------------------------------------------------------------------- */
-void addReplyCore(client *c, robj_roptr obj, bool fAsync) {
-    if (prepareClientToWrite(c, fAsync) != C_OK) return;
+/* Add the object 'obj' string representation to the client output buffer. */
+void addReply(client *c, robj_roptr obj) {
+    if (prepareClientToWrite(c) != C_OK) return;
 
     if (sdsEncodedObject(obj)) {
-        if (_addReplyToBuffer(c,(const char*)ptrFromObj(obj),sdslen((sds)ptrFromObj(obj)),fAsync) != C_OK)
+        if (_addReplyToBuffer(c,(const char*)ptrFromObj(obj),sdslen((sds)ptrFromObj(obj))) != C_OK)
             _addReplyProtoToList(c,(const char*)ptrFromObj(obj),sdslen((sds)ptrFromObj(obj)));
     } else if (obj->encoding == OBJ_ENCODING_INT) {
         /* For integer encoded strings we just convert it into a string
@@ -379,42 +391,24 @@ void addReplyCore(client *c, robj_roptr obj, bool fAsync) {
          * to the output buffer. */
         char buf[32];
         size_t len = ll2string(buf,sizeof(buf),(long)ptrFromObj(obj));
-        if (_addReplyToBuffer(c,buf,len,fAsync) != C_OK)
+        if (_addReplyToBuffer(c,buf,len) != C_OK)
             _addReplyProtoToList(c,buf,len);
     } else {
         serverPanic("Wrong obj->encoding in addReply()");
     }
 }
 
-/* Add the object 'obj' string representation to the client output buffer. */
-void addReply(client *c, robj_roptr obj)
-{
-    addReplyCore(c, obj, false);
-}
-void addReplyAsync(client *c, robj_roptr obj)
-{
-    addReplyCore(c, obj, true);
-}
-
 /* Add the SDS 's' string to the client output buffer, as a side effect
  * the SDS string is freed. */
-void addReplySdsCore(client *c, sds s, bool fAsync) {
-    if (prepareClientToWrite(c, fAsync) != C_OK) {
+void addReplySds(client *c, sds s) {
+    if (prepareClientToWrite(c) != C_OK) {
         /* The caller expects the sds to be free'd. */
         sdsfree(s);
         return;
     }
-    if (_addReplyToBuffer(c,s,sdslen(s), fAsync) != C_OK)
+    if (_addReplyToBuffer(c,s,sdslen(s)) != C_OK)
         _addReplyProtoToList(c,s,sdslen(s));
     sdsfree(s);
-}
-
-void addReplySds(client *c, sds s) {
-    addReplySdsCore(c, s, false);
-}
-
-void addReplySdsAsync(client *c, sds s) {
-    addReplySdsCore(c, s, true);
 }
 
 /* This low level function just adds whatever protocol you send it to the
@@ -425,18 +419,14 @@ void addReplySdsAsync(client *c, sds s) {
  * if not needed. The object will only be created by calling
  * _addReplyProtoToList() if we fail to extend the existing tail object
  * in the list of objects. */
-void addReplyProtoCore(client *c, const char *s, size_t len, bool fAsync) {
-    if (prepareClientToWrite(c, fAsync) != C_OK) return;
-    if (_addReplyToBuffer(c,s,len,fAsync) != C_OK)
+void addReplyProto(client *c, const char *s, size_t len) {
+    if (prepareClientToWrite(c) != C_OK) return;
+    if (_addReplyToBuffer(c,s,len) != C_OK)
         _addReplyProtoToList(c,s,len);
 }
 
-void addReplyProto(client *c, const char *s, size_t len) {
-    addReplyProtoCore(c, s, len, false);
-}
-
-void addReplyProtoAsync(client *c, const char *s, size_t len) {
-    addReplyProtoCore(c, s, len, true);
+void addReplyProtoCString(client *c, const char *s) {
+    addReplyProto(c, s, strlen(s));
 }
 
 std::string escapeString(sds str)
@@ -474,14 +464,18 @@ std::string escapeString(sds str)
  *
  * If the error code is already passed in the string 's', the error
  * code provided is used, otherwise the string "-ERR " for the generic
- * error code is automatically added. */
-void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) {
+ * error code is automatically added.
+ * Note that 's' must NOT end with \r\n. */
+void addReplyErrorLength(client *c, const char *s, size_t len) {
     /* If the string already starts with "-..." then the error code
      * is provided by the caller. Otherwise we use "-ERR". */
-    if (!len || s[0] != '-') addReplyProtoCore(c,"-ERR ",5,fAsync);
-    addReplyProtoCore(c,s,len,fAsync);
-    addReplyProtoCore(c,"\r\n",2,fAsync);
+    if (!len || s[0] != '-') addReplyProto(c,"-ERR ",5);
+    addReplyProto(c,s,len);
+    addReplyProto(c,"\r\n",2);
+}
 
+/* Do some actions after an error reply was sent (Log if needed, updates stats, etc.) */
+void afterErrorReply(client *c, const char *s, size_t len) {
     /* Sometimes it could be normal that a replica replies to a master with
      * an error and this function gets called. Actually the error will never
      * be sent because addReply*() against master clients has no effect...
@@ -507,10 +501,11 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
             from = "master";
         }
 
+        if (len > 4096) len = 4096;
         const char *cmdname = c->lastcmd ? c->lastcmd->name : "<unknown>";
         serverLog(LL_WARNING,"== CRITICAL == This %s is sending an error "
-                             "to its %s: '%s' after processing the command "
-                             "'%s'", from, to, s, cmdname);
+                             "to its %s: '%.*s' after processing the command "
+                             "'%s'", from, to, (int)len, s, cmdname);
         if (ctype == CLIENT_TYPE_MASTER && g_pserver->repl_backlog &&
             g_pserver->repl_backlog_histlen > 0)
         {
@@ -520,32 +515,38 @@ void addReplyErrorLengthCore(client *c, const char *s, size_t len, bool fAsync) 
     }
 }
 
-void addReplyErrorLength(client *c, const char *s, size_t len)
-{
-    addReplyErrorLengthCore(c, s, len, false);
+/* The 'err' object is expected to start with -ERRORCODE and end with \r\n.
+ * Unlike addReplyErrorSds and others alike which rely on addReplyErrorLength. */
+void addReplyErrorObject(client *c, robj *err) {
+    addReply(c, err);
+    afterErrorReply(c, szFromObj(err), sdslen(szFromObj(err))-2); /* Ignore trailing \r\n */
 }
 
 void addReplyError(client *c, const char *err) {
-    addReplyErrorLengthCore(c,err,strlen(err), false);
+    addReplyErrorLength(c, err, strlen(err));
+    afterErrorReply(c,err,strlen(err));
 }
 
-void addReplyErrorAsync(client *c, const char *err) {
-    addReplyErrorLengthCore(c, err, strlen(err), true);
+/* See addReplyErrorLength for expectations from the input string. */
+void addReplyErrorSds(client *c, sds err) {
+    addReplyErrorLength(c,err,sdslen(err));
+    afterErrorReply(c,err,sdslen(err));
 }
 
+/* See addReplyErrorLength for expectations from the formatted string.
+ * The formatted string is safe to contain \r and \n anywhere. */
 void addReplyErrorFormat(client *c, const char *fmt, ...) {
-    size_t l, j;
     va_list ap;
     va_start(ap,fmt);
     sds s = sdscatvprintf(sdsempty(),fmt,ap);
     va_end(ap);
-    /* Make sure there are no newlines in the string, otherwise invalid protocol
-     * is emitted. */
-    l = sdslen(s);
-    for (j = 0; j < l; j++) {
-        if (s[j] == '\r' || s[j] == '\n') s[j] = ' ';
-    }
+    /* Trim any newlines at the end (ones will be added by addReplyErrorLength) */
+    s = sdstrim(s, "\r\n");
+    /* Make sure there are no newlines in the middle of the string, otherwise
+     * invalid protocol is emitted. */
+    s = sdsmapchars(s, "\r\n", "  ",  2);
     addReplyErrorLength(c,s,sdslen(s));
+    afterErrorReply(c,s,sdslen(s));
     sdsfree(s);
 }
 
@@ -598,26 +599,26 @@ void trimReplyUnusedTailSpace(client *c) {
 
 /* Adds an empty object to the reply list that will contain the multi bulk
  * length, which is not known when this function is called. */
-void *addReplyDeferredLen(client *c) {
+void *addReplyDeferredLenCore(client *c) {
     /* Note that we install the write event here even if the object is not
      * ready to be sent, since we are sure that before returning to the
      * event loop setDeferredAggregateLen() will be called. */
-    if (prepareClientToWrite(c, false) != C_OK) return NULL;
+    if (prepareClientToWrite(c) != C_OK) return NULL;
     trimReplyUnusedTailSpace(c);
     listAddNodeTail(c->reply,NULL); /* NULL is our placeholder. */
     return listLast(c->reply);
 }
 
-void *addReplyDeferredLenAsync(client *c) {
+void *addReplyDeferredLen(client *c) {
     if (FCorrectThread(c))
-        return addReplyDeferredLen(c);
+        return addReplyDeferredLenCore(c);
         
-    prepareClientToWrite(c, true);
-    return (void*)((ssize_t)c->bufposAsync);
+    return (void*)((ssize_t)(c->replyAsync ? c->replyAsync->used : 0));
 }
 
 /* Populate the length object and try gluing it to the next chunk. */
 void setDeferredAggregateLen(client *c, void *node, long length, char prefix) {
+    serverAssert(length >= 0);
     listNode *ln = (listNode*)node;
     clientReplyBlock *next;
     char lenstr[128];
@@ -668,25 +669,29 @@ void setDeferredAggregateLenAsync(client *c, void *node, long length, char prefi
     char lenstr[128];
     int lenstr_len = sprintf(lenstr, "%c%ld\r\n", prefix, length);
 
-    ssize_t idxSplice = (ssize_t)node;
-    serverAssert(idxSplice <= c->bufposAsync);
-    if (c->buflenAsync < (c->bufposAsync + lenstr_len))
+    size_t idxSplice = (size_t)node;
+    serverAssert(idxSplice <= c->replyAsync->used);
+    if (c->replyAsync->size < (c->replyAsync->used + lenstr_len))
     {
-        c->buflenAsync = std::max((int)(c->bufposAsync+lenstr_len), c->buflenAsync*2 - c->buflenAsync);
-        c->bufAsync = (char*)zrealloc(c->bufAsync, c->buflenAsync, MALLOC_LOCAL);
+        int newsize = std::max(c->replyAsync->used + lenstr_len, c->replyAsync->size*2);
+        clientReplyBlock *replyNew = (clientReplyBlock*)zmalloc(sizeof(clientReplyBlock) + newsize);
+        replyNew->size = zmalloc_usable(replyNew) - sizeof(clientReplyBlock);
+        replyNew->used = c->replyAsync->used;
+        memcpy(replyNew->buf(), c->replyAsync->buf(), c->replyAsync->used);
+        zfree(c->replyAsync);
+        c->replyAsync = replyNew;
     }
     
-    memmove(c->bufAsync + idxSplice + lenstr_len, c->bufAsync + idxSplice, c->bufposAsync - idxSplice);
-    memcpy(c->bufAsync + idxSplice, lenstr, lenstr_len);
-    c->bufposAsync += lenstr_len;
+    memmove(c->replyAsync->buf() + idxSplice + lenstr_len, c->replyAsync->buf() + idxSplice, c->replyAsync->used - idxSplice);
+    memcpy(c->replyAsync->buf() + idxSplice, lenstr, lenstr_len);
+    c->replyAsync->used += lenstr_len;
 }
 
 void setDeferredArrayLen(client *c, void *node, long length) {
-    setDeferredAggregateLen(c,node,length,'*');
-}
-
-void setDeferredArrayLenAsync(client *c, void *node, long length) {
-    setDeferredAggregateLenAsync(c, node, length, '*');
+    if (FCorrectThread(c))
+        setDeferredAggregateLen(c,node,length,'*');
+    else
+        setDeferredAggregateLenAsync(c, node, length, '*');
 }
 
 void setDeferredMapLen(client *c, void *node, long length) {
@@ -712,15 +717,15 @@ void setDeferredPushLen(client *c, void *node, long length) {
 }
 
 /* Add a double as a bulk reply */
-void addReplyDoubleCore(client *c, double d, bool fAsync) {
+void addReplyDouble(client *c, double d) {
     if (std::isinf(d)) {
         /* Libc in odd systems (Hi Solaris!) will format infinite in a
          * different way, so better to handle it in an explicit way. */
         if (c->resp == 2) {
-            addReplyBulkCStringCore(c, d > 0 ? "inf" : "-inf", fAsync);
+            addReplyBulkCString(c, d > 0 ? "inf" : "-inf");
         } else {
-            addReplyProtoCore(c, d > 0 ? ",inf\r\n" : ",-inf\r\n",
-                              d > 0 ? 6 : 7, fAsync);
+            addReplyProto(c, d > 0 ? ",inf\r\n" : ",-inf\r\n",
+                              d > 0 ? 6 : 7);
         }
     } else {
         char dbuf[MAX_LONG_DOUBLE_CHARS+3],
@@ -729,52 +734,34 @@ void addReplyDoubleCore(client *c, double d, bool fAsync) {
         if (c->resp == 2) {
             dlen = snprintf(dbuf,sizeof(dbuf),"%.17g",d);
             slen = snprintf(sbuf,sizeof(sbuf),"$%d\r\n%s\r\n",dlen,dbuf);
-            addReplyProtoCore(c,sbuf,slen,fAsync);
+            addReplyProto(c,sbuf,slen);
         } else {
             dlen = snprintf(dbuf,sizeof(dbuf),",%.17g\r\n",d);
-            addReplyProtoCore(c,dbuf,dlen,fAsync);
+            addReplyProto(c,dbuf,dlen);
         }
     }
 }
 
-void addReplyDouble(client *c, double d) {
-    addReplyDoubleCore(c, d, false);
-}
-
-void addReplyDoubleAsync(client *c, double d) {
-    addReplyDoubleCore(c, d, true);
-}
-
-void addReplyBulkCore(client *c, robj_roptr obj, bool fAsync);
-
 /* Add a long double as a bulk reply, but uses a human readable formatting
  * of the double instead of exposing the crude behavior of doubles to the
  * dear user. */
-void addReplyHumanLongDoubleCore(client *c, long double d, bool fAsync) {
+void addReplyHumanLongDouble(client *c, long double d) {
     if (c->resp == 2) {
         robj *o = createStringObjectFromLongDouble(d,1);
-        addReplyBulkCore(c,o,fAsync);
+        addReplyBulk(c,o);
         decrRefCount(o);
     } else {
         char buf[MAX_LONG_DOUBLE_CHARS];
         int len = ld2string(buf,sizeof(buf),d,LD_STR_HUMAN);
-        addReplyProtoCore(c,",",1,fAsync);
-        addReplyProtoCore(c,buf,len,fAsync);
-        addReplyProtoCore(c,"\r\n",2,fAsync);
+        addReplyProto(c,",",1);
+        addReplyProto(c,buf,len);
+        addReplyProto(c,"\r\n",2);
     }
-}
-
-void addReplyHumanLongDouble(client *c, long double d) {
-    addReplyHumanLongDoubleCore(c, d, false);
-}
-
-void addReplyHumanLongDoubleAsync(client *c, long double d) {
-    addReplyHumanLongDoubleCore(c, d, true);
 }
 
 /* Add a long long as integer reply or bulk len / multi bulk count.
  * Basically this is used to output <prefix><long long><crlf>. */
-void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool fAsync) {
+void addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
     char buf[128];
     int len;
 
@@ -782,10 +769,10 @@ void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool f
      * so we have a few shared objects to use if the integer is small
      * like it is most of the times. */
     if (prefix == '*' && ll < OBJ_SHARED_BULKHDR_LEN && ll >= 0) {
-        addReplyCore(c,shared.mbulkhdr[ll], fAsync);
+        addReply(c,shared.mbulkhdr[ll]);
         return;
     } else if (prefix == '$' && ll < OBJ_SHARED_BULKHDR_LEN && ll >= 0) {
-        addReplyCore(c,shared.bulkhdr[ll], fAsync);
+        addReply(c,shared.bulkhdr[ll]);
         return;
     }
 
@@ -793,65 +780,33 @@ void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool f
     len = ll2string(buf+1,sizeof(buf)-1,ll);
     buf[len+1] = '\r';
     buf[len+2] = '\n';
-    addReplyProtoCore(c,buf,len+3, fAsync);
-}
-
-void addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
-    addReplyLongLongWithPrefixCore(c, ll, prefix, false);
-}
-
-void addReplyLongLongCore(client *c, long long ll, bool fAsync) {
-    if (ll == 0)
-        addReplyCore(c,shared.czero, fAsync);
-    else if (ll == 1)
-        addReplyCore(c,shared.cone, fAsync);
-    else
-        addReplyLongLongWithPrefixCore(c,ll,':', fAsync);
+    addReplyProto(c,buf,len+3);
 }
 
 void addReplyLongLong(client *c, long long ll) {
-    addReplyLongLongCore(c, ll, false);
-}
-
-void addReplyLongLongAsync(client *c, long long ll) {
-    addReplyLongLongCore(c, ll, true);
-}
-
-void addReplyAggregateLenCore(client *c, long length, int prefix, bool fAsync) {
-    if (prefix == '*' && length < OBJ_SHARED_BULKHDR_LEN)
-        addReplyCore(c,shared.mbulkhdr[length], fAsync);
+    if (ll == 0)
+        addReply(c,shared.czero);
+    else if (ll == 1)
+        addReply(c,shared.cone);
     else
-        addReplyLongLongWithPrefixCore(c,length,prefix, fAsync);
+        addReplyLongLongWithPrefix(c,ll,':');
 }
 
 void addReplyAggregateLen(client *c, long length, int prefix) {
-    addReplyAggregateLenCore(c, length, prefix, false);
-}
-
-void addReplyArrayLenCore(client *c, long length, bool fAsync) {
-    addReplyAggregateLenCore(c,length,'*', fAsync);
+    if (prefix == '*' && length < OBJ_SHARED_BULKHDR_LEN)
+        addReply(c,shared.mbulkhdr[length]);
+    else
+        addReplyLongLongWithPrefix(c,length,prefix);
 }
 
 void addReplyArrayLen(client *c, long length) {
-    addReplyArrayLenCore(c, length, false);
-}
-
-void addReplyArrayLenAsync(client *c, long length) {
-    addReplyArrayLenCore(c, length, true);
-}
-
-void addReplyMapLenCore(client *c, long length, bool fAsync) {
-    int prefix = c->resp == 2 ? '*' : '%';
-    if (c->resp == 2) length *= 2;
-    addReplyAggregateLenCore(c,length,prefix,fAsync);
+    addReplyAggregateLen(c,length,'*');
 }
 
 void addReplyMapLen(client *c, long length) {
-    addReplyMapLenCore(c, length, false);
-}
-
-void addReplyMapLenAsync(client *c, long length) {
-    addReplyMapLenCore(c, length, true);
+    int prefix = c->resp == 2 ? '*' : '%';
+    if (c->resp == 2) length *= 2;
+    addReplyAggregateLen(c,length,prefix);
 }
 
 void addReplySetLen(client *c, long length) {
@@ -865,36 +820,17 @@ void addReplyAttributeLen(client *c, long length) {
     addReplyAggregateLen(c,length,prefix);
 }
 
-void addReplyPushLenCore(client *c, long length, bool fAsync) {
-    int prefix = c->resp == 2 ? '*' : '>';
-    addReplyAggregateLenCore(c,length,prefix, fAsync);
-}
-
 void addReplyPushLen(client *c, long length) {
-    addReplyPushLenCore(c, length, false);
+    int prefix = c->resp == 2 ? '*' : '>';
+    addReplyAggregateLen(c,length,prefix);
 }
 
-void addReplyPushLenAsync(client *c, long length) {
-    addReplyPushLenCore(c, length, true);
-}
-
-void addReplyNullCore(client *c, bool fAsync) {
+void addReplyNull(client *c) {
     if (c->resp == 2) {
-        addReplyProtoCore(c,"$-1\r\n",5,fAsync);
+        addReplyProto(c,"$-1\r\n",5);
     } else {
-        addReplyProtoCore(c,"_\r\n",3,fAsync);
+        addReplyProto(c,"_\r\n",3);
     }
-}
-
-void addReplyNull(client *c, robj_roptr objOldProtocol) {
-    if (c->resp < 3 && objOldProtocol != nullptr)
-        addReply(c, objOldProtocol);
-    else
-        addReplyNullCore(c, false);
-}
-
-void addReplyNullAsync(client *c) {
-    addReplyNullCore(c, true);
 }
 
 void addReplyBool(client *c, int b) {
@@ -909,105 +845,56 @@ void addReplyBool(client *c, int b) {
  * RESP2 had it, so API-wise we have this call, that will emit the correct
  * RESP2 protocol, however for RESP3 the reply will always be just the
  * Null type "_\r\n". */
-void addReplyNullArrayCore(client *c, bool fAsync) 
+void addReplyNullArray(client *c) 
 {
     if (c->resp == 2) {
-        addReplyProtoCore(c,"*-1\r\n",5,fAsync);
+        addReplyProto(c,"*-1\r\n",5);
     } else {
-        addReplyProtoCore(c,"_\r\n",3,fAsync);
+        addReplyProto(c,"_\r\n",3);
     }
-}
-
-void addReplyNullArray(client *c)
-{
-    addReplyNullArrayCore(c, false);
-}
-
-void addReplyNullArrayAsync(client *c)
-{
-    addReplyNullArrayCore(c, true);
 }
 
 /* Create the length prefix of a bulk reply, example: $2234 */
-void addReplyBulkLenCore(client *c, robj_roptr obj, bool fAsync) {
+void addReplyBulkLen(client *c, robj_roptr obj) {
     size_t len = stringObjectLen(obj);
 
     if (len < OBJ_SHARED_BULKHDR_LEN)
-        addReplyCore(c,shared.bulkhdr[len], fAsync);
+        addReply(c,shared.bulkhdr[len]);
     else
-        addReplyLongLongWithPrefixCore(c,len,'$', fAsync);
-}
-
-void addReplyBulkLen(client *c, robj *obj)
-{
-    addReplyBulkLenCore(c, obj, false);
+        addReplyLongLongWithPrefix(c,len,'$');
 }
 
 /* Add a Redis Object as a bulk reply */
-void addReplyBulkCore(client *c, robj_roptr obj, bool fAsync) {
-    addReplyBulkLenCore(c,obj,fAsync);
-    addReplyCore(c,obj,fAsync);
-    addReplyCore(c,shared.crlf,fAsync);
-}
-
-void addReplyBulk(client *c, robj_roptr obj)
-{
-    addReplyBulkCore(c, obj, false);
-}
-
-void addReplyBulkAsync(client *c, robj_roptr obj)
-{
-    addReplyBulkCore(c, obj, true);
+void addReplyBulk(client *c, robj_roptr obj) {
+    addReplyBulkLen(c,obj);
+    addReply(c,obj);
+    addReply(c,shared.crlf);
 }
 
 /* Add a C buffer as bulk reply */
-void addReplyBulkCBufferCore(client *c, const void *p, size_t len, bool fAsync) {
-    addReplyLongLongWithPrefixCore(c,len,'$',fAsync);
-    addReplyProtoCore(c,(const char*)p,len,fAsync);
-    addReplyCore(c,shared.crlf,fAsync);
-}
-
 void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
-    addReplyBulkCBufferCore(c, p, len, false);
-}
-
-void addReplyBulkCBufferAsync(client *c, const void *p, size_t len) {
-    addReplyBulkCBufferCore(c, p, len, true);
+    addReplyLongLongWithPrefix(c,len,'$');
+    addReplyProto(c,(const char*)p,len);
+    addReply(c,shared.crlf);
 }
 
 /* Add sds to reply (takes ownership of sds and frees it) */
-void addReplyBulkSdsCore(client *c, sds s, bool fAsync)  {
-    addReplyLongLongWithPrefixCore(c,sdslen(s),'$', fAsync);
-    addReplySdsCore(c,s,fAsync);
-    addReplyCore(c,shared.crlf,fAsync);
-}
-
-void addReplyBulkSds(client *c, sds s) {
-    addReplyBulkSdsCore(c, s, false);
-}
-
-void addReplyBulkSdsAsync(client *c, sds s) {
-    addReplyBulkSdsCore(c, s, true);
+void addReplyBulkSds(client *c, sds s)  {
+    addReplyLongLongWithPrefix(c,sdslen(s),'$');
+    addReplySds(c,s);
+    addReply(c,shared.crlf);
 }
 
 /* Add a C null term string as bulk reply */
-void addReplyBulkCStringCore(client *c, const char *s, bool fAsync) {
+void addReplyBulkCString(client *c, const char *s) {
     if (s == NULL) {
         if (c->resp < 3)
-            addReplyCore(c,shared.nullbulk, fAsync);
+            addReply(c,shared.nullbulk);
         else
-            addReplyNullCore(c,fAsync);
+            addReplyNull(c);
     } else {
-        addReplyBulkCBufferCore(c,s,strlen(s),fAsync);
+        addReplyBulkCBuffer(c,s,strlen(s));
     }
-}
-
-void addReplyBulkCString(client *c, const char *s) {
-    addReplyBulkCStringCore(c, s, false);
-}
-
-void addReplyBulkCStringAsync(client *c, const char *s) {
-    addReplyBulkCStringCore(c, s, true);
 }
 
 /* Add a long long as a bulk reply */
@@ -1028,9 +915,9 @@ void addReplyBulkLongLong(client *c, long long ll) {
  * three first characters of the extension are used, and if the
  * provided one is shorter than that, the remaining is filled with
  * spaces. */
-void addReplyVerbatimCore(client *c, const char *s, size_t len, const char *ext, bool fAsync) {
+void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext) {
     if (c->resp == 2) {
-        addReplyBulkCBufferCore(c,s,len,fAsync);
+        addReplyBulkCBuffer(c,s,len);
     } else {
         char buf[32];
         size_t preflen = snprintf(buf,sizeof(buf),"=%zu\r\nxxx:",len+4);
@@ -1042,18 +929,10 @@ void addReplyVerbatimCore(client *c, const char *s, size_t len, const char *ext,
                 p[i] = *ext++;
             }
         }
-        addReplyProtoCore(c,buf,preflen,fAsync);
-        addReplyProtoCore(c,s,len,fAsync);
-        addReplyProtoCore(c,"\r\n",2,fAsync);
+        addReplyProto(c,buf,preflen);
+        addReplyProto(c,s,len);
+        addReplyProto(c,"\r\n",2);
     }
-}
-
-void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext) {
-    addReplyVerbatimCore(c, s, len, ext, false);
-}
-
-void addReplyVerbatimAsync(client *c, const char *s, size_t len, const char *ext) {
-    addReplyVerbatimCore(c, s, len, ext, true);
 }
 
 /* Add an array of C strings as status replies with a heading.
@@ -1091,7 +970,7 @@ void addReplySubcommandSyntaxError(client *c) {
 /* Append 'src' client output buffers into 'dst' client output buffers. 
  * This function clears the output buffers of 'src' */
 void AddReplyFromClient(client *dst, client *src) {
-    if (prepareClientToWrite(dst, false) != C_OK)
+    if (prepareClientToWrite(dst) != C_OK)
         return;
     addReplyProto(dst,src->buf, src->bufpos);
     if (listLength(src->reply))
@@ -1207,21 +1086,38 @@ void clientAcceptHandler(connection *conn) {
 #define MAX_ACCEPTS_PER_CALL 1000
 static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) {
     client *c;
+    char conninfo[100];
     UNUSED(ip);
     AeLocker locker;
     locker.arm(nullptr);
 
-    /* Admission control will happen before a client is created and connAccept()
+    if (connGetState(conn) != CONN_STATE_ACCEPTING) {
+        serverLog(LL_VERBOSE,
+            "Accepted client connection in error state: %s (conn: %s)",
+            connGetLastError(conn),
+            connGetInfo(conn, conninfo, sizeof(conninfo)));
+        connClose(conn);
+        return;
+    }
+
+    /* Limit the number of connections we take at the same time.
+     *
+     * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
-     * if rejected.
-     */
-    if (listLength(g_pserver->clients) >= g_pserver->maxclients) {
-        const char *err = "-ERR max number of clients reached\r\n";
+     * if rejected. */
+    if (listLength(g_pserver->clients) + getClusterConnectionsCount()
+        >= g_pserver->maxclients)
+    {
+        const char *err;
+        if (g_pserver->cluster_enabled)
+            err = "-ERR max number of clients + cluster "
+                  "connections reached\r\n";
+        else
+            err = "-ERR max number of clients reached\r\n";
 
         /* That's a best effort error message, don't check write errors.
-         * Note that for TLS connections, no handshake was done yet so nothing is written
-         * and the connection will just drop.
-         */
+         * Note that for TLS connections, no handshake was done yet so nothing
+         * is written and the connection will just drop. */
         if (connWrite(conn,err,strlen(err)) == -1) {
             /* Nothing to do, Just to avoid the warning... */
         }
@@ -1232,7 +1128,6 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) 
 
     /* Create connection and client */
     if ((c = createClient(conn, iel)) == NULL) {
-        char conninfo[100];
         serverLog(LL_WARNING,
             "Error registering fd event for the new client: %s (conn: %s)",
             connGetLastError(conn),
@@ -1608,7 +1503,7 @@ bool freeClient(client *c) {
 
     /* Release other dynamically allocated client structure fields,
      * and finally release the client structure itself. */
-    zfree(c->bufAsync);
+    zfree(c->replyAsync);
     if (c->name) decrRefCount(c->name);
     zfree(c->argv);
     freeClientMultiState(c);
@@ -1687,6 +1582,9 @@ client *lookupClientByID(uint64_t id) {
  * set to 0. So when handler_installed is set to 0 the function must be
  * thread safe. */
 int writeToClient(client *c, int handler_installed) {
+    /* Update total number of writes on server */
+    g_pserver->stat_total_writes_processed.fetch_add(1, std::memory_order_relaxed);
+
     ssize_t nwritten = 0, totwritten = 0;
     clientReplyBlock *o;
     AssertCorrectThread(c);
@@ -1811,29 +1709,25 @@ void ProcessPendingAsyncWrites()
         serverAssert(c->fPendingAsyncWrite);
         if (c->flags & (CLIENT_CLOSE_ASAP | CLIENT_CLOSE_AFTER_REPLY))
         {
-            c->bufposAsync = 0;
-            c->buflenAsync = 0;
-            zfree(c->bufAsync);
-            c->bufAsync = nullptr;
+            zfree(c->replyAsync);
+            c->replyAsync = nullptr;
             c->fPendingAsyncWrite = FALSE;
             continue;
         }
 
-        // TODO: Append to end of reply block?
+        int size = c->replyAsync->used;
 
-        size_t size = c->bufposAsync;
-        clientReplyBlock *reply = (clientReplyBlock*)zmalloc(size + sizeof(clientReplyBlock), MALLOC_LOCAL);
-        /* take over the allocation's internal fragmentation */
-        reply->size = zmalloc_usable(reply) - sizeof(clientReplyBlock);
-        reply->used = c->bufposAsync;
-        memcpy(reply->buf(), c->bufAsync, c->bufposAsync);
-        listAddNodeTail(c->reply, reply);
-        c->reply_bytes += reply->size;
+        if (listLength(c->reply) == 0 && size <= (PROTO_REPLY_CHUNK_BYTES - c->bufpos)) {
+            memcpy(c->buf + c->bufpos, c->replyAsync->buf(), size);
+            c->bufpos += size;
+        } else {
+            c->reply_bytes += c->replyAsync->size;
+            listAddNodeTail(c->reply, c->replyAsync);
+            c->replyAsync = nullptr;
+        }
 
-        c->bufposAsync = 0;
-        c->buflenAsync = 0;
-        zfree(c->bufAsync);
-        c->bufAsync = nullptr;
+        zfree(c->replyAsync);
+        c->replyAsync = nullptr;
         c->fPendingAsyncWrite = FALSE;
 
         // Now install the write event handler
@@ -1861,16 +1755,17 @@ void ProcessPendingAsyncWrites()
         
         if (FCorrectThread(c))
         {
-            prepareClientToWrite(c, false); // queue an event
+            prepareClientToWrite(c); // queue an event
         }
         else
         {
-            if (!c->fPendingAsyncWriteHandler) {
-                c->fPendingAsyncWriteHandler = true;
+            bool expected = false;
+            if (c->fPendingAsyncWriteHandler.compare_exchange_strong(expected, true)) {
                 bool fResult = c->postFunction([](client *c) {
                     c->fPendingAsyncWriteHandler = false;
-                    connSetWriteHandler(c->conn, sendReplyToClient, true);
-                });
+                    clientInstallWriteHandler(c);
+                    handleClientsWithPendingWrites(c->iel, g_pserver->aof_state);
+                }, false);
 
                 if (!fResult)
                     c->fPendingAsyncWriteHandler = false;   // if we failed to set the handler then prevent this from never being reset
@@ -1885,8 +1780,7 @@ void ProcessPendingAsyncWrites()
  * get it called, and so forth. */
 int handleClientsWithPendingWrites(int iel, int aof_state) {
     std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[iel].lockPendingWrite);
-    auto &vec = g_pserver->rgthreadvar[iel].clients_pending_write;
-    int processed = (int)vec.size();
+    int processed = 0;
     serverAssert(iel == (serverTL - g_pserver->rgthreadvar));
 
     int ae_flags = AE_WRITABLE|AE_WRITE_THREADSAFE;
@@ -1901,16 +1795,17 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
         ae_flags |= AE_BARRIER;
     }
 
-    while(!vec.empty()) {
-        client *c = vec.back();
+    auto vec = std::move(g_pserver->rgthreadvar[iel].clients_pending_write);
+    processed += (int)vec.size();
+
+    for (client *c : vec) {
         AssertCorrectThread(c);
 
-        c->flags &= ~CLIENT_PENDING_WRITE;
-        vec.pop_back();
+        uint64_t flags = c->flags.fetch_and(~CLIENT_PENDING_WRITE, std::memory_order_relaxed);
 
         /* If a client is protected, don't do anything,
-         * that may trigger write error or recreate handler. */
-        if (c->flags & CLIENT_PROTECTED) continue;
+        * that may trigger write error or recreate handler. */
+        if (flags & CLIENT_PROTECTED) continue;
 
         std::unique_lock<decltype(c->lock)> lock(c->lock);
 
@@ -1929,7 +1824,7 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
         }
 
         /* If after the synchronous writes above we still have data to
-         * output to the client, we need to install the writable handler. */
+        * output to the client, we need to install the writable handler. */
         if (clientHasPendingReplies(c)) {
             if (connSetWriteHandlerWithBarrier(c->conn, sendReplyToClient, ae_flags, true) == C_ERR) 
                 freeClientAsync(c);
@@ -2199,7 +2094,8 @@ int processMultibulkBuffer(client *c) {
             }
 
             ok = string2ll(c->querybuf+c->qb_pos+1,newline-(c->querybuf+c->qb_pos+1),&ll);
-            if (!ok || ll < 0 || ll > g_pserver->proto_max_bulk_len) {
+            if (!ok || ll < 0 ||
+                (!(c->flags & CLIENT_MASTER) && ll > g_pserver->proto_max_bulk_len)) {
                 addReplyError(c,"Protocol error: invalid bulk length");
                 setProtocolError("invalid bulk length",c);
                 return C_ERR;
@@ -2409,6 +2305,9 @@ void readQueryFromClient(connection *conn) {
     std::unique_lock<decltype(c->lock)> lock(c->lock, std::defer_lock);
     if (!lock.try_lock())
         return; // Process something else while we wait
+
+    /* Update total number of reads on server */
+    g_pserver->stat_total_reads_processed.fetch_add(1, std::memory_order_relaxed);
 
     readlen = PROTO_IOBUF_LEN;
     /* If this is a multi bulk request, and we are processing a bulk reply
@@ -2678,6 +2577,7 @@ void clientCommand(client *c) {
 "SETNAME <name>         -- Assign the name <name> to the current connection.",
 "UNBLOCK <clientid> [TIMEOUT|ERROR] -- Unblock the specified blocked client.",
 "TRACKING (on|off) [REDIRECT <id>] [BCAST] [PREFIX first] [PREFIX second] [OPTIN] [OPTOUT]... -- Enable client keys tracking for client side caching.",
+"CACHING  (yes|no)      -- Enable/Disable tracking of the keys for next command in OPTIN/OPTOUT mode.",
 "GETREDIR               -- Return the client ID we are redirecting to when tracking is enabled.",
 NULL
         };
@@ -2847,7 +2747,7 @@ NULL
         if (target && target->flags & CLIENT_BLOCKED) {
             std::unique_lock<fastlock> ul(target->lock);
             if (unblock_error)
-                addReplyErrorAsync(target,
+                addReplyError(target,
                     "-UNBLOCKED client unblocked via CLIENT UNBLOCK");
             else
                 replyToBlockedClientTimedOut(target);
@@ -3202,7 +3102,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
  * enforcing the client output length limits. */
 unsigned long getClientOutputBufferMemoryUsage(client *c) {
     unsigned long list_item_size = sizeof(listNode) + sizeof(clientReplyBlock);
-    return c->reply_bytes + (list_item_size*listLength(c->reply)) + c->buflenAsync;
+    return c->reply_bytes + (list_item_size*listLength(c->reply)) + (c->replyAsync ? c->replyAsync->size : 0);
 }
 
 /* Get the class of a client, used in order to enforce limits to different

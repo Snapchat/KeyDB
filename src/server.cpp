@@ -2436,7 +2436,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     int iel = ielFromEventLoop(eventLoop);
     
     locker.arm();
-    processClients();
+    serverAssert(g_pserver->repl_batch_offStart < 0);
+    runAndPropogateToReplicas(processClients);
 
     /* Handle precise timeouts of blocked clients. */
     handleBlockedClientsTimeout();
@@ -2559,6 +2560,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
      * time. */
+    serverAssert(g_pserver->repl_batch_offStart < 0);
     locker.disarm();
     if (!fSentReplies)
         handleClientsWithPendingWrites(iel, aof_state);
@@ -3812,6 +3814,7 @@ void call(client *c, int flags) {
     /* We need to transfer async writes before a client's repl state gets changed.  Otherwise
         we won't be able to propogate them correctly. */
     if (c->cmd->flags & CMD_CATEGORY_REPLICATION) {
+        flushReplBacklogToClients();
         ProcessPendingAsyncWrites();
     }
 
@@ -4273,8 +4276,18 @@ int processCommand(client *c, int callFlags) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
+        /* If the command was replication or admin related we *must* flush our buffers first.  This is in case
+            something happens which would modify what we would send to replicas */
+
+        if (c->cmd->flags & (CMD_MODULE | CMD_ADMIN))
+            flushReplBacklogToClients();
+
         call(c,callFlags);
         c->woff = g_pserver->master_repl_offset;
+
+        if (c->cmd->flags & (CMD_MODULE | CMD_ADMIN))
+            flushReplBacklogToClients();
+        
         if (listLength(g_pserver->ready_keys))
             handleClientsBlockedOnKeys();
     }
@@ -5640,6 +5653,8 @@ void loadDataFromDisk(void) {
             {
                 memcpy(g_pserver->replid,rsi.repl_id,sizeof(g_pserver->replid));
                 g_pserver->master_repl_offset = rsi.repl_offset;
+                if (g_pserver->repl_batch_offStart >= 0)
+                    g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
                 listIter li;
                 listNode *ln;
                 
@@ -5925,6 +5940,7 @@ int main(int argc, char **argv) {
     srand(time(NULL)^getpid());
     gettimeofday(&tv,NULL);
     crc64_init();
+    serverAssert(g_pserver->repl_batch_offStart < 0);
 
     uint8_t hashseed[16];
     getRandomHexChars((char*)hashseed,sizeof(hashseed));

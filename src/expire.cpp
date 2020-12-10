@@ -301,7 +301,7 @@ void pexpireMemberAtCommand(client *c)
  * executed, where the time limit is a percentage of the REDIS_HZ period
  * as specified by the ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC define. */
 
-void activeExpireCycle(int type) {
+void activeExpireCycleCore(int type) {
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
     static unsigned int current_db = 0; /* Last DB tested. */
@@ -416,6 +416,11 @@ void activeExpireCycle(int type) {
         current_perc = 0;
     g_pserver->stat_expired_stale_perc = (current_perc*0.05)+
                                      (g_pserver->stat_expired_stale_perc*0.95);
+}
+
+void activeExpireCycle(int type)
+{
+    runAndPropogateToReplicas(activeExpireCycleCore, type);
 }
 
 /*-----------------------------------------------------------------------------

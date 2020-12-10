@@ -1783,6 +1783,13 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
     int processed = 0;
     serverAssert(iel == (serverTL - g_pserver->rgthreadvar));
 
+    if (listLength(serverTL->clients_pending_asyncwrite))
+    {
+        AeLocker locker;
+        locker.arm(nullptr);
+        ProcessPendingAsyncWrites();
+    }
+
     int ae_flags = AE_WRITABLE|AE_WRITE_THREADSAFE;
     /* For the fsync=always policy, we want that a given FD is never
         * served for reading and writing in the same event loop iteration,
@@ -1829,13 +1836,6 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
             if (connSetWriteHandlerWithBarrier(c->conn, sendReplyToClient, ae_flags, true) == C_ERR) 
                 freeClientAsync(c);
         }
-    }
-
-    if (listLength(serverTL->clients_pending_asyncwrite))
-    {
-        AeLocker locker;
-        locker.arm(nullptr);
-        ProcessPendingAsyncWrites();
     }
 
     return processed;
@@ -2193,8 +2193,7 @@ void commandProcessed(client *c, int flags) {
         if (applied) {
             if (!g_pserver->fActiveReplica && (flags & CMD_CALL_PROPAGATE))
             {
-                replicationFeedSlavesFromMasterStream(g_pserver->slaves,
-                    c->pending_querybuf, applied);
+                replicationFeedSlavesFromMasterStream(c->pending_querybuf, applied);
             }
             sdsrange(c->pending_querybuf,applied,-1);
         }
@@ -3345,6 +3344,13 @@ void processEventsWhileBlocked(int iel) {
         }
     }
     
+    /* Since we're about to release our lock we need to flush the repl backlog queue */
+    bool fReplBacklog = g_pserver->repl_batch_offStart >= 0;
+    if (fReplBacklog) {
+        flushReplBacklogToClients();
+        g_pserver->repl_batch_idxStart = -1;
+        g_pserver->repl_batch_offStart = -1;
+    }
 
     aeReleaseLock();
     serverAssert(!GlobalLocksAcquired());
@@ -3376,6 +3382,12 @@ void processEventsWhileBlocked(int iel) {
     AeLocker locker;
     locker.arm(nullptr);
     locker.release();
+
+    // Restore it so the calling code is not confused
+    if (fReplBacklog) {
+        g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
+        g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
+    }
 
     for (client *c : vecclients)
         c->lock.lock();

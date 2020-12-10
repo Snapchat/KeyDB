@@ -4416,6 +4416,12 @@ int prepareForShutdown(int flags) {
         unlink(cserver.pidfile);
     }
 
+    if (g_pserver->repl_batch_idxStart >= 0) {
+        flushReplBacklogToClients();
+        g_pserver->repl_batch_offStart = -1;
+        g_pserver->repl_batch_idxStart = -1;
+    }
+
     /* Best effort flush of replica output buffers, so that we hopefully
      * send them pending writes. */
     flushSlavesOutputBuffers();

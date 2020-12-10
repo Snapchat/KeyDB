@@ -3384,7 +3384,7 @@ void processEventsWhileBlocked(int iel) {
     locker.release();
 
     // Restore it so the calling code is not confused
-    if (fReplBacklog) {
+    if (fReplBacklog && !serverTL->el->stop) {
         g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
         g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
     }

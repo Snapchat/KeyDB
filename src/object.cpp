@@ -30,6 +30,7 @@
 
 #include "server.h"
 #include "cron.h"
+#include "t_nhash.h"
 #include <math.h>
 #include <ctype.h>
 #include <mutex>
@@ -395,6 +396,7 @@ void decrRefCount(robj_roptr o) {
         case OBJ_MODULE: freeModuleObject(o); break;
         case OBJ_STREAM: freeStreamObject(o); break;
         case OBJ_CRON: freeCronObject(o); break;
+        case OBJ_NESTEDHASH: freeNestedHashObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
         if (g_pserver->fActiveReplica) {
@@ -433,7 +435,7 @@ robj *resetRefCount(robj *obj) {
 
 int checkType(client *c, robj_roptr o, int type) {
     if (o->type != type) {
-        addReplyAsync(c,shared.wrongtypeerr);
+        addReply(c,shared.wrongtypeerr);
         return 1;
     }
     return 0;
@@ -1659,7 +1661,7 @@ void *allocPtrFromObj(robj_roptr o) {
 }
 
 robj *objFromAllocPtr(void *pv) {
-    if (g_pserver->fActiveReplica) {
+    if (pv != nullptr && g_pserver->fActiveReplica) {
         return reinterpret_cast<robj*>(reinterpret_cast<redisObjectExtended*>(pv)+1);
     } 
     return reinterpret_cast<robj*>(pv);

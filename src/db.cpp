@@ -215,13 +215,15 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
-bool dbAddCore(redisDb *db, robj *key, robj *val, bool fAssumeNew = false) {
+bool dbAddCore(redisDb *db, robj *key, robj *val, bool fUpdateMvcc, bool fAssumeNew = false) {
     serverAssert(!val->FExpires());
     sds copy = sdsdupshared(szFromObj(key));
     
     uint64_t mvcc = getMvccTstamp();
-    setMvccTstamp(key, mvcc);
-    setMvccTstamp(val, mvcc);
+    if (fUpdateMvcc) {
+        setMvccTstamp(key, mvcc);
+        setMvccTstamp(val, mvcc);
+    }
 
     bool fInserted = db->insert(copy, val, fAssumeNew);
 
@@ -247,7 +249,7 @@ bool dbAddCore(redisDb *db, robj *key, robj *val, bool fAssumeNew = false) {
  * The program is aborted if the key already exists. */
 void dbAdd(redisDb *db, robj *key, robj *val)
 {
-    bool fInserted = dbAddCore(db, key, val);
+    bool fInserted = dbAddCore(db, key, val, true /* fUpdateMvcc */);
     serverAssertWithInfo(NULL,key,fInserted);
 }
 
@@ -303,7 +305,7 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
     {
         auto itr = db->find(key);
         if (itr == nullptr)
-            return (dbAddCore(db, key, val) == true);
+            return (dbAddCore(db, key, val, false /* fUpdateMvcc */) == true);
 
         robj *old = itr.val();
         if (mvccFromObj(old) <= mvccFromObj(val))
@@ -316,7 +318,7 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
     }
     else
     {
-        return (dbAddCore(db, key, val, true) == true);
+        return (dbAddCore(db, key, val, true /* fUpdateMvcc */, true /* fAssumeNew */) == true);
     }
 }
 
@@ -333,7 +335,7 @@ int dbMerge(redisDb *db, robj *key, robj *val, int fReplace)
  * in a context where there is no clear client performing the operation. */
 void genericSetKey(client *c, redisDb *db, robj *key, robj *val, int keepttl, int signal) {
     db->prepOverwriteForSnapshot(szFromObj(key));
-    if (!dbAddCore(db, key, val)) {
+    if (!dbAddCore(db, key, val, true /* fUpdateMvcc */)) {
         dbOverwrite(db, key, val, !keepttl);
     }
     incrRefCount(val);
@@ -868,14 +870,14 @@ void keysCommandCore(client *cIn, const redisDbPersistentDataSnapshot *db, sds p
     setDeferredArrayLen(c,replylen,numkeys);
 
     aeAcquireLock();
-    addReplyProtoAsync(cIn, c->buf, c->bufpos);
+    addReplyProto(cIn, c->buf, c->bufpos);
     listIter li;
     listNode *ln;
     listRewind(c->reply, &li);
     while ((ln = listNext(&li)) != nullptr)
     {
         clientReplyBlock *block = (clientReplyBlock*)listNodeValue(ln);
-        addReplyProtoAsync(cIn, block->buf(), block->used);
+        addReplyProto(cIn, block->buf(), block->used);
     }
     aeReleaseLock();
     freeFakeClient(c);
@@ -1313,14 +1315,6 @@ void shutdownCommand(client *c) {
             return;
         }
     }
-    /* When SHUTDOWN is called while the server is loading a dataset in
-     * memory we need to make sure no attempt is performed to save
-     * the dataset on shutdown (otherwise it could overwrite the current DB
-     * with half-read data).
-     *
-     * Also when in Sentinel mode clear the SAVE flag and force NOSAVE. */
-    if (g_pserver->loading || g_pserver->sentinel_mode)
-        flags = (flags & ~SHUTDOWN_SAVE) | SHUTDOWN_NOSAVE;
     if (prepareForShutdown(flags) == C_OK) throw ShutdownException();
     addReplyError(c,"Errors trying to SHUTDOWN. Check logs.");
 }
@@ -2678,13 +2672,13 @@ dict_iter redisDbPersistentData::random()
             iter = m_pdbSnapshot->random_cache_threadsafe();    // BUG: RANDOM doesn't consider keys not in RAM
             ensure(iter.key());
             dictEntry *de = dictFind(m_pdict, iter.key());
-            return dict_iter(de);
+            return dict_iter(m_pdict, de);
         }
     }
     dictEntry *de = dictGetRandomKey(m_pdict);
     if (de != nullptr)
         ensure((const char*)dictGetKey(de), &de);
-    return dict_iter(de);
+    return dict_iter(m_pdict, de);
 }
 
 size_t redisDbPersistentData::size() const 

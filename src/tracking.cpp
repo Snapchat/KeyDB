@@ -101,7 +101,7 @@ void disableTracking(client *c) {
 
 /* Set the client 'c' to track the prefix 'prefix'. If the client 'c' is
  * already registered for the specified prefix, no operation is performed. */
-static void enableBcastTrackingForPrefix(client *c, const char *prefix, size_t plen) {
+void enableBcastTrackingForPrefix(client *c, const char *prefix, size_t plen) {
     bcastState *bs = (bcastState*)raxFind(PrefixTable,(unsigned char*)prefix,plen);
     /* If this is the first client subscribing to such prefix, create
      * the prefix in the table. */
@@ -198,12 +198,13 @@ void trackingRememberKeys(client *c) {
  *
  * In case the 'proto' argument is non zero, the function will assume that
  * 'keyname' points to a buffer of 'keylen' bytes already expressed in the
- * form of Redis RESP protocol, representing an array of keys to send
- * to the client as value of the invalidation. This is used in BCAST mode
- * in order to optimized the implementation to use less CPU time. */
-void sendTrackingMessage(client *c, const char *keyname, size_t keylen, int proto) {
+ * form of Redis RESP protocol. This is used for:
+ * - In BCAST mode, to send an array of invalidated keys to all
+ *   applicable clients
+ * - Following a flush command, to send a single RESP NULL to indicate
+ *   that all keys are now invalid. */
+void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
     std::unique_lock<fastlock> ul(c->lock);
-    serverAssert(c->lock.fOwnLock());
 
     int using_redirection = 0;
     if (c->client_tracking_redirection) {
@@ -214,9 +215,9 @@ void sendTrackingMessage(client *c, const char *keyname, size_t keylen, int prot
              * are unable to send invalidation messages to the redirected
              * connection, because the client no longer exist. */
             if (c->resp > 2) {
-                addReplyPushLenAsync(c,3);
-                addReplyBulkCBufferAsync(c,"tracking-redir-broken",21);
-                addReplyLongLongAsync(c,c->client_tracking_redirection);
+                addReplyPushLen(c,3);
+                addReplyBulkCBuffer(c,"tracking-redir-broken",21);
+                addReplyLongLong(c,c->client_tracking_redirection);
             }
             return;
         }
@@ -231,8 +232,8 @@ void sendTrackingMessage(client *c, const char *keyname, size_t keylen, int prot
      * in Pub/Sub mode, we can support the feature with RESP 2 as well,
      * by sending Pub/Sub messages in the __redis__:invalidate channel. */
     if (c->resp > 2) {
-        addReplyPushLenAsync(c,2);
-        addReplyBulkCBufferAsync(c,"invalidate",10);
+        addReplyPushLen(c,2);
+        addReplyBulkCBuffer(c,"invalidate",10);
     } else if (using_redirection && c->flags & CLIENT_PUBSUB) {
         /* We use a static object to speedup things, however we assume
          * that addReplyPubsubMessage() will not take a reference. */
@@ -247,10 +248,10 @@ void sendTrackingMessage(client *c, const char *keyname, size_t keylen, int prot
 
     /* Send the "value" part, which is the array of keys. */
     if (proto) {
-        addReplyProtoAsync(c,keyname,keylen);
+        addReplyProto(c,keyname,keylen);
     } else {
-        addReplyArrayLenAsync(c,1);
-        addReplyBulkCBufferAsync(c,keyname,keylen);
+        addReplyArrayLen(c,1);
+        addReplyBulkCBuffer(c,keyname,keylen);
     }
 }
 
@@ -347,17 +348,19 @@ void trackingInvalidateKey(client *c, robj *keyobj) {
     trackingInvalidateKeyRaw(c,szFromObj(keyobj),sdslen(szFromObj(keyobj)),1);
 }
 
-/* This function is called when one or all the Redis databases are flushed
- * (dbid == -1 in case of FLUSHALL). Caching keys are not specific for
- * each DB but are global: currently what we do is send a special
- * notification to clients with tracking enabled, invalidating the caching
- * key "", which means, "all the keys", in order to avoid flooding clients
- * with many invalidation messages for all the keys they may hold.
+/* This function is called when one or all the Redis databases are
+ * flushed (dbid == -1 in case of FLUSHALL). Caching keys are not
+ * specific for each DB but are global: currently what we do is send a
+ * special notification to clients with tracking enabled, sending a
+ * RESP NULL, which means, "all the keys", in order to avoid flooding
+ * clients with many invalidation messages for all the keys they may
+ * hold.
  */
 void freeTrackingRadixTree(void *rt) {
     raxFree((rax*)rt);
 }
 
+/* A RESP NULL is sent to indicate that all keys are invalid */
 void trackingInvalidateKeysOnFlush(int dbid) {
     if (g_pserver->tracking_clients) {
         listNode *ln;
@@ -366,7 +369,7 @@ void trackingInvalidateKeysOnFlush(int dbid) {
         while ((ln = listNext(&li)) != NULL) {
             client *c = (client*)listNodeValue(ln);
             if (c->flags & CLIENT_TRACKING) {
-                sendTrackingMessage(c,"",1,0);
+                sendTrackingMessage(c,szFromObj(shared.null[c->resp]),sdslen(szFromObj(shared.null[c->resp])),1);
             }
         }
     }

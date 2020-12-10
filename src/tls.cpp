@@ -360,15 +360,44 @@ void connTLSMarshalThread(connection *c) {
     conn->el = serverTL->el;
 }
 
+/* Fetch the latest OpenSSL error and store it in the connection */
+static void updateTLSError(tls_connection *conn) {
+    conn->c.last_errno = 0;
+    if (conn->ssl_error) zfree(conn->ssl_error);
+    conn->ssl_error = (char*)zmalloc(512);
+    ERR_error_string_n(ERR_get_error(), conn->ssl_error, 512);
+}
+
+/* Create a new TLS connection that is already associated with
+ * an accepted underlying file descriptor.
+ *
+ * The socket is not ready for I/O until connAccept() was called and
+ * invoked the connection-level accept handler.
+ *
+ * Callers should use connGetState() and verify the created connection
+ * is not in an error state.
+ */
 connection *connCreateAcceptedTLS(int fd, int require_auth) {
     tls_connection *conn = (tls_connection *) connCreateTLS();
     conn->c.fd = fd;
     conn->c.state = CONN_STATE_ACCEPTING;
 
-    if (!require_auth) {
-        /* We still verify certificates if provided, but don't require them.
-         */
-        SSL_set_verify(conn->ssl, SSL_VERIFY_PEER, NULL);
+    if (!conn->ssl) {
+        updateTLSError(conn);
+        conn->c.state = CONN_STATE_ERROR;
+        return (connection *) conn;
+    }
+
+    switch (require_auth) {
+        case TLS_CLIENT_AUTH_NO:
+            SSL_set_verify(conn->ssl, SSL_VERIFY_NONE, NULL);
+            break;
+        case TLS_CLIENT_AUTH_OPTIONAL:
+            SSL_set_verify(conn->ssl, SSL_VERIFY_PEER, NULL);
+            break;
+        default: /* TLS_CLIENT_AUTH_YES, also fall-secure */
+            SSL_set_verify(conn->ssl, SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
+            break;
     }
 
     SSL_set_fd(conn->ssl, conn->c.fd);
@@ -401,10 +430,7 @@ static int handleSSLReturnCode(tls_connection *conn, int ret_value, WantIOType *
                 break;
             default:
                 /* Error! */
-                conn->c.last_errno = 0;
-                if (conn->ssl_error) zfree(conn->ssl_error);
-                conn->ssl_error = (char*)zmalloc(512);
-                ERR_error_string_n(ERR_get_error(), conn->ssl_error, 512);
+                updateTLSError(conn);
                 break;
         }
 
@@ -891,6 +917,12 @@ exit:
     return nread;
 }
 
+static int connTLSGetType(connection *conn_) {
+    (void) conn_;
+
+    return CONN_TYPE_TLS;
+}
+
 ConnectionType CT_TLS = {
     tlsEventHandler,
     connTLSConnect,
@@ -906,6 +938,7 @@ ConnectionType CT_TLS = {
     connTLSSyncRead,
     connTLSSyncReadLine,
     connTLSMarshalThread,
+    connTLSGetType
 };
 
 int tlsHasPendingData() {

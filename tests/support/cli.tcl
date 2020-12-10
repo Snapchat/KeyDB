@@ -11,8 +11,8 @@ proc rediscli_tls_config {testsdir} {
     }
 }
 
-proc rediscli {port {opts {}}} {
-    set cmd [list src/keydb-cli -p $port]
+proc rediscli {host port {opts {}}} {
+    set cmd [list src/keydb-cli --no-motd -h $host -p $port]
     lappend cmd {*}[rediscli_tls_config "tests"]
     lappend cmd {*}$opts
     return $cmd

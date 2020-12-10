@@ -64,6 +64,10 @@
 #include "aelocker.h"
 #include "keycheck.h"
 #include "motd.h"
+#include "t_nhash.h"
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 int g_fTestMode = false;
 const char *motd_url = "http://api.keydb.dev/motd/motd_server_pro.txt";
@@ -350,6 +354,10 @@ struct redisCommand redisCommandTable[] = {
 
     {"ltrim",ltrimCommand,4,
      "write @list",
+     0,NULL,1,1,1,0,0,0},
+
+    {"lpos",lposCommand,-3,
+     "read-only @list",
      0,NULL,1,1,1,0,0,0},
 
     {"lrem",lremCommand,4,
@@ -1054,7 +1062,19 @@ struct redisCommand redisCommandTable[] = {
     
     {"stralgo",stralgoCommand,-2,
      "read-only @string",
-     0,lcsGetKeys,0,0,0,0,0,0}
+     0,lcsGetKeys,0,0,0,0,0,0},
+
+    {"keydb.nhget",nhgetCommand,-2,
+     "read-only fast @hash",
+     0,NULL,1,1,1,0,0,0},
+    
+    {"keydb.nhset",nhsetCommand,-3,
+     "read-only fast @hash",
+     0,NULL,1,1,1,0,0,0},
+
+    {"KEYDB.MVCCRESTORE",mvccrestoreCommand, 5,
+     "write use-memory @keyspace @dangerous",
+     0,NULL,1,1,1,0,0,0},
 };
 
 /*============================ Utility functions ============================ */
@@ -2412,19 +2432,24 @@ void processClients();
  * The most important is freeClientsInAsyncFreeQueue but we also
  * call some other low-risk functions. */
 void beforeSleep(struct aeEventLoop *eventLoop) {
+    AeLocker locker;
     int iel = ielFromEventLoop(eventLoop);
+    
+    locker.arm();
+    processClients();
+
+    /* Handle precise timeouts of blocked clients. */
+    handleBlockedClientsTimeout();
 
     /* Handle TLS pending data. (must be done before flushAppendOnlyFile) */
-    tlsProcessPendingData();
+    if (tlsHasPendingData()) {
+        locker.disarm();
+        tlsProcessPendingData();
+        locker.arm();
+    }
 
     /* If tls still has pending unread data don't sleep at all. */
     aeSetDontWait(eventLoop, tlsHasPendingData());
-
-    aeAcquireLock();
-    processClients();
-    
-    /* Handle precise timeouts of blocked clients. */
-    handleBlockedClientsTimeout();
 
     /* Call the Redis Cluster before sleep function. Note that this function
      * may change the state of Redis Cluster (from ok to fail or vice versa),
@@ -2497,7 +2522,17 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     int aof_state = g_pserver->aof_state;
-    aeReleaseLock();
+
+    /* We try to handle writes at the end so we don't have to reacquire the lock,
+        but if there is a pending async close we need to ensure the writes happen
+        first so perform it here */
+    bool fSentReplies = false;
+    if (listLength(g_pserver->clients_to_close)) {
+        locker.disarm();
+        handleClientsWithPendingWrites(iel, aof_state);
+        locker.arm();
+        fSentReplies = true;
+    }
 
     mstime_t commit_latency;
     latencyStartMonitor(commit_latency);
@@ -2513,7 +2548,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (!serverTL->gcEpoch.isReset())
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);
     serverTL->gcEpoch.reset();
-    aeAcquireLock();
 
     /* Close clients that need to be closed asynchronous */
     freeClientsInAsyncFreeQueue(iel);
@@ -2525,8 +2559,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
      * time. */
+    locker.disarm();
+    if (!fSentReplies)
+        handleClientsWithPendingWrites(iel, aof_state);
     if (moduleCount()) moduleReleaseGIL(TRUE /*fServerThread*/);
-    aeReleaseLock();
 }
 
 /* This function is called immadiately after the event loop multiplexing
@@ -2647,6 +2683,8 @@ void createSharedObjects(void) {
     shared.hdel = makeObjectShared(createStringObject("HDEL", 4));
     shared.zrem = makeObjectShared(createStringObject("ZREM", 4));
     shared.srem = makeObjectShared(createStringObject("SREM", 4));
+    shared.mvccrestore = makeObjectShared(createStringObject("KEYDB.MVCCRESTORE", 17));
+    shared.pexpirememberat = makeObjectShared(createStringObject("PEXPIREMEMBERAT",15));
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =
             makeObjectShared(createObject(OBJ_STRING,(void*)(long)j));
@@ -2774,6 +2812,10 @@ void initServerConfig(void) {
     for (j = 0; j < CLIENT_TYPE_OBUF_COUNT; j++)
         cserver.client_obuf_limits[j] = clientBufferLimitsDefaults[j];
 
+    /* Linux OOM Score config */
+    for (j = 0; j < CONFIG_OOM_COUNT; j++)
+        g_pserver->oom_score_adj_values[j] = configOOMScoreAdjValuesDefaults[j];
+
     /* Double constants initialization */
     R_Zero = 0.0;
     R_PosInf = 1.0/R_Zero;
@@ -2860,7 +2902,7 @@ int restartServer(int flags, mstime_t delay) {
     /* Config rewriting. */
     if (flags & RESTART_SERVER_CONFIG_REWRITE &&
         cserver.configfile &&
-        rewriteConfig(cserver.configfile) == -1)
+        rewriteConfig(cserver.configfile, 0) == -1)
     {
         serverLog(LL_WARNING,"Can't restart: configuration rewrite process "
                              "failed");
@@ -2905,60 +2947,57 @@ int restartServer(int flags, mstime_t delay) {
     return C_ERR; /* Never reached. */
 }
 
-bool getCommandAsync(client *c)
-{
-    if (c->argc != 2)
-        return false;
-    
-    if (g_pserver->m_pstorageFactory)
-        return false;   // BUG! But we don't have time to fix right now, fails tests
+static void readOOMScoreAdj(void) {
+#ifdef HAVE_PROC_OOM_SCORE_ADJ
+    char buf[64];
+    int fd = open("/proc/self/oom_score_adj", O_RDONLY);
 
-    int idb;
-    for (idb = 0; idb < cserver.dbnum; ++idb)
-    {
-        if (c->db == g_pserver->db[idb])
-            break;
-    }
-    if (idb >= cserver.dbnum)
-        return false;
-    
-    if (serverTL->rgdbSnapshot[idb] == nullptr || serverTL->rgdbSnapshot[idb]->mvccCheckpoint() < c->mvccCheckpoint || serverTL->rgdbSnapshot[idb]->FStale()) {
-        AeLocker locker;
-        locker.arm(c);
-        if (serverTL->rgdbSnapshot[idb] != nullptr)
-        {
-            g_pserver->db[idb]->endSnapshot(serverTL->rgdbSnapshot[idb]);
-            serverTL->rgdbSnapshot[idb] = nullptr;
-        }
+    if (fd < 0) return;
+    if (read(fd, buf, sizeof(buf)) > 0)
+        g_pserver->oom_score_adj_base = atoi(buf);
+    close(fd);
+#endif
+}
 
-        serverTL->rgdbSnapshot[idb] = c->db->createSnapshot(c->mvccCheckpoint, true);
-    }
-        
-    if (serverTL->rgdbSnapshot[idb] == nullptr)
-        return false;
+/* This function will configure the current process's oom_score_adj according
+ * to user specified configuration. This is currently implemented on Linux
+ * only.
+ *
+ * A process_class value of -1 implies OOM_CONFIG_MASTER or OOM_CONFIG_REPLICA,
+ * depending on current role.
+ */
+int setOOMScoreAdj(int process_class) {
 
-    auto itr = serverTL->rgdbSnapshot[idb]->find_cached_threadsafe(szFromObj(c->argv[1]));
-    if (itr == serverTL->rgdbSnapshot[idb]->end())
-    {
-        if (g_pserver->m_pstorageFactory)
-            return false;   // no cached result doesn't mean the value doesn't exist
-        addReply(c, shared.null[c->resp]);
-        return true;
-    }
-    
-    // Are we expired?
-    std::unique_lock<fastlock> ul(g_expireLock);
-    const expireEntry *expire = serverTL->rgdbSnapshot[idb]->getExpire(c->argv[1]);
-    long long when;
-    if (expire && expire->FGetPrimaryExpire(&when) && when > 0) {
-        if (g_pserver->mstime >= when) {
-            addReply(c, shared.null[c->resp]);
-            return true;
-        }
+    if (!g_pserver->oom_score_adj) return C_OK;
+    if (process_class == -1)
+        process_class = (listLength(g_pserver->masters) ? CONFIG_OOM_REPLICA : CONFIG_OOM_MASTER);
+
+    serverAssert(process_class >= 0 && process_class < CONFIG_OOM_COUNT);
+
+#ifdef HAVE_PROC_OOM_SCORE_ADJ
+    int fd;
+    int val;
+    char buf[64];
+
+    val = g_pserver->oom_score_adj_base + g_pserver->oom_score_adj_values[process_class];
+    if (val > 1000) val = 1000;
+    if (val < -1000) val = -1000;
+
+    snprintf(buf, sizeof(buf) - 1, "%d\n", val);
+
+    fd = open("/proc/self/oom_score_adj", O_WRONLY);
+    if (fd < 0 || write(fd, buf, strlen(buf)) < 0) {
+        serverLog(LOG_WARNING, "Unable to write oom_score_adj: %s", strerror(errno));
+        if (fd != -1) close(fd);
+        return C_ERR;
     }
 
-    addReplyBulk(c,itr.val());
-    return true;
+    close(fd);
+    return C_OK;
+#else
+    /* Unsupported */
+    return C_ERR;
+#endif
 }
 
 /* This function will try to raise the max number of open files accordingly to
@@ -3349,7 +3388,8 @@ void initServer(void) {
     g_pserver->get_ack_from_slaves = 0;
     cserver.system_memory_size = zmalloc_get_memory_size();
 
-    if (g_pserver->tls_port && tlsConfigure(&g_pserver->tls_ctx_config) == C_ERR) {
+    if ((g_pserver->tls_port || g_pserver->tls_replication || g_pserver->tls_cluster)
+            && tlsConfigure(&g_pserver->tls_ctx_config) == C_ERR) {
         serverLog(LL_WARNING, "Failed to configure TLS. Check logs for more info.");
         exit(1);
     }
@@ -3763,10 +3803,16 @@ void call(client *c, int flags) {
     /* Send the command to clients in MONITOR mode if applicable.
      * Administrative commands are considered too dangerous to be shown. */
     if (listLength(g_pserver->monitors) &&
-        !g_pserver->loading &&
+        !g_pserver->loading.load(std::memory_order_relaxed) &&
         !(c->cmd->flags & (CMD_SKIP_MONITOR|CMD_ADMIN)))
     {
         replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
+    }
+
+    /* We need to transfer async writes before a client's repl state gets changed.  Otherwise
+        we won't be able to propogate them correctly. */
+    if (c->cmd->flags & CMD_CATEGORY_REPLICATION) {
+        ProcessPendingAsyncWrites();
     }
 
     /* Initialization: clear the flags that must be set by the command on
@@ -3778,8 +3824,17 @@ void call(client *c, int flags) {
     /* Call the command. */
     dirty = g_pserver->dirty;
     updateCachedTime(0);
+    incrementMvccTstamp();
     start = g_pserver->ustime;
-    c->cmd->proc(c);
+    try {
+        c->cmd->proc(c);
+    } catch (robj_roptr o) {
+        addReply(c, o);
+    } catch (robj *o) {
+        addReply(c, o);
+    } catch (const char *sz) {
+        addReplyError(c, sz);
+    }
     serverTL->commandsExecuted++;
     duration = ustime()-start;
     dirty = g_pserver->dirty-dirty;
@@ -3901,8 +3956,6 @@ void call(client *c, int flags) {
         }
         redisOpArrayFree(&g_pserver->also_propagate);
     }
-
-    ProcessPendingAsyncWrites();
     
     g_pserver->also_propagate = prev_also_propagate;
 
@@ -3920,6 +3973,38 @@ void call(client *c, int flags) {
 
     g_pserver->stat_numcommands++;
     serverTL->fixed_time_expire--;
+}
+
+/* Used when a command that is ready for execution needs to be rejected, due to
+ * varios pre-execution checks. it returns the appropriate error to the client.
+ * If there's a transaction is flags it as dirty, and if the command is EXEC,
+ * it aborts the transaction.
+ * Note: 'reply' is expected to end with \r\n */
+void rejectCommand(client *c, robj *reply) {
+    flagTransaction(c);
+    if (c->cmd && c->cmd->proc == execCommand) {
+        execCommandAbort(c, szFromObj(reply));
+    } else {
+        /* using addReplyError* rather than addReply so that the error can be logged. */
+        addReplyErrorObject(c, reply);
+    }
+}
+
+void rejectCommandFormat(client *c, const char *fmt, ...) {
+    flagTransaction(c);
+    va_list ap;
+    va_start(ap,fmt);
+    sds s = sdscatvprintf(sdsempty(),fmt,ap);
+    va_end(ap);
+    /* Make sure there are no newlines in the string, otherwise invalid protocol
+     * is emitted (The args come from the user, they may contain any character). */
+    sdsmapchars(s, "\r\n", "  ",  2);
+    if (c->cmd && c->cmd->proc == execCommand) {
+        execCommandAbort(c, s);
+    } else {
+        addReplyErrorSds(c, s);
+    }
+    sdsfree(s);
 }
 
 /* If this function gets called we already read a whole
@@ -3953,22 +4038,29 @@ int processCommand(client *c, int callFlags) {
      * such as wrong arity, bad command name and so forth. */
     c->cmd = c->lastcmd = lookupCommand((sds)ptrFromObj(c->argv[0]));
     if (!c->cmd) {
-        flagTransaction(c);
         sds args = sdsempty();
         int i;
         for (i=1; i < c->argc && sdslen(args) < 128; i++)
             args = sdscatprintf(args, "`%.*s`, ", 128-(int)sdslen(args), (char*)ptrFromObj(c->argv[i]));
-        addReplyErrorFormat(c,"unknown command `%s`, with args beginning with: %s",
+        rejectCommandFormat(c,"unknown command `%s`, with args beginning with: %s",
             (char*)ptrFromObj(c->argv[0]), args);
         sdsfree(args);
         return C_OK;
     } else if ((c->cmd->arity > 0 && c->cmd->arity != c->argc) ||
                (c->argc < -c->cmd->arity)) {
-        flagTransaction(c);
-        addReplyErrorFormat(c,"wrong number of arguments for '%s' command",
+        rejectCommandFormat(c,"wrong number of arguments for '%s' command",
             c->cmd->name);
         return C_OK;
     }
+
+    int is_write_command = (c->cmd->flags & CMD_WRITE) ||
+                           (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_WRITE));
+    int is_denyoom_command = (c->cmd->flags & CMD_DENYOOM) ||
+                             (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_DENYOOM));
+    int is_denystale_command = !(c->cmd->flags & CMD_STALE) ||
+                               (c->cmd->proc == execCommand && (c->mstate.cmd_inv_flags & CMD_STALE));
+    int is_denyloading_command = !(c->cmd->flags & CMD_LOADING) ||
+                                 (c->cmd->proc == execCommand && (c->mstate.cmd_inv_flags & CMD_LOADING));
 
     /* Check if the user is authenticated. This check is skipped in case
      * the default user is flagged as "nopass" and is active. */
@@ -3979,8 +4071,7 @@ int processCommand(client *c, int callFlags) {
         /* AUTH and HELLO and no auth modules are valid even in
          * non-authenticated state. */
         if (!(c->cmd->flags & CMD_NO_AUTH)) {
-            flagTransaction(c);
-            addReply(c,shared.noautherr);
+            rejectCommand(c,shared.noautherr);
             return C_OK;
         }
     }
@@ -3991,13 +4082,12 @@ int processCommand(client *c, int callFlags) {
     int acl_retval = ACLCheckCommandPerm(c,&acl_keypos);
     if (acl_retval != ACL_OK) {
         addACLLogEntry(c,acl_retval,acl_keypos,NULL);
-        flagTransaction(c);
         if (acl_retval == ACL_DENIED_CMD)
-            addReplyErrorFormat(c,
+            rejectCommandFormat(c,
                 "-NOPERM this user has no permissions to run "
                 "the '%s' command or its subcommand", c->cmd->name);
         else
-            addReplyErrorFormat(c,
+            rejectCommandFormat(c,
                 "-NOPERM this user has no permissions to access "
                 "one of the keys used as arguments");
         return C_OK;
@@ -4029,8 +4119,6 @@ int processCommand(client *c, int callFlags) {
         }
     }
 
-    incrementMvccTstamp();
-
     /* Handle the maxmemory directive.
      *
      * Note that we do not want to reclaim memory if we are here re-entering
@@ -4043,17 +4131,20 @@ int processCommand(client *c, int callFlags) {
          * into a replica, that may be the active client, to be freed. */
         if (serverTL->current_client == NULL) return C_ERR;
 
-        /* It was impossible to free enough memory, and the command the client
-         * is trying to execute is denied during OOM conditions or the client
-         * is in MULTI/EXEC context? Error. */
-        if (out_of_memory &&
-            (c->cmd->flags & CMD_DENYOOM ||
-             (c->flags & CLIENT_MULTI &&
-              c->cmd->proc != execCommand &&
-              c->cmd->proc != discardCommand)))
-        {
-            flagTransaction(c);
-            addReply(c, shared.oomerr);
+        int reject_cmd_on_oom = is_denyoom_command;
+        /* If client is in MULTI/EXEC context, queuing may consume an unlimited
+         * amount of memory, so we want to stop that.
+         * However, we never want to reject DISCARD, or even EXEC (unless it
+         * contains denied commands, in which case is_denyoom_command is already
+         * set. */
+        if (c->flags & CLIENT_MULTI &&
+            c->cmd->proc != execCommand &&
+            c->cmd->proc != discardCommand) {
+            reject_cmd_on_oom = 1;
+        }
+
+        if (out_of_memory && reject_cmd_on_oom) {
+            rejectCommand(c, shared.oomerr);
             return C_OK;
         }
 
@@ -4069,50 +4160,43 @@ int processCommand(client *c, int callFlags) {
      * caching metadata. */
     if (g_pserver->tracking_clients) trackingLimitUsedSlots();
 
+    
     /* Don't accept write commands if there are problems persisting on disk
-     * and if this is a master instance. */
-    if (c->cmd->flags & CMD_WRITE || c->cmd->proc == pingCommand)
+        * and if this is a master instance. */
+    int deny_write_type = writeCommandsDeniedByDiskError();
+    if (deny_write_type != DISK_ERROR_TYPE_NONE &&
+        listLength(g_pserver->masters) == 0 &&
+        (is_write_command ||c->cmd->proc == pingCommand))
     {
-        int deny_write_type = writeCommandsDeniedByDiskError();
-        if (deny_write_type != DISK_ERROR_TYPE_NONE &&
-            listLength(g_pserver->masters) == 0 &&
-            (c->cmd->flags & CMD_WRITE ||
-            c->cmd->proc == pingCommand))
-        {
-            flagTransaction(c);
-            if (deny_write_type == DISK_ERROR_TYPE_RDB)
-                addReply(c, shared.bgsaveerr);
-            else
-                addReplySds(c,
-                    sdscatprintf(sdsempty(),
-                    "-MISCONF Errors writing to the AOF file: %s\r\n",
-                    strerror(g_pserver->aof_last_write_errno)));
-            return C_OK;
-        }    
+        if (deny_write_type == DISK_ERROR_TYPE_RDB)
+            rejectCommand(c, shared.bgsaveerr);
+        else
+            rejectCommandFormat(c,
+                "-MISCONF Errors writing to the AOF file: %s",
+                strerror(g_pserver->aof_last_write_errno));
+        return C_OK;
+    }    
 
-        /* Don't accept write commands if there are not enough good slaves and
-        * user configured the min-slaves-to-write option. */
-        if (listLength(g_pserver->masters) == 0 &&
-            g_pserver->repl_min_slaves_to_write &&
-            g_pserver->repl_min_slaves_max_lag &&
-            c->cmd->flags & CMD_WRITE &&
-            g_pserver->repl_good_slaves_count < g_pserver->repl_min_slaves_to_write)
-        {
-            flagTransaction(c);
-            addReply(c, shared.noreplicaserr);
-            return C_OK;
-        }
+    /* Don't accept write commands if there are not enough good slaves and
+    * user configured the min-slaves-to-write option. */
+    if (listLength(g_pserver->masters) == 0 &&
+        g_pserver->repl_min_slaves_to_write &&
+        g_pserver->repl_min_slaves_max_lag &&
+        is_write_command &&
+        g_pserver->repl_good_slaves_count < g_pserver->repl_min_slaves_to_write)
+    {
+        rejectCommand(c, shared.noreplicaserr);
+        return C_OK;
+    }
 
-        /* Don't accept write commands if this is a read only replica. But
-        * accept write commands if this is our master. */
-        if (listLength(g_pserver->masters) && g_pserver->repl_slave_ro &&
-            !(c->flags & CLIENT_MASTER) &&
-            c->cmd->flags & CMD_WRITE)
-        {
-            flagTransaction(c);
-            addReply(c, shared.roslaveerr);
-            return C_OK;
-        }
+    /* Don't accept write commands if this is a read only replica. But
+    * accept write commands if this is our master. */
+    if (listLength(g_pserver->masters) && g_pserver->repl_slave_ro &&
+        !(c->flags & CLIENT_MASTER) &&
+        is_write_command)
+    {
+        rejectCommand(c, shared.roslaveerr);
+        return C_OK;
     }
 
     /* Only allow a subset of commands in the context of Pub/Sub if the
@@ -4123,7 +4207,7 @@ int processCommand(client *c, int callFlags) {
         c->cmd->proc != unsubscribeCommand &&
         c->cmd->proc != psubscribeCommand &&
         c->cmd->proc != punsubscribeCommand) {
-        addReplyErrorFormat(c,
+        rejectCommandFormat(c,
             "Can't execute '%s': only (P)SUBSCRIBE / "
             "(P)UNSUBSCRIBE / PING / QUIT are allowed in this context",
             c->cmd->name);
@@ -4137,22 +4221,21 @@ int processCommand(client *c, int callFlags) {
         * link with master. */
         if (FBrokenLinkToMaster() &&
             g_pserver->repl_serve_stale_data == 0 &&
-            !(c->cmd->flags & CMD_STALE)
-            && !(g_pserver->fActiveReplica && c->cmd->proc == syncCommand))
+            is_denystale_command &&
+            !(g_pserver->fActiveReplica && c->cmd->proc == syncCommand))
         {
-            flagTransaction(c);
-            addReply(c, shared.masterdownerr);
+            rejectCommand(c, shared.masterdownerr);
             return C_OK;
         }
     }
 
     /* Loading DB? Return an error if the command has not the
      * CMD_LOADING flag. */
-    if (g_pserver->loading && !(c->cmd->flags & CMD_LOADING)) {
+    if (g_pserver->loading && is_denyloading_command) {
         /* Active Replicas can execute read only commands, and optionally write commands */
         if (!(g_pserver->loading == LOADING_REPLICATION && g_pserver->fActiveReplica && ((c->cmd->flags & CMD_READONLY) || g_pserver->fWriteDuringActiveLoad)))
         {
-            addReply(c, shared.loadingerr);
+            rejectCommand(c, shared.loadingerr);
             return C_OK;
         }
     }
@@ -4168,7 +4251,6 @@ int processCommand(client *c, int callFlags) {
           c->cmd->proc != helloCommand &&
           c->cmd->proc != replconfCommand &&
           c->cmd->proc != multiCommand &&
-          c->cmd->proc != execCommand &&
           c->cmd->proc != discardCommand &&
           c->cmd->proc != watchCommand &&
           c->cmd->proc != unwatchCommand &&
@@ -4179,8 +4261,7 @@ int processCommand(client *c, int callFlags) {
           c->argc == 2 &&
           tolower(((char*)ptrFromObj(c->argv[1]))[0]) == 'k'))
     {
-        flagTransaction(c);
-        addReply(c, shared.slowscripterr);
+        rejectCommand(c, shared.slowscripterr);
         return C_OK;
     }
 
@@ -4200,13 +4281,13 @@ int processCommand(client *c, int callFlags) {
     return C_OK;
 }
 
-bool client::postFunction(std::function<void(client *)> fn) {
+bool client::postFunction(std::function<void(client *)> fn, bool fLock) {
     this->casyncOpsPending++;
     return aePostFunction(g_pserver->rgthreadvar[this->iel].el, [this, fn]{
         std::lock_guard<decltype(this->lock)> lock(this->lock);
         --casyncOpsPending;
         fn(this);
-    }) == AE_OK;
+    }, false, fLock) == AE_OK;
 }
 
 /*================================== Shutdown =============================== */
@@ -4233,6 +4314,15 @@ void closeListeningSockets(int unlink_unix_socket) {
 }
 
 int prepareForShutdown(int flags) {
+    /* When SHUTDOWN is called while the server is loading a dataset in
+     * memory we need to make sure no attempt is performed to save
+     * the dataset on shutdown (otherwise it could overwrite the current DB
+     * with half-read data).
+     *
+     * Also when in Sentinel mode clear the SAVE flag and force NOSAVE. */
+    if (g_pserver->loading || g_pserver->sentinel_mode)
+        flags = (flags & ~SHUTDOWN_SAVE) | SHUTDOWN_NOSAVE;
+
     int save = flags & SHUTDOWN_SAVE;
     int nosave = flags & SHUTDOWN_NOSAVE;
 
@@ -4924,7 +5014,9 @@ sds genRedisInfoString(const char *section) {
             "tracking_total_keys:%lld\r\n"
             "tracking_total_items:%llu\r\n"
             "tracking_total_prefixes:%lld\r\n"
-            "unexpected_error_replies:%lld\r\n",
+            "unexpected_error_replies:%lld\r\n"
+            "total_reads_processed:%lld\r\n"
+            "total_writes_processed:%lld\r\n",
             g_pserver->stat_numconnections,
             g_pserver->stat_numcommands,
             getInstantaneousMetric(STATS_METRIC_COMMAND),
@@ -4955,7 +5047,9 @@ sds genRedisInfoString(const char *section) {
             (unsigned long long) trackingGetTotalKeys(),
             (unsigned long long) trackingGetTotalItems(),
             (unsigned long long) trackingGetTotalPrefixes(),
-            g_pserver->stat_unexpected_error_replies);
+            g_pserver->stat_unexpected_error_replies,
+            g_pserver->stat_total_reads_processed.load(std::memory_order_relaxed),
+            g_pserver->stat_total_writes_processed.load(std::memory_order_relaxed));
     }
 
     /* Replication */
@@ -5258,7 +5352,7 @@ void linuxMemoryWarnings(void) {
         serverLog(LL_WARNING,"WARNING overcommit_memory is set to 0! Background save may fail under low memory condition. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.");
     }
     if (THPIsEnabled()) {
-        serverLog(LL_WARNING,"WARNING you have Transparent Huge Pages (THP) support enabled in your kernel. This will create latency and memory usage issues with KeyDB. To fix this issue run the command 'echo never > /sys/kernel/mm/transparent_hugepage/enabled' as root, and add it to your /etc/rc.local in order to retain the setting after a reboot. KeyDB must be restarted after THP is disabled.");
+        serverLog(LL_WARNING,"WARNING you have Transparent Huge Pages (THP) support enabled in your kernel. This will create latency and memory usage issues with KeyDB. To fix this issue run the command 'echo madvise > /sys/kernel/mm/transparent_hugepage/enabled' as root, and add it to your /etc/rc.local in order to retain the setting after a reboot. KeyDB must be restarted after THP is disabled (set to 'madvise' or 'never').");
     }
 }
 #endif /* __linux__ */
@@ -5344,7 +5438,7 @@ void redisAsciiArt(void) {
             mode, g_pserver->port ? g_pserver->port : g_pserver->tls_port
         );
     } else {
-        sds motd = fetchMOTD(true);
+        sds motd = fetchMOTD(true, cserver.enable_motd);
         snprintf(buf,1024*16,ascii_logo,
             KEYDB_REAL_VERSION,
             redisGitSHA1(),
@@ -5445,13 +5539,24 @@ void setupChildSignalHandlers(void) {
     return;
 }
 
+/* After fork, the child process will inherit the resources
+ * of the parent process, e.g. fd(socket or flock) etc.
+ * should close the resources not used by the child process, so that if the
+ * parent restarts it can bind/lock despite the child possibly still running. */
+void closeClildUnusedResourceAfterFork() {
+    closeListeningSockets(0);
+    if (g_pserver->cluster_enabled && g_pserver->cluster_config_file_lock_fd != -1)
+        close(g_pserver->cluster_config_file_lock_fd);  /* don't care if this fails */
+}
+
 int redisFork() {
     int childpid;
     long long start = ustime();
     if ((childpid = fork()) == 0) {
         /* Child */
-        closeListeningSockets(0);
+        setOOMScoreAdj(CONFIG_OOM_BGCHILD);
         setupChildSignalHandlers();
+        closeClildUnusedResourceAfterFork();
     } else {
         /* Parent */
         g_pserver->stat_fork_time = ustime()-start;
@@ -5517,6 +5622,7 @@ void loadDataFromDisk(void) {
     } else if (g_pserver->rdb_filename != NULL || g_pserver->rdb_s3bucketpath != NULL) {
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
         rsi.fForceSetKey = false;
+        errno = 0; /* Prevent a stale value from affecting error checking */
         if (rdbLoad(&rsi,RDBFLAGS_NONE) == C_OK) {
             serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
                 (float)(ustime()-start)/1000000);
@@ -5558,7 +5664,8 @@ void loadDataFromDisk(void) {
 void redisOutOfMemoryHandler(size_t allocation_size) {
     serverLog(LL_WARNING,"Out Of Memory allocating %zu bytes!",
         allocation_size);
-    serverPanic("Redis aborting for OUT OF MEMORY");
+    serverPanic("Redis aborting for OUT OF MEMORY. Allocating %zu bytes!", 
+        allocation_size);
 }
 
 void fuzzOutOfMemoryHandler(size_t allocation_size) {
@@ -5921,6 +6028,10 @@ int main(int argc, char **argv) {
         sdsfree(options);
     }
 
+    cserver.supervised = redisIsSupervised(cserver.supervised_mode);
+    int background = cserver.daemonize && !cserver.supervised;
+    if (background) daemonize();
+
     serverLog(LL_WARNING, "oO0OoO0OoO0Oo KeyDB is starting oO0OoO0OoO0Oo");
     serverLog(LL_WARNING,
         "KeyDB version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",
@@ -5938,10 +6049,6 @@ int main(int argc, char **argv) {
 
     validateConfiguration();
 
-    cserver.supervised = redisIsSupervised(cserver.supervised_mode);
-    int background = cserver.daemonize && !cserver.supervised;
-    if (background) daemonize();
-
     const char *err;
     if (!initializeStorageProvider(&err))
     {
@@ -5949,11 +6056,11 @@ int main(int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
 
-
     for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
     {
         initServerThread(g_pserver->rgthreadvar+iel, iel == IDX_EVENT_LOOP_MAIN);
     }
+    readOOMScoreAdj();
     initServer();
     initNetworking(cserver.cthreads > 1 /* fReusePort */);
 
@@ -6012,6 +6119,10 @@ int main(int argc, char **argv) {
     } else {
         InitServerLast();
         sentinelIsRunning();
+        if (cserver.supervised_mode == SUPERVISED_SYSTEMD) {
+            redisCommunicateSystemd("STATUS=Ready to accept connections\n");
+            redisCommunicateSystemd("READY=1\n");
+        }
     }
 
     if (g_pserver->rdb_filename == nullptr)
@@ -6035,6 +6146,7 @@ int main(int argc, char **argv) {
     aeReleaseLock();    //Finally we can dump the lock
     moduleReleaseGIL(true);
     
+    setOOMScoreAdj(-1);
     serverAssert(cserver.cthreads > 0 && cserver.cthreads <= MAX_EVENT_LOOPS);
     pthread_t rgthread[MAX_EVENT_LOOPS];
     for (int iel = 0; iel < cserver.cthreads; ++iel)

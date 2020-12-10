@@ -315,7 +315,7 @@ void replicationFeedSlave(client *replica, int dictid, robj **argv, int argc, bo
         if (g_pserver->repl_backlog && fSendRaw) feedReplicationBacklogWithObject(selectcmd);
 
         /* Send it to slaves */
-        addReplyAsync(replica,selectcmd);
+        addReply(replica,selectcmd);
 
         if (dictid < 0 || dictid >= PROTO_SHARED_SELECT_CMDS)
             decrRefCount(selectcmd);
@@ -329,18 +329,18 @@ void replicationFeedSlave(client *replica, int dictid, robj **argv, int argc, bo
     if (fSendRaw)
     {
         /* Add the multi bulk length. */
-        addReplyArrayLenAsync(replica,argc);
+        addReplyArrayLen(replica,argc);
 
         /* Finally any additional argument that was not stored inside the
             * static buffer if any (from j to argc). */
         for (int j = 0; j < argc; j++)
-            addReplyBulkAsync(replica,argv[j]);
+            addReplyBulk(replica,argv[j]);
     }
     else
     {
         struct redisCommand *cmd = lookupCommand(szFromObj(argv[0]));
         sds buf = catCommandForAofAndActiveReplication(sdsempty(), cmd, argv, argc);
-        addReplyProtoAsync(replica, buf, sdslen(buf));
+        addReplyProto(replica, buf, sdslen(buf));
         sdsfree(buf);
     }
 }
@@ -516,21 +516,21 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
          * or are already in sync with the master. */
 
         if (!fSendRaw)
-            addReplyProtoAsync(replica, proto, cchProto);
+            addReplyProto(replica, proto, cchProto);
 
-        addReplyProtoAsync(replica,fake->buf,fake->bufpos);
+        addReplyProto(replica,fake->buf,fake->bufpos);
         listRewind(fake->reply, &liReply);
         while ((lnReply = listNext(&liReply)))
         {
             clientReplyBlock* reply = (clientReplyBlock*)listNodeValue(lnReply);
-            addReplyProtoAsync(replica, reply->buf(), reply->used);
+            addReplyProto(replica, reply->buf(), reply->used);
         }
 
         if (!fSendRaw)
         {
-            addReplyAsync(replica,shared.crlf);
-            addReplyProtoAsync(replica, szDbNum, cchDbNum);
-            addReplyProtoAsync(replica, szMvcc, cchMvcc);
+            addReply(replica,shared.crlf);
+            addReplyProto(replica, szDbNum, cchDbNum);
+            addReplyProto(replica, szMvcc, cchMvcc);
         }
     }
 
@@ -605,7 +605,7 @@ void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t bufle
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
         if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
-        addReplyProtoAsync(replica,buf,buflen);
+        addReplyProto(replica,buf,buflen);
     }
     
     if (listLength(slaves))
@@ -651,7 +651,7 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
 		// When writing to clients on other threads the global lock is sufficient provided we only use AddReply*Async()
 		if (FCorrectThread(c))
 			lock.lock();
-        addReplyAsync(monitor,cmdobj);
+        addReply(monitor,cmdobj);
     }
     decrRefCount(cmdobj);
 }
@@ -1635,6 +1635,16 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
         } else if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
             struct redis_stat buf;
 
+            if (bgsaveerr != C_OK) {
+                ul.unlock();
+                if (FCorrectThread(replica))
+                    freeClient(replica);
+                else
+                    freeClientAsync(replica);
+                serverLog(LL_WARNING,"SYNC failed. BGSAVE child returned an error");
+                continue;
+            }
+
             /* If this was an RDB on disk save, we have to prepare to send
              * the RDB from disk to the replica socket. Otherwise if this was
              * already an RDB -> Slaves socket transfer, used in the case of
@@ -1673,15 +1683,6 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
                 replica->repl_put_online_on_ack = 1;
                 replica->repl_ack_time = g_pserver->unixtime; /* Timeout otherwise. */
             } else {
-                if (bgsaveerr != C_OK) {
-                    ul.unlock();
-                    if (FCorrectThread(replica))
-                        freeClient(replica);
-                    else
-                        freeClientAsync(replica);
-                    serverLog(LL_WARNING,"SYNC failed. BGSAVE child returned an error");
-                    continue;
-                }
                 if ((replica->repldbfd = open(g_pserver->rdb_filename,O_RDONLY)) == -1 ||
                     redis_fstat(replica->repldbfd,&buf) == -1) {
                     ul.unlock();
@@ -2659,6 +2660,7 @@ void syncWithMaster(connection *conn) {
          * both. */
         if (err[0] != '+' &&
             strncmp(err,"-NOAUTH",7) != 0 &&
+            strncmp(err,"-NOPERM",7) != 0 &&
             strncmp(err,"-ERR operation not permitted",28) != 0)
         {
             serverLog(LL_WARNING,"Error reply to PING from master: '%s'",err);
@@ -3096,7 +3098,11 @@ struct redisMaster *replicationAddMaster(char *ip, int port) {
         else
             freeClientAsync(mi->master);
     }
-    disconnectAllBlockedClients(); /* Clients blocked in master, now replica. */
+    if (!g_pserver->fActiveReplica)
+        disconnectAllBlockedClients(); /* Clients blocked in master, now replica. */
+
+    /* Update oom_score_adj */
+    setOOMScoreAdj(-1);
 
     /* Force our slaves to resync with us as well. They may hopefully be able
      * to partially resync with us, but we can notify the replid change. */
@@ -3193,6 +3199,9 @@ void replicationUnsetMaster(redisMaster *mi) {
     serverAssert(ln != nullptr);
     listDelNode(g_pserver->masters, ln);
     freeMasterInfo(mi);
+
+    /* Update oom_score_adj */
+    setOOMScoreAdj(-1);
 
     /* Fire the role change modules event. */
     moduleFireServerEvent(REDISMODULE_EVENT_REPLICATION_ROLE_CHANGED,
@@ -3308,7 +3317,7 @@ void replicaofCommand(client *c) {
             miNew->masterhost, miNew->masterport, client);
         sdsfree(client);
     }
-    addReplyAsync(c,shared.ok);
+    addReply(c,shared.ok);
 }
 
 /* ROLE command: provide information about the role of the instance
@@ -3535,6 +3544,11 @@ void replicationResurrectCachedMaster(redisMaster *mi, connection *conn) {
     /* Normally changing the thread of a client is a BIG NONO,
         but this client was unlinked so its OK here */
     mi->master->iel = serverTL - g_pserver->rgthreadvar; // martial to this thread
+
+    /* Fire the master link modules event. */
+    moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
+                          REDISMODULE_SUBEVENT_MASTER_LINK_UP,
+                          NULL);
 
     /* Re-add to the list of clients. */
     linkClient(mi->master);
@@ -3783,7 +3797,7 @@ void processClientsWaitingReplicas(void) {
                            last_numreplicas > c->bpop.numreplicas)
         {
             unblockClient(c);
-            addReplyLongLongAsync(c,last_numreplicas);
+            addReplyLongLong(c,last_numreplicas);
         } else {
             int numreplicas = replicationCountAcksByOffset(c->bpop.reploffset);
 
@@ -3791,7 +3805,7 @@ void processClientsWaitingReplicas(void) {
                 last_offset = c->bpop.reploffset;
                 last_numreplicas = numreplicas;
                 unblockClient(c);
-                addReplyLongLongAsync(c,numreplicas);
+                addReplyLongLong(c,numreplicas);
             }
         }
         fastlock_unlock(&c->lock);
@@ -4401,4 +4415,40 @@ static void propagateMasterStaleKeys()
     }
 
     decrRefCount(rgobj[0]);
+}
+
+void replicationNotifyLoadedKey(redisDb *db, robj_roptr key, robj_roptr val, long long expire) {
+    if (!g_pserver->fActiveReplica || listLength(g_pserver->slaves) == 0)
+        return;
+
+    // Send a digest over to the replicas
+    rio r;
+
+    createDumpPayload(&r, val, key.unsafe_robjcast());
+
+    redisObjectStack objPayload;
+    initStaticStringObject(objPayload, r.io.buffer.ptr);
+    redisObjectStack objTtl;
+    initStaticStringObject(objTtl, sdscatprintf(sdsempty(), "%lld", expire));
+    redisObjectStack objMvcc;
+    initStaticStringObject(objMvcc, sdscatprintf(sdsempty(), "%lu", mvccFromObj(val)));
+    redisObject *argv[5] = {shared.mvccrestore, key.unsafe_robjcast(), &objMvcc, &objTtl, &objPayload};
+
+    replicationFeedSlaves(g_pserver->slaves, db->id, argv, 5);
+
+    sdsfree(szFromObj(&objTtl));
+    sdsfree(szFromObj(&objMvcc));
+    sdsfree(r.io.buffer.ptr);
+}
+
+void replicateSubkeyExpire(redisDb *db, robj_roptr key, robj_roptr subkey, long long expire) {
+    if (!g_pserver->fActiveReplica || listLength(g_pserver->slaves) == 0)
+        return;
+
+    redisObjectStack objTtl;
+    initStaticStringObject(objTtl, sdscatprintf(sdsempty(), "%lld", expire));
+    redisObject *argv[4] = {shared.pexpirememberat, key.unsafe_robjcast(), subkey.unsafe_robjcast(), &objTtl};
+    replicationFeedSlaves(g_pserver->slaves, db->id, argv, 4);
+
+    sdsfree(szFromObj(&objTtl));
 }

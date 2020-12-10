@@ -390,6 +390,10 @@ public:
         : sdsview(sdsdup(other.m_str))
     {}
 
+    sdsstring(const char *rgch, size_t cch)
+        : sdsview(sdsnewlen(rgch, cch))
+    {}
+
     sdsstring(sdsstring &&other)
         : sdsview(other.m_str)
     {
@@ -408,6 +412,12 @@ public:
         sdsfree(m_str);
         m_str = sdsdup(other);
         return *this;
+    }
+
+    sds release() {
+        sds sdsT = m_str;
+        m_str = nullptr;
+        return sdsT;
     }
 
     ~sdsstring()

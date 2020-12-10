@@ -392,6 +392,7 @@ inline bool operator!=(const void *p, const robj_sharedptr &rhs)
 #define PROTO_MAX_QUERYBUF_LEN  (1024*1024*1024) /* 1GB max query buffer. */
 #define PROTO_IOBUF_LEN         (1024*16)  /* Generic I/O buffer size */
 #define PROTO_REPLY_CHUNK_BYTES (16*1024) /* 16k output buffer */
+#define PROTO_ASYNC_REPLY_CHUNK_BYTES (1024)
 #define PROTO_INLINE_MAX_SIZE   (1024*64) /* Max size of inline reads */
 #define PROTO_MBULK_BIG_ARG     (1024*32)
 #define LONG_STR_SIZE      21          /* Bytes needed for long -> str + '\0' */
@@ -404,6 +405,14 @@ inline bool operator!=(const void *p, const robj_sharedptr &rhs)
  * a few more to stay safe. Since RESERVED_FDS defaults to 32, we add 96
  * in order to make sure of not over provisioning more than 128 fds. */
 #define CONFIG_FDSET_INCR (CONFIG_MIN_RESERVED_FDS+96)
+
+/* OOM Score Adjustment classes. */
+#define CONFIG_OOM_MASTER 0
+#define CONFIG_OOM_REPLICA 1
+#define CONFIG_OOM_BGCHILD 2
+#define CONFIG_OOM_COUNT 3
+
+extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 
 /* Hash table parameters */
 #define HASHTABLE_MIN_FILL        10      /* Minimal hash table fill 10% */
@@ -626,6 +635,11 @@ inline bool operator!=(const void *p, const robj_sharedptr &rhs)
 #define STORAGE_WRITEBACK 0
 #define STORAGE_WRITETHROUGH 1
 
+/* TLS Client Authentication */
+#define TLS_CLIENT_AUTH_NO 0
+#define TLS_CLIENT_AUTH_YES 1
+#define TLS_CLIENT_AUTH_OPTIONAL 2
+
 /* Sets operations codes */
 #define SET_OP_UNION 0
 #define SET_OP_DIFF 1
@@ -694,6 +708,7 @@ inline bool operator!=(const void *p, const robj_sharedptr &rhs)
 #define NOTIFY_EVICTED (1<<9)     /* e */
 #define NOTIFY_STREAM (1<<10)     /* t */
 #define NOTIFY_KEY_MISS (1<<11)   /* m (Note: This one is excluded from NOTIFY_ALL on purpose) */
+#define NOTIFY_LOADED (1<<12)     /* module only key space notification, indicate a key loaded from rdb */
 #define NOTIFY_ALL (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_EXPIRED | NOTIFY_EVICTED | NOTIFY_STREAM) /* A flag */
 
 /* Get the first bind addr or NULL */
@@ -711,11 +726,11 @@ inline bool operator!=(const void *p, const robj_sharedptr &rhs)
 /* A redis object, that is a type able to hold a string / list / set */
 
 /* The actual Redis Object */
-#define OBJ_STRING 0    /* String object. */
-#define OBJ_LIST 1      /* List object. */
-#define OBJ_SET 2       /* Set object. */
-#define OBJ_ZSET 3      /* Sorted set object. */
-#define OBJ_HASH 4      /* Hash object. */
+#define OBJ_STRING 0     /* String object. */
+#define OBJ_LIST 1       /* List object. */
+#define OBJ_SET 2        /* Set object. */
+#define OBJ_ZSET 3       /* Sorted set object. */
+#define OBJ_HASH 4       /* Hash object. */
 
 /* The "module" object type is a special one that signals that the object
  * is one directly managed by a Redis module. In this case the value points
@@ -728,10 +743,10 @@ inline bool operator!=(const void *p, const robj_sharedptr &rhs)
  * by a 64 bit module type ID, which has a 54 bits module-specific signature
  * in order to dispatch the loading to the right module, plus a 10 bits
  * encoding version. */
-#define OBJ_MODULE 5    /* Module object. */
-#define OBJ_STREAM 6    /* Stream object. */
-#define OBJ_CRON 7      /* CRON job */
-
+#define OBJ_MODULE 5     /* Module object. */
+#define OBJ_STREAM 6     /* Stream object. */
+#define OBJ_CRON 7       /* CRON job */
+#define OBJ_NESTEDHASH 8 /* Nested Hash Object */
 
 /* Extract encver / signature from a module type ID. */
 #define REDISMODULE_TYPE_ENCVER_BITS 10
@@ -877,7 +892,7 @@ struct redisObjectExtended {
     uint64_t mvcc_tstamp;
 };
 
-typedef class redisObject {
+typedef struct redisObject {
 protected:
     redisObject() {}
 
@@ -992,15 +1007,22 @@ public:
 };
 class dict_iter : public dict_const_iter
 {
+    dict *m_dict = nullptr;
 public:
-    explicit dict_iter(dictEntry *de)
-        : dict_const_iter(de)
+    explicit dict_iter(nullptr_t)
+        : dict_const_iter(nullptr)
+    {}
+    explicit dict_iter(dict *d, dictEntry *de)
+        : dict_const_iter(de), m_dict(d)
     {}
     sds key() { return de ? (sds)dictGetKey(de) : nullptr; }
     robj *val() { return de ? (robj*)dictGetVal(de) : nullptr; }
     robj *operator->() { return de ? (robj*)dictGetVal(de) : nullptr; }
     operator robj*() const { return de ? (robj*)dictGetVal(de) : nullptr; }
 
+    void setval(robj *val) {
+        dictSetVal(m_dict, de, val);
+    }
 };
 
 class redisDbPersistentDataSnapshot;
@@ -1030,7 +1052,7 @@ public:
     {
         dictEntry *de = dictFind(m_pdict, key);
         ensure(key, &de);
-        return dict_iter(de);
+        return dict_iter(m_pdict, de);
     }
 
     dict_iter find(robj_roptr key)
@@ -1045,7 +1067,7 @@ public:
         return m_setexpire->random_value();
     }
 
-    dict_iter end()  { return dict_iter(nullptr); }
+    dict_iter end()  { return dict_iter(nullptr, nullptr); }
     dict_const_iter end() const { return dict_const_iter(nullptr); }
 
     void getStats(char *buf, size_t bufsize) { dictGetStats(buf, bufsize, m_pdict); }
@@ -1301,6 +1323,9 @@ typedef struct multiState {
     int cmd_flags;          /* The accumulated command flags OR-ed together.
                                So if at least a command has a given flag, it
                                will be set in this field. */
+    int cmd_inv_flags;      /* Same as cmd_flags, OR-ing the ~flags. so that it
+                               is possible to know if all the commands have a
+                               certain flag. */
     int minreplicas;        /* MINREPLICAS for synchronous replication */
     time_t minreplicas_timeout; /* MINREPLICAS timeout as unixtime. */
 } multiState;
@@ -1433,7 +1458,7 @@ typedef struct client {
     std::atomic<uint64_t> flags;              /* Client flags: CLIENT_* macros. */
     int casyncOpsPending;
     int fPendingAsyncWrite; /* NOTE: Not a flag because it is written to outside of the client lock (locked by the global lock instead) */
-    int fPendingAsyncWriteHandler;
+    std::atomic<bool> fPendingAsyncWriteHandler;
     int authenticated;      /* Needed when the default user requires auth. */
     int replstate;          /* Replication state if this is a replica. */
     int repl_put_online_on_ack; /* Install replica write handler on ACK. */
@@ -1496,9 +1521,7 @@ typedef struct client {
     char buf[PROTO_REPLY_CHUNK_BYTES];
 
     /* Async Response Buffer - other threads write here */
-    int bufposAsync;
-    int buflenAsync;
-    char *bufAsync;
+    clientReplyBlock *replyAsync;
 
     uint64_t mvccCheckpoint = 0;    // the MVCC checkpoint of our last write
 
@@ -1507,7 +1530,7 @@ typedef struct client {
     int master_error;
 
     // post a function from a non-client thread to run on its client thread
-    bool postFunction(std::function<void(client *)> fn);
+    bool postFunction(std::function<void(client *)> fn, bool fLock = true);
 } client;
 
 struct saveparam {
@@ -1530,7 +1553,7 @@ struct sharedObjectsStruct {
     *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
     *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink,
     *rpop, *lpop, *lpush, *rpoplpush, *zpopmin, *zpopmax, *emptyscan,
-    *multi, *exec, *srem, *hdel, *zrem,
+    *multi, *exec, *srem, *hdel, *zrem, *mvccrestore, *pexpirememberat,
     *select[PROTO_SHARED_SELECT_CMDS],
     *integers[OBJ_SHARED_INTEGERS],
     *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
@@ -1870,6 +1893,8 @@ struct redisServerConst {
 
     unsigned char uuid[UUID_BINARY_LEN];         /* This server's UUID - populated on boot */
 
+    int enable_motd;            /* Flag to retrieve the Message of today using CURL request*/
+
     sds license_key = nullptr;
     int trial_timeout = 120;
     int delete_on_evict = false;   // Only valid when a storage provider is set
@@ -1973,6 +1998,10 @@ struct redisServer {
     size_t stat_module_cow_bytes;   /* Copy on write bytes during module fork. */
     uint64_t stat_clients_type_memory[CLIENT_TYPE_COUNT];/* Mem usage by type */
     long long stat_unexpected_error_replies; /* Number of unexpected (aof-loading, replica to master, etc.) error replies */
+    long long stat_io_reads_processed; /* Number of read events processed by IO / Main threads */
+    long long stat_io_writes_processed; /* Number of write events processed by IO / Main threads */
+    std::atomic<long long> stat_total_reads_processed; /* Total number of read events processed */
+    std::atomic<long long> stat_total_writes_processed; /* Total number of write events processed */
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {
@@ -2129,6 +2158,9 @@ struct redisServer {
     int lfu_log_factor;             /* LFU logarithmic counter factor. */
     int lfu_decay_time;             /* LFU counter decay factor. */
     long long proto_max_bulk_len;   /* Protocol bulk length maximum size. */
+    int oom_score_adj_base;         /* Base oom_score_adj value, as observed on startup */
+    int oom_score_adj_values[CONFIG_OOM_COUNT];   /* Linux oom_score_adj configuration */
+    int oom_score_adj;                            /* If true, oom_score_adj is managed */
     /* Blocked clients */
     unsigned int blocked_clients;   /* # of clients executing a blocking cmd.*/
     unsigned int blocked_clients_by_type[BLOCKED_NUM];
@@ -2186,6 +2218,7 @@ struct redisServer {
                                       REDISMODULE_CLUSTER_FLAG_*. */
     int cluster_allow_reads_when_down; /* Are reads allowed when the cluster
                                         is down? */
+    int cluster_config_file_lock_fd;   /* cluster config fd, will be flock */
     /* Scripting */
     lua_State *lua; /* The Lua interpreter. We use just one for all clients */
     client *lua_caller = nullptr;   /* The client running EVAL right now, or NULL */
@@ -2397,6 +2430,7 @@ void moduleBlockedClientTimedOut(client *c);
 void moduleBlockedClientPipeReadable(aeEventLoop *el, int fd, void *privdata, int mask);
 size_t moduleCount(void);
 void moduleAcquireGIL(int fServerThread);
+int moduleTryAcquireGIL(bool fServerThread);
 void moduleReleaseGIL(int fServerThread);
 void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid);
 void moduleCallCommandFilters(client *c);
@@ -2444,30 +2478,29 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void acceptTLSHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void readQueryFromClient(connection *conn);
-void addReplyNull(client *c, robj_roptr objOldProtocol = nullptr);
+void addReplyNull(client *c);
 void addReplyNullArray(client *c);
-void addReplyNullArrayAsync(client *c);
 void addReplyBool(client *c, int b);
 void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext);
-void addReplyVerbatimAsync(client *c, const char *s, size_t len, const char *ext);
 void addReplyProto(client *c, const char *s, size_t len);
+void addReplyProtoCString(client *c, const char *s);
 void addReplyBulk(client *c, robj_roptr obj);
 void AddReplyFromClient(client *c, client *src);
 void addReplyBulkCString(client *c, const char *s);
-void addReplyBulkCStringAsync(client *c, const char *s);
 void addReplyBulkCBuffer(client *c, const void *p, size_t len);
 void addReplyBulkLongLong(client *c, long long ll);
 void addReply(client *c, robj_roptr obj);
 void addReplySds(client *c, sds s);
 void addReplyBulkSds(client *c, sds s);
+void addReplyErrorObject(client *c, robj *err);
+void addReplyErrorSds(client *c, sds err);
 void addReplyError(client *c, const char *err);
 void addReplyStatus(client *c, const char *status);
 void addReplyDouble(client *c, double d);
 void addReplyHumanLongDouble(client *c, long double d);
-void addReplyHumanLongDoubleAsync(client *c, long double d);
 void addReplyLongLong(client *c, long long ll);
 #ifdef __cplusplus
-void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix, bool fAsync);
+void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix);
 #endif
 void addReplyArrayLen(client *c, long length);
 void addReplyMapLen(client *c, long length);
@@ -2511,23 +2544,6 @@ int writeToClient(client *c, int handler_installed);
 void linkClient(client *c);
 void protectClient(client *c);
 void unprotectClient(client *c);
-
-// Special Thread-safe addReply() commands for posting messages to clients from a different thread
-void addReplyAsync(client *c, robj_roptr obj);
-void addReplyArrayLenAsync(client *c, long length);
-void addReplyProtoAsync(client *c, const char *s, size_t len);
-void addReplyBulkAsync(client *c, robj_roptr obj);
-void addReplyBulkCBufferAsync(client *c, const void *p, size_t len);
-void addReplyErrorAsync(client *c, const char *err);
-void addReplyMapLenAsync(client *c, long length);
-void addReplyNullAsync(client *c);
-void addReplyDoubleAsync(client *c, double d);
-void *addReplyDeferredLenAsync(client *c);
-void setDeferredArrayLenAsync(client *c, void *node, long length);
-void addReplySdsAsync(client *c, sds s);
-void addReplyBulkSdsAsync(client *c, sds s);
-void addReplyPushLenAsync(client *c, long length);
-void addReplyLongLongAsync(client *c, long long ll);
 
 void ProcessPendingAsyncWrites(void);
 client *lookupClientByID(uint64_t id);
@@ -2579,6 +2595,7 @@ void touchWatchedKey(redisDb *db, robj *key);
 void touchWatchedKeysOnFlush(int dbid);
 void discardTransaction(client *c);
 void flagTransaction(client *c);
+void execCommandAbort(client *c, sds error);
 void execCommandPropagateMulti(client *c);
 void execCommandPropagateExec(client *c);
 
@@ -2679,6 +2696,8 @@ void updateMasterAuth();
 void showLatestBacklog();
 void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask);
 void rdbPipeWriteHandlerConnRemoved(struct connection *conn);
+void replicationNotifyLoadedKey(redisDb *db, robj_roptr key, robj_roptr val, long long expire);
+void replicateSubkeyExpire(redisDb *db, robj_roptr key, robj_roptr subkey, long long expire);
 
 /* Generic persistence functions */
 void startLoadingFile(FILE* fp, const char * filename, int rdbflags);
@@ -2859,6 +2878,7 @@ const char *evictPolicyToString(void);
 struct redisMemOverhead *getMemoryOverheadData(void);
 void freeMemoryOverheadData(struct redisMemOverhead *mh);
 void checkChildrenDone(void);
+int setOOMScoreAdj(int process_class);
 
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1<<0)     /* Do proper shutdown. */
@@ -2922,7 +2942,7 @@ void appendServerSaveParams(time_t seconds, int changes);
 void resetServerSaveParams(void);
 struct rewriteConfigState; /* Forward declaration to export API. */
 void rewriteConfigRewriteLine(struct rewriteConfigState *state, const char *option, sds line, int force);
-int rewriteConfig(char *path);
+int rewriteConfig(char *path, int force_all);
 void initConfigValues();
 
 /* db.c -- Keyspace access API */
@@ -2934,6 +2954,7 @@ int expireIfNeeded(redisDb *db, robj *key);
 void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when);
 void setExpire(client *c, redisDb *db, robj *key, expireEntry &&entry);
 robj_roptr lookupKeyRead(redisDb *db, robj *key);
+int checkAlreadyExpired(long long when);
 robj *lookupKeyWrite(redisDb *db, robj *key);
 robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply);
 robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply);
@@ -3141,6 +3162,7 @@ void flushdbCommand(client *c);
 void flushallCommand(client *c);
 void sortCommand(client *c);
 void lremCommand(client *c);
+void lposCommand(client *c);
 void rpoplpushCommand(client *c);
 void infoCommand(client *c);
 void mgetCommand(client *c);
@@ -3221,6 +3243,7 @@ void watchCommand(client *c);
 void unwatchCommand(client *c);
 void clusterCommand(client *c);
 void restoreCommand(client *c);
+void mvccrestoreCommand(client *c);
 void migrateCommand(client *c);
 void askingCommand(client *c);
 void readonlyCommand(client *c);

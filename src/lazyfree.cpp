@@ -41,6 +41,30 @@ size_t lazyfreeGetFreeEffort(robj *obj) {
     } else if (obj->type == OBJ_HASH && obj->encoding == OBJ_ENCODING_HT) {
         dict *ht = (dict*)ptrFromObj(obj);
         return dictSize(ht);
+    } else if (obj->type == OBJ_STREAM) {
+        size_t effort = 0;
+        stream *s = (stream*)ptrFromObj(obj);
+
+        /* Make a best effort estimate to maintain constant runtime. Every macro
+         * node in the Stream is one allocation. */
+        effort += s->prax->numnodes;
+
+        /* Every consumer group is an allocation and so are the entries in its
+         * PEL. We use size of the first group's PEL as an estimate for all
+         * others. */
+        if (s->cgroups) {
+            raxIterator ri;
+            streamCG *cg;
+            raxStart(&ri,s->cgroups);
+            raxSeek(&ri,"^",NULL,0);
+            /* There must be at least one group so the following should always
+             * work. */
+            serverAssert(raxNext(&ri));
+            cg = (streamCG*)ri.data;
+            effort += raxSize(s->cgroups)*(1+raxSize(cg->pel));
+            raxStop(&ri);
+        }
+        return effort;
     } else {
         return 1; /* Everything else is a single allocation. */
     }
@@ -72,7 +96,7 @@ bool redisDbPersistentData::asyncDelete(robj *key) {
         {
             /* Deleting an entry from the expires dict will not free the sds of
              * the key, because it is shared with the main dictionary. */
-            removeExpire(key,dict_iter(de));
+            removeExpire(key,dict_iter(m_pdict, de));
         }
 
         size_t free_effort = lazyfreeGetFreeEffort(val);

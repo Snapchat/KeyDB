@@ -2273,17 +2273,42 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
             }
             return 0;
         }
+        /* Change the SetSize for the current thread first. If any error, return the error message to the client, 
+         * otherwise, continue to do the same for other threads */
+        if ((unsigned int) aeGetSetSize(aeGetCurrentEventLoop()) <
+            g_pserver->maxclients + CONFIG_FDSET_INCR)
+        {
+            if (aeResizeSetSize(aeGetCurrentEventLoop(),
+                g_pserver->maxclients + CONFIG_FDSET_INCR) == AE_ERR)
+            {
+                *err = "The event loop API used by Redis is not able to handle the specified number of clients";
+                return 0;
+            }
+            serverLog(LL_DEBUG,"Successfully changed the setsize for current thread %d", ielFromEventLoop(aeGetCurrentEventLoop()));
+        }
+
         for (int iel = 0; iel < cserver.cthreads; ++iel)
         {
+            if (g_pserver->rgthreadvar[iel].el == aeGetCurrentEventLoop()){
+                continue;
+            }
+
             if ((unsigned int) aeGetSetSize(g_pserver->rgthreadvar[iel].el) <
                 g_pserver->maxclients + CONFIG_FDSET_INCR)
             {
-                if (aeResizeSetSize(g_pserver->rgthreadvar[iel].el,
-                    g_pserver->maxclients + CONFIG_FDSET_INCR) == AE_ERR)
-                {
-                    *err = "The event loop API used by Redis is not able to handle the specified number of clients";
+                int res = aePostFunction(g_pserver->rgthreadvar[iel].el, [iel] {
+                    if (aeResizeSetSize(g_pserver->rgthreadvar[iel].el, g_pserver->maxclients + CONFIG_FDSET_INCR) == AE_ERR) {
+                        serverLog(LL_WARNING,"Failed to change the setsize for Thread %d", iel);
+                    }
+                });
+
+                if (res != AE_OK){
+                    static char msg[128];
+                    sprintf(msg, "Failed to post the request to change setsize for Thread %d", iel);
+                    *err = msg;
                     return 0;
                 }
+                serverLog(LL_DEBUG,"Successfully post the request to change the setsize for thread %d", iel);
             }
         }
     }

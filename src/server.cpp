@@ -4025,8 +4025,8 @@ bool client::postFunction(std::function<void(client *)> fn, bool fLock) {
     this->casyncOpsPending++;
     return aePostFunction(g_pserver->rgthreadvar[this->iel].el, [this, fn]{
         std::lock_guard<decltype(this->lock)> lock(this->lock);
-        --casyncOpsPending;
         fn(this);
+        --casyncOpsPending;
     }, false, fLock) == AE_OK;
 }
 

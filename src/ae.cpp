@@ -379,6 +379,11 @@ int aeGetSetSize(aeEventLoop *eventLoop) {
     return eventLoop->setsize;
 }
 
+/* Return the current EventLoop. */
+aeEventLoop *aeGetCurrentEventLoop(){
+    return g_eventLoopThisThread;
+}
+
 /* Tells the next iteration/s of the event processing to set timeout of 0. */
 void aeSetDontWait(aeEventLoop *eventLoop, int noWait) {
     if (noWait)

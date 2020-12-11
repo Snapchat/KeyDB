@@ -48,4 +48,7 @@ start_server {tags {"nested_hash"}} {
         r keydb.nhset a.b.c val1
         assert_equal [r expire a.b 100] 0
     }
+
+    # Save not implemented so ensure we don't crash saving the RDB on shutdown
+    r flushall
 }

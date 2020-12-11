@@ -1548,7 +1548,7 @@ int freeClientsInAsyncFreeQueue(int iel) {
     while((ln = listNext(&li))) 
     {
         client *c = (client*)listNodeValue(ln);
-        if (c->iel == iel && !(c->flags & CLIENT_PROTECTED))
+        if (c->iel == iel && !(c->flags & CLIENT_PROTECTED) && !c->casyncOpsPending)
         {
             vecclientsFree.push_back(c);
             listDelNode(g_pserver->clients_to_close, ln);

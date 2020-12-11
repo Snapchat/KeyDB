@@ -310,8 +310,10 @@ void freeStringObject(robj_roptr o) {
 void freeListObject(robj_roptr o) {
     if (o->encoding == OBJ_ENCODING_QUICKLIST) {
         quicklistRelease((quicklist*)ptrFromObj(o));
+    } else if (o->encoding == OBJ_ENCODING_ZIPLIST) {
+        zfree(ptrFromObj(o));
     } else {
-        serverPanic("Unknown list encoding type");
+        serverPanic("Unknown list encoding type: %d", o->encoding);
     }
 }
 

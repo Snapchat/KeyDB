@@ -2545,7 +2545,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     latencyEndMonitor(commit_latency);
     latencyAddSampleIfNeeded("storage-commit", commit_latency);
     
-    handleClientsWithPendingWrites(iel, aof_state);
     if (!serverTL->gcEpoch.isReset())
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);
     serverTL->gcEpoch.reset();

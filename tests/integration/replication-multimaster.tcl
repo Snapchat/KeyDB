@@ -10,8 +10,11 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
         set R($j) [srv [expr 0-$j] client]
         set R_host($j) [srv [expr 0-$j] host]
         set R_port($j) [srv [expr 0-$j] port]
+        set R_log($j) [srv [expr 0-$j] stdout]
 
 	$R($j) config set multi-master-no-forward $noforward
+    $R($j) config set key-load-delay 1000000
+    
     }
 
     set topology_name "$topology[expr {[string equal $noforward "yes"] ? " no-forward" : ""}]"
@@ -99,6 +102,55 @@ start_server {overrides {hz 500 active-replica yes multi-master yes}} {
 
     # Keep this test last since it muchs with the config
     if [string equal $topology "mesh"] {
+    test "$topology_name does not timeout while waiting for replication" {
+        for {set n 0} {n < 4} {incr n} {
+            $R($n) config set repl-timeout 60
+            $R($n) config set key-load-delay 1000000
+            #$R($n) config set repl-diskless-sync yes
+        }
+        #for {set n 0} {$n < 10000} {incr n} {
+        #    puts "Setting key $n"
+        #    $R(0) set $n foo
+        #}
+
+        $R(0) debug populate 100 key 100
+
+        catch {$R(0) debug restart}
+
+        after 10000
+
+        #puts [$R(0) info]
+
+        for {set j 0} {$j < 4} {incr j} {
+            wait_for_condition 100 100 {
+                [string match {*master_global_link_status:up*} [$R($j) info replication]]
+            } else {
+                fail "Multimaster group didn't reconnect in a reasonable period of time"
+            }
+        }
+
+        wait_for_condition 100 100 {
+            [string match "*master_link_status:up*" [$R(0) info replication]] && [string match "*master_1_link_status:up*" [$R(0) info replication]] && [string match "*master_2_link_status:up*" [$R(0) info replication]]
+        } else {
+            #puts [$R(0) info]
+            fail "Could not reconnect to masters fast enough."
+        }
+        #puts [$R(0) info]
+        #puts "-----------------------------------------"
+        #set fp [open $R_log(0) r]
+        #set content [read $fp]
+        #puts $content
+        #close $fp
+
+
+        for {set n 0} {$n < 4} {incr n} {
+            if {[log_file_matches $R_log($n) "*Timeout connecting to the MASTER*"]} {
+                fail "Server $n timed out connecting to master."
+            }
+        }
+
+    }
+
     test "$topology_name quorum respected" {
         $R(0) config set replica-serve-stale-data no
 

@@ -2487,8 +2487,10 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             }
         }
 
-        if (g_pserver->key_load_delay)
+        if (g_pserver->key_load_delay) {
             usleep(g_pserver->key_load_delay);
+            serverLog(LL_NOTICE, "key loaded");
+        }
 
         /* Reset the state that is key-specified and is populated by
          * opcodes before the key, so that we start from scratch again. */

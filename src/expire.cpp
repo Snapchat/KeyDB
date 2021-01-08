@@ -136,7 +136,7 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
                 executeCronJobExpireHook(keyCopy, val);
                 sdsfree(keyCopy);
                 decrRefCount(val);
-            }, false, true /*fLock*/, true /*fForceQueue*/);
+            }, true /*fLock*/, true /*fForceQueue*/);
         }
             return;
 

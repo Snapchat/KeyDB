@@ -286,7 +286,7 @@ int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg)
     return AE_OK;
 }
 
-int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynchronous, bool fLock, bool fForceQueue)
+int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fLock, bool fForceQueue)
 {
     if (eventLoop == g_eventLoopThisThread && !fForceQueue)
     {
@@ -299,11 +299,6 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
     cmd.pfn = new (MALLOC_LOCAL) std::function<void()>(fn);
     cmd.pctl = nullptr;
     cmd.fLock = fLock;
-    if (fSynchronous)
-    {
-        cmd.pctl = new (MALLOC_LOCAL) aeCommandControl;
-        cmd.pctl->mutexcv.lock();
-    }
 
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
     if (!(!size || size == sizeof(cmd))) {
@@ -314,17 +309,7 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
     if (size == 0)
         return AE_ERR;
 
-    int ret = AE_OK;
-    if (fSynchronous)
-    {
-        {
-        std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::adopt_lock);
-        cmd.pctl->cv.wait(ulock);
-        ret = cmd.pctl->rval;
-        }
-        delete cmd.pctl;
-    }
-    return ret;
+    return AE_OK;
 }
 
 aeEventLoop *aeCreateEventLoop(int setsize) {

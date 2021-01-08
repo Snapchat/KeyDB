@@ -4040,7 +4040,7 @@ bool client::postFunction(std::function<void(client *)> fn, bool fLock) {
         std::lock_guard<decltype(this->lock)> lock(this->lock);
         fn(this);
         --casyncOpsPending;
-    }, false, fLock) == AE_OK;
+    }, fLock) == AE_OK;
 }
 
 /*================================== Shutdown =============================== */

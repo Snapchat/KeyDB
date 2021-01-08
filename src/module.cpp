@@ -5104,7 +5104,14 @@ void moduleAcquireGIL(int fServerThread) {
     }
     else
     {
-        s_mutexModule.lock();
+        // It is possible that another module thread holds the GIL (and s_mutexModule as a result). 
+        // When said thread goes to release the GIL, it will wait for s_mutex, which this thread owns. 
+        // This thread is however waiting for the GIL (and s_mutexModule) that the other thread owns.
+        // As a result, a deadlock has occured. 
+        // We release the lock on s_mutex and wait until we are able to safely acquire the GIL 
+        // in order to prevent this deadlock from occuring. 
+        while (!s_mutexModule.try_lock())
+            s_cv.wait(lock);         
         ++s_cAcquisitionsModule;
         fModuleGILWlocked++;
     }

@@ -1904,6 +1904,7 @@ void disklessLoadRestoreBackups(redisDb *backup, int restore, int empty_db_flags
 /* Asynchronously read the SYNC payload we receive from a master */
 #define REPL_MAX_WRITTEN_BEFORE_FSYNC (1024*1024*8) /* 8 MB */
 void readSyncBulkPayload(connection *conn) {
+    serverLog(LL_WARNING, "readSyncBulkPayload");
     char buf[PROTO_IOBUF_LEN];
     ssize_t nread, readlen, nwritten;
     int use_diskless_load = useDisklessLoad();
@@ -2604,6 +2605,8 @@ void syncWithMaster(connection *conn) {
     int psync_result;
 
     redisMaster *mi = (redisMaster*)connGetPrivateData(conn);
+    
+    serverLog(LL_WARNING, "syncWithMaster: host %s, port %d, uuid %s", mi->masterhost, mi->masterport, mi->master_uuid);
 
     /* If this event fired after the user turned the instance into a master
      * with SLAVEOF NO ONE we must just return ASAP. */
@@ -3787,6 +3790,7 @@ long long replicationGetSlaveOffset(redisMaster *mi) {
 
 /* Replication cron function, called 1 time per second. */
 void replicationCron(void) {
+    serverLog(LL_WARNING, "replicationCron run");
     static long long replication_cron_loops = 0;
     serverAssert(GlobalLocksAcquired());
     listIter liMaster;
@@ -3808,6 +3812,8 @@ void replicationCron(void) {
     {
         redisMaster *mi = (redisMaster*)listNodeValue(lnMaster);
 
+        
+
         std::unique_lock<decltype(mi->master->lock)> ulock;
         if (mi->master != nullptr)
             ulock = decltype(ulock)(mi->master->lock);
@@ -3826,7 +3832,7 @@ void replicationCron(void) {
         if (mi->masterhost && mi->repl_state == REPL_STATE_TRANSFER &&
             (time(NULL)-mi->repl_transfer_lastio) > g_pserver->repl_timeout)
         {
-            serverLog(LL_WARNING,"Timeout receiving bulk data from MASTER... If the problem persists try to set the 'repl-timeout' parameter in keydb.conf to a larger value.");
+            serverLog(LL_WARNING,"Timeout receiving bulk data from master %s:%d... If the problem persists try to set the 'repl-timeout' parameter in keydb.conf to a larger value.", mi->masterhost, mi->masterport);
             cancelReplicationHandshake(mi);
         }
 
@@ -3874,6 +3880,7 @@ void replicationCron(void) {
     robj *ping_argv[1];
 
     /* First, send PING according to ping_slave_period. */
+    serverLog(LL_WARNING, "Loops: %lld, Period: %d", replication_cron_loops, g_pserver->repl_ping_slave_period);
     if ((replication_cron_loops % g_pserver->repl_ping_slave_period) == 0 &&
         listLength(g_pserver->slaves))
     {
@@ -3890,6 +3897,7 @@ void replicationCron(void) {
             ping_argv[0] = createStringObject("PING",4);
             replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb,
                 ping_argv, 1);
+            serverLog(LL_WARNING, "Pinging %d slaves", listLength(g_pserver->slaves));
             decrRefCount(ping_argv[0]);
         }
     }

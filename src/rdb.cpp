@@ -2165,8 +2165,8 @@ void stopSaving(int success) {
 void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
     if (g_pserver->rdb_checksum)
         rioGenericUpdateChecksum(r, buf, len);
-    if (g_pserver->loading_process_events_interval_bytes &&
-        (r->processed_bytes + len)/g_pserver->loading_process_events_interval_bytes > r->processed_bytes/g_pserver->loading_process_events_interval_bytes)
+    if (true)// g_pserver->loading_process_events_interval_bytes &&
+        //(r->processed_bytes + len)/g_pserver->loading_process_events_interval_bytes > r->processed_bytes/g_pserver->loading_process_events_interval_bytes)
     {
         /* The DB can take some non trivial amount of time to load. Update
          * our cached time since it is used to create and update the last
@@ -2181,6 +2181,12 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
             if (mi->repl_state == REPL_STATE_TRANSFER)
                 replicationSendNewlineToMaster(mi);
         }
+        redisObject* ping_argv[1];
+        ping_argv[0] = createStringObject("PING",4);
+        replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb,
+            ping_argv, 1);
+        serverLog(LL_WARNING, "Pinging %d slaves", listLength(g_pserver->slaves));
+        decrRefCount(ping_argv[0]);
         loadingProgress(r->processed_bytes);
         processEventsWhileBlocked(serverTL - g_pserver->rgthreadvar);
         processModuleLoadingProgressEvent(0);

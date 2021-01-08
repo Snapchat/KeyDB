@@ -3760,6 +3760,7 @@ void rejectCommandFormat(client *c, const char *fmt, ...) {
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c, int callFlags) {
+    
     AssertCorrectThread(c);
     serverAssert(GlobalLocksAcquired());
 
@@ -3976,6 +3977,13 @@ int processCommand(client *c, int callFlags) {
         if (!(g_pserver->loading == LOADING_REPLICATION && g_pserver->fActiveReplica && ((c->cmd->flags & CMD_READONLY) || g_pserver->fWriteDuringActiveLoad)))
         {
             rejectCommand(c, shared.loadingerr);
+            if (c->flags & CLIENT_MASTER) {
+                redisMaster *mi = MasterInfoFromClient(c);
+                if (mi) {
+                    serverLog(LL_WARNING, "updating timestamp");
+                    mi->repl_transfer_lastio = g_pserver->unixtime;
+                }
+            }
             return C_OK;
         }
     }

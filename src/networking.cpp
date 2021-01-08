@@ -2287,6 +2287,8 @@ void processInputBuffer(client *c, int callFlags) {
 
 void readQueryFromClient(connection *conn) {
     client *c = (client*)connGetPrivateData(conn);
+
+    
     serverAssert(conn == c->conn);
     int nread, readlen;
     size_t qblen;

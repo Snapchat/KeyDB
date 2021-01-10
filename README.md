@@ -8,6 +8,8 @@
 
 ##### Have feedback?  Take our quick survey: https://www.surveymonkey.com/r/Y9XNS93
 
+##### KeyDB is Hiring! We are currently building out our dev team. If you are interested please see the posting here: https://keydb.dev/careers.html
+
 What is KeyDB?
 --------------
 
@@ -15,11 +17,13 @@ KeyDB is a high performance fork of Redis with a focus on multithreading, memory
 
 KeyDB maintains full compatibility with the Redis protocol, modules, and scripts.  This includes the atomicity guarantees for scripts and transactions.  Because KeyDB keeps in sync with Redis development KeyDB is a superset of Redis functionality, making KeyDB a drop in replacement for existing Redis deployments.
 
-On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency. Active-Replication simplifies hot-spare failover allowing you to easily distribute writes over replicas and use simple TCP based load balancing/failover. KeyDB's higher performance allows you to do more on less hardware which reduces operation costs and complexity.
+On the same hardware KeyDB can achieve significantly higher throughput than Redis. Active-Replication simplifies hot-spare failover allowing you to easily distribute writes over replicas and use simple TCP based load balancing/failover. KeyDB's higher performance allows you to do more on less hardware which reduces operation costs and complexity.
 
-<img src="https://keydb.dev/assets/img/blog/5x_opspersecVSdatasize.PNG"/>
+The chart below compares several KeyDB and Redis setups, including the latest Redis6 io-threads option, and TLS benchmarks.
 
-See the full benchmark results and setup information here: https://docs.keydb.dev/blog/2019/10/07/blog-post/
+<img src="https://docs.keydb.dev/img/blog/2020-09-15/ops_comparison.png"/>
+
+See the full benchmark results and setup information here: https://docs.keydb.dev/blog/2020/09/29/blog-post/
 
 Why fork Redis?
 ---------------
@@ -81,6 +85,8 @@ Building KeyDB
 --------------
 
 KeyDB can be compiled and is tested for use on Linux.  KeyDB currently relies on SO_REUSEPORT's load balancing behavior which is available only in Linux.  When we support marshalling connections across threads we plan to support other operating systems such as FreeBSD.
+
+More on CentOS/Archlinux/Alpine/Debian/Ubuntu dependencies and builds can be found here: https://docs.keydb.dev/docs/build/
 
 Install dependencies:
 

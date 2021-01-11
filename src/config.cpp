@@ -2467,7 +2467,7 @@ standardConfig configs[] = {
 
     /* Long configs */
     createLongConfig("loading-process-events-interval-bytes", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->loading_process_events_interval_bytes, 2*1024*1024, MEMORY_CONFIG, NULL, NULL),
-    createLongConfig("loading-process-events-interval-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->loading_process_events_interval_keys, 10000, MEMORY_CONFIG, NULL, NULL),
+    createLongConfig("loading-process-events-interval-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->loading_process_events_interval_keys, 8192, MEMORY_CONFIG, NULL, NULL),
     /* Unsigned Long configs */
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, cserver.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */
     createULongConfig("slowlog-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->slowlog_max_len, 128, INTEGER_CONFIG, NULL, NULL),

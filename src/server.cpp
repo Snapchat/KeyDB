@@ -2547,7 +2547,6 @@ void initServerConfig(void) {
     g_pserver->cluster_configfile = zstrdup(CONFIG_DEFAULT_CLUSTER_CONFIG_FILE);
     g_pserver->migrate_cached_sockets = dictCreate(&migrateCacheDictType,NULL);
     g_pserver->next_client_id = 1; /* Client IDs, start from 1 .*/
-    g_pserver->loading_process_events_interval_bytes = (1024*1024*2);
 
     g_pserver->lruclock = getLRUClock();
     resetServerSaveParams();

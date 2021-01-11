@@ -144,7 +144,7 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
         aeFileProc *proc, void *clientData);
 
 int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
-        aeFileProc *proc, void *clientData, int fSynchronous);
+        aeFileProc *proc, void *clientData);
 
 void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask);
 void aeDeleteFileEventAsync(aeEventLoop *eventLoop, int fd, int mask);

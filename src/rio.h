@@ -62,6 +62,9 @@ struct _rio {
     /* The current checksum and flags (see RIO_FLAG_*) */
     uint64_t cksum, flags;
 
+    /* number of keys loaded in transaction */
+    size_t loaded_keys;
+
     /* number of bytes read or written */
     size_t processed_bytes;
 

@@ -354,6 +354,7 @@ int redis_check_rdb_main(int argc, const char **argv, FILE *fp) {
     if (shared.integers[0] == NULL)
         createSharedObjects();
     g_pserver->loading_process_events_interval_bytes = 0;
+    g_pserver->loading_process_events_interval_keys = 0;
     rdbCheckMode = 1;
     rdbCheckInfo("Checking RDB file %s", argv[1]);
     rdbCheckSetupSignals();

@@ -2188,6 +2188,12 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         processEventsWhileBlocked(serverTL - g_pserver->rgthreadvar);
         processModuleLoadingProgressEvent(0);
 
+        robj *ping_argv[1];
+
+        ping_argv[0] = createStringObject("PING",4);
+        replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb, ping_argv, 1);
+        decrRefCount(ping_argv[0]);
+
         r->loaded_keys = 0;
     }
 }

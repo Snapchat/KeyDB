@@ -62,8 +62,8 @@ struct _rio {
     /* The current checksum and flags (see RIO_FLAG_*) */
     uint64_t cksum, flags;
 
-    /* number of keys loaded in transaction */
-    long int loaded_keys;
+    /* number of keys loaded since last rdbLoadProgressCallback */
+    long int keys_since_last_callback;
 
     /* number of bytes read or written */
     size_t processed_bytes;

@@ -2169,7 +2169,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
     if ((g_pserver->loading_process_events_interval_bytes &&
         (r->processed_bytes + len)/g_pserver->loading_process_events_interval_bytes > r->processed_bytes/g_pserver->loading_process_events_interval_bytes) ||
         (g_pserver->loading_process_events_interval_keys &&
-        (r->loaded_keys >= g_pserver->loading_process_events_interval_keys)))
+        (r->keys_since_last_callback >= g_pserver->loading_process_events_interval_keys)))
     {
         /* The DB can take some non trivial amount of time to load. Update
          * our cached time since it is used to create and update the last
@@ -2194,7 +2194,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb, ping_argv, 1);
         decrRefCount(ping_argv[0]);
 
-        r->loaded_keys = 0;
+        r->keys_since_last_callback = 0;
     }
 }
 
@@ -2501,7 +2501,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         if (g_pserver->key_load_delay)
             usleep(g_pserver->key_load_delay);
 
-        rdb->loaded_keys++;
+        rdb->keys_since_last_callback++;
 
         /* Reset the state that is key-specified and is populated by
          * opcodes before the key, so that we start from scratch again. */

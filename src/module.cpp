@@ -5605,29 +5605,31 @@ RedisModuleTimerID RM_CreateTimer(RedisModuleCtx *ctx, mstime_t period, RedisMod
         }
     }
 
-    /* We need to install the main event loop timer if it's not already
-     * installed, or we may need to refresh its period if we just installed
-     * a timer that will expire sooner than any other else. */
-    if (aeTimer != -1) {
-        raxIterator ri;
-        raxStart(&ri,Timers);
-        raxSeek(&ri,"^",NULL,0);
-        raxNext(&ri);
-        if (memcmp(ri.key,&key,sizeof(key)) == 0) {
-            /* This is the first key, we need to re-install the timer according
-             * to the just added event. */
-            aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [period]{
+    aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [period, key]{
+        /* We need to install the main event loop timer if it's not already
+        * installed, or we may need to refresh its period if we just installed
+        * a timer that will expire sooner than any other else. */
+        if (aeTimer != -1) {
+            raxIterator ri;
+            raxStart(&ri,Timers);
+            raxSeek(&ri,"^",NULL,0);
+            raxNext(&ri);
+            if (memcmp(ri.key,&key,sizeof(key)) == 0) {
+                /* This is the first key, we need to re-install the timer according
+                * to the just added event. */
                 aeDeleteTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,aeTimer);
-                aeTimer = aeCreateTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,period,moduleTimerHandler,NULL,NULL);
-            });
+                aeTimer = -1;
+            }
+            raxStop(&ri);
         }
-        raxStop(&ri);
-    } else {    
-        /* If we have no main timer because this is the first module timer we have, install one. */
-        aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [period]{
+
+        /* If we have no main timer (the old one was invalidated, or this is the
+        * first module timer we have), install one. */
+        if (aeTimer == -1) {
             aeTimer = aeCreateTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,period,moduleTimerHandler,NULL,NULL);
-        });
-    }
+        }
+    });
+
 
     return key;
 }

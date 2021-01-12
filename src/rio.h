@@ -63,7 +63,7 @@ struct _rio {
     uint64_t cksum, flags;
 
     /* number of keys loaded in transaction */
-    size_t loaded_keys;
+    long int loaded_keys;
 
     /* number of bytes read or written */
     size_t processed_bytes;

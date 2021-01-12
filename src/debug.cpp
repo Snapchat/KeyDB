@@ -829,6 +829,13 @@ NULL
             c->flags &= ~(CLIENT_MASTER | CLIENT_MASTER_FORCE_REPLY);
         }
         addReply(c, shared.ok);
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"truncate-repl-backlog") && c->argc == 2) {
+        g_pserver->repl_backlog_idx = 0;
+        g_pserver->repl_backlog_off = g_pserver->master_repl_offset+1;
+        g_pserver->repl_backlog_histlen = 0;
+        if (g_pserver->repl_batch_idxStart >= 0) g_pserver->repl_batch_idxStart = -1;
+        if (g_pserver->repl_batch_offStart >= 0) g_pserver->repl_batch_offStart = -1;
+        addReply(c, shared.ok);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"config-rewrite-force-all") && c->argc == 2)
     {
         if (rewriteConfig(cserver.configfile, 1) == -1)

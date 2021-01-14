@@ -3773,13 +3773,14 @@ void call(client *c, int flags) {
  * If there's a transaction is flags it as dirty, and if the command is EXEC,
  * it aborts the transaction.
  * Note: 'reply' is expected to end with \r\n */
-void rejectCommand(client *c, robj *reply) {
+void rejectCommand(client *c, robj *reply, int severity = ERR_CRITICAL) {
     flagTransaction(c);
     if (c->cmd && c->cmd->proc == execCommand) {
         execCommandAbort(c, szFromObj(reply));
-    } else {
+    }
+    else {
         /* using addReplyError* rather than addReply so that the error can be logged. */
-        addReplyErrorObject(c, reply);
+        addReplyErrorObject(c, reply, severity);
     }
 }
 
@@ -4024,7 +4025,7 @@ int processCommand(client *c, int callFlags) {
         /* Active Replicas can execute read only commands, and optionally write commands */
         if (!(g_pserver->loading == LOADING_REPLICATION && g_pserver->fActiveReplica && ((c->cmd->flags & CMD_READONLY) || g_pserver->fWriteDuringActiveLoad)))
         {
-            rejectCommand(c, shared.loadingerr);
+            rejectCommand(c, shared.loadingerr, ERR_WARNING);
             return C_OK;
         }
     }

@@ -5579,6 +5579,8 @@ void RM_SetClusterFlags(RedisModuleCtx *ctx, uint64_t flags) {
 
 static rax *Timers;     /* The radix tree of all the timers sorted by expire. */
 long long aeTimer = -1; /* Main event loop (ae.c) timer identifier. */
+bool aeTimerSet = false;/* Checks whether the main event loop timer is set
+                           or if an aePostFunction is queued up that will set it */
 
 typedef void (*RedisModuleTimerProc)(RedisModuleCtx *ctx, void *data);
 
@@ -5668,32 +5670,38 @@ RedisModuleTimerID RM_CreateTimer(RedisModuleCtx *ctx, mstime_t period, RedisMod
         }
     }
 
-    aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [period, key]{
-        /* We need to install the main event loop timer if it's not already
-         * installed, or we may need to refresh its period if we just installed
-         * a timer that will expire sooner than any other else (i.e. the timer
-         * we just installed is the first timer in the Timers rax). */
-        if (aeTimer != -1) {
-            raxIterator ri;
-            raxStart(&ri,Timers);
-            raxSeek(&ri,"^",NULL,0);
-            raxNext(&ri);
-            if (memcmp(ri.key,&key,sizeof(key)) == 0) {
-                /* This is the first key, we need to re-install the timer according
-                * to the just added event. */
+    /* We need to install the main event loop timer if it's not already
+     * installed, or we may need to refresh its period if we just installed
+     * a timer that will expire sooner than any other else (i.e. the timer
+     * we just installed is the first timer in the Timers rax). */
+    bool isFirstExpiry = false;
+    if (raxSize(Timers) > 0){
+        raxIterator ri;
+        raxStart(&ri, Timers);
+        raxSeek(&ri,"^",NULL,0);
+        raxNext(&ri);    
+        if (memcmp(ri.key,&key,sizeof(key)) == 0)
+            /* This is the first key, we need to re-install the timer according
+             * to the just added event. */
+            isFirstExpiry = true;
+        raxStop(&ri);
+    }
+
+    /* Now that either we know that we either need to refresh the period of the
+    *  recently installed timer, or that there is no timer to begin with, we must post
+    *  a function call to install the main event timer */
+    if (isFirstExpiry || !aeTimerSet){
+        aeTimerSet = true;
+        aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [period, isFirstExpiry]{
+            /* If we deemed that this timer required a reinstall, delete it before proceeding
+             * to the install */
+            if (isFirstExpiry)
                 aeDeleteTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,aeTimer);
-                aeTimer = -1;
-            }
-            raxStop(&ri);
-        }
-
-        /* If we have no main timer (the old one was invalidated, or this is the
-        * first module timer we have), install one. */
-        if (aeTimer == -1) {
+            /* If we have no main timer (the old one was invalidated, or this is the
+             * first module timer we have), install one. */
             aeTimer = aeCreateTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,period,moduleTimerHandler,NULL,NULL);
-        }
-    });
-
+        });
+    }
 
     return key;
 }

@@ -3807,8 +3807,8 @@ int processCommand(client *c, int callFlags) {
                              (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_DENYOOM));
     int is_denystale_command = !(c->cmd->flags & CMD_STALE) ||
                                (c->cmd->proc == execCommand && (c->mstate.cmd_inv_flags & CMD_STALE));
-    int is_denyloading_command = !(c->cmd->flags & CMD_LOADING) ||
-                                 (c->cmd->proc == execCommand && (c->mstate.cmd_inv_flags & CMD_LOADING));
+    int is_denyloading_command = strcmp(c->cmd->name, "ping") && (!(c->cmd->flags & CMD_LOADING) ||
+                                 (c->cmd->proc == execCommand && (c->mstate.cmd_inv_flags & CMD_LOADING)));
 
     /* Check if the user is authenticated. This check is skipped in case
      * the default user is flagged as "nopass" and is active. */

@@ -1520,7 +1520,8 @@ struct redisServer {
     off_t loading_total_bytes;
     off_t loading_loaded_bytes;
     time_t loading_start_time;
-    off_t loading_process_events_interval_bytes;
+    unsigned long loading_process_events_interval_bytes;
+    unsigned int loading_process_events_interval_keys;
 
     int active_expire_enabled;      /* Can be disabled for testing purposes. */
 

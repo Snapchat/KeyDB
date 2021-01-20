@@ -127,6 +127,7 @@ int _dictInit(dict *d, dictType *type,
     d->privdata = privDataPtr;
     d->rehashidx = -1;
     d->iterators = 0;
+    d->asyncdata = nullptr;
     return DICT_OK;
 }
 
@@ -188,13 +189,13 @@ int dictExpand(dict *d, unsigned long size)
 int dictRehash(dict *d, int n) {
     int empty_visits = n*10; /* Max number of empty buckets to visit. */
     if (!dictIsRehashing(d)) return 0;
+    if (d->asyncdata) return 0;
 
     while(n-- && d->ht[0].used != 0) {
         dictEntry *de, *nextde;
 
         /* Note that rehashidx can't overflow as we are sure there are more
          * elements because ht[0].used != 0 */
-        assert(d->ht[0].size > (unsigned long)d->rehashidx);
         while(d->ht[0].table[d->rehashidx] == NULL) {
             d->rehashidx++;
             if (--empty_visits == 0) return 1;
@@ -228,6 +229,95 @@ int dictRehash(dict *d, int n) {
 
     /* More to rehash... */
     return 1;
+}
+
+dictAsyncRehashCtl *dictRehashAsyncStart(dict *d) {
+    if (!dictIsRehashing(d)) return 0;
+    if (d->asyncdata != nullptr) {
+        /* An async rehash is already in progress, in the future we could give out an additional block */
+        return nullptr;
+    }
+    d->asyncdata = new dictAsyncRehashCtl(d);
+
+    int empty_visits = dictAsyncRehashCtl::c_targetQueueSize * 10;
+
+    while (d->asyncdata->queue.size() < dictAsyncRehashCtl::c_targetQueueSize && (d->ht[0].used - d->asyncdata->queue.size()) != 0) {
+        dictEntry *de;
+
+        /* Note that rehashidx can't overflow as we are sure there are more
+         * elements because ht[0].used != 0 */
+        while(d->ht[0].table[d->rehashidx] == NULL) {
+            d->rehashidx++;
+            if (--empty_visits == 0) goto LDone;
+        }
+
+        de = d->ht[0].table[d->rehashidx];
+        // We have to queue every node in the bucket, even if we go over our target size
+        while (de) {
+            d->asyncdata->queue.emplace_back(de);
+            de = de->next;
+        }
+        d->rehashidx++;
+    }
+
+LDone:
+    if (d->asyncdata->queue.empty()) {
+        // We didn't find any work to do (can happen if there is a large gap in the hash table)
+        delete d->asyncdata;
+        d->asyncdata = nullptr;
+    }
+    return d->asyncdata;
+}
+
+void dictRehashAsync(dictAsyncRehashCtl *ctl) {
+    for (auto &wi : ctl->queue) {
+        wi.hash = dictHashKey(ctl->dict, dictGetKey(wi.de));
+    }
+}
+
+void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl) {
+    dict *d = ctl->dict;
+
+    // Was the dictionary free'd while we were in flight?
+    if (ctl->release) {
+        dictRelease(d);
+        delete ctl;
+        return;
+    }
+
+    for (auto &wi : ctl->queue) {
+        // We need to remove it from the source hash table, and store it in the dest.
+        //  Note that it may have been deleted in the meantime and therefore not exist.
+        //  In this case it will be in the garbage collection list
+        
+        dictEntry **pdePrev = &d->ht[0].table[wi.hash & d->ht[0].sizemask];
+        while (*pdePrev != nullptr && *pdePrev != wi.de) {
+            pdePrev = &((*pdePrev)->next);
+        }
+        if (*pdePrev != nullptr) {
+            assert(*pdePrev == wi.de);
+            *pdePrev = wi.de->next;
+            // Now link it to the dest hash table
+            wi.de->next = d->ht[1].table[wi.hash & d->ht[1].sizemask];
+            d->ht[1].table[wi.hash & d->ht[1].sizemask] = wi.de;
+            d->ht[0].used--;
+            d->ht[1].used++;
+        } else {
+            // In this scenario the de should be in the free list, find and delete it
+            bool found = false;
+            for (dictEntry **pdeGCPrev = &ctl->deGCList; *pdeGCPrev != nullptr && !found; pdeGCPrev = &((*pdeGCPrev)->next)) {
+                if (*pdeGCPrev == wi.de) {
+                    *pdeGCPrev = wi.de->next;
+                    dictFreeUnlinkedEntry(d, wi.de);
+                    found = true;
+                }
+            }
+            // Note: We may not find it if the entry was just unlinked but reused elsewhere
+        }
+    }
+
+    delete ctl;
+    d->asyncdata = nullptr;
 }
 
 long long timeInMilliseconds(void) {
@@ -385,9 +475,14 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
                 else
                     d->ht[table].table[idx] = he->next;
                 if (!nofree) {
-                    dictFreeKey(d, he);
-                    dictFreeVal(d, he);
-                    zfree(he);
+                    if (d->asyncdata != nullptr) {
+                        he->next = d->asyncdata->deGCList;
+                        d->asyncdata->deGCList = he->next;
+                    } else {
+                        dictFreeKey(d, he);
+                        dictFreeVal(d, he);
+                        zfree(he);
+                    }
                 }
                 d->ht[table].used--;
                 return he;
@@ -470,6 +565,10 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
 /* Clear & Release the hash table */
 void dictRelease(dict *d)
 {
+    if (d->asyncdata) {
+        d->asyncdata->release = true;
+        return;
+    }
     _dictClear(d,&d->ht[0],NULL);
     _dictClear(d,&d->ht[1],NULL);
     zfree(d);

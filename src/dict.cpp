@@ -277,6 +277,7 @@ void dictRehashAsync(dictAsyncRehashCtl *ctl) {
 
 void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl) {
     dict *d = ctl->dict;
+    d->asyncdata = nullptr; // dictFreeUnlinkedEntry won't actually free if we don't NULL this
 
     // Was the dictionary free'd while we were in flight?
     if (ctl->release) {
@@ -315,9 +316,9 @@ void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl) {
             // Note: We may not find it if the entry was just unlinked but reused elsewhere
         }
     }
+    assert(ctl->deGCList == nullptr);
 
     delete ctl;
-    d->asyncdata = nullptr;
 }
 
 long long timeInMilliseconds(void) {
@@ -475,7 +476,7 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
                 else
                     d->ht[table].table[idx] = he->next;
                 if (!nofree) {
-                    if (d->asyncdata != nullptr) {
+                    if (table == 0 && d->asyncdata != nullptr) {
                         he->next = d->asyncdata->deGCList;
                         d->asyncdata->deGCList = he->next;
                     } else {
@@ -530,9 +531,14 @@ dictEntry *dictUnlink(dict *ht, const void *key) {
  * to dictUnlink(). It's safe to call this function with 'he' = NULL. */
 void dictFreeUnlinkedEntry(dict *d, dictEntry *he) {
     if (he == NULL) return;
-    dictFreeKey(d, he);
-    dictFreeVal(d, he);
-    zfree(he);
+    if (d->asyncdata) {
+        he->next = d->asyncdata->deGCList;
+        d->asyncdata->deGCList = he;
+    } else { 
+        dictFreeKey(d, he);
+        dictFreeVal(d, he);
+        zfree(he);
+    }
 }
 
 /* Destroy an entire dictionary */
@@ -548,9 +554,14 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
         if ((he = ht->table[i]) == NULL) continue;
         while(he) {
             nextHe = he->next;
-            dictFreeKey(d, he);
-            dictFreeVal(d, he);
-            zfree(he);
+            if (i == 0 && d->asyncdata) {
+                he->next = d->asyncdata->deGCList;
+                d->asyncdata->deGCList = he;
+            } else {
+                dictFreeKey(d, he);
+                dictFreeVal(d, he);
+                zfree(he);
+            }
             ht->used--;
             he = nextHe;
         }

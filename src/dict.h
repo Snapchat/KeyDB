@@ -92,13 +92,14 @@ struct dictAsyncRehashCtl {
         }
     };
 
-    static const int c_targetQueueSize = 100;
+    static const int c_targetQueueSize = 512;
     dictEntry *deGCList = nullptr;
     struct dict *dict = nullptr;
     std::vector<workItem> queue;
     bool release = false;
+    dictAsyncRehashCtl *next = nullptr;
 
-    dictAsyncRehashCtl(struct dict *d) : dict(d) {
+    dictAsyncRehashCtl(struct dict *d, dictAsyncRehashCtl *next) : dict(d), next(next) {
         queue.reserve(c_targetQueueSize);
     }
 };

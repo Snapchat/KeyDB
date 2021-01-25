@@ -106,6 +106,15 @@ configEnum tls_auth_clients_enum[] = {
     {"optional", TLS_CLIENT_AUTH_OPTIONAL},
     {NULL, 0}
 };
+
+configEnum oom_score_adj_enum[] = {
+    {"no", OOM_SCORE_ADJ_NO},
+    {"yes", OOM_SCORE_RELATIVE},
+    {"relative", OOM_SCORE_RELATIVE},
+    {"absolute", OOM_SCORE_ADJ_ABSOLUTE},
+    {NULL, 0}
+};
+
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
     {0, 0, 0}, /* normal */
@@ -302,7 +311,7 @@ void queueLoadModule(sds path, sds *argv, int argc) {
  * g_pserver->oom_score_adj_values if valid.
  */
 
-static int updateOOMScoreAdjValues(sds *args, const char **err) {
+static int updateOOMScoreAdjValues(sds *args, const char **err, int apply) {
     int i;
     int values[CONFIG_OOM_COUNT];
 
@@ -310,8 +319,8 @@ static int updateOOMScoreAdjValues(sds *args, const char **err) {
         char *eptr;
         long long val = strtoll(args[i], &eptr, 10);
 
-        if (*eptr != '\0' || val < -1000 || val > 1000) {
-            if (err) *err = "Invalid oom-score-adj-values, elements must be between -1000 and 1000.";
+        if (*eptr != '\0' || val < -2000 || val > 2000) {
+            if (err) *err = "Invalid oom-score-adj-values, elements must be between -2000 and 2000.";
             return C_ERR;
         }
 
@@ -335,6 +344,10 @@ static int updateOOMScoreAdjValues(sds *args, const char **err) {
         old_values[i] = g_pserver->oom_score_adj_values[i];
         g_pserver->oom_score_adj_values[i] = values[i];
     }
+    
+    /* When parsing the config file, we want to apply only when all is done. */
+    if (!apply)
+        return C_OK;
 
     /* Update */
     if (setOOMScoreAdj(-1) == C_ERR) {
@@ -473,7 +486,16 @@ void loadServerConfigFromString(char *config) {
         } else if ((!strcasecmp(argv[0],"slaveof") ||
                     !strcasecmp(argv[0],"replicaof")) && argc == 3) {
             slaveof_linenum = linenum;
-            replicationAddMaster(argv[1], atoi(argv[2]));
+            if (!strcasecmp(argv[1], "no") && !strcasecmp(argv[2], "one")) {
+                listRelease(g_pserver->masters);
+                continue;
+            }
+            char *ptr;
+            int port = strtol(argv[2], &ptr, 10);
+            if (port < 0 || port > 65535 || *ptr != '\0') {
+                err= "Invalid master port"; goto loaderr;
+            }
+            replicationAddMaster(argv[1], port);
         } else if (!strcasecmp(argv[0],"requirepass") && argc == 2) {
             if (strlen(argv[1]) > CONFIG_AUTHPASS_MAX_LEN) {
                 err = "Password is longer than CONFIG_AUTHPASS_MAX_LEN";
@@ -484,11 +506,16 @@ void loadServerConfigFromString(char *config) {
              * additionally is to remember the cleartext password in this
              * case, for backward compatibility with Redis <= 5. */
             ACLSetUser(DefaultUser,"resetpass",-1);
-            sds aclop = sdscatprintf(sdsempty(),">%s",argv[1]);
-            ACLSetUser(DefaultUser,aclop,sdslen(aclop));
-            sdsfree(aclop);
             sdsfree(g_pserver->requirepass);
-            g_pserver->requirepass = sdsnew(argv[1]);
+            g_pserver->requirepass = NULL;
+            if (sdslen(argv[1])) {
+                sds aclop = sdscatprintf(sdsempty(),">%s",argv[1]);
+                ACLSetUser(DefaultUser,aclop,sdslen(aclop));
+                sdsfree(aclop);
+                g_pserver->requirepass = sdsnew(argv[1]);
+            } else {
+                ACLSetUser(DefaultUser,"nopass",-1);
+            }
         } else if (!strcasecmp(argv[0],"list-max-ziplist-entries") && argc == 2){
             /* DEAD OPTION */
         } else if (!strcasecmp(argv[0],"list-max-ziplist-value") && argc == 2) {
@@ -543,7 +570,7 @@ void loadServerConfigFromString(char *config) {
             cserver.client_obuf_limits[type].soft_limit_bytes = soft;
             cserver.client_obuf_limits[type].soft_limit_seconds = soft_seconds;
         } else if (!strcasecmp(argv[0],"oom-score-adj-values") && argc == 1 + CONFIG_OOM_COUNT) {
-            if (updateOOMScoreAdjValues(&argv[1], &err) == C_ERR) goto loaderr;
+            if (updateOOMScoreAdjValues(&argv[1], &err, 0) == C_ERR) goto loaderr;
         } else if (!strcasecmp(argv[0],"notify-keyspace-events") && argc == 2) {
             int flags = keyspaceEventsStringToFlags(argv[1]);
 
@@ -751,11 +778,16 @@ void configSetCommand(client *c) {
          * additionally is to remember the cleartext password in this
          * case, for backward compatibility with Redis <= 5. */
         ACLSetUser(DefaultUser,"resetpass",-1);
-        sds aclop = sdscatprintf(sdsempty(),">%s",(char*)ptrFromObj(o));
-        ACLSetUser(DefaultUser,aclop,sdslen(aclop));
-        sdsfree(aclop);
         sdsfree(g_pserver->requirepass);
-        g_pserver->requirepass = sdsnew(szFromObj(o));
+        g_pserver->requirepass = NULL;
+        if (sdslen(szFromObj(o))) {
+            sds aclop = sdscatprintf(sdsempty(),">%s",(char*)ptrFromObj(o));
+            ACLSetUser(DefaultUser,aclop,sdslen(aclop));
+            sdsfree(aclop);
+            g_pserver->requirepass = sdsnew(szFromObj(o));
+        } else {
+            ACLSetUser(DefaultUser,"nopass",-1);
+        }
     } config_set_special_field("save") {
         int vlen, j;
         sds *v = sdssplitlen(szFromObj(o),sdslen(szFromObj(o))," ",1,&vlen);
@@ -845,7 +877,7 @@ void configSetCommand(client *c) {
         int success = 1;
 
         sds *v = sdssplitlen(szFromObj(o), sdslen(szFromObj(o)), " ", 1, &vlen);
-        if (vlen != CONFIG_OOM_COUNT || updateOOMScoreAdjValues(v, &errstr) == C_ERR)
+        if (vlen != CONFIG_OOM_COUNT || updateOOMScoreAdjValues(v, &errstr, 1) == C_ERR)
             success = 0;
 
         sdsfreesplitres(v, vlen);
@@ -1356,7 +1388,7 @@ void rewriteConfigNumericalOption(struct rewriteConfigState *state, const char *
     rewriteConfigRewriteLine(state,option,line,force);
 }
 
-/* Rewrite a octal option. */
+/* Rewrite an octal option. */
 void rewriteConfigOctalOption(struct rewriteConfigState *state, const char *option, int value, int defvalue) {
     int force = value != defvalue;
     sds line = sdscatprintf(sdsempty(),"%s %o",option,value);
@@ -1380,6 +1412,12 @@ void rewriteConfigEnumOption(struct rewriteConfigState *state, const char *optio
 void rewriteConfigSaveOption(struct rewriteConfigState *state) {
     int j;
     sds line;
+
+    /* In Sentinel mode we don't need to rewrite the save parameters */
+    if (g_pserver->sentinel_mode) {
+        rewriteConfigMarkAsProcessed(state,"save");
+        return;
+    }
 
     /* Note that if there are no save parameters at all, all the current
      * config line with "save" will be detected as orphaned and deleted,
@@ -1628,60 +1666,62 @@ void rewriteConfigRemoveOrphaned(struct rewriteConfigState *state) {
     dictReleaseIterator(di);
 }
 
-/* This function overwrites the old configuration file with the new content.
- *
- * 1) The old file length is obtained.
- * 2) If the new content is smaller, padding is added.
- * 3) A single write(2) call is used to replace the content of the file.
- * 4) Later the file is truncated to the length of the new content.
- *
- * This way we are sure the file is left in a consistent state even if the
- * process is stopped between any of the four operations.
+/* This function replaces the old configuration file with the new content
+ * in an atomic manner.
  *
  * The function returns 0 on success, otherwise -1 is returned and errno
- * set accordingly. */
+ * is set accordingly. */
 int rewriteConfigOverwriteFile(char *configfile, sds content) {
-    int retval = 0;
-    int fd = open(configfile,O_RDWR|O_CREAT,0644);
-    int content_size = sdslen(content), padding = 0;
-    struct stat sb;
-    sds content_padded;
+    int fd = -1;
+    int retval = -1;
+    char tmp_conffile[PATH_MAX];
+    const char *tmp_suffix = ".XXXXXX";
+    size_t offset = 0;
+    ssize_t written_bytes = 0;
 
-    /* 1) Open the old file (or create a new one if it does not
-     *    exist), get the size. */
-    if (fd == -1) return -1; /* errno set by open(). */
-    if (fstat(fd,&sb) == -1) {
-        close(fd);
-        return -1; /* errno set by fstat(). */
+    int tmp_path_len = snprintf(tmp_conffile, sizeof(tmp_conffile), "%s%s", configfile, tmp_suffix);
+    if (tmp_path_len <= 0 || (unsigned int)tmp_path_len >= sizeof(tmp_conffile)) {
+        serverLog(LL_WARNING, "Config file full path is too long");
+        errno = ENAMETOOLONG;
+        return retval;
     }
 
-    /* 2) Pad the content at least match the old file size. */
-    content_padded = sdsdup(content);
-    if (content_size < sb.st_size) {
-        /* If the old file was bigger, pad the content with
-         * a newline plus as many "#" chars as required. */
-        padding = sb.st_size - content_size;
-        content_padded = sdsgrowzero(content_padded,sb.st_size);
-        content_padded[content_size] = '\n';
-        memset(content_padded+content_size+1,'#',padding-1);
+#ifdef _GNU_SOURCE
+    fd = mkostemp(tmp_conffile, O_CLOEXEC);
+#else
+    /* There's a theoretical chance here to leak the FD if a module thread forks & execv in the middle */
+    fd = mkstemp(tmp_conffile);
+#endif
+
+    if (fd == -1) {
+        serverLog(LL_WARNING, "Could not create tmp config file (%s)", strerror(errno));
+        return retval;
     }
 
-    /* 3) Write the new content using a single write(2). */
-    if (write(fd,content_padded,strlen(content_padded)) == -1) {
-        retval = -1;
-        goto cleanup;
+    while (offset < sdslen(content)) {
+         written_bytes = write(fd, content + offset, sdslen(content) - offset);
+         if (written_bytes <= 0) {
+             if (errno == EINTR) continue; /* FD is blocking, no other retryable errors */
+             serverLog(LL_WARNING, "Failed after writing (%zd) bytes to tmp config file (%s)", offset, strerror(errno));
+             goto cleanup;
+         }
+         offset+=written_bytes;
     }
 
-    /* 4) Truncate the file to the right length if we used padding. */
-    if (padding) {
-        if (ftruncate(fd,content_size) == -1) {
-            /* Non critical error... */
-        }
+    if (fsync(fd))
+        serverLog(LL_WARNING, "Could not sync tmp config file to disk (%s)", strerror(errno));
+    else if (fchmod(fd, 0644) == -1)
+        serverLog(LL_WARNING, "Could not chmod config file (%s)", strerror(errno));
+    else if (rename(tmp_conffile, configfile) == -1)
+        serverLog(LL_WARNING, "Could not rename tmp config file (%s)", strerror(errno));
+    else {
+        retval = 0;
+        serverLog(LL_DEBUG, "Rewritten config file (%s) successfully", configfile);
     }
 
 cleanup:
-    sdsfree(content_padded);
     close(fd);
+    if (retval) unlink(tmp_conffile);
     return retval;
 }
 
@@ -2195,7 +2235,7 @@ static int isValidAOFfilename(char *val, const char **err) {
 static int updateHZ(long long val, long long prev, const char **err) {
     UNUSED(prev);
     UNUSED(err);
-    /* Hz is more an hint from the user, so we accept values out of range
+    /* Hz is more a hint from the user, so we accept values out of range
      * but cap them to reasonable values. */
     g_pserver->config_hz = val;
     if (g_pserver->config_hz < CONFIG_MIN_HZ) g_pserver->config_hz = CONFIG_MIN_HZ;
@@ -2213,7 +2253,7 @@ static int updateJemallocBgThread(int val, int prev, const char **err) {
 
 static int updateReplBacklogSize(long long val, long long prev, const char **err) {
     /* resizeReplicationBacklog sets g_pserver->repl_backlog_size, and relies on
-     * being able to tell when the size changes, so restore prev becore calling it. */
+     * being able to tell when the size changes, so restore prev before calling it. */
     UNUSED(err);
     g_pserver->repl_backlog_size = prev;
     resizeReplicationBacklog(val);
@@ -2403,7 +2443,6 @@ standardConfig configs[] = {
     createBoolConfig("multi-master-no-forward", NULL, MODIFIABLE_CONFIG, cserver.multimaster_no_forward, 0, validateMultiMasterNoForward, NULL),
     createBoolConfig("allow-write-during-load", NULL, MODIFIABLE_CONFIG, g_pserver->fWriteDuringActiveLoad, 0, NULL, NULL),
     createBoolConfig("io-threads-do-reads", NULL, IMMUTABLE_CONFIG, fDummy, 0, NULL, NULL),
-    createBoolConfig("oom-score-adj", NULL, MODIFIABLE_CONFIG, g_pserver->oom_score_adj, 0, NULL, updateOOMScoreAdj),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->acl_filename, "", NULL, NULL),
@@ -2420,6 +2459,7 @@ standardConfig configs[] = {
     createStringConfig("bio_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->bio_cpulist, NULL, NULL, NULL),
     createStringConfig("aof_rewrite_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->aof_rewrite_cpulist, NULL, NULL, NULL),
     createStringConfig("bgsave_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->bgsave_cpulist, NULL, NULL, NULL),
+    createStringConfig("ignore-warnings", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->ignore_warnings, "ARM64-COW-BUG", NULL, NULL),
 
     /* Enum Configs */
     createEnumConfig("supervised", NULL, IMMUTABLE_CONFIG, supervised_mode_enum, cserver.supervised_mode, SUPERVISED_NONE, NULL, NULL),
@@ -2428,6 +2468,7 @@ standardConfig configs[] = {
     createEnumConfig("loglevel", NULL, MODIFIABLE_CONFIG, loglevel_enum, cserver.verbosity, LL_NOTICE, NULL, NULL),
     createEnumConfig("maxmemory-policy", NULL, MODIFIABLE_CONFIG, maxmemory_policy_enum, g_pserver->maxmemory_policy, MAXMEMORY_NO_EVICTION, NULL, NULL),
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, g_pserver->aof_fsync, AOF_FSYNC_EVERYSEC, NULL, NULL),
+    createEnumConfig("oom-score-adj", NULL, MODIFIABLE_CONFIG, oom_score_adj_enum, g_pserver->oom_score_adj, OOM_SCORE_ADJ_NO, NULL, updateOOMScoreAdj),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, cserver.dbnum, 16, INTEGER_CONFIG, NULL, NULL),

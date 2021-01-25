@@ -1508,13 +1508,12 @@ void tryResizeHashTables(int dbid) {
  * table will use two tables for a long time. So we try to use 1 millisecond
  * of CPU time at every call of this function to perform some rehashing.
  *
- * The function returns 1 if some rehashing was performed, otherwise 0
+ * The function returns the number of rehashes if some rehashing was performed, otherwise 0
  * is returned. */
 int incrementallyRehash(int dbid) {
     /* Keys dictionary */
     if (dictIsRehashing(g_pserver->db[dbid].dict)) {
-        dictRehashMilliseconds(g_pserver->db[dbid].dict,1);
-        return 1; /* already used our millisecond for this loop... */
+        return dictRehashMilliseconds(g_pserver->db[dbid].dict,1);
     }
     return 0;
 }
@@ -1772,12 +1771,22 @@ bool expireOwnKeys()
     return false;
 }
 
+int hash_spin_worker() {
+    auto ctl = serverTL->rehashCtl;
+    if (ctl->hashIdx < ctl->queue.size()) {
+        ctl->queue[ctl->hashIdx].hash = dictHashKey(ctl->dict, dictGetKey(ctl->queue[ctl->hashIdx].de));
+        ctl->hashIdx++;
+        return true;
+    } else {
+        return false;
+    }
+}
+
 /* This function handles 'background' operations we are required to do
  * incrementally in Redis databases, such as active key expiring, resizing,
  * rehashing. */
-dictAsyncRehashCtl* databasesCron(bool fMainThread) {
-    dictAsyncRehashCtl *ctl = nullptr;
-
+void databasesCron(bool fMainThread) {
+    static int rehashes_per_ms = 0;
     if (fMainThread) {
         /* Expire keys by random sampling. Not required for slaves
         * as master will synthesize DELs for us. */
@@ -1819,24 +1828,42 @@ dictAsyncRehashCtl* databasesCron(bool fMainThread) {
         /* Rehash */
         if (g_pserver->activerehashing) {
             for (j = 0; j < dbs_per_call; j++) {
-                ctl = dictRehashAsyncStart(g_pserver->db[rehash_db].pdict);
-                if (ctl)
+                if (serverTL->rehashCtl != nullptr) {
+                    if (dictRehashSomeAsync(serverTL->rehashCtl, 5)) {
+                        break;
+                    } else {
+                        dictCompleteRehashAsync(serverTL->rehashCtl);
+                        serverTL->rehashCtl = nullptr;
+                    }
+                }
+                if (rehashes_per_ms > 0)
+                    serverTL->rehashCtl = dictRehashAsyncStart(g_pserver->db[rehash_db].dict, rehashes_per_ms);
+                if (serverTL->rehashCtl)
                     break;
-                int work_done = fMainThread && incrementallyRehash(rehash_db);
-                if (work_done) {
-                    /* If the function did some work, stop here, we'll do
-                     * more at the next cron loop. */
-                    break;
-                } else {
-                    /* If this db didn't need rehash, we'll try the next one. */
-                    rehash_db++;
-                    rehash_db %= cserver.dbnum;
+                
+                if (fMainThread) {
+                    // We only synchronously rehash on the main thread, otherwise we'll cause too much latency
+                    rehashes_per_ms = incrementallyRehash(rehash_db);
+                    if (rehashes_per_ms > 0) {
+                        /* If the function did some work, stop here, we'll do
+                        * more at the next cron loop. */
+                        serverLog(LL_WARNING, "Rehashes per ms: %d", rehashes_per_ms);
+                        break;
+                    } else {
+                        /* If this db didn't need rehash, we'll try the next one. */
+                        rehash_db++;
+                        rehash_db %= cserver.dbnum;
+                    }
                 }
             }
         }
     }
 
-    return ctl;
+    if (serverTL->rehashCtl) {
+        setAeLockSetThreadSpinWorker(hash_spin_worker);
+    } else {
+        setAeLockSetThreadSpinWorker(nullptr);
+    }
 }
 
 /* We take a cached value of the unix time in the global state because with
@@ -2076,14 +2103,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     clientsCron(IDX_EVENT_LOOP_MAIN);
 
     /* Handle background operations on Redis databases. */
-    auto asyncRehash = databasesCron(true /* fMainThread */);
-
-    if (asyncRehash) {
-        aeReleaseLock();
-        dictRehashAsync(asyncRehash);
-        aeAcquireLock();
-        dictCompleteRehashAsync(asyncRehash);
-    }
+    databasesCron(true /* fMainThread */);
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
@@ -2234,14 +2254,7 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
     }
 
     /* Handle background operations on Redis databases. */
-    auto asyncRehash = databasesCron(false /* fMainThread */);
-
-    if (asyncRehash) {
-        aeReleaseLock();
-        dictRehashAsync(asyncRehash);
-        aeAcquireLock();
-        dictCompleteRehashAsync(asyncRehash);
-    }
+    databasesCron(false /* fMainThread */);
 
     /* Unpause clients if enough time has elapsed */
     unpauseClientsIfNecessary();

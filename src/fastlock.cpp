@@ -338,7 +338,7 @@ extern "C" void fastlock_init(struct fastlock *lock, const char *name)
 }
 
 #ifndef ASM_SPINLOCK
-extern "C" void fastlock_lock(struct fastlock *lock)
+extern "C" void fastlock_lock(struct fastlock *lock, spin_worker worker)
 {
     int pidOwner;
     __atomic_load(&lock->m_pidOwner, &pidOwner, __ATOMIC_ACQUIRE);
@@ -362,11 +362,16 @@ extern "C" void fastlock_lock(struct fastlock *lock)
         if ((ticketT.u & 0xffff) == myticket)
             break;
 
+        if (worker != nullptr) {
+            worker();
+        } else {
 #if defined(__i386__) || defined(__amd64__)
-        __asm__ __volatile__ ("pause");
+            __asm__ __volatile__ ("pause");
 #elif defined(__aarch64__)
-        __asm__ __volatile__ ("yield");
+            __asm__ __volatile__ ("yield");
 #endif
+        }
+
         if ((++cloops % loopLimit) == 0)
         {
             fastlock_sleep(lock, tid, ticketT.u, myticket);

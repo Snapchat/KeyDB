@@ -1393,6 +1393,7 @@ struct redisServerThreadVars {
     long unsigned commandsExecuted = 0;
     bool fRetrySetAofEvent = false;
     std::vector<client*> vecclientsProcess;
+    dictAsyncRehashCtl *rehashCtl = nullptr;
 };
 
 struct redisMaster {

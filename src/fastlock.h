@@ -6,10 +6,16 @@
 extern "C" {
 #endif
 
+typedef int (*spin_worker)();
+
 /* Begin C API */
 struct fastlock;
 void fastlock_init(struct fastlock *lock, const char *name);
-void fastlock_lock(struct fastlock *lock);
+#ifdef __cplusplus
+void fastlock_lock(struct fastlock *lock, spin_worker worker = nullptr);
+#else
+void fastlock_lock(struct fastlock *lock, spin_worker worker);
+#endif
 int fastlock_trylock(struct fastlock *lock, int fWeak);
 void fastlock_unlock(struct fastlock *lock);
 void fastlock_free(struct fastlock *lock);
@@ -56,9 +62,9 @@ struct fastlock
         fastlock_init(this, name);
     }
 
-    inline void lock()
+    inline void lock(spin_worker worker = nullptr)
     {
-        fastlock_lock(this);
+        fastlock_lock(this, worker);
     }
 
     inline bool try_lock(bool fWeak = false)

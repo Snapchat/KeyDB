@@ -96,6 +96,7 @@ struct dictAsyncRehashCtl {
     dictEntry *deGCList = nullptr;
     struct dict *dict = nullptr;
     std::vector<workItem> queue;
+    size_t hashIdx = 0;
     bool release = false;
     dictAsyncRehashCtl *next = nullptr;
 
@@ -218,8 +219,9 @@ uint64_t dictGetHash(dict *d, const void *key);
 dictEntry **dictFindEntryRefByPtrAndHash(dict *d, const void *oldptr, uint64_t hash);
 
 /* Async Rehash Functions */
-dictAsyncRehashCtl *dictRehashAsyncStart(dict *d);
+dictAsyncRehashCtl *dictRehashAsyncStart(dict *d, int buckets = dictAsyncRehashCtl::c_targetQueueSize);
 void dictRehashAsync(dictAsyncRehashCtl *ctl);
+bool dictRehashSomeAsync(dictAsyncRehashCtl *ctl, size_t hashes);
 void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl);
 
 /* Hash table types */

@@ -842,9 +842,15 @@ void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *aftersleep, 
     eventLoop->aftersleepFlags = flags;
 }
 
+thread_local spin_worker tl_worker = nullptr;
+void setAeLockSetThreadSpinWorker(spin_worker worker)
+{
+    tl_worker = worker;
+}
+
 void aeAcquireLock()
 {
-    g_lock.lock();
+    g_lock.lock(tl_worker);
 }
 
 int aeTryAcquireLock(int fWeak)

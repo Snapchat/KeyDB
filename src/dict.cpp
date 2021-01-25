@@ -231,13 +231,14 @@ int dictRehash(dict *d, int n) {
     return 1;
 }
 
-dictAsyncRehashCtl *dictRehashAsyncStart(dict *d) {
+dictAsyncRehashCtl *dictRehashAsyncStart(dict *d, int buckets) {
     if (!dictIsRehashing(d)) return 0;
+
     d->asyncdata = new dictAsyncRehashCtl(d, d->asyncdata);
 
-    int empty_visits = dictAsyncRehashCtl::c_targetQueueSize * 10;
+    int empty_visits = buckets * 10;
 
-    while (d->asyncdata->queue.size() < dictAsyncRehashCtl::c_targetQueueSize && (d->ht[0].used - d->asyncdata->queue.size()) != 0) {
+    while (d->asyncdata->queue.size() < (size_t)buckets && d->rehashidx < d->ht[0].size) {
         dictEntry *de;
 
         /* Note that rehashidx can't overflow as we are sure there are more
@@ -245,11 +246,12 @@ dictAsyncRehashCtl *dictRehashAsyncStart(dict *d) {
         while(d->ht[0].table[d->rehashidx] == NULL) {
             d->rehashidx++;
             if (--empty_visits == 0) goto LDone;
+            if (d->rehashidx >= d->ht[0].size) goto LDone;
         }
 
         de = d->ht[0].table[d->rehashidx];
         // We have to queue every node in the bucket, even if we go over our target size
-        while (de) {
+        while (de != nullptr) {
             d->asyncdata->queue.emplace_back(de);
             de = de->next;
         }
@@ -268,9 +270,21 @@ LDone:
 }
 
 void dictRehashAsync(dictAsyncRehashCtl *ctl) {
-    for (auto &wi : ctl->queue) {
+    for (size_t idx = ctl->hashIdx; idx < ctl->queue.size(); ++idx) {
+        auto &wi = ctl->queue[idx];
         wi.hash = dictHashKey(ctl->dict, dictGetKey(wi.de));
     }
+    ctl->hashIdx = ctl->queue.size();
+}
+
+bool dictRehashSomeAsync(dictAsyncRehashCtl *ctl, size_t hashes) {
+    size_t max = std::min(ctl->hashIdx + hashes, ctl->queue.size());
+    for (; ctl->hashIdx < max; ++ctl->hashIdx) {
+        auto &wi = ctl->queue[ctl->hashIdx];
+        wi.hash = dictHashKey(ctl->dict, dictGetKey(wi.de));
+    }
+
+    return ctl->hashIdx < ctl->queue.size();
 }
 
 void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl) {
@@ -287,28 +301,33 @@ void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl) {
 
     // Was the dictionary free'd while we were in flight?
     if (ctl->release) {
-        dictRelease(d);
+        if (d->asyncdata != nullptr)
+            d->asyncdata->release = true;
+        else
+            dictRelease(d);
         delete ctl;
         return;
     }
 
-    for (auto &wi : ctl->queue) {
-        // We need to remove it from the source hash table, and store it in the dest.
-        //  Note that it may have been deleted in the meantime and therefore not exist.
-        //  In this case it will be in the garbage collection list
-        
-        dictEntry **pdePrev = &d->ht[0].table[wi.hash & d->ht[0].sizemask];
-        while (*pdePrev != nullptr && *pdePrev != wi.de) {
-            pdePrev = &((*pdePrev)->next);
-        }
-        if (*pdePrev != nullptr) {  // The element may be NULL if its in the GC list
-            assert(*pdePrev == wi.de);
-            *pdePrev = wi.de->next;
-            // Now link it to the dest hash table
-            wi.de->next = d->ht[1].table[wi.hash & d->ht[1].sizemask];
-            d->ht[1].table[wi.hash & d->ht[1].sizemask] = wi.de;
-            d->ht[0].used--;
-            d->ht[1].used++;
+    if (d->ht[0].table != nullptr) {    // can be null if we're cleared during the rehash
+        for (auto &wi : ctl->queue) {
+            // We need to remove it from the source hash table, and store it in the dest.
+            //  Note that it may have been deleted in the meantime and therefore not exist.
+            //  In this case it will be in the garbage collection list
+            
+            dictEntry **pdePrev = &d->ht[0].table[wi.hash & d->ht[0].sizemask];
+            while (*pdePrev != nullptr && *pdePrev != wi.de) {
+                pdePrev = &((*pdePrev)->next);
+            }
+            if (*pdePrev != nullptr) {  // The element may be NULL if its in the GC list
+                assert(*pdePrev == wi.de);
+                *pdePrev = wi.de->next;
+                // Now link it to the dest hash table
+                wi.de->next = d->ht[1].table[wi.hash & d->ht[1].sizemask];
+                d->ht[1].table[wi.hash & d->ht[1].sizemask] = wi.de;
+                d->ht[0].used--;
+                d->ht[1].used++;
+            }
         }
     }
 
@@ -565,7 +584,7 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
         if ((he = ht->table[i]) == NULL) continue;
         while(he) {
             nextHe = he->next;
-            if (i == 0 && d->asyncdata) {
+            if (d->asyncdata) {
                 he->next = d->asyncdata->deGCList;
                 d->asyncdata->deGCList = he;
             } else {

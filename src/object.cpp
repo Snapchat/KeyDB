@@ -149,7 +149,7 @@ robj *createStringObject(const char *ptr, size_t len) {
 /* Create a string object from a long long value. When possible returns a
  * shared integer object, or at least an integer encoded one.
  *
- * If valueobj is non zero, the function avoids returning a a shared
+ * If valueobj is non zero, the function avoids returning a shared
  * integer, because the object is going to be used as value in the Redis key
  * space (for instance when the INCR command is used), so we want LFU/LRU
  * values specific for each key. */
@@ -273,7 +273,7 @@ robj *createZsetObject(void) {
     zset *zs = (zset*)zmalloc(sizeof(*zs), MALLOC_SHARED);
     robj *o;
 
-    zs->pdict = dictCreate(&zsetDictType,NULL);
+    zs->dict = dictCreate(&zsetDictType,NULL);
     zs->zsl = zslCreate();
     o = createObject(OBJ_ZSET,zs);
     o->encoding = OBJ_ENCODING_SKIPLIST;
@@ -335,7 +335,7 @@ void freeZsetObject(robj_roptr o) {
     switch (o->encoding) {
     case OBJ_ENCODING_SKIPLIST:
         zs = (zset*)ptrFromObj(o);
-        dictRelease(zs->pdict);
+        dictRelease(zs->dict);
         zslFree(zs->zsl);
         zfree(zs);
         break;
@@ -805,6 +805,7 @@ const char *strEncoding(int encoding) {
     case OBJ_ENCODING_INTSET: return "intset";
     case OBJ_ENCODING_SKIPLIST: return "skiplist";
     case OBJ_ENCODING_EMBSTR: return "embstr";
+    case OBJ_ENCODING_STREAM: return "stream";
     default: return "unknown";
     }
 }
@@ -851,7 +852,7 @@ size_t objectComputeSize(robj *o, size_t sample_size) {
         if(o->encoding == OBJ_ENCODING_INT) {
             asize = sizeof(*o);
         } else if(o->encoding == OBJ_ENCODING_RAW) {
-            asize = sdsAllocSize(szFromObj(o))+sizeof(*o);
+            asize = sdsZmallocSize(szFromObj(o))+sizeof(*o);
         } else if(o->encoding == OBJ_ENCODING_EMBSTR) {
             asize = sdslen(szFromObj(o))+2+sizeof(*o);
         } else {
@@ -879,7 +880,7 @@ size_t objectComputeSize(robj *o, size_t sample_size) {
             asize = sizeof(*o)+sizeof(dict)+(sizeof(struct dictEntry*)*dictSlots(d));
             while((de = dictNext(di)) != NULL && samples < sample_size) {
                 ele = (sds)dictGetKey(de);
-                elesize += sizeof(struct dictEntry) + sdsAllocSize(ele);
+                elesize += sizeof(struct dictEntry) + sdsZmallocSize(ele);
                 samples++;
             }
             dictReleaseIterator(di);
@@ -894,14 +895,14 @@ size_t objectComputeSize(robj *o, size_t sample_size) {
         if (o->encoding == OBJ_ENCODING_ZIPLIST) {
             asize = sizeof(*o)+(ziplistBlobLen((unsigned char*)ptrFromObj(o)));
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
-            d = ((zset*)ptrFromObj(o))->pdict;
+            d = ((zset*)ptrFromObj(o))->dict;
             zskiplist *zsl = ((zset*)ptrFromObj(o))->zsl;
             zskiplistNode *znode = zsl->header->level(0)->forward;
             asize = sizeof(*o)+sizeof(zset)+sizeof(zskiplist)+sizeof(dict)+
                     (sizeof(struct dictEntry*)*dictSlots(d))+
                     zmalloc_size(zsl->header);
             while(znode != NULL && samples < sample_size) {
-                elesize += sdsAllocSize(znode->ele);
+                elesize += sdsZmallocSize(znode->ele);
                 elesize += sizeof(struct dictEntry) + zmalloc_size(znode);
                 samples++;
                 znode = znode->level(0)->forward;
@@ -920,7 +921,7 @@ size_t objectComputeSize(robj *o, size_t sample_size) {
             while((de = dictNext(di)) != NULL && samples < sample_size) {
                 ele = (sds)dictGetKey(de);
                 ele2 = (sds)dictGetVal(de);
-                elesize += sdsAllocSize(ele) + sdsAllocSize(ele2);
+                elesize += sdsZmallocSize(ele) + sdsZmallocSize(ele2);
                 elesize += sizeof(struct dictEntry);
                 samples++;
             }
@@ -1061,7 +1062,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
 
     mem = 0;
     if (g_pserver->aof_state != AOF_OFF) {
-        mem += sdsalloc(g_pserver->aof_buf);
+        mem += sdsZmallocSize(g_pserver->aof_buf);
         mem += aofRewriteBufferSize();
     }
     mh->aof_buffer = mem;
@@ -1081,16 +1082,16 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
 
     for (j = 0; j < cserver.dbnum; j++) {
         redisDb *db = g_pserver->db+j;
-        long long keyscount = dictSize(db->pdict);
+        long long keyscount = dictSize(db->dict);
         if (keyscount==0) continue;
 
         mh->total_keys += keyscount;
         mh->db = (decltype(mh->db))zrealloc(mh->db,sizeof(mh->db[0])*(mh->num_dbs+1), MALLOC_LOCAL);
         mh->db[mh->num_dbs].dbid = j;
 
-        mem = dictSize(db->pdict) * sizeof(dictEntry) +
-              dictSlots(db->pdict) * sizeof(dictEntry*) +
-              dictSize(db->pdict) * sizeof(robj);
+        mem = dictSize(db->dict) * sizeof(dictEntry) +
+              dictSlots(db->dict) * sizeof(dictEntry*) +
+              dictSize(db->dict) * sizeof(robj);
         mh->db[mh->num_dbs].overhead_ht_main = mem;
         mem_total+=mem;
 
@@ -1276,24 +1277,21 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
 
 /* This is a helper function for the OBJECT command. We need to lookup keys
  * without any modification of LRU or other parameters. */
-robj *objectCommandLookup(client *c, robj *key) {
-    dictEntry *de;
-
-    if ((de = dictFind(c->db->pdict,ptrFromObj(key))) == NULL) return NULL;
-    return (robj*) dictGetVal(de);
+robj_roptr objectCommandLookup(client *c, robj *key) {
+    return lookupKeyReadWithFlags(c->db,key,LOOKUP_NOTOUCH|LOOKUP_NONOTIFY);
 }
 
-robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply) {
-    robj *o = objectCommandLookup(c,key);
+robj_roptr objectCommandLookupOrReply(client *c, robj *key, robj *reply) {
+    robj_roptr o = objectCommandLookup(c,key);
 
     if (!o) addReply(c, reply);
     return o;
 }
 
-/* Object command allows to inspect the internals of an Redis Object.
+/* Object command allows to inspect the internals of a Redis Object.
  * Usage: OBJECT <refcount|encoding|idletime|freq> <key> */
 void objectCommand(client *c) {
-    robj *o;
+    robj_roptr o;
 
     if (c->argc == 2 && !strcasecmp(szFromObj(c->argv[1]),"help")) {
         const char *help[] = {
@@ -1306,15 +1304,15 @@ NULL
         addReplyHelp(c, help);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"refcount") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
-                == NULL) return;
+                == nullptr) return;
         addReplyLongLong(c,o->getrefcount(std::memory_order_relaxed));
     } else if (!strcasecmp(szFromObj(c->argv[1]),"encoding") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
-                == NULL) return;
+                == nullptr) return;
         addReplyBulkCString(c,strEncoding(o->encoding));
     } else if (!strcasecmp(szFromObj(c->argv[1]),"idletime") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
-                == NULL) return;
+                == nullptr) return;
         if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
             addReplyError(c,"An LFU maxmemory policy is selected, idle time not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.");
             return;
@@ -1322,7 +1320,7 @@ NULL
         addReplyLongLong(c,estimateObjectIdleTime(o)/1000);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"freq") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
-                == NULL) return;
+                == nullptr) return;
         if (!(g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU)) {
             addReplyError(c,"An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.");
             return;
@@ -1331,10 +1329,10 @@ NULL
          * in case of the key has not been accessed for a long time,
          * because we update the access time only
          * when the key is read or overwritten. */
-        addReplyLongLong(c,LFUDecrAndReturn(o));
+        addReplyLongLong(c,LFUDecrAndReturn(o.unsafe_robjcast()));
     } else if (!strcasecmp(szFromObj(c->argv[1]), "lastmodified") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
-                == NULL) return;
+                == nullptr) return;
         uint64_t mvcc = mvccFromObj(o);
         addReplyLongLong(c, (g_pserver->mstime - (mvcc >> MVCC_MS_SHIFT)) / 1000);
     } else {
@@ -1377,12 +1375,12 @@ NULL
                 return;
             }
         }
-        if ((de = dictFind(c->db->pdict,ptrFromObj(c->argv[2]))) == NULL) {
+        if ((de = dictFind(c->db->dict,ptrFromObj(c->argv[2]))) == NULL) {
             addReplyNull(c);
             return;
         }
         size_t usage = objectComputeSize((robj*)dictGetVal(de),samples);
-        usage += sdsAllocSize((sds)dictGetKey(de));
+        usage += sdsZmallocSize((sds)dictGetKey(de));
         usage += sizeof(dictEntry);
         addReplyLongLong(c,usage);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"stats") && c->argc == 2) {

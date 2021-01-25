@@ -89,7 +89,7 @@ void discardTransaction(client *c) {
     unwatchAllKeys(c);
 }
 
-/* Flag the transacation as DIRTY_EXEC so that EXEC will fail.
+/* Flag the transaction as DIRTY_EXEC so that EXEC will fail.
  * Should be called every time there is an error while queueing a command. */
 void flagTransaction(client *c) {
     if (c->flags & CLIENT_MULTI)
@@ -348,32 +348,38 @@ void touchWatchedKey(redisDb *db, robj *key) {
     }
 }
 
-/* On FLUSHDB or FLUSHALL all the watched keys that are present before the
- * flush but will be deleted as effect of the flushing operation should
- * be touched. "dbid" is the DB that's getting the flush. -1 if it is
- * a FLUSHALL operation (all the DBs flushed). */
-void touchWatchedKeysOnFlush(int dbid) {
-    listIter li1, li2;
+/* Set CLIENT_DIRTY_CAS to all clients of DB when DB is dirty.
+ * It may happen in the following situations:
+ * FLUSHDB, FLUSHALL, SWAPDB
+ *
+ * replaced_with: for SWAPDB, the WATCH should be invalidated if
+ * the key exists in either of them, and skipped only if it
+ * doesn't exist in both. */
+void touchAllWatchedKeysInDb(redisDb *emptied, redisDb *replaced_with) {
+    listIter li;
     listNode *ln;
+    dictEntry *de;
+
     serverAssert(GlobalLocksAcquired());
 
-    /* For every client, check all the waited keys */
-    listRewind(g_pserver->clients,&li1);
-    while((ln = listNext(&li1))) {
-        client *c = (client*)listNodeValue(ln);
-        listRewind(c->watched_keys,&li2);
-        while((ln = listNext(&li2))) {
-            watchedKey *wk = (watchedKey*)listNodeValue(ln);
+    if (dictSize(emptied->watched_keys) == 0) return;
 
-            /* For every watched key matching the specified DB, if the
-             * key exists, mark the client as dirty, as the key will be
-             * removed. */
-            if (dbid == -1 || wk->db->id == dbid) {
-                if (dictFind(wk->db->pdict, ptrFromObj(wk->key)) != NULL)
-                    c->flags |= CLIENT_DIRTY_CAS;
+    dictIterator *di = dictGetSafeIterator(emptied->watched_keys);
+    while((de = dictNext(di)) != NULL) {
+        robj *key = (robj*)dictGetKey(de);
+        list *clients = (list*)dictGetVal(de);
+        if (!clients) continue;
+        listRewind(clients,&li);
+        while((ln = listNext(&li))) {
+            client *c = (client*)listNodeValue(ln);
+            if (dictFind(emptied->dict, ptrFromObj(key))) {
+                c->flags |= CLIENT_DIRTY_CAS;
+            } else if (replaced_with && dictFind(replaced_with->dict, ptrFromObj(key))) {
+                c->flags |= CLIENT_DIRTY_CAS;
             }
         }
     }
+    dictReleaseIterator(di);
 }
 
 void watchCommand(client *c) {

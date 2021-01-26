@@ -723,8 +723,8 @@ void ACLAddAllowedSubcommand(user *u, unsigned long id, const char *sub) {
  * -<command>   Disallow the execution of that command
  * +@<category> Allow the execution of all the commands in such category
  *              with valid categories are like @admin, @set, @sortedset, ...
- *              and so forth, see the full list in the server.c file where
- *              the Redis command table is described and defined.
+ *              and so forth, see the full list in the server.cpp file where
+ *              the KeyDB command table is described and defined.
  *              The special category @all means all the commands, but currently
  *              present in the server, and that will be loaded in the future
  *              via modules.

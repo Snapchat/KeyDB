@@ -2949,8 +2949,6 @@ void runAndPropogateToReplicas(FN_PTR *pfn, TARGS... args) {
     }
 }
 
-
-void killIOThreads(void);
 void killThreads(void);
 void makeThreadKillable(void);
 

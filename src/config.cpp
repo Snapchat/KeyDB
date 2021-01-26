@@ -1930,7 +1930,7 @@ static int enumConfigSet(typeData data, sds value, int update, const char **err)
         }
         sdsrange(enumerr,0,-3); /* Remove final ", ". */
 
-        strncpy(loadbuf, enumerr, LOADBUF_SIZE);
+        strncpy(loadbuf, enumerr, LOADBUF_SIZE-1);
         loadbuf[LOADBUF_SIZE - 1] = '\0';
 
         sdsfree(enumerr);

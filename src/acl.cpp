@@ -383,7 +383,7 @@ int ACLUserCanExecuteFutureCommands(user *u) {
  * zero, the user flag ALLCOMMANDS is cleared since it is no longer possible
  * to skip the command bit explicit test. */
 void ACLSetUserCommandBit(user *u, unsigned long id, int value) {
-    uint64_t word, bit;
+    uint64_t word=0, bit=0;
     if (ACLGetCommandBitCoordinates(id,&word,&bit) == C_ERR) return;
     if (value) {
         u->allowed_commands[word] |= bit;

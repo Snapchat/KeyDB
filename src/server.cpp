@@ -3351,8 +3351,8 @@ int populateCommandTableParseFlags(struct redisCommand *c, const char *strflags)
     return C_OK;
 }
 
-/* Populates the Redis Command Table starting from the hard coded list
- * we have on top of server.c file. */
+/* Populates the KeyDB Command Table starting from the hard coded list
+ * we have on top of server.cpp file. */
 void populateCommandTable(void) {
     int j;
     int numcommands = sizeof(redisCommandTable)/sizeof(struct redisCommand);

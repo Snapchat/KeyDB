@@ -172,8 +172,8 @@ static int connSocketWrite(connection *conn, const void *data, size_t data_len) 
         /* Don't overwrite the state of a connection that is not already
          * connected, not to mess with handler callbacks.
          */
-        if (conn->state == CONN_STATE_CONNECTED)
-            conn->state.store(CONN_STATE_ERROR, std::memory_order_relaxed);
+        ConnectionState expected = CONN_STATE_CONNECTED;
+        conn->state.compare_exchange_strong(expected, CONN_STATE_ERROR);
     }
 
     return ret;

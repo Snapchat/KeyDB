@@ -2468,7 +2468,7 @@ void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
      * first byte is zero, they'll do auto discovery. */
     memset(hdr->myip,0,NET_IP_STR_LEN);
     if (g_pserver->cluster_announce_ip) {
-        strncpy(hdr->myip,g_pserver->cluster_announce_ip,NET_IP_STR_LEN);
+        strncpy(hdr->myip,g_pserver->cluster_announce_ip,NET_IP_STR_LEN-1);
         hdr->myip[NET_IP_STR_LEN-1] = '\0';
     }
 
@@ -3542,7 +3542,7 @@ void clusterCron(void) {
                  * duplicating the string. This way later we can check if
                  * the address really changed. */
                 prev_ip = zstrdup(prev_ip);
-                strncpy(myself->ip,g_pserver->cluster_announce_ip,NET_IP_STR_LEN);
+                strncpy(myself->ip,g_pserver->cluster_announce_ip,NET_IP_STR_LEN-1);
                 myself->ip[NET_IP_STR_LEN-1] = '\0';
             } else {
                 myself->ip[0] = '\0'; /* Force autodetection. */

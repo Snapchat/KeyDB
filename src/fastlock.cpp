@@ -356,26 +356,32 @@ extern "C" void fastlock_lock(struct fastlock *lock, spin_worker worker)
     __atomic_load(&g_fHighCpuPressure, &fHighPressure, __ATOMIC_RELAXED);
     unsigned loopLimit = fHighPressure ? 0x10000 : 0x100000;
 
-    // WARNING:::: THIS DOESN"T MATCH ASM
-    for (;;)
-    {
-        __atomic_load(&lock->m_ticket.u, &ticketT.u, __ATOMIC_ACQUIRE);
-        if ((ticketT.u & 0xffff) == myticket)
-            break;
+    if (worker != nullptr) {
+        for (;;) {
+            __atomic_load(&lock->m_ticket.u, &ticketT.u, __ATOMIC_ACQUIRE);
+            if ((ticketT.u & 0xffff) == myticket)
+                break;
+            if (!worker())
+                goto LNormalLoop;
+        }
+    } else {
+LNormalLoop:
+        for (;;)
+        {
+            __atomic_load(&lock->m_ticket.u, &ticketT.u, __ATOMIC_ACQUIRE);
+            if ((ticketT.u & 0xffff) == myticket)
+                break;
 
-        if (worker != nullptr) {
-            worker();
-        } else {
 #if defined(__i386__) || defined(__amd64__)
             __asm__ __volatile__ ("pause");
 #elif defined(__aarch64__)
             __asm__ __volatile__ ("yield");
 #endif
-        }
 
-        if ((++cloops % loopLimit) == 0)
-        {
-            fastlock_sleep(lock, tid, ticketT.u, myticket);
+            if ((++cloops % loopLimit) == 0)
+            {
+                fastlock_sleep(lock, tid, ticketT.u, myticket);
+            }
         }
     }
 

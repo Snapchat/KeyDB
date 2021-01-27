@@ -2246,11 +2246,12 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
     int iel = ielFromEventLoop(eventLoop);
 
+    locker.arm();
+
     size_t zmalloc_used = zmalloc_used_memory();
     if (zmalloc_used > g_pserver->stat_peak_memory)
         g_pserver->stat_peak_memory = zmalloc_used;
     
-    locker.arm();
     serverAssert(g_pserver->repl_batch_offStart < 0);
     runAndPropogateToReplicas(processClients);
 

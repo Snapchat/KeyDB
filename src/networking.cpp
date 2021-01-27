@@ -3486,6 +3486,16 @@ void processEventsWhileBlocked(int iel) {
     locker.arm(nullptr);
     locker.release();
 
+    // Try to complete any async rehashes (this would normally happen in dbCron, but that won't run here)
+    for (int idb = 0; idb < cserver.dbnum; ++idb) {
+        redisDb *db = &g_pserver->db[idb];
+        while (db->pdict->asyncdata != nullptr) {
+            if (!db->pdict->asyncdata->done)
+                break;
+            dictCompleteRehashAsync(db->pdict->asyncdata, false /*fFree*/);
+        }
+    }
+
     // Restore it so the calling code is not confused
     if (fReplBacklog) {
         g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;

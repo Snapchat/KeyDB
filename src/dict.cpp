@@ -275,6 +275,7 @@ void dictRehashAsync(dictAsyncRehashCtl *ctl) {
         wi.hash = dictHashKey(ctl->dict, dictGetKey(wi.de));
     }
     ctl->hashIdx = ctl->queue.size();
+    ctl->done = true;
 }
 
 bool dictRehashSomeAsync(dictAsyncRehashCtl *ctl, size_t hashes) {
@@ -284,71 +285,88 @@ bool dictRehashSomeAsync(dictAsyncRehashCtl *ctl, size_t hashes) {
         wi.hash = dictHashKey(ctl->dict, dictGetKey(wi.de));
     }
 
+    if (ctl->hashIdx == ctl->queue.size()) ctl->done = true;
     return ctl->hashIdx < ctl->queue.size();
 }
 
-void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl) {
+void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl, bool fFree) {
     dict *d = ctl->dict;
+    assert(ctl->done);
+    
     // Unlink ourselves
+    bool fUnlinked = false;
     dictAsyncRehashCtl **pprev = &d->asyncdata;
+
     while (*pprev != nullptr) {
         if (*pprev == ctl) {
             *pprev = ctl->next;
+            fUnlinked = true;
             break;
         }
         pprev = &((*pprev)->next);
     }
 
-    // Was the dictionary free'd while we were in flight?
-    if (ctl->release) {
-        if (d->asyncdata != nullptr)
-            d->asyncdata->release = true;
-        else
-            dictRelease(d);
-        delete ctl;
-        return;
-    }
-
-    if (d->ht[0].table != nullptr) {    // can be null if we're cleared during the rehash
-        for (auto &wi : ctl->queue) {
-            // We need to remove it from the source hash table, and store it in the dest.
-            //  Note that it may have been deleted in the meantime and therefore not exist.
-            //  In this case it will be in the garbage collection list
-            
-            dictEntry **pdePrev = &d->ht[0].table[wi.hash & d->ht[0].sizemask];
-            while (*pdePrev != nullptr && *pdePrev != wi.de) {
-                pdePrev = &((*pdePrev)->next);
-            }
-            if (*pdePrev != nullptr) {  // The element may be NULL if its in the GC list
-                assert(*pdePrev == wi.de);
-                *pdePrev = wi.de->next;
-                // Now link it to the dest hash table
-                wi.de->next = d->ht[1].table[wi.hash & d->ht[1].sizemask];
-                d->ht[1].table[wi.hash & d->ht[1].sizemask] = wi.de;
-                d->ht[0].used--;
-                d->ht[1].used++;
-            }
+    if (fUnlinked) {
+        if (ctl->next != nullptr && ctl->deGCList != nullptr) {
+            // An older work item may depend on our free list, so pass our free list to them
+            dictEntry **deGC = &ctl->next->deGCList;
+            while (*deGC != nullptr) deGC = &((*deGC)->next);
+            *deGC = ctl->deGCList;
+            ctl->deGCList = nullptr;
         }
     }
 
-    // Now free anyting in the GC list
-    while (ctl->deGCList != nullptr) {
-        auto next = ctl->deGCList->next;
-        dictFreeKey(d, ctl->deGCList);
-        dictFreeVal(d, ctl->deGCList);
-        zfree(ctl->deGCList);
-        ctl->deGCList = next;
+    if (fUnlinked && !ctl->release) {
+        if (d->ht[0].table != nullptr) {    // can be null if we're cleared during the rehash
+            for (auto &wi : ctl->queue) {
+                // We need to remove it from the source hash table, and store it in the dest.
+                //  Note that it may have been deleted in the meantime and therefore not exist.
+                //  In this case it will be in the garbage collection list
+                
+                dictEntry **pdePrev = &d->ht[0].table[wi.hash & d->ht[0].sizemask];
+                while (*pdePrev != nullptr && *pdePrev != wi.de) {
+                    pdePrev = &((*pdePrev)->next);
+                }
+                if (*pdePrev != nullptr) {  // The element may be NULL if its in the GC list
+                    assert(*pdePrev == wi.de);
+                    *pdePrev = wi.de->next;
+                    // Now link it to the dest hash table
+                    wi.de->next = d->ht[1].table[wi.hash & d->ht[1].sizemask];
+                    d->ht[1].table[wi.hash & d->ht[1].sizemask] = wi.de;
+                    d->ht[0].used--;
+                    d->ht[1].used++;
+                }
+            }
+        }
+
+        /* Check if we already rehashed the whole table... */
+        if (d->ht[0].used == 0 && d->asyncdata == nullptr) {
+            zfree(d->ht[0].table);
+            d->ht[0] = d->ht[1];
+            _dictReset(&d->ht[1]);
+            d->rehashidx = -1;
+        }
     }
 
-    /* Check if we already rehashed the whole table... */
-    if (d->ht[0].used == 0 && d->asyncdata == nullptr) {
-        zfree(d->ht[0].table);
-        d->ht[0] = d->ht[1];
-        _dictReset(&d->ht[1]);
-        d->rehashidx = -1;
-    }
+    if (fFree) {
+        while (ctl->deGCList != nullptr) {
+            auto next = ctl->deGCList->next;
+            dictFreeKey(d, ctl->deGCList);
+            dictFreeVal(d, ctl->deGCList);
+            zfree(ctl->deGCList);
+            ctl->deGCList = next;
+        }
 
-    delete ctl;
+        // Was the dictionary free'd while we were in flight?
+        if (ctl->release) {
+            if (d->asyncdata != nullptr)
+                d->asyncdata->release = true;
+            else
+                dictRelease(d);
+        }
+
+        delete ctl;
+    }
 }
 
 long long timeInMilliseconds(void) {
@@ -506,7 +524,7 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
                 else
                     d->ht[table].table[idx] = he->next;
                 if (!nofree) {
-                    if (table == 0 && d->asyncdata != nullptr) {
+                    if (table == 0 && d->asyncdata != nullptr && idx < d->rehashidx) {
                         he->next = d->asyncdata->deGCList;
                         d->asyncdata->deGCList = he->next;
                     } else {
@@ -584,7 +602,7 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
         if ((he = ht->table[i]) == NULL) continue;
         while(he) {
             nextHe = he->next;
-            if (d->asyncdata) {
+            if (d->asyncdata && i < d->rehashidx) {
                 he->next = d->asyncdata->deGCList;
                 d->asyncdata->deGCList = he;
             } else {

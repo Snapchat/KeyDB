@@ -356,6 +356,7 @@ extern "C" void fastlock_lock(struct fastlock *lock, spin_worker worker)
     __atomic_load(&g_fHighCpuPressure, &fHighPressure, __ATOMIC_RELAXED);
     unsigned loopLimit = fHighPressure ? 0x10000 : 0x100000;
 
+    // WARNING:::: THIS DOESN"T MATCH ASM
     for (;;)
     {
         __atomic_load(&lock->m_ticket.u, &ticketT.u, __ATOMIC_ACQUIRE);

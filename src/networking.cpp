@@ -3489,10 +3489,10 @@ void processEventsWhileBlocked(int iel) {
     // Try to complete any async rehashes (this would normally happen in dbCron, but that won't run here)
     for (int idb = 0; idb < cserver.dbnum; ++idb) {
         redisDb *db = &g_pserver->db[idb];
-        while (db->pdict->asyncdata != nullptr) {
-            if (!db->pdict->asyncdata->done)
+        while (db->dict->asyncdata != nullptr) {
+            if (!db->dict->asyncdata->done)
                 break;
-            dictCompleteRehashAsync(db->pdict->asyncdata, false /*fFree*/);
+            dictCompleteRehashAsync(db->dict->asyncdata, false /*fFree*/);
         }
     }
 

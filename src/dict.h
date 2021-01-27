@@ -37,6 +37,7 @@
 
 #ifdef __cplusplus
 #include <vector>
+#include <atomic>
 extern "C" {
 #endif
 
@@ -99,6 +100,7 @@ struct dictAsyncRehashCtl {
     size_t hashIdx = 0;
     bool release = false;
     dictAsyncRehashCtl *next = nullptr;
+    std::atomic<bool> done { false };
 
     dictAsyncRehashCtl(struct dict *d, dictAsyncRehashCtl *next) : dict(d), next(next) {
         queue.reserve(c_targetQueueSize);
@@ -222,7 +224,7 @@ dictEntry **dictFindEntryRefByPtrAndHash(dict *d, const void *oldptr, uint64_t h
 dictAsyncRehashCtl *dictRehashAsyncStart(dict *d, int buckets = dictAsyncRehashCtl::c_targetQueueSize);
 void dictRehashAsync(dictAsyncRehashCtl *ctl);
 bool dictRehashSomeAsync(dictAsyncRehashCtl *ctl, size_t hashes);
-void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl);
+void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl, bool fFree);
 
 /* Hash table types */
 extern dictType dictTypeHeapStringCopyKey;

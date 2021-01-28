@@ -1488,6 +1488,7 @@ struct redisServer {
     ::dict *orig_commands;        /* Command table before command renaming. */
 
     struct redisServerThreadVars rgthreadvar[MAX_EVENT_LOOPS];
+    pthread_t rgthread[MAX_EVENT_LOOPS];
 
     std::atomic<unsigned int> lruclock;      /* Clock for LRU eviction */
     std::atomic<int> shutdown_asap;          /* SHUTDOWN needed ASAP */

@@ -301,3 +301,20 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
 	}
     }
 }
+
+start_server {tags {"active-repl"} overrides {active-replica yes}} {
+    set master [srv 0 client]
+    set master_host [srv 0 host]
+    set master_port [srv 0 port]
+    test {REPLICAOF no one in config properly clears master list} {
+        start_server [list overrides [list "replicaof" "$master_host $master_port" "replicaof" "no one" "replicaof" "$master_host $master_port"]] {
+            wait_for_condition 50 100 {
+                [string match {*role:slave*} [[srv 0 client] info replication]] &&
+                [string match "*master_host:$master_host*" [[srv 0 client] info replication]] &&
+                [string match "*master_port:$master_port*" [[srv 0 client] info replication]]
+            } else {
+                fail "Replica did not properly connect to master"
+            }
+        }
+	}
+}

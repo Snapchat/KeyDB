@@ -487,7 +487,21 @@ void loadServerConfigFromString(char *config) {
                     !strcasecmp(argv[0],"replicaof")) && argc == 3) {
             slaveof_linenum = linenum;
             if (!strcasecmp(argv[1], "no") && !strcasecmp(argv[2], "one")) {
-                listRelease(g_pserver->masters);
+                if (listLength(g_pserver->masters)) {
+                    listIter li;
+                    listNode *ln;
+                    listRewind(g_pserver->masters, &li);
+                    while ((ln = listNext(&li)))
+                    {
+                        struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
+                        zfree(mi->masterauth);
+                        zfree(mi->masteruser);
+                        zfree(mi->repl_transfer_tmpfile);
+                        delete mi->staleKeyMap;
+                        zfree(mi);
+                        listDelNode(g_pserver->masters, ln);
+                    }
+                }
                 continue;
             }
             char *ptr;

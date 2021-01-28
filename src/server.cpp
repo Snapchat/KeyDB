@@ -5990,21 +5990,20 @@ int main(int argc, char **argv) {
     
     setOOMScoreAdj(-1);
     serverAssert(cserver.cthreads > 0 && cserver.cthreads <= MAX_EVENT_LOOPS);
-    pthread_t rgthread[MAX_EVENT_LOOPS];
 
     pthread_attr_t tattr;
     pthread_attr_init(&tattr);
     pthread_attr_setstacksize(&tattr, 1 << 23); // 8 MB
     for (int iel = 0; iel < cserver.cthreads; ++iel)
     {
-        pthread_create(rgthread + iel, &tattr, workerThreadMain, (void*)((int64_t)iel));
+        pthread_create(g_pserver->rgthread + iel, &tattr, workerThreadMain, (void*)((int64_t)iel));
         if (cserver.fThreadAffinity)
         {
 #ifdef __linux__
             cpu_set_t cpuset;
             CPU_ZERO(&cpuset);
             CPU_SET(iel + cserver.threadAffinityOffset, &cpuset);
-            if (pthread_setaffinity_np(rgthread[iel], sizeof(cpu_set_t), &cpuset) == 0)
+            if (pthread_setaffinity_np(g_pserver->rgthread[iel], sizeof(cpu_set_t), &cpuset) == 0)
             {
                 serverLog(LOG_INFO, "Binding thread %d to cpu %d", iel, iel + cserver.threadAffinityOffset + 1);
             }
@@ -6024,7 +6023,7 @@ int main(int argc, char **argv) {
         this is so that all worker threads are orthogonal in their startup/shutdown */
     void *pvRet;
     for (int iel = 0; iel < cserver.cthreads; ++iel)
-        pthread_join(rgthread[iel], &pvRet);
+        pthread_join(g_pserver->rgthread[iel], &pvRet);
 
     return 0;
 }

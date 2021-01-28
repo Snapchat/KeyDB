@@ -1671,8 +1671,13 @@ int memtest_test_linux_anonymous_maps(void) {
 }
 #endif /* HAVE_PROC_MAPS */
 
-static void killMainThread(void) {
+static void killServerThreads(void) {
     int err;
+    for (int i = 0; i < cserver.cthreads; i++) {
+        if (g_pserver->rgthread[i] != pthread_self()) {
+            pthread_cancel(g_pserver->rgthread[i]);
+        }
+    }
     if (pthread_self() != cserver.main_thread_id && pthread_cancel(cserver.main_thread_id) == 0) {
         if ((err = pthread_join(cserver.main_thread_id,NULL)) != 0) {
             serverLog(LL_WARNING, "main thread can not be joined: %s", strerror(err));
@@ -1687,7 +1692,7 @@ static void killMainThread(void) {
  * Currently Redis does this only on crash (for instance on SIGSEGV) in order
  * to perform a fast memory check without other threads messing with memory. */
 void killThreads(void) {
-    killMainThread();
+    killServerThreads();
     bioKillThreads();
 }
 

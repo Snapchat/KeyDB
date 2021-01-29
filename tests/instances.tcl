@@ -243,6 +243,7 @@ proc parse_options {} {
             puts "--pause-on-error        Pause for manual inspection on error."
             puts "--fail                  Simulate a test failure."
             puts "--valgrind              Run with valgrind."
+            puts "--tls                   Run tests in TLS mode."
             puts "--help                  Shows this help."
             exit 0
         } else {
@@ -322,7 +323,7 @@ proc pause_on_error {} {
             puts "S <id> cmd ... arg     Call command in Sentinel <id>."
             puts "R <id> cmd ... arg     Call command in Redis <id>."
             puts "SI <id> <field>        Show Sentinel <id> INFO <field>."
-            puts "RI <id> <field>        Show Sentinel <id> INFO <field>."
+            puts "RI <id> <field>        Show Redis <id> INFO <field>."
             puts "continue               Resume test."
         } else {
             set errcode [catch {eval $line} retval]
@@ -605,3 +606,16 @@ proc restart_instance {type id} {
     }
 }
 
+proc redis_deferring_client {type id} {
+    set port [get_instance_attrib $type $id port]
+    set host [get_instance_attrib $type $id host]
+    set client [redis $host $port 1 $::tls]
+    return $client
+}
+
+proc redis_client {type id} {
+    set port [get_instance_attrib $type $id port]
+    set host [get_instance_attrib $type $id host]
+    set client [redis $host $port 0 $::tls]
+    return $client
+}

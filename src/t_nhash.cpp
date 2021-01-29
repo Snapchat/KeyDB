@@ -66,7 +66,7 @@ robj *fetchFromKey(redisDb *db, robj_roptr key) {
 
             dict *d = nullptr;
             if (o == nullptr)
-                d = db->pdict;
+                d = db->dict;
             else
                 d = (dict*)ptrFromObj(o);
             
@@ -105,7 +105,7 @@ bool setWithKey(redisDb *db, robj_roptr key, robj *val, bool fCreateBuckets) {
 
             dict *d = nullptr;
             if (o == nullptr)
-                d = db->pdict;
+                d = db->dict;
             else
                 d = (dict*)ptrFromObj(o);
             

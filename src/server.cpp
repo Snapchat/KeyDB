@@ -2757,7 +2757,7 @@ int setOOMScoreAdj(int process_class) {
     int val;
     char buf[64];
 
-    val = g_pserver->oom_score_adj_base + g_pserver->oom_score_adj_values[process_class];
+    val = g_pserver->oom_score_adj_values[process_class];
     if (g_pserver->oom_score_adj == OOM_SCORE_RELATIVE)
         val += g_pserver->oom_score_adj_base;
     if (val > 1000) val = 1000;

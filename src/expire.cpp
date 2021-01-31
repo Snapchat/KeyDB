@@ -54,7 +54,7 @@ void activeExpireCycleExpireFullKey(redisDb *db, const char *key) {
         dbSyncDelete(db,keyobj);
     notifyKeyspaceEvent(NOTIFY_EXPIRED,
         "expired",keyobj,db->id);
-    trackingInvalidateKey(NULL, keyobj);
+    signalModifiedKey(NULL, db, keyobj);
     decrRefCount(keyobj);
     g_pserver->stat_expiredkeys++;
 }
@@ -76,7 +76,7 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
     }
 
     expireEntryFat *pfat = e.pfatentry();
-    dictEntry *de = dictFind(db->pdict, e.key());
+    dictEntry *de = dictFind(db->dict, e.key());
     robj *val = (robj*)dictGetVal(de);
     int deleted = 0;
 
@@ -297,14 +297,14 @@ void pexpireMemberAtCommand(client *c)
  * Expire cycle type:
  *
  * If type is ACTIVE_EXPIRE_CYCLE_FAST the function will try to run a
- * "fast" expire cycle that takes no longer than EXPIRE_FAST_CYCLE_DURATION
+ * "fast" expire cycle that takes no longer than ACTIVE_EXPIRE_CYCLE_FAST_DURATION
  * microseconds, and is not repeated again before the same amount of time.
  *
  * If type is ACTIVE_EXPIRE_CYCLE_SLOW, that normal expire cycle is
  * executed, where the time limit is a percentage of the REDIS_HZ period
  * as specified by the ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC define. */
 
-void activeExpireCycle(int type) {
+void activeExpireCycleCore(int type) {
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
     static unsigned int current_db = 0; /* Last DB tested. */
@@ -420,6 +420,11 @@ void activeExpireCycle(int type) {
                                      (g_pserver->stat_expired_stale_perc*0.95);
 }
 
+void activeExpireCycle(int type)
+{
+    runAndPropogateToReplicas(activeExpireCycleCore, type);
+}
+
 /*-----------------------------------------------------------------------------
  * Expires of keys created in writable slaves
  *
@@ -479,7 +484,7 @@ void expireSlaveKeys(void) {
                 redisDb *db = g_pserver->db+dbid;
 
                 // the expire is hashed based on the key pointer, so we need the point in the main db
-                dictEntry *deMain = dictFind(db->pdict, keyname);
+                dictEntry *deMain = dictFind(db->dict, keyname);
                 auto itr = db->setexpire->end();
                 if (deMain != nullptr)
                     itr = db->setexpire->find((sds)dictGetKey(deMain));
@@ -514,7 +519,7 @@ void expireSlaveKeys(void) {
         else
             dictDelete(slaveKeysWithExpire,keyname);
 
-        /* Stop conditions: found 3 keys we cna't expire in a row or
+        /* Stop conditions: found 3 keys we can't expire in a row or
          * time limit was reached. */
         cycles++;
         if (noexpire > 3) break;
@@ -566,7 +571,7 @@ size_t getSlaveKeyWithExpireCount(void) {
  *
  * Note: technically we should handle the case of a single DB being flushed
  * but it is not worth it since anyway race conditions using the same set
- * of key names in a wriatable replica and in its master will lead to
+ * of key names in a writable replica and in its master will lead to
  * inconsistencies. This is just a best-effort thing we do. */
 void flushSlaveKeysWithExpireList(void) {
     if (slaveKeysWithExpire) {
@@ -575,12 +580,22 @@ void flushSlaveKeysWithExpireList(void) {
     }
 }
 
+int checkAlreadyExpired(long long when) {
+    /* EXPIRE with negative TTL, or EXPIREAT with a timestamp into the past
+     * should never be executed as a DEL when load the AOF or in the context
+     * of a slave instance.
+     *
+     * Instead we add the already expired key to the database with expire time
+     * (possibly in the past) and wait for an explicit DEL from the master. */
+    return (when <= mstime() && !g_pserver->loading && (!listLength(g_pserver->masters) || g_pserver->fActiveReplica));
+}
+
 /*-----------------------------------------------------------------------------
  * Expires Commands
  *----------------------------------------------------------------------------*/
 
 /* This is the generic command implementation for EXPIRE, PEXPIRE, EXPIREAT
- * and PEXPIREAT. Because the commad second argument may be relative or absolute
+ * and PEXPIREAT. Because the command second argument may be relative or absolute
  * the "basetime" argument is used to signal what the base time is (either 0
  * for *AT variants of the command, or the current time for relative expires).
  *
@@ -602,13 +617,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         return;
     }
 
-    /* EXPIRE with negative TTL, or EXPIREAT with a timestamp into the past
-     * should never be executed as a DEL when load the AOF or in the context
-     * of a replica instance.
-     *
-     * Instead we take the other branch of the IF statement setting an expire
-     * (possibly in the past) and wait for an explicit DEL from the master. */
-    if (when <= mstime() && !g_pserver->loading && (!listLength(g_pserver->masters) || g_pserver->fActiveReplica)) {
+    if (checkAlreadyExpired(when)) {
         robj *aux;
 
         int deleted = g_pserver->lazyfree_lazy_expire ? dbAsyncDelete(c->db,key) :
@@ -715,6 +724,7 @@ void persistCommand(client *c) {
     if (lookupKeyWrite(c->db,c->argv[1])) {
         if (c->argc == 2) {
             if (removeExpire(c->db,c->argv[1])) {
+                signalModifiedKey(c,c->db,c->argv[1]);
                 notifyKeyspaceEvent(NOTIFY_GENERIC,"persist",c->argv[1],c->db->id);
                 addReply(c,shared.cone);
                 g_pserver->dirty++;
@@ -723,6 +733,7 @@ void persistCommand(client *c) {
             }
         } else if (c->argc == 3) {
             if (removeSubkeyExpire(c->db, c->argv[1], c->argv[2])) {
+                signalModifiedKey(c,c->db,c->argv[1]);
                 notifyKeyspaceEvent(NOTIFY_GENERIC,"persist",c->argv[1],c->db->id);
                 addReply(c,shared.cone);
                 g_pserver->dirty++;

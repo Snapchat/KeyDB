@@ -37,6 +37,7 @@ void initClientMultiState(client *c) {
     c->mstate.commands = NULL;
     c->mstate.count = 0;
     c->mstate.cmd_flags = 0;
+    c->mstate.cmd_inv_flags = 0;
 }
 
 /* Release all the resources associated with MULTI/EXEC state */
@@ -77,6 +78,7 @@ void queueMultiCommand(client *c) {
         incrRefCount(mc->argv[j]);
     c->mstate.count++;
     c->mstate.cmd_flags |= c->cmd->flags;
+    c->mstate.cmd_inv_flags |= ~c->cmd->flags;
 }
 
 void discardTransaction(client *c) {
@@ -87,7 +89,7 @@ void discardTransaction(client *c) {
     unwatchAllKeys(c);
 }
 
-/* Flag the transacation as DIRTY_EXEC so that EXEC will fail.
+/* Flag the transaction as DIRTY_EXEC so that EXEC will fail.
  * Should be called every time there is an error while queueing a command. */
 void flagTransaction(client *c) {
     if (c->flags & CLIENT_MULTI)
@@ -125,6 +127,24 @@ void execCommandPropagateExec(client *c) {
               PROPAGATE_AOF|PROPAGATE_REPL);
 }
 
+/* Aborts a transaction, with a specific error message.
+ * The transaction is always aboarted with -EXECABORT so that the client knows
+ * the server exited the multi state, but the actual reason for the abort is
+ * included too.
+ * Note: 'error' may or may not end with \r\n. see addReplyErrorFormat. */
+void execCommandAbort(client *c, sds error) {
+    discardTransaction(c);
+
+    if (error[0] == '-') error++;
+    addReplyErrorFormat(c, "-EXECABORT Transaction discarded because of: %s", error);
+
+    /* Send EXEC to clients waiting data from MONITOR. We did send a MULTI
+     * already, and didn't send any of the queued commands, now we'll just send
+     * EXEC so it is clear that the transaction is over. */
+    if (listLength(g_pserver->monitors) && !g_pserver->loading)
+        replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
+}
+
 void execCommand(client *c) {
     int j;
     robj **orig_argv;
@@ -138,15 +158,6 @@ void execCommand(client *c) {
         return;
     }
 
-    /* If we are in -BUSY state, flag the transaction and return the
-     * -BUSY error, like Redis <= 5. This is a temporary fix, may be changed
-     *  ASAP, see issue #7353 on Github. */
-    if (g_pserver->lua_timedout) {
-        flagTransaction(c);
-        addReply(c, shared.slowscripterr);
-        return;
-    }
-
     /* Check if we need to abort the EXEC because:
      * 1) Some WATCHed key was touched.
      * 2) There was a previous error while queueing commands.
@@ -156,21 +167,6 @@ void execCommand(client *c) {
     if (c->flags & (CLIENT_DIRTY_CAS|CLIENT_DIRTY_EXEC)) {
         addReply(c, c->flags & CLIENT_DIRTY_EXEC ? shared.execaborterr :
                                                    shared.nullarray[c->resp]);
-        discardTransaction(c);
-        goto handle_monitor;
-    }
-
-    /* If there are write commands inside the transaction, and this is a read
-     * only replica, we want to send an error. This happens when the transaction
-     * was initiated when the instance was a master or a writable replica and
-     * then the configuration changed (for example instance was turned into
-     * a replica). */
-    if (!g_pserver->loading && listLength(g_pserver->masters) && g_pserver->repl_slave_ro &&
-        !(c->flags & CLIENT_MASTER) && c->mstate.cmd_flags & CMD_WRITE)
-    {
-        addReplyError(c,
-            "Transaction contains write commands but instance "
-            "is now a read-only replica. EXEC aborted.");
         discardTransaction(c);
         goto handle_monitor;
     }
@@ -352,32 +348,38 @@ void touchWatchedKey(redisDb *db, robj *key) {
     }
 }
 
-/* On FLUSHDB or FLUSHALL all the watched keys that are present before the
- * flush but will be deleted as effect of the flushing operation should
- * be touched. "dbid" is the DB that's getting the flush. -1 if it is
- * a FLUSHALL operation (all the DBs flushed). */
-void touchWatchedKeysOnFlush(int dbid) {
-    listIter li1, li2;
+/* Set CLIENT_DIRTY_CAS to all clients of DB when DB is dirty.
+ * It may happen in the following situations:
+ * FLUSHDB, FLUSHALL, SWAPDB
+ *
+ * replaced_with: for SWAPDB, the WATCH should be invalidated if
+ * the key exists in either of them, and skipped only if it
+ * doesn't exist in both. */
+void touchAllWatchedKeysInDb(redisDb *emptied, redisDb *replaced_with) {
+    listIter li;
     listNode *ln;
+    dictEntry *de;
+
     serverAssert(GlobalLocksAcquired());
 
-    /* For every client, check all the waited keys */
-    listRewind(g_pserver->clients,&li1);
-    while((ln = listNext(&li1))) {
-        client *c = (client*)listNodeValue(ln);
-        listRewind(c->watched_keys,&li2);
-        while((ln = listNext(&li2))) {
-            watchedKey *wk = (watchedKey*)listNodeValue(ln);
+    if (dictSize(emptied->watched_keys) == 0) return;
 
-            /* For every watched key matching the specified DB, if the
-             * key exists, mark the client as dirty, as the key will be
-             * removed. */
-            if (dbid == -1 || wk->db->id == dbid) {
-                if (dictFind(wk->db->pdict, ptrFromObj(wk->key)) != NULL)
-                    c->flags |= CLIENT_DIRTY_CAS;
+    dictIterator *di = dictGetSafeIterator(emptied->watched_keys);
+    while((de = dictNext(di)) != NULL) {
+        robj *key = (robj*)dictGetKey(de);
+        list *clients = (list*)dictGetVal(de);
+        if (!clients) continue;
+        listRewind(clients,&li);
+        while((ln = listNext(&li))) {
+            client *c = (client*)listNodeValue(ln);
+            if (dictFind(emptied->dict, ptrFromObj(key))) {
+                c->flags |= CLIENT_DIRTY_CAS;
+            } else if (replaced_with && dictFind(replaced_with->dict, ptrFromObj(key))) {
+                c->flags |= CLIENT_DIRTY_CAS;
             }
         }
     }
+    dictReleaseIterator(di);
 }
 
 void watchCommand(client *c) {

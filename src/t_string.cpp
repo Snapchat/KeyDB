@@ -35,8 +35,8 @@
  *----------------------------------------------------------------------------*/
 
 static int checkStringLength(client *c, long long size) {
-    if (size > 512*1024*1024) {
-        addReplyError(c,"string exceeds maximum allowed size (512MB)");
+    if (!(c->flags & CLIENT_MASTER) && size > g_pserver->proto_max_bulk_len) {
+        addReplyError(c,"string exceeds maximum allowed size (proto-max-bulk-len)");
         return C_ERR;
     }
     return C_OK;
@@ -317,7 +317,7 @@ void msetGenericCommand(client *c, int nx) {
     }
 
     /* Handle the NX flag. The MSETNX semantic is to return zero and don't
-     * set anything if at least one key alerady exists. */
+     * set anything if at least one key already exists. */
     if (nx) {
         for (j = 1; j < c->argc; j += 2) {
             if (lookupKeyWrite(c->db,c->argv[j]) != NULL) {
@@ -505,6 +505,12 @@ void stralgoLCS(client *c) {
     const char *b = NULL;
     int getlen = 0, getidx = 0, withmatchlen = 0;
     robj_roptr obja, objb;
+    uint32_t arraylen = 0;  /* Number of ranges emitted in the array. */
+    uint32_t alen, blen, *lcs, idx;
+    int computelcs;
+    sds result = NULL;        /* Resulting LCS string. */
+    void *arraylenptr = NULL; /* Deffered length of the array for IDX. */
+    uint32_t arange_start, arange_end, brange_start = 0, brange_end = 0;
 
     for (j = 2; j < (uint32_t)c->argc; j++) {
         char *opt = szFromObj(c->argv[j]);
@@ -518,13 +524,13 @@ void stralgoLCS(client *c) {
             withmatchlen = 1;
         } else if (!strcasecmp(opt,"MINMATCHLEN") && moreargs) {
             if (getLongLongFromObjectOrReply(c,c->argv[j+1],&minmatchlen,NULL)
-                != C_OK) return;
+                != C_OK) goto cleanup;
             if (minmatchlen < 0) minmatchlen = 0;
             j++;
         } else if (!strcasecmp(opt,"STRINGS") && moreargs > 1) {
             if (a != NULL) {
                 addReplyError(c,"Either use STRINGS or KEYS");
-                return;
+                goto cleanup;
             }
             a = szFromObj(c->argv[j+1]);
             b = szFromObj(c->argv[j+2]);
@@ -532,10 +538,21 @@ void stralgoLCS(client *c) {
         } else if (!strcasecmp(opt,"KEYS") && moreargs > 1) {
             if (a != NULL) {
                 addReplyError(c,"Either use STRINGS or KEYS");
-                return;
+                goto cleanup;
             }
             obja = lookupKeyRead(c->db,c->argv[j+1]);
             objb = lookupKeyRead(c->db,c->argv[j+2]);
+            if ((obja && obja->type != OBJ_STRING) ||
+                (objb && objb->type != OBJ_STRING))
+            {
+                addReplyError(c,
+                    "The specified keys must contain string values");
+                /* Don't cleanup the objects, we need to do that
+                 * only after callign getDecodedObject(). */
+                obja = NULL;
+                objb = NULL;
+                goto cleanup;
+            }
             obja = obja ? getDecodedObject(obja) : createStringObject("",0);
             objb = objb ? getDecodedObject(objb) : createStringObject("",0);
             a = szFromObj(obja);
@@ -543,7 +560,7 @@ void stralgoLCS(client *c) {
             j += 2;
         } else {
             addReply(c,shared.syntaxerr);
-            return;
+            goto cleanup;
         }
     }
 
@@ -551,23 +568,23 @@ void stralgoLCS(client *c) {
     if (a == NULL) {
         addReplyError(c,"Please specify two strings: "
                         "STRINGS or KEYS options are mandatory");
-        return;
+        goto cleanup;
     } else if (getlen && getidx) {
         addReplyError(c,
             "If you want both the length and indexes, please "
             "just use IDX.");
-        return;
+        goto cleanup;
     }
 
     /* Compute the LCS using the vanilla dynamic programming technique of
      * building a table of LCS(x,y) substrings. */
-    uint32_t alen = sdslen(a);
-    uint32_t blen = sdslen(b);
+    alen = sdslen(a);
+    blen = sdslen(b);
 
     /* Setup an uint32_t array to store at LCS[i,j] the length of the
      * LCS A0..i-1, B0..j-1. Note that we have a linear array here, so
      * we index it as LCS[j+(blen+1)*j] */
-    uint32_t *lcs = (uint32_t*)zmalloc((alen+1)*(blen+1)*sizeof(uint32_t));
+    lcs = (uint32_t*)zmalloc((alen+1)*(blen+1)*sizeof(uint32_t));
     #define LCS(A,B) lcs[(B)+((A)*(blen+1))]
 
     /* Start building the LCS table. */
@@ -596,20 +613,18 @@ void stralgoLCS(client *c) {
 
     /* Store the actual LCS string in "result" if needed. We create
      * it backward, but the length is already known, we store it into idx. */
-    uint32_t idx = LCS(alen,blen);
-    sds result = NULL;        /* Resulting LCS string. */
-    void *arraylenptr = NULL; /* Deffered length of the array for IDX. */
-    uint32_t arange_start = alen, /* alen signals that values are not set. */
-             arange_end = 0,
-             brange_start = 0,
-             brange_end = 0;
+    idx = LCS(alen,blen);
+    arange_start = alen;  /* alen signals that values are not set. */
+    arange_end = 0;
+    brange_start = 0;
+    brange_end = 0;
 
     /* Do we need to compute the actual LCS string? Allocate it in that case. */
-    int computelcs = getidx || !getlen;
+    computelcs = getidx || !getlen;
     if (computelcs) result = sdsnewlen(SDS_NOINIT,idx);
 
     /* Start with a deferred array if we have to emit the ranges. */
-    uint32_t arraylen = 0;  /* Number of ranges emitted in the array. */
+    arraylen = 0;  /* Number of ranges emitted in the array. */
     if (getidx) {
         addReplyMapLen(c,2);
         addReplyBulkCString(c,"matches");
@@ -691,10 +706,12 @@ void stralgoLCS(client *c) {
     }
 
     /* Cleanup. */
-    if (obja) decrRefCount(obja);
-    if (objb) decrRefCount(objb);
     sdsfree(result);
     zfree(lcs);
+
+cleanup:
+    if (obja) decrRefCount(obja);
+    if (objb) decrRefCount(objb);
     return;
 }
 

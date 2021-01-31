@@ -100,12 +100,30 @@ configEnum repl_diskless_load_enum[] = {
     {NULL, 0}
 };
 
+configEnum tls_auth_clients_enum[] = {
+    {"no", TLS_CLIENT_AUTH_NO},
+    {"yes", TLS_CLIENT_AUTH_YES},
+    {"optional", TLS_CLIENT_AUTH_OPTIONAL},
+    {NULL, 0}
+};
+
+configEnum oom_score_adj_enum[] = {
+    {"no", OOM_SCORE_ADJ_NO},
+    {"yes", OOM_SCORE_RELATIVE},
+    {"relative", OOM_SCORE_RELATIVE},
+    {"absolute", OOM_SCORE_ADJ_ABSOLUTE},
+    {NULL, 0}
+};
+
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
     {0, 0, 0}, /* normal */
     {1024*1024*256, 1024*1024*64, 60}, /* replica */
     {1024*1024*32, 1024*1024*8, 60}  /* pubsub */
 };
+
+/* OOM Score defaults */
+int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT] = { 0, 200, 800 };
 
 /* Generic config infrastructure function pointers
  * int is_valid_fn(val, err)
@@ -289,6 +307,63 @@ void queueLoadModule(sds path, sds *argv, int argc) {
     listAddNodeTail(g_pserver->loadmodule_queue,loadmod);
 }
 
+/* Parse an array of CONFIG_OOM_COUNT sds strings, validate and populate
+ * g_pserver->oom_score_adj_values if valid.
+ */
+
+static int updateOOMScoreAdjValues(sds *args, const char **err, int apply) {
+    int i;
+    int values[CONFIG_OOM_COUNT];
+
+    for (i = 0; i < CONFIG_OOM_COUNT; i++) {
+        char *eptr;
+        long long val = strtoll(args[i], &eptr, 10);
+
+        if (*eptr != '\0' || val < -2000 || val > 2000) {
+            if (err) *err = "Invalid oom-score-adj-values, elements must be between -2000 and 2000.";
+            return C_ERR;
+        }
+
+        values[i] = val;
+    }
+
+    /* Verify that the values make sense. If they don't omit a warning but
+     * keep the configuration, which may still be valid for privileged processes.
+     */
+
+    if (values[CONFIG_OOM_REPLICA] < values[CONFIG_OOM_MASTER] ||
+        values[CONFIG_OOM_BGCHILD] < values[CONFIG_OOM_REPLICA]) {
+            serverLog(LOG_WARNING,
+                    "The oom-score-adj-values configuration may not work for non-privileged processes! "
+                    "Please consult the documentation.");
+    }
+
+    /* Store values, retain previous config for rollback in case we fail. */
+    int old_values[CONFIG_OOM_COUNT];
+    for (i = 0; i < CONFIG_OOM_COUNT; i++) {
+        old_values[i] = g_pserver->oom_score_adj_values[i];
+        g_pserver->oom_score_adj_values[i] = values[i];
+    }
+    
+    /* When parsing the config file, we want to apply only when all is done. */
+    if (!apply)
+        return C_OK;
+
+    /* Update */
+    if (setOOMScoreAdj(-1) == C_ERR) {
+        /* Roll back */
+        for (i = 0; i < CONFIG_OOM_COUNT; i++)
+            g_pserver->oom_score_adj_values[i] = old_values[i];
+
+        if (err)
+            *err = "Failed to apply oom-score-adj-values configuration, check server logs.";
+
+        return C_ERR;
+    }
+
+    return C_OK;
+}
+
 void initConfigValues() {
     for (standardConfig *config = configs; config->name != NULL; config++) {
         config->interface.init(config->data);
@@ -411,7 +486,30 @@ void loadServerConfigFromString(char *config) {
         } else if ((!strcasecmp(argv[0],"slaveof") ||
                     !strcasecmp(argv[0],"replicaof")) && argc == 3) {
             slaveof_linenum = linenum;
-            replicationAddMaster(argv[1], atoi(argv[2]));
+            if (!strcasecmp(argv[1], "no") && !strcasecmp(argv[2], "one")) {
+                if (listLength(g_pserver->masters)) {
+                    listIter li;
+                    listNode *ln;
+                    listRewind(g_pserver->masters, &li);
+                    while ((ln = listNext(&li)))
+                    {
+                        struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
+                        zfree(mi->masterauth);
+                        zfree(mi->masteruser);
+                        zfree(mi->repl_transfer_tmpfile);
+                        delete mi->staleKeyMap;
+                        zfree(mi);
+                        listDelNode(g_pserver->masters, ln);
+                    }
+                }
+                continue;
+            }
+            char *ptr;
+            int port = strtol(argv[2], &ptr, 10);
+            if (port < 0 || port > 65535 || *ptr != '\0') {
+                err= "Invalid master port"; goto loaderr;
+            }
+            replicationAddMaster(argv[1], port);
         } else if (!strcasecmp(argv[0],"requirepass") && argc == 2) {
             if (strlen(argv[1]) > CONFIG_AUTHPASS_MAX_LEN) {
                 err = "Password is longer than CONFIG_AUTHPASS_MAX_LEN";
@@ -422,11 +520,16 @@ void loadServerConfigFromString(char *config) {
              * additionally is to remember the cleartext password in this
              * case, for backward compatibility with Redis <= 5. */
             ACLSetUser(DefaultUser,"resetpass",-1);
-            sds aclop = sdscatprintf(sdsempty(),">%s",argv[1]);
-            ACLSetUser(DefaultUser,aclop,sdslen(aclop));
-            sdsfree(aclop);
             sdsfree(g_pserver->requirepass);
-            g_pserver->requirepass = sdsnew(argv[1]);
+            g_pserver->requirepass = NULL;
+            if (sdslen(argv[1])) {
+                sds aclop = sdscatprintf(sdsempty(),">%s",argv[1]);
+                ACLSetUser(DefaultUser,aclop,sdslen(aclop));
+                sdsfree(aclop);
+                g_pserver->requirepass = sdsnew(argv[1]);
+            } else {
+                ACLSetUser(DefaultUser,"nopass",-1);
+            }
         } else if (!strcasecmp(argv[0],"list-max-ziplist-entries") && argc == 2){
             /* DEAD OPTION */
         } else if (!strcasecmp(argv[0],"list-max-ziplist-value") && argc == 2) {
@@ -480,6 +583,8 @@ void loadServerConfigFromString(char *config) {
             cserver.client_obuf_limits[type].hard_limit_bytes = hard;
             cserver.client_obuf_limits[type].soft_limit_bytes = soft;
             cserver.client_obuf_limits[type].soft_limit_seconds = soft_seconds;
+        } else if (!strcasecmp(argv[0],"oom-score-adj-values") && argc == 1 + CONFIG_OOM_COUNT) {
+            if (updateOOMScoreAdjValues(&argv[1], &err, 0) == C_ERR) goto loaderr;
         } else if (!strcasecmp(argv[0],"notify-keyspace-events") && argc == 2) {
             int flags = keyspaceEventsStringToFlags(argv[1]);
 
@@ -541,7 +646,7 @@ void loadServerConfigFromString(char *config) {
             }
         } else if (!strcasecmp(argv[0], "active-replica") && argc == 2) {
             g_pserver->fActiveReplica = yesnotoi(argv[1]);
-            if (g_pserver->repl_slave_ro) {
+            if (g_pserver->fActiveReplica && g_pserver->repl_slave_ro) {
                 g_pserver->repl_slave_ro = FALSE;
                 serverLog(LL_NOTICE, "Notice: \"active-replica yes\" implies \"replica-read-only no\"");
             }
@@ -577,7 +682,7 @@ void loadServerConfigFromString(char *config) {
     return;
 
 loaderr:
-    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Redis %s) ***\n",
+    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (KeyDB %s) ***\n",
         KEYDB_REAL_VERSION);
     fprintf(stderr, "Reading the configuration file, at line %d\n", linenum);
     fprintf(stderr, ">>> '%s'\n", lines[i]);
@@ -605,7 +710,8 @@ void loadServerConfig(char *filename, char *options) {
         } else {
             if ((fp = fopen(filename,"r")) == NULL) {
                 serverLog(LL_WARNING,
-                    "Fatal error, can't open config file '%s'", filename);
+                    "Fatal error, can't open config file '%s': %s",
+                    filename, strerror(errno));
                 exit(1);
             }
         }
@@ -686,11 +792,16 @@ void configSetCommand(client *c) {
          * additionally is to remember the cleartext password in this
          * case, for backward compatibility with Redis <= 5. */
         ACLSetUser(DefaultUser,"resetpass",-1);
-        sds aclop = sdscatprintf(sdsempty(),">%s",(char*)ptrFromObj(o));
-        ACLSetUser(DefaultUser,aclop,sdslen(aclop));
-        sdsfree(aclop);
         sdsfree(g_pserver->requirepass);
-        g_pserver->requirepass = sdsnew(szFromObj(o));
+        g_pserver->requirepass = NULL;
+        if (sdslen(szFromObj(o))) {
+            sds aclop = sdscatprintf(sdsempty(),">%s",(char*)ptrFromObj(o));
+            ACLSetUser(DefaultUser,aclop,sdslen(aclop));
+            sdsfree(aclop);
+            g_pserver->requirepass = sdsnew(szFromObj(o));
+        } else {
+            ACLSetUser(DefaultUser,"nopass",-1);
+        }
     } config_set_special_field("save") {
         int vlen, j;
         sds *v = sdssplitlen(szFromObj(o),sdslen(szFromObj(o))," ",1,&vlen);
@@ -775,6 +886,17 @@ void configSetCommand(client *c) {
             cserver.client_obuf_limits[type].soft_limit_seconds = soft_seconds;
         }
         sdsfreesplitres(v,vlen);
+    } config_set_special_field("oom-score-adj-values") {
+        int vlen;
+        int success = 1;
+
+        sds *v = sdssplitlen(szFromObj(o), sdslen(szFromObj(o)), " ", 1, &vlen);
+        if (vlen != CONFIG_OOM_COUNT || updateOOMScoreAdjValues(v, &errstr, 1) == C_ERR)
+            success = 0;
+
+        sdsfreesplitres(v, vlen);
+        if (!success)
+            goto badfmt;
     } config_set_special_field("notify-keyspace-events") {
         int flags = keyspaceEventsStringToFlags(szFromObj(o));
 
@@ -987,6 +1109,26 @@ void configGetCommand(client *c) {
         }
         matches++;
     }
+    if (stringmatch(pattern,"oom-score-adj-values",0)) {
+        sds buf = sdsempty();
+        int j;
+
+        for (j = 0; j < CONFIG_OOM_COUNT; j++) {
+            buf = sdscatprintf(buf,"%d", g_pserver->oom_score_adj_values[j]);
+            if (j != CONFIG_OOM_COUNT-1)
+                buf = sdscatlen(buf," ",1);
+        }
+
+        addReplyBulkCString(c,"oom-score-adj-values");
+        addReplyBulkCString(c,buf);
+        sdsfree(buf);
+        matches++;
+    }
+    if (stringmatch(pattern,"active-replica",1)) {
+        addReplyBulkCString(c,"active-replica");
+        addReplyBulkCString(c, g_pserver->fActiveReplica ? "yes" : "no");
+        matches++;
+    }
 
     setDeferredMapLen(c,replylen,matches);
 }
@@ -1035,6 +1177,8 @@ struct rewriteConfigState {
     sds *lines;           /* Current lines as an array of sds strings */
     int has_tail;         /* True if we already added directives that were
                              not present in the original config file. */
+    int force_all;        /* True if we want all keywords to be force
+                             written. Currently only used for testing. */
 };
 
 /* Append the new line to the current configuration state. */
@@ -1082,6 +1226,7 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
     state->numlines = 0;
     state->lines = NULL;
     state->has_tail = 0;
+    state->force_all = 0;
     if (fp == NULL) return state;
 
     /* Read the old file line by line, populate the state. */
@@ -1160,7 +1305,7 @@ void rewriteConfigRewriteLine(struct rewriteConfigState *state, const char *opti
 
     rewriteConfigMarkAsProcessed(state,option);
 
-    if (!l && !force) {
+    if (!l && !force && !state->force_all) {
         /* Option not used previously, and we are not forced to use it. */
         sdsfree(line);
         sdsfree(o);
@@ -1257,7 +1402,7 @@ void rewriteConfigNumericalOption(struct rewriteConfigState *state, const char *
     rewriteConfigRewriteLine(state,option,line,force);
 }
 
-/* Rewrite a octal option. */
+/* Rewrite an octal option. */
 void rewriteConfigOctalOption(struct rewriteConfigState *state, const char *option, int value, int defvalue) {
     int force = value != defvalue;
     sds line = sdscatprintf(sdsempty(),"%s %o",option,value);
@@ -1281,6 +1426,12 @@ void rewriteConfigEnumOption(struct rewriteConfigState *state, const char *optio
 void rewriteConfigSaveOption(struct rewriteConfigState *state) {
     int j;
     sds line;
+
+    /* In Sentinel mode we don't need to rewrite the save parameters */
+    if (g_pserver->sentinel_mode) {
+        rewriteConfigMarkAsProcessed(state,"save");
+        return;
+    }
 
     /* Note that if there are no save parameters at all, all the current
      * config line with "save" will be detected as orphaned and deleted,
@@ -1404,6 +1555,26 @@ void rewriteConfigClientoutputbufferlimitOption(struct rewriteConfigState *state
     }
 }
 
+/* Rewrite the oom-score-adj-values option. */
+void rewriteConfigOOMScoreAdjValuesOption(struct rewriteConfigState *state) {
+    int force = 0;
+    int j;
+    const char *option = "oom-score-adj-values";
+    sds line;
+
+    line = sdsnew(option);
+    line = sdscatlen(line, " ", 1);
+    for (j = 0; j < CONFIG_OOM_COUNT; j++) {
+        if (g_pserver->oom_score_adj_values[j] != configOOMScoreAdjValuesDefaults[j])
+            force = 1;
+
+        line = sdscatprintf(line, "%d", g_pserver->oom_score_adj_values[j]);
+        if (j+1 != CONFIG_OOM_COUNT)
+            line = sdscatlen(line, " ", 1);
+    }
+    rewriteConfigRewriteLine(state,option,line,force);
+}
+
 /* Rewrite the bind option. */
 void rewriteConfigBindOption(struct rewriteConfigState *state) {
     int force = 1;
@@ -1509,60 +1680,62 @@ void rewriteConfigRemoveOrphaned(struct rewriteConfigState *state) {
     dictReleaseIterator(di);
 }
 
-/* This function overwrites the old configuration file with the new content.
- *
- * 1) The old file length is obtained.
- * 2) If the new content is smaller, padding is added.
- * 3) A single write(2) call is used to replace the content of the file.
- * 4) Later the file is truncated to the length of the new content.
- *
- * This way we are sure the file is left in a consistent state even if the
- * process is stopped between any of the four operations.
+/* This function replaces the old configuration file with the new content
+ * in an atomic manner.
  *
  * The function returns 0 on success, otherwise -1 is returned and errno
- * set accordingly. */
+ * is set accordingly. */
 int rewriteConfigOverwriteFile(char *configfile, sds content) {
-    int retval = 0;
-    int fd = open(configfile,O_RDWR|O_CREAT,0644);
-    int content_size = sdslen(content), padding = 0;
-    struct stat sb;
-    sds content_padded;
+    int fd = -1;
+    int retval = -1;
+    char tmp_conffile[PATH_MAX];
+    const char *tmp_suffix = ".XXXXXX";
+    size_t offset = 0;
+    ssize_t written_bytes = 0;
 
-    /* 1) Open the old file (or create a new one if it does not
-     *    exist), get the size. */
-    if (fd == -1) return -1; /* errno set by open(). */
-    if (fstat(fd,&sb) == -1) {
-        close(fd);
-        return -1; /* errno set by fstat(). */
+    int tmp_path_len = snprintf(tmp_conffile, sizeof(tmp_conffile), "%s%s", configfile, tmp_suffix);
+    if (tmp_path_len <= 0 || (unsigned int)tmp_path_len >= sizeof(tmp_conffile)) {
+        serverLog(LL_WARNING, "Config file full path is too long");
+        errno = ENAMETOOLONG;
+        return retval;
     }
 
-    /* 2) Pad the content at least match the old file size. */
-    content_padded = sdsdup(content);
-    if (content_size < sb.st_size) {
-        /* If the old file was bigger, pad the content with
-         * a newline plus as many "#" chars as required. */
-        padding = sb.st_size - content_size;
-        content_padded = sdsgrowzero(content_padded,sb.st_size);
-        content_padded[content_size] = '\n';
-        memset(content_padded+content_size+1,'#',padding-1);
+#ifdef _GNU_SOURCE
+    fd = mkostemp(tmp_conffile, O_CLOEXEC);
+#else
+    /* There's a theoretical chance here to leak the FD if a module thread forks & execv in the middle */
+    fd = mkstemp(tmp_conffile);
+#endif
+
+    if (fd == -1) {
+        serverLog(LL_WARNING, "Could not create tmp config file (%s)", strerror(errno));
+        return retval;
     }
 
-    /* 3) Write the new content using a single write(2). */
-    if (write(fd,content_padded,strlen(content_padded)) == -1) {
-        retval = -1;
-        goto cleanup;
+    while (offset < sdslen(content)) {
+         written_bytes = write(fd, content + offset, sdslen(content) - offset);
+         if (written_bytes <= 0) {
+             if (errno == EINTR) continue; /* FD is blocking, no other retryable errors */
+             serverLog(LL_WARNING, "Failed after writing (%zd) bytes to tmp config file (%s)", offset, strerror(errno));
+             goto cleanup;
+         }
+         offset+=written_bytes;
     }
 
-    /* 4) Truncate the file to the right length if we used padding. */
-    if (padding) {
-        if (ftruncate(fd,content_size) == -1) {
-            /* Non critical error... */
-        }
+    if (fsync(fd))
+        serverLog(LL_WARNING, "Could not sync tmp config file to disk (%s)", strerror(errno));
+    else if (fchmod(fd, 0644) == -1)
+        serverLog(LL_WARNING, "Could not chmod config file (%s)", strerror(errno));
+    else if (rename(tmp_conffile, configfile) == -1)
+        serverLog(LL_WARNING, "Could not rename tmp config file (%s)", strerror(errno));
+    else {
+        retval = 0;
+        serverLog(LL_DEBUG, "Rewritten config file (%s) successfully", configfile);
     }
 
 cleanup:
-    sdsfree(content_padded);
     close(fd);
+    if (retval) unlink(tmp_conffile);
     return retval;
 }
 
@@ -1572,15 +1745,18 @@ cleanup:
  *
  * Configuration parameters that are at their default value, unless already
  * explicitly included in the old configuration file, are not rewritten.
+ * The force_all flag overrides this behavior and forces everything to be
+ * written. This is currently only used for testing purposes.
  *
  * On error -1 is returned and errno is set accordingly, otherwise 0. */
-int rewriteConfig(char *path) {
+int rewriteConfig(char *path, int force_all) {
     struct rewriteConfigState *state;
     sds newcontent;
     int retval;
 
     /* Step 1: read the old config into our rewrite state. */
     if ((state = rewriteConfigReadOldFile(path)) == NULL) return -1;
+    if (force_all) state->force_all = 1;
 
     /* Step 2: rewrite every single option, replacing or appending it inside
      * the rewrite state. */
@@ -1604,6 +1780,7 @@ int rewriteConfig(char *path) {
     rewriteConfigClientoutputbufferlimitOption(state);
     rewriteConfigYesNoOption(state,"active-replica",g_pserver->fActiveReplica,CONFIG_DEFAULT_ACTIVE_REPLICA);
     rewriteConfigStringOption(state, "version-override",KEYDB_SET_VERSION,KEYDB_REAL_VERSION);
+    rewriteConfigOOMScoreAdjValuesOption(state);
 
     /* Rewrite Sentinel config if in Sentinel mode. */
     if (g_pserver->sentinel_mode) rewriteConfigSentinelOption(state);
@@ -1767,7 +1944,7 @@ static int enumConfigSet(typeData data, sds value, int update, const char **err)
         }
         sdsrange(enumerr,0,-3); /* Remove final ", ". */
 
-        strncpy(loadbuf, enumerr, LOADBUF_SIZE);
+        strncpy(loadbuf, enumerr, LOADBUF_SIZE-1);
         loadbuf[LOADBUF_SIZE - 1] = '\0';
 
         sdsfree(enumerr);
@@ -2072,7 +2249,7 @@ static int isValidAOFfilename(char *val, const char **err) {
 static int updateHZ(long long val, long long prev, const char **err) {
     UNUSED(prev);
     UNUSED(err);
-    /* Hz is more an hint from the user, so we accept values out of range
+    /* Hz is more a hint from the user, so we accept values out of range
      * but cap them to reasonable values. */
     g_pserver->config_hz = val;
     if (g_pserver->config_hz < CONFIG_MIN_HZ) g_pserver->config_hz = CONFIG_MIN_HZ;
@@ -2090,7 +2267,7 @@ static int updateJemallocBgThread(int val, int prev, const char **err) {
 
 static int updateReplBacklogSize(long long val, long long prev, const char **err) {
     /* resizeReplicationBacklog sets g_pserver->repl_backlog_size, and relies on
-     * being able to tell when the size changes, so restore prev becore calling it. */
+     * being able to tell when the size changes, so restore prev before calling it. */
     UNUSED(err);
     g_pserver->repl_backlog_size = prev;
     resizeReplicationBacklog(val);
@@ -2150,17 +2327,42 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
             }
             return 0;
         }
-        for (int iel = 0; iel < MAX_EVENT_LOOPS; ++iel)
+        /* Change the SetSize for the current thread first. If any error, return the error message to the client, 
+         * otherwise, continue to do the same for other threads */
+        if ((unsigned int) aeGetSetSize(aeGetCurrentEventLoop()) <
+            g_pserver->maxclients + CONFIG_FDSET_INCR)
         {
+            if (aeResizeSetSize(aeGetCurrentEventLoop(),
+                g_pserver->maxclients + CONFIG_FDSET_INCR) == AE_ERR)
+            {
+                *err = "The event loop API used by Redis is not able to handle the specified number of clients";
+                return 0;
+            }
+            serverLog(LL_DEBUG,"Successfully changed the setsize for current thread %d", ielFromEventLoop(aeGetCurrentEventLoop()));
+        }
+
+        for (int iel = 0; iel < cserver.cthreads; ++iel)
+        {
+            if (g_pserver->rgthreadvar[iel].el == aeGetCurrentEventLoop()){
+                continue;
+            }
+
             if ((unsigned int) aeGetSetSize(g_pserver->rgthreadvar[iel].el) <
                 g_pserver->maxclients + CONFIG_FDSET_INCR)
             {
-                if (aeResizeSetSize(g_pserver->rgthreadvar[iel].el,
-                    g_pserver->maxclients + CONFIG_FDSET_INCR) == AE_ERR)
-                {
-                    *err = "The event loop API used by Redis is not able to handle the specified number of clients";
+                int res = aePostFunction(g_pserver->rgthreadvar[iel].el, [iel] {
+                    if (aeResizeSetSize(g_pserver->rgthreadvar[iel].el, g_pserver->maxclients + CONFIG_FDSET_INCR) == AE_ERR) {
+                        serverLog(LL_WARNING,"Failed to change the setsize for Thread %d", iel);
+                    }
+                });
+
+                if (res != AE_OK){
+                    static char msg[128];
+                    sprintf(msg, "Failed to post the request to change setsize for Thread %d", iel);
+                    *err = msg;
                     return 0;
                 }
+                serverLog(LL_DEBUG,"Successfully post the request to change the setsize for thread %d", iel);
             }
         }
     }
@@ -2174,12 +2376,28 @@ static int validateMultiMasterNoForward(int val, const char **) {
     return 1;
 }
 
+static int updateOOMScoreAdj(int val, int prev, const char **err) {
+    UNUSED(prev);
+
+    if (val) {
+        if (setOOMScoreAdj(-1) == C_ERR) {
+            *err = "Failed to set current oom_score_adj. Check server logs.";
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
 #ifdef USE_OPENSSL
 static int updateTlsCfg(char *val, char *prev, const char **err) {
     UNUSED(val);
     UNUSED(prev);
     UNUSED(err);
-    if (tlsConfigure(&g_pserver->tls_ctx_config) == C_ERR) {
+
+    /* If TLS is enabled, try to configure OpenSSL. */
+    if ((g_pserver->tls_port || g_pserver->tls_replication || g_pserver->tls_cluster)
+            && tlsConfigure(&g_pserver->tls_ctx_config) == C_ERR) {
         *err = "Unable to update TLS configuration. Check server logs.";
         return 0;
     }
@@ -2205,6 +2423,7 @@ standardConfig configs[] = {
     createBoolConfig("daemonize", NULL, IMMUTABLE_CONFIG, cserver.daemonize, 0, NULL, NULL),
     createBoolConfig("lua-replicate-commands", NULL, MODIFIABLE_CONFIG, g_pserver->lua_always_replicate_commands, 1, NULL, NULL),
     createBoolConfig("always-show-logo", NULL, IMMUTABLE_CONFIG, g_pserver->always_show_logo, 0, NULL, NULL),
+    createBoolConfig("enable-motd", NULL, IMMUTABLE_CONFIG, cserver.enable_motd, 1, NULL, NULL),
     createBoolConfig("protected-mode", NULL, MODIFIABLE_CONFIG, g_pserver->protected_mode, 1, NULL, NULL),
     createBoolConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, g_pserver->rdb_compression, 1, NULL, NULL),
     createBoolConfig("rdb-del-sync-files", NULL, MODIFIABLE_CONFIG, g_pserver->rdb_del_sync_files, 0, NULL, NULL),
@@ -2254,6 +2473,7 @@ standardConfig configs[] = {
     createStringConfig("bio_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->bio_cpulist, NULL, NULL, NULL),
     createStringConfig("aof_rewrite_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->aof_rewrite_cpulist, NULL, NULL, NULL),
     createStringConfig("bgsave_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->bgsave_cpulist, NULL, NULL, NULL),
+    createStringConfig("ignore-warnings", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->ignore_warnings, "ARM64-COW-BUG", NULL, NULL),
 
     /* Enum Configs */
     createEnumConfig("supervised", NULL, IMMUTABLE_CONFIG, supervised_mode_enum, cserver.supervised_mode, SUPERVISED_NONE, NULL, NULL),
@@ -2262,6 +2482,7 @@ standardConfig configs[] = {
     createEnumConfig("loglevel", NULL, MODIFIABLE_CONFIG, loglevel_enum, cserver.verbosity, LL_NOTICE, NULL, NULL),
     createEnumConfig("maxmemory-policy", NULL, MODIFIABLE_CONFIG, maxmemory_policy_enum, g_pserver->maxmemory_policy, MAXMEMORY_NO_EVICTION, NULL, NULL),
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, g_pserver->aof_fsync, AOF_FSYNC_EVERYSEC, NULL, NULL),
+    createEnumConfig("oom-score-adj", NULL, MODIFIABLE_CONFIG, oom_score_adj_enum, g_pserver->oom_score_adj, OOM_SCORE_ADJ_NO, NULL, updateOOMScoreAdj),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, cserver.dbnum, 16, INTEGER_CONFIG, NULL, NULL),
@@ -2298,8 +2519,10 @@ standardConfig configs[] = {
     createIntConfig("replica-quorum", NULL, MODIFIABLE_CONFIG, -1, INT_MAX, g_pserver->repl_quorum, -1, INTEGER_CONFIG, NULL, NULL),
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, g_pserver->maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
+    createUIntConfig("loading-process-events-interval-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->loading_process_events_interval_keys, 8192, MEMORY_CONFIG, NULL, NULL),
 
     /* Unsigned Long configs */
+    createULongConfig("loading-process-events-interval-bytes", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->loading_process_events_interval_bytes, 2*1024*1024, MEMORY_CONFIG, NULL, NULL),
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, cserver.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */
     createULongConfig("slowlog-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->slowlog_max_len, 128, INTEGER_CONFIG, NULL, NULL),
     createULongConfig("acllog-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->acllog_max_len, 128, INTEGER_CONFIG, NULL, NULL),
@@ -2309,7 +2532,7 @@ standardConfig configs[] = {
     createLongLongConfig("cluster-node-timeout", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->cluster_node_timeout, 15000, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("slowlog-log-slower-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, g_pserver->slowlog_log_slower_than, 10000, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("latency-monitor-threshold", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->latency_monitor_threshold, 0, INTEGER_CONFIG, NULL, NULL),
-    createLongLongConfig("proto-max-bulk-len", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->proto_max_bulk_len, 512ll*1024*1024, MEMORY_CONFIG, NULL, NULL), /* Bulk request max size */
+    createLongLongConfig("proto-max-bulk-len", NULL, MODIFIABLE_CONFIG, 1024*1024, LLONG_MAX, g_pserver->proto_max_bulk_len, 512ll*1024*1024, MEMORY_CONFIG, NULL, NULL), /* Bulk request max size */
     createLongLongConfig("stream-node-max-entries", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->stream_node_max_entries, 100, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("repl-backlog-size", NULL, MODIFIABLE_CONFIG, 1, LLONG_MAX, g_pserver->repl_backlog_size, 1024*1024, MEMORY_CONFIG, NULL, updateReplBacklogSize), /* Default: 1mb */
 
@@ -2337,7 +2560,7 @@ standardConfig configs[] = {
     createIntConfig("tls-session-cache-timeout", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->tls_ctx_config.session_cache_timeout, 300, INTEGER_CONFIG, NULL, updateTlsCfgInt),
     createBoolConfig("tls-cluster", NULL, MODIFIABLE_CONFIG, g_pserver->tls_cluster, 0, NULL, NULL),
     createBoolConfig("tls-replication", NULL, MODIFIABLE_CONFIG, g_pserver->tls_replication, 0, NULL, NULL),
-    createBoolConfig("tls-auth-clients", NULL, MODIFIABLE_CONFIG, g_pserver->tls_auth_clients, 1, NULL, NULL),
+    createEnumConfig("tls-auth-clients", NULL, MODIFIABLE_CONFIG, tls_auth_clients_enum, g_pserver->tls_auth_clients, TLS_CLIENT_AUTH_YES, NULL, NULL),
     createBoolConfig("tls-prefer-server-ciphers", NULL, MODIFIABLE_CONFIG, g_pserver->tls_ctx_config.prefer_server_ciphers, 0, NULL, updateTlsCfgBool),
     createBoolConfig("tls-session-caching", NULL, MODIFIABLE_CONFIG, g_pserver->tls_ctx_config.session_caching, 1, NULL, updateTlsCfgBool),
     createStringConfig("tls-cert-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->tls_ctx_config.cert_file, NULL, NULL, updateTlsCfg),
@@ -2387,7 +2610,7 @@ NULL
             addReplyError(c,"The server is running without a config file");
             return;
         }
-        if (rewriteConfig(cserver.configfile) == -1) {
+        if (rewriteConfig(cserver.configfile, 0) == -1) {
             serverLog(LL_WARNING,"CONFIG REWRITE failed: %s", strerror(errno));
             addReplyErrorFormat(c,"Rewriting config file: %s", strerror(errno));
         } else {

@@ -444,7 +444,7 @@ sds sdscatlen(sds s, const void *t, size_t len) {
     return s;
 }
 
-/* Append the specified null termianted C string to the sds string 's'.
+/* Append the specified null terminated C string to the sds string 's'.
  *
  * After the call, the passed sds string is no longer valid and all the
  * references must be substituted with the new pointer returned by the call. */
@@ -492,7 +492,7 @@ int sdsll2str(char *s, long long value) {
     size_t l;
 
     /* Generate the string representation, this method produces
-     * an reversed string. */
+     * a reversed string. */
     v = (value < 0) ? -value : value;
     p = s;
     do {
@@ -523,7 +523,7 @@ int sdsull2str(char *s, unsigned long long v) {
     size_t l;
 
     /* Generate the string representation, this method produces
-     * an reversed string. */
+     * a reversed string. */
     p = s;
     do {
         *p++ = '0'+(v%10);
@@ -562,6 +562,7 @@ sds sdscatvprintf(sds s, const char *fmt, va_list ap) {
     va_list cpy;
     char staticbuf[1024], *buf = staticbuf, *t;
     size_t buflen = strlen(fmt)*2;
+    int bufstrlen;
 
     /* We try to start using a static buffer for speed.
      * If not possible we revert to heap allocation. */
@@ -572,16 +573,19 @@ sds sdscatvprintf(sds s, const char *fmt, va_list ap) {
         buflen = sizeof(staticbuf);
     }
 
-    /* Try with buffers two times bigger every time we fail to
+    /* Alloc enough space for buffer and \0 after failing to
      * fit the string in the current buffer size. */
     while(1) {
-        buf[buflen-2] = '\0';
         va_copy(cpy,ap);
-        vsnprintf(buf, buflen, fmt, cpy);
+        bufstrlen = vsnprintf(buf, buflen, fmt, cpy);
         va_end(cpy);
-        if (buf[buflen-2] != '\0') {
+        if (bufstrlen < 0) {
             if (buf != staticbuf) s_free(buf);
-            buflen *= 2;
+            return NULL;
+        }
+        if (((size_t)bufstrlen) >= buflen) {
+            if (buf != staticbuf) s_free(buf);
+            buflen = ((size_t)bufstrlen) + 1;
             buf = s_malloc(buflen, MALLOC_SHARED);
             if (buf == NULL) return NULL;
             continue;
@@ -590,7 +594,7 @@ sds sdscatvprintf(sds s, const char *fmt, va_list ap) {
     }
 
     /* Finally concat the obtained string to the SDS string and return it. */
-    t = sdscat(s, buf);
+    t = sdscatlen(s, buf, bufstrlen);
     if (buf != staticbuf) s_free(buf);
     return t;
 }
@@ -645,7 +649,7 @@ sds sdscatfmt(sds s, char const *fmt, ...) {
     /* To avoid continuous reallocations, let's start with a buffer that
      * can hold at least two times the format string itself. It's not the
      * best heuristic but seems to work in practice. */
-    s = sdsMakeRoomFor(s, initlen + strlen(fmt)*2);
+    s = sdsMakeRoomFor(s, strlen(fmt)*2);
     va_start(ap,fmt);
     f = fmt;    /* Next format specifier byte to process. */
     i = initlen; /* Position of the next byte to write to dest str. */
@@ -1197,6 +1201,22 @@ int sdsTest(void) {
         x = sdscatprintf(sdsempty(),"%d",123);
         test_cond("sdscatprintf() seems working in the base case",
             sdslen(x) == 3 && memcmp(x,"123\0",4) == 0)
+
+        sdsfree(x);
+        x = sdscatprintf(sdsempty(),"a%cb",0);
+        test_cond("sdscatprintf() seems working with \\0 inside of result",
+            sdslen(x) == 3 && memcmp(x,"a\0""b\0",4) == 0)
+
+        {
+            sdsfree(x);
+            char etalon[1024*1024];
+            for (size_t i = 0; i < sizeof(etalon); i++) {
+                etalon[i] = '0';
+            }
+            x = sdscatprintf(sdsempty(),"%0*d",(int)sizeof(etalon),0);
+            test_cond("sdscatprintf() can print 1MB",
+                sdslen(x) == sizeof(etalon) && memcmp(x,etalon,sizeof(etalon)) == 0)
+        }
 
         sdsfree(x);
         x = sdsnew("--");

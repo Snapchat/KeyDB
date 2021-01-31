@@ -48,6 +48,7 @@
 #include "fastlock.h"
 #include "zmalloc.h"
 #include "config.h"
+#include "serverassert.h"
 
 #ifdef USE_MUTEX
 thread_local int cOwnLock = 0;
@@ -83,8 +84,6 @@ mutex_wrapper g_lock;
 fastlock g_lock("AE (global)");
 #endif
 thread_local aeEventLoop *g_eventLoopThisThread = NULL;
-
-#define AE_ASSERT(x) if (!(x)) do { fprintf(stderr, "AE_ASSERT FAILURE %s: %d\n", __FILE__, __LINE__); *((volatile int*)1) = 1; } while(0)
 
 /* Include the best multiplexing layer supported by this system.
  * The following should be ordered by performances, descending. */
@@ -140,7 +139,7 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
         auto cb = read(fd, &cmd, sizeof(aeCommand));
         if (cb != sizeof(cmd))
         {
-            AE_ASSERT(errno == EAGAIN);
+            serverAssert(errno == EAGAIN);
             break;
         }
         switch (cmd.op)
@@ -251,8 +250,8 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
     auto size = safe_write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
     if (size != sizeof(cmd))
     {
-        AE_ASSERT(size == sizeof(cmd) || size <= 0);
-        AE_ASSERT(errno == EAGAIN);
+        serverAssert(size == sizeof(cmd) || size <= 0);
+        serverAssert(errno == EAGAIN);
         ret = AE_ERR;
     }
     
@@ -307,9 +306,14 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
     }
 
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
-    if (size != sizeof(cmd))
+    if (!(!size || size == sizeof(cmd))) {
+        printf("Last error: %d\n", errno);
+    }
+    serverAssert(!size || size == sizeof(cmd));
+
+    if (size == 0)
         return AE_ERR;
-    AE_ASSERT(size == sizeof(cmd));
+
     int ret = AE_OK;
     if (fSynchronous)
     {
@@ -352,7 +356,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
         goto err;
     eventLoop->fdCmdRead = rgfd[0];
     eventLoop->fdCmdWrite = rgfd[1];
-    fcntl(eventLoop->fdCmdWrite, F_SETFL, O_NONBLOCK);
+    //fcntl(eventLoop->fdCmdWrite, F_SETFL, O_NONBLOCK);
     fcntl(eventLoop->fdCmdRead, F_SETFL, O_NONBLOCK);
     eventLoop->cevents = 0;
     aeCreateFileEvent(eventLoop, eventLoop->fdCmdRead, AE_READABLE|AE_READ_THREADSAFE, aeProcessCmd, NULL);
@@ -373,6 +377,11 @@ int aeGetSetSize(aeEventLoop *eventLoop) {
     return eventLoop->setsize;
 }
 
+/* Return the current EventLoop. */
+aeEventLoop *aeGetCurrentEventLoop(){
+    return g_eventLoopThisThread;
+}
+
 /* Tells the next iteration/s of the event processing to set timeout of 0. */
 void aeSetDontWait(aeEventLoop *eventLoop, int noWait) {
     if (noWait)
@@ -389,7 +398,7 @@ void aeSetDontWait(aeEventLoop *eventLoop, int noWait) {
  *
  * Otherwise AE_OK is returned and the operation is successful. */
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
-    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
+    serverAssert(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     int i;
 
     if (setsize == eventLoop->setsize) return AE_OK;
@@ -427,14 +436,14 @@ extern "C" void aeDeleteEventLoop(aeEventLoop *eventLoop) {
 }
 
 extern "C" void aeStop(aeEventLoop *eventLoop) {
-    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
+    serverAssert(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     eventLoop->stop = 1;
 }
 
 extern "C" int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
         aeFileProc *proc, void *clientData)
 {
-    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
+    serverAssert(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     if (fd >= eventLoop->setsize) {
         errno = ERANGE;
         return AE_ERR;
@@ -463,12 +472,12 @@ void aeDeleteFileEventAsync(aeEventLoop *eventLoop, int fd, int mask)
     cmd.mask = mask;
     cmd.fLock = true;
     auto cb = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
-    AE_ASSERT(cb == sizeof(cmd));
+    serverAssert(cb == sizeof(cmd));
 }
 
 extern "C" void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask)
 {
-    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
+    serverAssert(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     if (fd >= eventLoop->setsize) return;
     aeFileEvent *fe = &eventLoop->events[fd];
     if (fe->mask == AE_NONE) return;
@@ -526,7 +535,7 @@ extern "C" long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long millise
         aeTimeProc *proc, void *clientData,
         aeEventFinalizerProc *finalizerProc)
 {
-    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
+    serverAssert(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     long long id = eventLoop->timeEventNextId++;
     aeTimeEvent *te;
 
@@ -548,7 +557,7 @@ extern "C" long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long millise
 
 extern "C" int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id)
 {
-    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
+    serverAssert(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     aeTimeEvent *te = eventLoop->timeEventHead;
     while(te) {
         if (te->id == id) {
@@ -573,7 +582,7 @@ extern "C" int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id)
  */
 static aeTimeEvent *aeSearchNearestTimer(aeEventLoop *eventLoop)
 {
-    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
+    serverAssert(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     aeTimeEvent *te = eventLoop->timeEventHead;
     aeTimeEvent *nearest = NULL;
 
@@ -589,7 +598,7 @@ static aeTimeEvent *aeSearchNearestTimer(aeEventLoop *eventLoop)
 
 /* Process time events */
 static int processTimeEvents(aeEventLoop *eventLoop) {
-    std::unique_lock<decltype(g_lock)> ulock(g_lock);
+    std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
     int processed = 0;
     aeTimeEvent *te;
     long long maxId;
@@ -634,8 +643,10 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
                 eventLoop->timeEventHead = te->next;
             if (te->next)
                 te->next->prev = te->prev;
-            if (te->finalizerProc)
+            if (te->finalizerProc) {
+                if (!ulock.owns_lock()) ulock.lock();
                 te->finalizerProc(eventLoop, te->clientData);
+            }
             zfree(te);
             te = next;
             continue;
@@ -654,6 +665,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
         if (now_sec > te->when_sec ||
             (now_sec == te->when_sec && now_ms >= te->when_ms))
         {
+            if (!ulock.owns_lock()) ulock.lock();
             int retval;
 
             id = te->id;
@@ -746,7 +758,7 @@ extern "C" void ProcessEventCore(aeEventLoop *eventLoop, aeFileEvent *fe, int ma
  * The function returns the number of events processed. */
 int aeProcessEvents(aeEventLoop *eventLoop, int flags)
 {
-    AE_ASSERT(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
+    serverAssert(g_eventLoopThisThread == NULL || g_eventLoopThisThread == eventLoop);
     int processed = 0, numevents;
 
     /* Nothing to do? return ASAP */
@@ -870,9 +882,9 @@ void aeMain(aeEventLoop *eventLoop) {
                 ulock.lock();
             eventLoop->beforesleep(eventLoop);
         }
-        AE_ASSERT(!aeThreadOwnsLock()); // we should have relinquished it after processing
+        serverAssert(!aeThreadOwnsLock()); // we should have relinquished it after processing
         aeProcessEvents(eventLoop, AE_ALL_EVENTS|AE_CALL_AFTER_SLEEP);
-        AE_ASSERT(!aeThreadOwnsLock()); // we should have relinquished it after processing
+        serverAssert(!aeThreadOwnsLock()); // we should have relinquished it after processing
     }
 }
 

@@ -7,7 +7,7 @@ jobs:
   test-ubuntu-latest:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v2
     - name: make
       run: |
           sudo apt-get update
@@ -17,7 +17,7 @@ jobs:
       run: ./utils/gen-test-certs.sh
     - name: test-tls
       run: |
-        sudo apt-get -y install tcl8.5 tcl-tls
+        sudo apt-get -y install tcl tcl-tls
         ./runtest --clients 2 --verbose --tls
     - name: cluster-test
       run: |
@@ -42,14 +42,14 @@ jobs:
   build-macos-latest:
     runs-on: macos-latest
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v2
     - name: make
       run: make -j2
 
   build-libc-malloc:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v2
     - name: make
       run: |
           sudo apt-get update

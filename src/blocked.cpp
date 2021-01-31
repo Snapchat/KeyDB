@@ -53,7 +53,7 @@
  * to 0, no timeout is processed).
  * It usually just needs to send a reply to the client.
  *
- * When implementing a new type of blocking opeation, the implementation
+ * When implementing a new type of blocking operation, the implementation
  * should modify unblockClient() and replyToBlockedClientTimedOut() in order
  * to handle the btype-specific behavior of this two functions.
  * If the blocking operation waits for certain keys to change state, the
@@ -128,7 +128,7 @@ void processUnblockedClients(int iel) {
 
 /* This function will schedule the client for reprocessing at a safe time.
  *
- * This is useful when a client was blocked for some reason (blocking opeation,
+ * This is useful when a client was blocked for some reason (blocking operation,
  * CLIENT PAUSE, or whatever), because it may end with some accumulated query
  * buffer that needs to be processed ASAP:
  *
@@ -188,9 +188,9 @@ void replyToBlockedClientTimedOut(client *c) {
     if (c->btype == BLOCKED_LIST ||
         c->btype == BLOCKED_ZSET ||
         c->btype == BLOCKED_STREAM) {
-        addReplyNullArrayAsync(c);
+        addReplyNullArray(c);
     } else if (c->btype == BLOCKED_WAIT) {
-        addReplyLongLongAsync(c,replicationCountAcksByOffset(c->bpop.reploffset));
+        addReplyLongLong(c,replicationCountAcksByOffset(c->bpop.reploffset));
     } else if (c->btype == BLOCKED_MODULE) {
         moduleBlockedClientTimedOut(c);
     } else {
@@ -216,7 +216,7 @@ void disconnectAllBlockedClients(void) {
         
         fastlock_lock(&c->lock);
         if (c->flags & CLIENT_BLOCKED) {
-            addReplySdsAsync(c,sdsnew(
+            addReplySds(c,sdsnew(
                 "-UNBLOCKED force unblock from blocking operation, "
                 "instance state changed (master -> replica?)\r\n"));
             unblockClient(c);
@@ -373,7 +373,7 @@ void serveClientsBlockedOnStreamKey(robj *o, readyList *rl) {
                 /* If the group was not found, send an error
                  * to the consumer. */
                 if (!group) {
-                    addReplyErrorAsync(receiver,
+                    addReplyError(receiver,
                         "-NOGROUP the consumer group this client "
                         "was blocked on no longer exists");
                     unblockClient(receiver);
@@ -404,12 +404,12 @@ void serveClientsBlockedOnStreamKey(robj *o, readyList *rl) {
                  * extracted from it. Wrapped in a single-item
                  * array, since we have just one key. */
                 if (receiver->resp == 2) {
-                    addReplyArrayLenAsync(receiver,1);
-                    addReplyArrayLenAsync(receiver,2);
+                    addReplyArrayLen(receiver,1);
+                    addReplyArrayLen(receiver,2);
                 } else {
-                    addReplyMapLenAsync(receiver,1);
+                    addReplyMapLen(receiver,1);
                 }
-                addReplyBulkAsync(receiver,rl->key);
+                addReplyBulk(receiver,rl->key);
 
                 streamPropInfo pi = {
                     rl->key,
@@ -522,7 +522,7 @@ void handleClientsBlockedOnKeys(void) {
             serverTL->fixed_time_expire++;
             updateCachedTime(0);
 
-            /* Serve clients blocked on list key. */
+            /* Serve clients blocked on the key. */
             robj *o = lookupKeyWrite(rl->db,rl->key);
 
             if (o != NULL) {
@@ -671,6 +671,13 @@ void signalKeyAsReady(redisDb *db, robj *key) {
 
     /* Key was already signaled? No need to queue it again. */
     if (dictFind(db->ready_keys,key) != NULL) return;
+
+    if (key->getrefcount() == OBJ_STATIC_REFCOUNT) {
+        // Sometimes a key may be stack allocated, we'll need to dupe it
+        robj *newKey = createStringObject(szFromObj(key), sdslen(szFromObj(key)));
+        newKey->setrefcount(0); // Start with 0 but don't free
+        key = newKey;
+    }
 
     /* Ok, we need to queue this key into g_pserver->ready_keys. */
     rl = (readyList*)zmalloc(sizeof(*rl), MALLOC_SHARED);

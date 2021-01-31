@@ -4203,6 +4203,8 @@ int prepareForShutdown(int flags) {
     /* Best effort flush of replica output buffers, so that we hopefully
      * send them pending writes. */
     flushSlavesOutputBuffers();
+    g_pserver->repl_batch_idxStart = -1;
+    g_pserver->repl_batch_offStart = -1;
 
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);

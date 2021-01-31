@@ -5180,7 +5180,7 @@ int linuxMadvFreeForkBugCheck(void) {
     const long map_size = 3 * 4096;
 
     /* Create a memory map that's in our full control (not one used by the allocator). */
-    p = mmap(NULL, map_size, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    p = (char*)mmap(NULL, map_size, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
     serverAssert(p != MAP_FAILED);
 
     q = p + 4096;

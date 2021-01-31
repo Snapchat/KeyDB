@@ -3295,6 +3295,8 @@ void flushSlavesOutputBuffers(void) {
     listIter li;
     listNode *ln;
 
+    flushReplBacklogToClients();
+
     listRewind(g_pserver->slaves,&li);
     while((ln = listNext(&li))) {
         client *replica = (client*)listNodeValue(ln);

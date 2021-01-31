@@ -448,7 +448,7 @@ start_server {tags {"scripting"}} {
         set start [clock clicks -milliseconds]
         $rd eval {redis.call('set',KEYS[1],'y'); for i=1,1500000 do redis.call('ping') end return 'ok'} 1 x
         $rd flush
-        after 100
+        after 200
         catch {r ping} err
         assert_match {BUSY*} $err
         $rd read
@@ -457,7 +457,7 @@ start_server {tags {"scripting"}} {
         set start [clock clicks -milliseconds]
         $rd debug loadaof
         $rd flush
-        after 100
+        after 200
         catch {r ping} err
         assert_match {LOADING*} $err
         $rd read

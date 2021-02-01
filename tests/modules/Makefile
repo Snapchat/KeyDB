@@ -25,7 +25,7 @@ TEST_MODULES = \
     auth.so \
     keyspace_events.so \
     blockedclient.so \
-    getkeys.so
+    timers.so
 
 
 .PHONY: all

@@ -132,6 +132,7 @@ tags "modules" {
             }
 
             $replica replicaof no one
+            after 300
 
             test {Test role-master hook} {
                 assert_equal [r hooks.event_count role-replica] 1

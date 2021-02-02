@@ -329,6 +329,7 @@ static int s_cAcquisitionsModule = 0;
 static std::mutex s_mutex;
 static std::condition_variable s_cv;
 static std::recursive_mutex s_mutexModule;
+thread_local bool g_fModuleThread = false; /* did this thread originate from a module ? */
 
 typedef void (*RedisModuleForkDoneHandler) (int exitcode, int bysignal, void *user_data);
 
@@ -4772,6 +4773,10 @@ int moduleClientIsBlockedOnKeys(client *c) {
  * RedisModule_BlockClientOnKeys() is accessible from the timeout
  * callback via RM_GetBlockedClientPrivateData). */
 int RM_UnblockClient(RedisModuleBlockedClient *bc, void *privdata) {
+    if (serverTL == nullptr) {
+        serverTL = &g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN];    // arbitrary module threads get the main thread context
+        g_fModuleThread = true;
+    }
     if (bc->blocked_on_keys) {
         /* In theory the user should always pass the timeout handler as an
          * argument, but better to be safe than sorry. */
@@ -5045,7 +5050,6 @@ void RM_FreeThreadSafeContext(RedisModuleCtx *ctx) {
     zfree(ctx);
 }
 
-thread_local bool g_fModuleThread = false;
 /* Acquire the server lock before executing a thread safe API call.
  * This is not needed for `RedisModule_Reply*` calls when there is
  * a blocked client connected to the thread safe context. */

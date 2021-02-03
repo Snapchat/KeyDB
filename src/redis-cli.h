@@ -171,6 +171,7 @@ extern struct config {
     char *user;
     int output; /* output mode, see OUTPUT_* defines */
     sds mb_delim;
+    sds cmd_delim;
     char prompt[128];
     char *eval;
     int eval_ldb;

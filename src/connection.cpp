@@ -169,7 +169,12 @@ static int connSocketWrite(connection *conn, const void *data, size_t data_len) 
     int ret = write(conn->fd, data, data_len);
     if (ret < 0 && errno != EAGAIN) {
         conn->last_errno = errno;
-        conn->state.store(CONN_STATE_ERROR, std::memory_order_relaxed);
+
+        /* Don't overwrite the state of a connection that is not already
+         * connected, not to mess with handler callbacks.
+         */
+        ConnectionState expected = CONN_STATE_CONNECTED;
+        conn->state.compare_exchange_strong(expected, CONN_STATE_ERROR, std::memory_order_relaxed);
     }
 
     return ret;
@@ -181,7 +186,12 @@ static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
         conn->state.store(CONN_STATE_CLOSED, std::memory_order_release);
     } else if (ret < 0 && errno != EAGAIN) {
         conn->last_errno = errno;
-        conn->state.store(CONN_STATE_ERROR, std::memory_order_release);
+
+        /* Don't overwrite the state of a connection that is not already
+         * connected, not to mess with handler callbacks.
+         */
+        ConnectionState expected = CONN_STATE_CONNECTED;
+        conn->state.compare_exchange_strong(expected, CONN_STATE_ERROR, std::memory_order_release);
     }
 
     return ret;
@@ -263,8 +273,9 @@ void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientData, in
     if (conn->state.load(std::memory_order_relaxed) == CONN_STATE_CONNECTING &&
             (mask & AE_WRITABLE) && conn->conn_handler) {
 
-        if (connGetSocketError(conn)) {
-            conn->last_errno = errno;
+        int conn_error = connGetSocketError(conn);
+        if (conn_error) {
+            conn->last_errno = conn_error;
             conn->state.store(CONN_STATE_ERROR, std::memory_order_release);
         } else {
             conn->state.store(CONN_STATE_CONNECTED, std::memory_order_release);

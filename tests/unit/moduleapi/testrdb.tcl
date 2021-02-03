@@ -96,7 +96,7 @@ tags "modules" {
                             $master client kill type replica
                             $master set asdf asdf
                             # the side effect of resizing the backlog is that it is flushed (16k is the min size)
-                            $master config set repl-backlog-size [expr {16384 + $i}]
+                            $master debug truncate-repl-backlog
                             $master exec
                         }
                         # wait for loading to stop (fail)

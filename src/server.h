@@ -1074,11 +1074,6 @@ public:
         return m_setexpire->random_value();
     }
 
-    void delete_setexpire()
-    {
-        delete m_setexpire;
-    }
-
     dict_iter end()  { return dict_iter(nullptr, nullptr); }
     dict_const_iter end() const { return dict_const_iter(nullptr); }
 
@@ -1291,7 +1286,6 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::expireSize;
     using redisDbPersistentData::removeExpire;
     using redisDbPersistentData::removeSubkeyExpire;
-    using redisDbPersistentData::delete_setexpire;
     using redisDbPersistentData::clear;
     using redisDbPersistentData::emptyDbAsync;
     using redisDbPersistentData::iterate;
@@ -3031,9 +3025,9 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*));
 long long emptyDbStructure(redisDb **dbarray, int dbnum, int flags, void(callback)(void*));
 void flushAllDataAndResetRDB(int flags);
 long long dbTotalServerKeyCount();
-dbBackup *backupDb(void);
-void restoreDbBackup(dbBackup *buckup);
-void discardDbBackup(dbBackup *buckup, int flags, void(callback)(void*));
+const redisDbPersistentDataSnapshot **backupDb(void);
+void restoreDbBackup(const redisDbPersistentDataSnapshot **buckup);
+void discardDbBackup(const redisDbPersistentDataSnapshot **buckup, int flags, void(callback)(void*));
 
 
 int selectDb(client *c, int id);

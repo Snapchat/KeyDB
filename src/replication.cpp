@@ -1874,7 +1874,7 @@ static int useDisklessLoad() {
 /* Helper function for readSyncBulkPayload() to make backups of the current
  * databases before socket-loading the new ones. The backups may be restored
  * by disklessLoadRestoreBackup or freed by disklessLoadDiscardBackup later. */
-dbBackup *disklessLoadMakeBackup(void) {
+const redisDbPersistentDataSnapshot **disklessLoadMakeBackup(void) {
     return backupDb();
 }
 
@@ -1884,13 +1884,13 @@ dbBackup *disklessLoadMakeBackup(void) {
  *
  * If the socket loading went wrong, we want to restore the old backups
  * into the server databases. */
-void disklessLoadRestoreBackup(dbBackup *buckup) {
+void disklessLoadRestoreBackup(const redisDbPersistentDataSnapshot **buckup) {
     restoreDbBackup(buckup);
 }
 
 /* Helper function for readSyncBulkPayload() to discard our old backups
  * when the loading succeeded. */
-void disklessLoadDiscardBackup(dbBackup *buckup, int flag) {
+void disklessLoadDiscardBackup(const redisDbPersistentDataSnapshot **buckup, int flag) {
     discardDbBackup(buckup, flag, replicationEmptyDbCallback);
 }
 
@@ -1900,7 +1900,7 @@ void readSyncBulkPayload(connection *conn) {
     char buf[PROTO_IOBUF_LEN];
     ssize_t nread, readlen, nwritten;
     int use_diskless_load = useDisklessLoad();
-    dbBackup *diskless_load_backup = NULL;
+    const redisDbPersistentDataSnapshot **diskless_load_backup = NULL;
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
     int empty_db_flags = g_pserver->repl_slave_lazy_flush ? EMPTYDB_ASYNC :
                                                         EMPTYDB_NO_FLAGS;

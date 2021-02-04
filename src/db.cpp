@@ -516,12 +516,7 @@ long long emptyDbStructure(redisDb **dbarray, int dbnum, int async,
 
     for (int j = startdb; j <= enddb; j++) {
         removed += dbarray[j]->size();
-        if (async) {
-            dbarray[j]->emptyDbAsync();
-        } else {
-            dictEmpty(dbarray[j]->dictUnsafeKeyOnly(),callback);
-            dbarray[j]->setexpireUnsafe()->clear();
-        }
+        dbarray[j]->clear(async, callback);
         /* Because all keys of database are removed, reset average ttl. */
         dbarray[j]->avg_ttl = 0;
         dbarray[j]->last_expire_set = 0;
@@ -585,47 +580,21 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
 
 /* Store a backup of the database for later use, and put an empty one
  * instead of it. */
-dbBackup *backupDb(void) {
-    dbBackup *backup = (dbBackup*)zmalloc(sizeof(dbBackup));
-
-    /* Backup main DBs. */
-    backup->dbarray = (redisDb**)zmalloc(sizeof(redisDb*)*cserver.dbnum);
+const redisDbPersistentDataSnapshot **backupDb(void) {
+    const redisDbPersistentDataSnapshot **backup = (const redisDbPersistentDataSnapshot**)zmalloc(sizeof(redisDbPersistentDataSnapshot*)*cserver.dbnum);
     for (int i=0; i<cserver.dbnum; i++) {
-        backup->dbarray[i] = g_pserver->db[i];
-        g_pserver->db[i] = new (MALLOC_LOCAL) redisDb();
-        g_pserver->db[i]->initialize(i);
+        backup[i] = g_pserver->db[i]->createSnapshot(LLONG_MAX, false);
     }
-
-    /* Backup cluster slots to keys map if enable cluster. */
-    if (g_pserver->cluster_enabled) {
-        backup->slots_to_keys = g_pserver->cluster->slots_to_keys;
-        memcpy(backup->slots_keys_count, g_pserver->cluster->slots_keys_count,
-            sizeof(g_pserver->cluster->slots_keys_count));
-        g_pserver->cluster->slots_to_keys = raxNew();
-        memset(g_pserver->cluster->slots_keys_count, 0,
-            sizeof(g_pserver->cluster->slots_keys_count));
-    }
-
     return backup;
 }
 
 /* Discard a previously created backup, this can be slow (similar to FLUSHALL)
  * Arguments are similar to the ones of emptyDb, see EMPTYDB_ flags. */
-void discardDbBackup(dbBackup *buckup, int flags, void(callback)(void*)) {
-    int async = (flags & EMPTYDB_ASYNC);
-
+void discardDbBackup(const redisDbPersistentDataSnapshot **buckup, int flags, void(callback)(void*)) {
     /* Release main DBs backup . */
-    emptyDbStructure(buckup->dbarray, -1, async, callback);
     for (int i=0; i<cserver.dbnum; i++) {
-        dictRelease(buckup->dbarray[i]->dictUnsafeKeyOnly());
-        buckup->dbarray[i]->delete_setexpire();
+        g_pserver->db[i]->endSnapshot(buckup[i]);
     }
-
-    /* Release slots to keys map backup if enable cluster. */
-    if (g_pserver->cluster_enabled) freeSlotsToKeysMap(buckup->slots_to_keys, async);
-
-    /* Release buckup. */
-    zfree(buckup->dbarray);
     zfree(buckup);
 }
 
@@ -633,27 +602,11 @@ void discardDbBackup(dbBackup *buckup, int flags, void(callback)(void*)) {
  * in the db).
  * This function should be called after the current contents of the database
  * was emptied with a previous call to emptyDb (possibly using the async mode). */
-void restoreDbBackup(dbBackup *buckup) {
+void restoreDbBackup(const redisDbPersistentDataSnapshot **buckup) {
     /* Restore main DBs. */
     for (int i=0; i<cserver.dbnum; i++) {
-        serverAssert(g_pserver->db[i]->size() == 0);
-        serverAssert(g_pserver->db[i]->expireSize() == 0);
-        dictRelease(g_pserver->db[i]->dictUnsafeKeyOnly());
-        g_pserver->db[i]->delete_setexpire();
-        g_pserver->db[i] = buckup->dbarray[i];
+        g_pserver->db[i]->restoreSnapshot(buckup[i]);
     }
-
-    /* Restore slots to keys map backup if enable cluster. */
-    if (g_pserver->cluster_enabled) {
-        serverAssert(g_pserver->cluster->slots_to_keys->numele == 0);
-        raxFree(g_pserver->cluster->slots_to_keys);
-        g_pserver->cluster->slots_to_keys = buckup->slots_to_keys;
-        memcpy(g_pserver->cluster->slots_keys_count, buckup->slots_keys_count,
-                sizeof(g_pserver->cluster->slots_keys_count));
-    }
-
-    /* Release buckup. */
-    zfree(buckup->dbarray);
     zfree(buckup);
 }
 

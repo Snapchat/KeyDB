@@ -116,7 +116,7 @@ robj *lookupKeyByPattern(redisDb *db, robj *pattern, robj *subst, int writeflag)
     if (fieldobj) {
         if (o->type != OBJ_HASH) goto noobj;
 
-        /* Retrieve value from hash by the field name. The returend object
+        /* Retrieve value from hash by the field name. The returned object
          * is a new object with refcount already incremented. */
         o = hashTypeGetValueObject(o, szFromObj(fieldobj));
     } else {
@@ -271,7 +271,7 @@ void sortCommand(client *c) {
     }
 
     /* Lookup the key to sort. It must be of the right types */
-    if (storekey)
+    if (!storekey)
         sortval = lookupKeyRead(c->db,c->argv[1]).unsafe_robjcast();
     else
         sortval = lookupKeyWrite(c->db,c->argv[1]);
@@ -317,7 +317,7 @@ void sortCommand(client *c) {
     switch(sortval->type) {
     case OBJ_LIST: vectorlen = listTypeLength(sortval); break;
     case OBJ_SET: vectorlen =  setTypeSize(sortval); break;
-    case OBJ_ZSET: vectorlen = dictSize(((zset*)ptrFromObj(sortval))->pdict); break;
+    case OBJ_ZSET: vectorlen = dictSize(((zset*)ptrFromObj(sortval))->dict); break;
     default: vectorlen = 0; serverPanic("Bad SORT type"); /* Avoid GCC warning */
     }
 
@@ -412,7 +412,7 @@ void sortCommand(client *c) {
 
         /* Check if starting point is trivial, before doing log(N) lookup. */
         if (desc) {
-            long zsetlen = dictSize(((zset*)ptrFromObj(sortval))->pdict);
+            long zsetlen = dictSize(((zset*)ptrFromObj(sortval))->dict);
 
             ln = zsl->tail;
             if (start > 0)
@@ -436,7 +436,7 @@ void sortCommand(client *c) {
         end -= start;
         start = 0;
     } else if (sortval->type == OBJ_ZSET) {
-        dict *set = ((zset*)ptrFromObj(sortval))->pdict;
+        dict *set = ((zset*)ptrFromObj(sortval))->dict;
         dictIterator *di;
         dictEntry *setele;
         sds sdsele;

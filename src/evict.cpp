@@ -42,7 +42,7 @@
 /* To improve the quality of the LRU approximation we take a set of keys
  * that are good candidate for eviction across freeMemoryIfNeeded() calls.
  *
- * Entries inside the eviciton pool are taken ordered by idle time, putting
+ * Entries inside the eviction pool are taken ordered by idle time, putting
  * greater idle times to the right (ascending order).
  *
  * When an LFU policy is used instead, a reverse frequency indication is used
@@ -216,7 +216,7 @@ void processEvictionCandidate(int dbid, sds key, robj *o, const expireEntry *e, 
     /* Try to reuse the cached SDS string allocated in the pool entry,
         * because allocating and deallocating this object is costly
         * (according to the profiler, not my fantasy. Remember:
-        * premature optimizbla bla bla bla. */
+        * premature optimization bla bla bla bla. */
     int klen = sdslen(key);
     if (klen > EVPOOL_CACHED_SDS_SIZE) {
         pool[k].key = sdsdup(key);
@@ -372,7 +372,7 @@ unsigned long LFUDecrAndReturn(robj_roptr o) {
 }
 
 /* ----------------------------------------------------------------------------
- * The external API for eviction: freeMemroyIfNeeded() is called by the
+ * The external API for eviction: freeMemoryIfNeeded() is called by the
  * server when there is data to add in order to make space if needed.
  * --------------------------------------------------------------------------*/
 
@@ -482,7 +482,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
  *
  * The function returns C_OK if we are under the memory limit or if we
  * were over the limit, but the attempt to free memory was successful.
- * Otehrwise if we are over the memory limit, but not enough memory
+ * Otherwise if we are over the memory limit, but not enough memory
  * was freed to return back under the limit, the function returns C_ERR. */
 int freeMemoryIfNeeded(bool fQuickCycle, bool fPreSnapshot) {
     serverAssert(GlobalLocksAcquired());
@@ -651,12 +651,12 @@ int freeMemoryIfNeeded(bool fQuickCycle, bool fPreSnapshot) {
                     dbAsyncDelete(db,keyobj);
                 else
                     dbSyncDelete(db,keyobj);
-                signalModifiedKey(NULL,db,keyobj);
                 latencyEndMonitor(eviction_latency);
                 latencyAddSampleIfNeeded("eviction-del",eviction_latency);
                 delta -= (long long) zmalloc_used_memory();
                 mem_freed += delta;
                 g_pserver->stat_evictedkeys++;
+                signalModifiedKey(NULL,db,keyobj);
                 notifyKeyspaceEvent(NOTIFY_EVICTED, "evicted",
                     keyobj, db->id);
                 decrRefCount(keyobj);

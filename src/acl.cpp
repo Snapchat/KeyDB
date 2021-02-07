@@ -300,7 +300,13 @@ void ACLFreeUserAndKillClients(user *u) {
              * it in non authenticated mode. */
             c->puser = DefaultUser;
             c->authenticated = 0;
-            freeClientAsync(c);
+            /* We will write replies to this client later, so we can't
+             * close it directly even if async. */
+            if (c == serverTL->current_client) {
+                c->flags |= CLIENT_CLOSE_AFTER_COMMAND;
+            } else {
+                freeClientAsync(c);
+            }
         }
     }
     ACLFreeUser(u);
@@ -377,7 +383,7 @@ int ACLUserCanExecuteFutureCommands(user *u) {
  * zero, the user flag ALLCOMMANDS is cleared since it is no longer possible
  * to skip the command bit explicit test. */
 void ACLSetUserCommandBit(user *u, unsigned long id, int value) {
-    uint64_t word, bit;
+    uint64_t word=0, bit=0;
     if (ACLGetCommandBitCoordinates(id,&word,&bit) == C_ERR) return;
     if (value) {
         u->allowed_commands[word] |= bit;
@@ -472,21 +478,68 @@ sds ACLDescribeUserCommandRules(user *u) {
         ACLSetUser(fakeuser,"-@all",-1);
     }
 
-    /* Try to add or subtract each category one after the other. Often a
-     * single category will not perfectly match the set of commands into
-     * it, so at the end we do a final pass adding/removing the single commands
-     * needed to make the bitmap exactly match. */
-    for (int j = 0; ACLCommandCategories[j].flag != 0; j++) {
-        unsigned long on, off;
-        ACLCountCategoryBitsForUser(u,&on,&off,ACLCommandCategories[j].name);
-        if ((additive && on > off) || (!additive && off > on)) {
-            sds op = sdsnewlen(additive ? "+@" : "-@", 2);
-            op = sdscat(op,ACLCommandCategories[j].name);
-            ACLSetUser(fakeuser,op,-1);
-            rules = sdscatsds(rules,op);
-            rules = sdscatlen(rules," ",1);
-            sdsfree(op);
+    /* Attempt to find a good approximation for categories and commands
+     * based on the current bits used, by looping over the category list
+     * and applying the best fit each time. Often a set of categories will not 
+     * perfectly match the set of commands into it, so at the end we do a 
+     * final pass adding/removing the single commands needed to make the bitmap
+     * exactly match. A temp user is maintained to keep track of categories 
+     * already applied. */
+    user tu = {0};
+    user *tempuser = &tu;
+    
+    /* Keep track of the categories that have been applied, to prevent
+     * applying them twice.  */
+    char applied[sizeof(ACLCommandCategories)/sizeof(ACLCommandCategories[0])];
+    memset(applied, 0, sizeof(applied));
+
+    memcpy(tempuser->allowed_commands,
+        u->allowed_commands, 
+        sizeof(u->allowed_commands));
+    while (1) {
+        int best = -1;
+        unsigned long mindiff = INT_MAX, maxsame = 0;
+        for (int j = 0; ACLCommandCategories[j].flag != 0; j++) {
+            if (applied[j]) continue;
+
+            unsigned long on, off, diff, same;
+            ACLCountCategoryBitsForUser(tempuser,&on,&off,ACLCommandCategories[j].name);
+            /* Check if the current category is the best this loop:
+             * * It has more commands in common with the user than commands
+             *   that are different.
+             * AND EITHER
+             * * It has the fewest number of differences
+             *    than the best match we have found so far. 
+             * * OR it matches the fewest number of differences
+             *   that we've seen but it has more in common. */
+            diff = additive ? off : on;
+            same = additive ? on : off;
+            if (same > diff && 
+                ((diff < mindiff) || (diff == mindiff && same > maxsame)))
+            {
+                best = j;
+                mindiff = diff;
+                maxsame = same;
+            }
         }
+
+        /* We didn't find a match */
+        if (best == -1) break;
+
+        sds op = sdsnewlen(additive ? "+@" : "-@", 2);
+        op = sdscat(op,ACLCommandCategories[best].name);
+        ACLSetUser(fakeuser,op,-1);
+
+        sds invop = sdsnewlen(additive ? "-@" : "+@", 2);
+        invop = sdscat(invop,ACLCommandCategories[best].name);
+        ACLSetUser(tempuser,invop,-1);
+
+        rules = sdscatsds(rules,op);
+        rules = sdscatlen(rules," ",1);
+        sdsfree(op);
+        sdsfree(invop);
+
+        applied[best] = 1;
     }
 
     /* Fix the final ACLs with single commands differences. */
@@ -670,8 +723,8 @@ void ACLAddAllowedSubcommand(user *u, unsigned long id, const char *sub) {
  * -<command>   Disallow the execution of that command
  * +@<category> Allow the execution of all the commands in such category
  *              with valid categories are like @admin, @set, @sortedset, ...
- *              and so forth, see the full list in the server.c file where
- *              the Redis command table is described and defined.
+ *              and so forth, see the full list in the server.cpp file where
+ *              the KeyDB command table is described and defined.
  *              The special category @all means all the commands, but currently
  *              present in the server, and that will be loaded in the future
  *              via modules.
@@ -1099,8 +1152,9 @@ int ACLCheckCommandPerm(client *c, int *keyidxptr) {
     if (!(c->puser->flags & USER_FLAG_ALLKEYS) &&
         (c->cmd->getkeys_proc || c->cmd->firstkey))
     {
-        int numkeys;
-        int *keyidx = getKeysFromCommand(c->cmd,c->argv,c->argc,&numkeys);
+        getKeysResult result = GETKEYS_RESULT_INIT;
+        int numkeys = getKeysFromCommand(c->cmd,c->argv,c->argc,&result);
+        int *keyidx = result.keys;
         for (int j = 0; j < numkeys; j++) {
             listIter li;
             listNode *ln;
@@ -1121,11 +1175,11 @@ int ACLCheckCommandPerm(client *c, int *keyidxptr) {
             }
             if (!match) {
                 if (keyidxptr) *keyidxptr = keyidx[j];
-                getKeysFreeResult(keyidx);
+                getKeysFreeResult(&result);
                 return ACL_DENIED_KEY;
             }
         }
-        getKeysFreeResult(keyidx);
+        getKeysFreeResult(&result);
     }
 
     /* If we survived all the above checks, the user can execute the

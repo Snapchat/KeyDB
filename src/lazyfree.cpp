@@ -15,7 +15,7 @@ size_t lazyfreeGetPendingObjectsCount(void) {
 
 /* Return the amount of work needed in order to free an object.
  * The return value is not always the actual number of allocations the
- * object is compoesd of, but a number proportional to it.
+ * object is composed of, but a number proportional to it.
  *
  * For strings the function always returns 1.
  *
@@ -159,16 +159,10 @@ void redisDbPersistentData::emptyDbAsync() {
     bioCreateBackgroundJob(BIO_LAZY_FREE,NULL,oldht1,set);
 }
 
-/* Empty the slots-keys map of Redis CLuster by creating a new empty one
- * and scheduiling the old for lazy freeing. */
-void slotToKeyFlushAsync(void) {
-    rax *old = g_pserver->cluster->slots_to_keys;
-
-    g_pserver->cluster->slots_to_keys = raxNew();
-    memset(g_pserver->cluster->slots_keys_count,0,
-           sizeof(g_pserver->cluster->slots_keys_count));
-    atomicIncr(lazyfree_objects,old->numele);
-    bioCreateBackgroundJob(BIO_LAZY_FREE,NULL,NULL,old);
+/* Release the radix tree mapping Redis Cluster keys to slots asynchronously. */
+void freeSlotsToKeysMapAsync(rax *rt) {
+    atomicIncr(lazyfree_objects,rt->numele);
+    bioCreateBackgroundJob(BIO_LAZY_FREE,NULL,NULL,rt);
 }
 
 /* Release objects from the lazyfree thread. It's just decrRefCount()
@@ -179,10 +173,8 @@ void lazyfreeFreeObjectFromBioThread(robj *o) {
 }
 
 /* Release a database from the lazyfree thread. The 'db' pointer is the
- * database which was substitutied with a fresh one in the main thread
- * when the database was logically deleted. 'sl' is a skiplist used by
- * Redis Cluster in order to take the hash slots -> keys mapping. This
- * may be NULL if Redis Cluster is disabled. */
+ * database which was substituted with a fresh one in the main thread
+ * when the database was logically deleted. */
 void lazyfreeFreeDatabaseFromBioThread(dict *ht1, expireset *set) {
     size_t numkeys = dictSize(ht1);
     dictRelease(ht1);
@@ -190,7 +182,7 @@ void lazyfreeFreeDatabaseFromBioThread(dict *ht1, expireset *set) {
     atomicDecr(lazyfree_objects,numkeys);
 }
 
-/* Release the skiplist mapping Redis Cluster keys to slots in the
+/* Release the radix tree mapping Redis Cluster keys to slots in the
  * lazyfree thread. */
 void lazyfreeFreeSlotsMapFromBioThread(rax *rt) {
     size_t len = rt->numele;

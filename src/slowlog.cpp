@@ -75,7 +75,7 @@ slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long dur
             } else if (argv[j]->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT) {
                 se->argv[j] = argv[j];
             } else {
-                /* Here we need to dupliacate the string objects composing the
+                /* Here we need to duplicate the string objects composing the
                  * argument vector of the command, because those may otherwise
                  * end shared with string objects stored into keys. Having
                  * shared objects between any part of Redis, and the data

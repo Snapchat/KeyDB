@@ -190,7 +190,7 @@ void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj
             }
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = (zset*)ptrFromObj(o);
-            dictIterator *di = dictGetIterator(zs->pdict);
+            dictIterator *di = dictGetIterator(zs->dict);
             dictEntry *de;
 
             while((de = dictNext(di)) != NULL) {
@@ -396,7 +396,7 @@ void debugCommand(client *c) {
 "OOM -- Crash the server simulating an out-of-memory error.",
 "PANIC -- Crash the server simulating a panic.",
 "POPULATE <count> [prefix] [size] -- Create <count> string keys named key:<num>. If a prefix is specified is used instead of the 'key' prefix.",
-"RELOAD [MERGE] [NOFLUSH] [NOSAVE] -- Save the RDB on disk and reload it back in memory. By default it will save the RDB file and load it back. With the NOFLUSH option the current database is not removed before loading the new one, but conficts in keys will kill the server with an exception. When MERGE is used, conflicting keys will be loaded (the key in the loaded RDB file will win). When NOSAVE is used, the server will not save the current dataset in the RDB file before loading. Use DEBUG RELOAD NOSAVE when you want just to load the RDB file you placed in the Redis working directory in order to replace the current dataset in memory. Use DEBUG RELOAD NOSAVE NOFLUSH MERGE when you want to add what is in the current RDB file placed in the Redis current directory, with the current memory content. Use DEBUG RELOAD when you want to verify Redis is able to persist the current dataset in the RDB file, flush the memory content, and load it back.",
+"RELOAD [MERGE] [NOFLUSH] [NOSAVE] -- Save the RDB on disk and reload it back in memory. By default it will save the RDB file and load it back. With the NOFLUSH option the current database is not removed before loading the new one, but conflicts in keys will kill the server with an exception. When MERGE is used, conflicting keys will be loaded (the key in the loaded RDB file will win). When NOSAVE is used, the server will not save the current dataset in the RDB file before loading. Use DEBUG RELOAD NOSAVE when you want just to load the RDB file you placed in the Redis working directory in order to replace the current dataset in memory. Use DEBUG RELOAD NOSAVE NOFLUSH MERGE when you want to add what is in the current RDB file placed in the Redis current directory, with the current memory content. Use DEBUG RELOAD when you want to verify Redis is able to persist the current dataset in the RDB file, flush the memory content, and load it back.",
 "RESTART -- Graceful restart: save config, db, restart.",
 "SDSLEN <key> -- Show low level SDS string info representing key and value.",
 "SEGFAULT -- Crash the server with sigsegv.",
@@ -465,7 +465,7 @@ NULL
             }
         }
 
-        /* The default beahvior is to save the RDB file before loading
+        /* The default behavior is to save the RDB file before loading
          * it back. */
         if (save) {
             rdbSaveInfo rsi, *rsiptr;
@@ -637,7 +637,11 @@ NULL
         for (int j = 2; j < c->argc; j++) {
             unsigned char digest[20];
             memset(digest,0,20); /* Start with a clean result */
-            robj_roptr o = lookupKeyReadWithFlags(c->db,c->argv[j],LOOKUP_NOTOUCH);
+
+            /* We don't use lookupKey because a debug command should
+             * work on logically expired keys */
+            auto itr = c->db->find(c->argv[j]);
+            robj* o = (robj*)(itr == NULL ? NULL : itr.val());
             if (o) xorObjectDigest(c->db,c->argv[j],digest,o);
 
             sds d = sdsempty();
@@ -776,7 +780,7 @@ NULL
         case OBJ_ENCODING_SKIPLIST:
             {
                 zset *zs = (zset*)ptrFromObj(o);
-                ht = zs->pdict;
+                ht = zs->dict;
             }
             break;
         case OBJ_ENCODING_HT:
@@ -820,6 +824,13 @@ NULL
             }
             c->flags &= ~(CLIENT_MASTER | CLIENT_MASTER_FORCE_REPLY);
         }
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"truncate-repl-backlog") && c->argc == 2) {
+        g_pserver->repl_backlog_idx = 0;
+        g_pserver->repl_backlog_off = g_pserver->master_repl_offset+1;
+        g_pserver->repl_backlog_histlen = 0;
+        if (g_pserver->repl_batch_idxStart >= 0) g_pserver->repl_batch_idxStart = -1;
+        if (g_pserver->repl_batch_offStart >= 0) g_pserver->repl_batch_offStart = -1;
         addReply(c, shared.ok);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"config-rewrite-force-all") && c->argc == 2)
     {
@@ -968,7 +979,7 @@ static void *getMcontextEip(ucontext_t *uc) {
     #endif
 #elif defined(__linux__)
     /* Linux */
-    #if defined(__i386__) || defined(__ILP32__)
+    #if defined(__i386__) || ((defined(__X86_64__) || defined(__x86_64__)) && defined(__ILP32__))
     return (void*) uc->uc_mcontext.gregs[14]; /* Linux 32 */
     #elif defined(__X86_64__) || defined(__x86_64__)
     return (void*) uc->uc_mcontext.gregs[16]; /* Linux 64 */
@@ -992,6 +1003,12 @@ static void *getMcontextEip(ucontext_t *uc) {
     return (void*) uc->sc_eip;
     #elif defined(__x86_64__)
     return (void*) uc->sc_rip;
+    #endif
+#elif defined(__NetBSD__)
+    #if defined(__i386__)
+    return (void*) uc->uc_mcontext.__gregs[_REG_EIP];
+    #elif defined(__x86_64__)
+    return (void*) uc->uc_mcontext.__gregs[_REG_RIP];
     #endif
 #elif defined(__DragonFly__)
     return (void*) uc->uc_mcontext.mc_rip;
@@ -1129,7 +1146,7 @@ void logRegisters(ucontext_t *uc) {
 /* Linux */
 #elif defined(__linux__)
     /* Linux x86 */
-    #if defined(__i386__) || defined(__ILP32__)
+    #if defined(__i386__) || ((defined(__X86_64__) || defined(__x86_64__)) && defined(__ILP32__))
     serverLog(LL_WARNING,
     "\n"
     "EAX:%08lx EBX:%08lx ECX:%08lx EDX:%08lx\n"
@@ -1217,7 +1234,7 @@ void logRegisters(ucontext_t *uc) {
 	      "R10:%016lx R9 :%016lx\nR8 :%016lx R7 :%016lx\n"
 	      "R6 :%016lx R5 :%016lx\nR4 :%016lx R3 :%016lx\n"
 	      "R2 :%016lx R1 :%016lx\nR0 :%016lx EC :%016lx\n"
-	      "fp: %016lx ip:%016lx\n",
+	      "fp: %016lx ip:%016lx\n"
 	      "pc:%016lx sp:%016lx\ncpsr:%016lx fault_address:%016lx\n",
 	      (unsigned long) uc->uc_mcontext.arm_r10,
 	      (unsigned long) uc->uc_mcontext.arm_r9,
@@ -1349,6 +1366,59 @@ void logRegisters(ucontext_t *uc) {
         (unsigned long) uc->sc_gs
     );
     logStackContent((void**)uc->sc_esp);
+    #endif
+#elif defined(__NetBSD__)
+    #if defined(__x86_64__)
+    serverLog(LL_WARNING,
+    "\n"
+    "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
+    "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
+    "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
+    "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
+    "RIP:%016lx EFL:%016lx\nCSGSFS:%016lx",
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_RAX],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_RBX],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_RCX],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_RDX],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_RDI],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_RSI],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_RBP],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_RSP],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_R8],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_R9],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_R10],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_R11],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_R12],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_R13],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_R14],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_R15],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_RIP],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_RFLAGS],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_CS]
+    );
+    logStackContent((void**)uc->uc_mcontext.__gregs[_REG_RSP]);
+    #elif defined(__i386__)
+    serverLog(LL_WARNING,
+    "\n"
+    "EAX:%08lx EBX:%08lx ECX:%08lx EDX:%08lx\n"
+    "EDI:%08lx ESI:%08lx EBP:%08lx ESP:%08lx\n"
+    "SS :%08lx EFL:%08lx EIP:%08lx CS:%08lx\n"
+    "DS :%08lx ES :%08lx FS :%08lx GS:%08lx",
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_EAX],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_EBX],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_EDX],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_EDI],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_ESI],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_EBP],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_ESP],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_SS],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_EFLAGS],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_EIP],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_CS],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_ES],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_FS],
+        (unsigned long) uc->uc_mcontext.__gregs[_REG_GS]
+    );
     #endif
 #elif defined(__DragonFly__)
     serverLog(LL_WARNING,
@@ -1511,7 +1581,7 @@ void logCurrentClient(void) {
     }
     /* Check if the first argument, usually a key, is found inside the
      * selected DB, and if so print info about the associated object. */
-    if (cc->argc >= 1) {
+    if (cc->argc > 1) {
         robj *val, *key;
 
         key = getDecodedObject(cc->argv[1]);
@@ -1528,7 +1598,7 @@ void logCurrentClient(void) {
 
 #define MEMTEST_MAX_REGIONS 128
 
-/* A non destructive memory test executed during segfauls. */
+/* A non destructive memory test executed during segfault. */
 int memtest_test_linux_anonymous_maps(void) {
     FILE *fp;
     char line[1024];
@@ -1589,7 +1659,32 @@ int memtest_test_linux_anonymous_maps(void) {
     closeDirectLogFiledes(fd);
     return errors;
 }
-#endif
+#endif /* HAVE_PROC_MAPS */
+
+static void killServerThreads(void) {
+    int err;
+    for (int i = 0; i < cserver.cthreads; i++) {
+        if (g_pserver->rgthread[i] != pthread_self()) {
+            pthread_cancel(g_pserver->rgthread[i]);
+        }
+    }
+    if (pthread_self() != cserver.main_thread_id && pthread_cancel(cserver.main_thread_id) == 0) {
+        if ((err = pthread_join(cserver.main_thread_id,NULL)) != 0) {
+            serverLog(LL_WARNING, "main thread can not be joined: %s", strerror(err));
+        } else {
+            serverLog(LL_WARNING, "main thread terminated");
+        }
+    }
+}
+
+/* Kill the running threads (other than current) in an unclean way. This function
+ * should be used only when it's critical to stop the threads for some reason.
+ * Currently Redis does this only on crash (for instance on SIGSEGV) in order
+ * to perform a fast memory check without other threads messing with memory. */
+void killThreads(void) {
+    killServerThreads();
+    bioKillThreads();
+}
 
 /* Scans the (assumed) x86 code starting at addr, for a max of `len`
  * bytes, searching for E8 (callq) opcodes, and dumping the symbols
@@ -1627,7 +1722,7 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 
     bugReportStart();
     serverLog(LL_WARNING,
-        "KeyDB %s crashed by signal: %d", KEYDB_REAL_VERSION, sig);
+        "KeyDB %s crashed by signal: %d, si_code: %d", KEYDB_REAL_VERSION, sig, info->si_code);
     if (eip != NULL) {
         serverLog(LL_WARNING,
         "Crashed running the instruction at: %p", eip);
@@ -1635,6 +1730,9 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
     if (sig == SIGSEGV || sig == SIGBUS) {
         serverLog(LL_WARNING,
         "Accessing address: %p", (void*)info->si_addr);
+    }
+    if (info->si_pid != -1) {
+        serverLog(LL_WARNING, "Killed by PID: %d, UID: %d", info->si_pid, info->si_uid);
     }
     serverLog(LL_WARNING,
         "Failed assertion: %s (%s:%d)", g_pserver->assert_failed,
@@ -1669,7 +1767,7 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 #if defined(HAVE_PROC_MAPS)
     /* Test memory */
     serverLogRaw(LL_WARNING|LL_RAW, "\n------ FAST MEMORY TEST ------\n");
-    bioKillThreads();
+    killThreads();
     if (memtest_test_linux_anonymous_maps()) {
         serverLogRaw(LL_WARNING|LL_RAW,
             "!!! MEMORY ERROR DETECTED! Check your memory ASAP !!!\n");
@@ -1697,13 +1795,14 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
                 /* Find the address of the next page, which is our "safety"
                  * limit when dumping. Then try to dump just 128 bytes more
                  * than EIP if there is room, or stop sooner. */
+                void *base = (void *)info.dli_saddr;
                 unsigned long next = ((unsigned long)eip + sz) & ~(sz-1);
                 unsigned long end = (unsigned long)eip + 128;
                 if (end > next) end = next;
-                len = end - (unsigned long)info.dli_saddr;
+                len = end - (unsigned long)base;
                 serverLogHexDump(LL_WARNING, "dump of function",
-                    info.dli_saddr ,len);
-                dumpX86Calls(info.dli_saddr,len);
+                    base ,len);
+                dumpX86Calls(base,len);
             }
         }
     }
@@ -1716,7 +1815,7 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 );
 
     /* free(messages); Don't call free() with possibly corrupted memory. */
-    if (cserver.daemonize && cserver.supervised == 0) unlink(cserver.pidfile);
+    if (cserver.daemonize && cserver.supervised == 0 && cserver.pidfile) unlink(cserver.pidfile);
 
     /* Make sure we exit with the right signal at the end. So for instance
      * the core will be dumped if enabled. */

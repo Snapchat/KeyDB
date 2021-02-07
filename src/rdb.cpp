@@ -1637,12 +1637,7 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
     return C_OK;
 }
 
-/* Note that we may call this function in signal handle 'sigShutdownHandler',
- * so we need guarantee all functions we call are async-signal-safe.
- * If  we call this function from signal handle, we won't call bg_unlik that
- * is not async-signal-safe. */
-void rdbRemoveTempFile(int tmpfileNum, int from_signal) {
-    char tmpfile[256];
+void getTempFileName(char tmpfile[], int tmpfileNum) {
     char pid[32];
     char tmpfileNumString[214];
 
@@ -1654,6 +1649,16 @@ void rdbRemoveTempFile(int tmpfileNum, int from_signal) {
     strcpy(tmpfile+5+pid_len, "-");
     strncpy(tmpfile+5+pid_len+1, tmpfileNumString, tmpfileNum_len);
     strcpy(tmpfile+5+pid_len+1+tmpfileNum_len, ".rdb");
+}
+
+/* Note that we may call this function in signal handle 'sigShutdownHandler',
+ * so we need guarantee all functions we call are async-signal-safe.
+ * If  we call this function from signal handle, we won't call bg_unlik that
+ * is not async-signal-safe. */
+void rdbRemoveTempFile(int tmpfileNum, int from_signal) {
+    char tmpfile[256];
+    
+    getTempFileName(tmpfile, tmpfileNum);
 
     if (from_signal) {
         /* bg_unlink is not async-signal-safe, but in this case we don't really

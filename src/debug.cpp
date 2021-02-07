@@ -58,6 +58,8 @@ typedef ucontext_t sigcontext_t;
 
 int g_fInCrash = false;
 
+void getTempFileName(char tmpfile[], int tmpfileNum);
+
 /* ================================= Debugging ============================== */
 
 /* Compute the sha1 of string at 's' with 'len' bytes long.
@@ -825,6 +827,10 @@ NULL
             c->flags &= ~(CLIENT_MASTER | CLIENT_MASTER_FORCE_REPLY);
         }
         addReply(c, shared.ok);
+    } else if (!strcasecmp(szFromObj(c->argv[1]), "get-temp-file") && c->argc == 2) {
+        char tmpfile[256];
+        getTempFileName(tmpfile, g_pserver->rdbThreadVars.tmpfileNum);
+        addReplyBulkCString(c, tmpfile);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"truncate-repl-backlog") && c->argc == 2) {
         g_pserver->repl_backlog_idx = 0;
         g_pserver->repl_backlog_off = g_pserver->master_repl_offset+1;

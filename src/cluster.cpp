@@ -5066,12 +5066,15 @@ void mvccrestoreCommand(client *c) {
     setMvccTstamp(obj, mvcc);
 
     /* Create the key and set the TTL if any */
-    dbMerge(c->db,key,obj,true);
-    if (expire >= 0) {
-        setExpire(c,c->db,key,nullptr,expire);
+    if (dbMerge(c->db,key,obj,true)) {
+        if (expire >= 0) {
+            setExpire(c,c->db,key,nullptr,expire);
+        }
+        signalModifiedKey(c,c->db,key);
+        notifyKeyspaceEvent(NOTIFY_GENERIC,"restore",key,c->db->id);
+    } else {
+        decrRefCount(obj);
     }
-    signalModifiedKey(c,c->db,key);
-    notifyKeyspaceEvent(NOTIFY_GENERIC,"restore",key,c->db->id);
     addReply(c,shared.ok);
     g_pserver->dirty++;
 }

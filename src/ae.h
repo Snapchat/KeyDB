@@ -135,7 +135,7 @@ aeEventLoop *aeCreateEventLoop(int setsize);
 int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg);
 #ifdef __cplusplus
 }   // EXTERN C
-int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynchronous = false, bool fLock = true, bool fForceQueue = false);
+int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fLock = true, bool fForceQueue = false);
 extern "C" {
 #endif
 void aeDeleteEventLoop(aeEventLoop *eventLoop);
@@ -144,7 +144,7 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
         aeFileProc *proc, void *clientData);
 
 int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
-        aeFileProc *proc, void *clientData, int fSynchronous);
+        aeFileProc *proc, void *clientData);
 
 void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask);
 void aeDeleteFileEventAsync(aeEventLoop *eventLoop, int fd, int mask);

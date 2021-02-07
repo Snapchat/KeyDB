@@ -37,7 +37,7 @@
 
 /* Database backup. */
 struct dbBackup {
-    redisDb **dbarray;
+    const redisDbPersistentDataSnapshot **dbarray;
     rax *slots_to_keys;
     uint64_t slots_keys_count[CLUSTER_SLOTS];
 };
@@ -580,34 +580,66 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
 
 /* Store a backup of the database for later use, and put an empty one
  * instead of it. */
-const redisDbPersistentDataSnapshot **backupDb(void) {
-    const redisDbPersistentDataSnapshot **backup = (const redisDbPersistentDataSnapshot**)zmalloc(sizeof(redisDbPersistentDataSnapshot*)*cserver.dbnum);
+const dbBackup *backupDb(void) {
+    dbBackup *backup = new dbBackup();
+    
+    backup->dbarray = (const redisDbPersistentDataSnapshot**)zmalloc(sizeof(redisDbPersistentDataSnapshot*) * cserver.dbnum);
     for (int i=0; i<cserver.dbnum; i++) {
-        backup[i] = g_pserver->db[i]->createSnapshot(LLONG_MAX, false);
+        backup->dbarray[i] = g_pserver->db[i]->createSnapshot(LLONG_MAX, false);
     }
+
+    /* Backup cluster slots to keys map if enable cluster. */
+    if (g_pserver->cluster_enabled) {
+        backup->slots_to_keys = g_pserver->cluster->slots_to_keys;
+        memcpy(backup->slots_keys_count, g_pserver->cluster->slots_keys_count,
+            sizeof(g_pserver->cluster->slots_keys_count));
+        g_pserver->cluster->slots_to_keys = raxNew();
+        memset(g_pserver->cluster->slots_keys_count, 0,
+            sizeof(g_pserver->cluster->slots_keys_count));
+    }
+
     return backup;
 }
 
 /* Discard a previously created backup, this can be slow (similar to FLUSHALL)
  * Arguments are similar to the ones of emptyDb, see EMPTYDB_ flags. */
-void discardDbBackup(const redisDbPersistentDataSnapshot **buckup, int flags, void(callback)(void*)) {
+void discardDbBackup(const dbBackup *backup, int flags, void(callback)(void*)) {
+    int async = (flags & EMPTYDB_ASYNC);
+
     /* Release main DBs backup . */
     for (int i=0; i<cserver.dbnum; i++) {
-        g_pserver->db[i]->endSnapshot(buckup[i]);
+        g_pserver->db[i]->endSnapshot(backup->dbarray[i]);
     }
-    zfree(buckup);
+
+    /* Release slots to keys map backup if enable cluster. */
+    if (g_pserver->cluster_enabled) freeSlotsToKeysMap(backup->slots_to_keys, async);
+
+    zfree(backup->dbarray);
+    delete backup;
 }
 
 /* Restore the previously created backup (discarding what currently resides
  * in the db).
  * This function should be called after the current contents of the database
  * was emptied with a previous call to emptyDb (possibly using the async mode). */
-void restoreDbBackup(const redisDbPersistentDataSnapshot **buckup) {
+void restoreDbBackup(const dbBackup *backup) {
     /* Restore main DBs. */
     for (int i=0; i<cserver.dbnum; i++) {
-        g_pserver->db[i]->restoreSnapshot(buckup[i]);
+        g_pserver->db[i]->restoreSnapshot(backup->dbarray[i]);
     }
-    zfree(buckup);
+    
+    /* Restore slots to keys map backup if enable cluster. */
+    if (g_pserver->cluster_enabled) {
+        serverAssert(g_pserver->cluster->slots_to_keys->numele == 0);
+        raxFree(g_pserver->cluster->slots_to_keys);
+        g_pserver->cluster->slots_to_keys = backup->slots_to_keys;
+        memcpy(g_pserver->cluster->slots_keys_count, backup->slots_keys_count,
+                sizeof(g_pserver->cluster->slots_keys_count));
+    }
+
+    /* Release buckup. */
+    zfree(backup->dbarray);
+    delete backup;
 }
 
 int selectDb(client *c, int id) {
@@ -2481,7 +2513,7 @@ void redisDbPersistentData::clear(void(callback)(void*))
     m_setexpire = new (MALLOC_LOCAL) expireset();
     if (m_spstorage != nullptr)
         m_spstorage->clear();
-    dictEmpty(m_pdictTombstone,nullptr);
+    dictEmpty(m_pdictTombstone,callback);
     m_pdbSnapshot = nullptr;
 }
 

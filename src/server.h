@@ -3025,9 +3025,9 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*));
 long long emptyDbStructure(redisDb **dbarray, int dbnum, int flags, void(callback)(void*));
 void flushAllDataAndResetRDB(int flags);
 long long dbTotalServerKeyCount();
-const redisDbPersistentDataSnapshot **backupDb(void);
-void restoreDbBackup(const redisDbPersistentDataSnapshot **buckup);
-void discardDbBackup(const redisDbPersistentDataSnapshot **buckup, int flags, void(callback)(void*));
+const dbBackup *backupDb(void);
+void restoreDbBackup(const dbBackup *buckup);
+void discardDbBackup(const dbBackup *buckup, int flags, void(callback)(void*));
 
 
 int selectDb(client *c, int id);

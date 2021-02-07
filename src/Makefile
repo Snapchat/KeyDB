@@ -48,8 +48,8 @@ endif
 USEASM?=true
 
 ifneq ($(strip $(SANITIZE)),)
-	CFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE
-	CXXFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE
+	CFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE  -fno-omit-frame-pointer
+	CXXFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE  -fno-omit-frame-pointer
 	LDFLAGS+= -fsanitize=$(SANITIZE)
 	MALLOC=libc
 	USEASM=false

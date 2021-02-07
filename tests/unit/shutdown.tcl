@@ -10,8 +10,8 @@ start_server {tags {"shutdown"}} {
         r bgsave
         after 100
         set dir [lindex [r config get dir] 1]
-        set child_pid [get_child_pid 0]
-        set temp_rdb [file join [lindex [r config get dir] 1] temp-${child_pid}.rdb]
+        set tmpfile [r debug get-temp-file]
+        set temp_rdb [file join [lindex [r config get dir] 1] $tmpfile]
         # Temp rdb must be existed
         assert {[file exists $temp_rdb]}
 
@@ -34,7 +34,8 @@ start_server {tags {"shutdown"}} {
         r config set rdb-key-save-delay 100000
         
         set pid [s process_id]
-        set temp_rdb [file join [lindex [r config get dir] 1] temp-${pid}.rdb]
+        set tmpfile [r debug get-temp-file]
+        set temp_rdb [file join [lindex [r config get dir] 1] $tmpfile]
 
         # trigger a shutdown which will save an rdb
         exec kill -SIGINT $pid

@@ -38,7 +38,7 @@ test "Right to restore backups when fail to diskless load " {
     $master set $slot0_key 1
     after 100
     assert_equal {1} [$replica get $slot0_key]
-    assert_equal $slot0_key [$replica CLUSTER GETKEYSINSLOT 0 1]
+    assert_equal $slot0_key [$replica CLUSTER GETKEYSINSLOT 0 1] "THIS ONE"
 
     # Save an RDB and kill the replica
     $replica save
@@ -75,5 +75,5 @@ test "Right to restore backups when fail to diskless load " {
 
     # Replica keys and keys to slots map still both are right
     assert_equal {1} [$replica get $slot0_key]
-    assert_equal $slot0_key [$replica CLUSTER GETKEYSINSLOT 0 1]
+    assert_equal $slot0_key [$replica CLUSTER GETKEYSINSLOT 0 1] "POST RUN"
 }

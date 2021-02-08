@@ -109,13 +109,6 @@ enum class AE_ASYNC_OP
     CreateFileEvent,
 };
 
-struct aeCommandControl
-{
-    std::condition_variable cv;
-    std::atomic<int> rval;
-    std::mutex mutexcv;
-};
-
 struct aeCommand
 {
     AE_ASYNC_OP op;
@@ -128,7 +121,6 @@ struct aeCommand
         std::function<void()> *pfn;
     };
     void *clientData;
-    aeCommandControl *pctl;
 };
 #ifdef PIPE_BUF
 static_assert(sizeof(aeCommand) <= PIPE_BUF, "aeCommand must be small enough to send atomically through a pipe");
@@ -152,19 +144,7 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
             break;
 
         case AE_ASYNC_OP::CreateFileEvent:
-        {
-            if (cmd.pctl != nullptr)
-            {
-                cmd.pctl->mutexcv.lock();
-                std::atomic_store(&cmd.pctl->rval, aeCreateFileEvent(eventLoop, cmd.fd, cmd.mask, cmd.fproc, cmd.clientData));
-                cmd.pctl->cv.notify_all();
-                cmd.pctl->mutexcv.unlock();
-            }
-            else
-            {
-                aeCreateFileEvent(eventLoop, cmd.fd, cmd.mask, cmd.fproc, cmd.clientData);
-            }
-        }
+            aeCreateFileEvent(eventLoop, cmd.fd, cmd.mask, cmd.fproc, cmd.clientData);
             break;
 
         case AE_ASYNC_OP::PostFunction:
@@ -178,19 +158,11 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
 
         case AE_ASYNC_OP::PostCppFunction:
         {
-            if (cmd.pctl != nullptr)
-                cmd.pctl->mutexcv.lock();
-            
             std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
             if (cmd.fLock)
                 ulock.lock();
             (*cmd.pfn)();
-            
-            if (cmd.pctl != nullptr)
-            {
-                cmd.pctl->cv.notify_all();
-                cmd.pctl->mutexcv.unlock();
-            }
+
             delete cmd.pfn;
         }
             break;
@@ -229,7 +201,7 @@ ssize_t safe_write(int fd, const void *pv, size_t cb)
 }
 
 int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
-        aeFileProc *proc, void *clientData, int fSynchronous)
+        aeFileProc *proc, void *clientData)
 {
     if (eventLoop == g_eventLoopThisThread)
         return aeCreateFileEvent(eventLoop, fd, mask, proc, clientData);
@@ -242,13 +214,7 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
     cmd.mask = mask;
     cmd.fproc = proc;
     cmd.clientData = clientData;
-    cmd.pctl = nullptr;
     cmd.fLock = true;
-    if (fSynchronous)
-    {
-        cmd.pctl = new aeCommandControl();
-        cmd.pctl->mutexcv.lock();
-    }
 
     auto size = safe_write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
     if (size != sizeof(cmd))
@@ -256,16 +222,6 @@ int aeCreateRemoteFileEvent(aeEventLoop *eventLoop, int fd, int mask,
         serverAssert(size == sizeof(cmd) || size <= 0);
         serverAssert(errno == EAGAIN);
         ret = AE_ERR;
-    }
-    
-    if (fSynchronous)
-    {
-        {
-        std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::adopt_lock);
-        cmd.pctl->cv.wait(ulock);
-        ret = cmd.pctl->rval;
-        }
-        delete cmd.pctl;
     }
 
     return ret;
@@ -289,7 +245,7 @@ int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg)
     return AE_OK;
 }
 
-int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynchronous, bool fLock, bool fForceQueue)
+int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fLock, bool fForceQueue)
 {
     if (eventLoop == g_eventLoopThisThread && !fForceQueue)
     {
@@ -300,13 +256,7 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
     aeCommand cmd = {};
     cmd.op = AE_ASYNC_OP::PostCppFunction;
     cmd.pfn = new std::function<void()>(fn);
-    cmd.pctl = nullptr;
     cmd.fLock = fLock;
-    if (fSynchronous)
-    {
-        cmd.pctl = new aeCommandControl();
-        cmd.pctl->mutexcv.lock();
-    }
 
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
     if (!(!size || size == sizeof(cmd))) {
@@ -316,17 +266,8 @@ int aePostFunction(aeEventLoop *eventLoop, std::function<void()> fn, bool fSynch
 
     if (size == 0)
         return AE_ERR;
-    int ret = AE_OK;
-    if (fSynchronous)
-    {
-        {
-        std::unique_lock<std::mutex> ulock(cmd.pctl->mutexcv, std::adopt_lock);
-        cmd.pctl->cv.wait(ulock);
-        ret = cmd.pctl->rval;
-        }
-        delete cmd.pctl;
-    }
-    return ret;
+
+    return AE_OK;
 }
 
 aeEventLoop *aeCreateEventLoop(int setsize) {
@@ -904,9 +845,15 @@ void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *aftersleep, 
     eventLoop->aftersleepFlags = flags;
 }
 
+thread_local spin_worker tl_worker = nullptr;
+void setAeLockSetThreadSpinWorker(spin_worker worker)
+{
+    tl_worker = worker;
+}
+
 void aeAcquireLock()
 {
-    g_lock.lock();
+    g_lock.lock(tl_worker);
 }
 
 int aeTryAcquireLock(int fWeak)

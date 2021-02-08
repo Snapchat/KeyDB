@@ -2592,6 +2592,18 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     int aof_state = g_pserver->aof_state;
 
+    mstime_t commit_latency;
+    latencyStartMonitor(commit_latency);
+    if (g_pserver->m_pstorageFactory != nullptr)
+    {
+        locker.disarm();
+        for (redisDb *db : vecdb)
+            db->commitChanges();
+        locker.arm();
+    }
+    latencyEndMonitor(commit_latency);
+    latencyAddSampleIfNeeded("storage-commit", commit_latency);
+
     /* We try to handle writes at the end so we don't have to reacquire the lock,
         but if there is a pending async close we need to ensure the writes happen
         first so perform it here */
@@ -2602,16 +2614,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         locker.arm();
         fSentReplies = true;
     }
-
-    mstime_t commit_latency;
-    latencyStartMonitor(commit_latency);
-    if (g_pserver->m_pstorageFactory != nullptr)
-    {
-        for (redisDb *db : vecdb)
-            db->commitChanges();
-    }
-    latencyEndMonitor(commit_latency);
-    latencyAddSampleIfNeeded("storage-commit", commit_latency);
     
     if (!serverTL->gcEpoch.isReset())
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);

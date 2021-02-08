@@ -125,7 +125,7 @@ fastlock_lock:
 	mov rsi, [rsp+24]
 	mov eax, [rsp+32]
 	add rsp, 40
-	.cfi_adjust_cfa_offset 40
+	.cfi_adjust_cfa_offset -40
 	jmp .LLoop
 .cfi_endproc
 

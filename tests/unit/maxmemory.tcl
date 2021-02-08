@@ -215,7 +215,7 @@ proc test_slave_buffers {test_name cmd_count payload_len limit_memory pipeline} 
             set used_no_repl [expr {$new_used - $mem_not_counted_for_evict}]
             set delta [expr {($used_no_repl - $client_buf) - ($orig_used_no_repl - $orig_client_buf)}]
 
-            assert {[$master dbsize] == 100}
+            assert_equal [$master dbsize] 100
             assert {$slave_buf > 2*1024*1024} ;# some of the data may have been pushed to the OS buffers
             set delta_max [expr {$cmd_count / 2}] ;# 1 byte unaccounted for, with 1M commands will consume some 1MB
             assert {$delta < $delta_max && $delta > -$delta_max}
@@ -245,4 +245,67 @@ test_slave_buffers {slave buffer are counted correctly} 1000000 10 0 1
 # test that slave buffer don't induce eviction
 # test again with fewer (and bigger) commands without pipeline, but with eviction
 test_slave_buffers "replica buffer don't induce eviction" 100000 100 1 0
-} ;# run_solo
+
+start_server {tags {"maxmemory"}} {
+    test {client tracking don't cause eviction feedback loop} {
+        r config set maxmemory 0
+        r config set maxmemory-policy allkeys-lru
+
+        # 10 clients listening on tracking messages
+        set clients {}
+        for {set j 0} {$j < 10} {incr j} {
+            lappend clients [redis_deferring_client]
+        }
+        foreach rd $clients {
+            $rd HELLO 3
+            $rd read ; # Consume the HELLO reply
+            $rd CLIENT TRACKING on
+            $rd read ; # Consume the CLIENT reply
+        }
+
+        # populate 300 keys, with long key name and short value
+        for {set j 0} {$j < 300} {incr j} {
+            set key $j[string repeat x 1000]
+            r set $key x
+
+            # for each key, enable caching for this key
+            foreach rd $clients {
+                $rd get $key
+                $rd read
+            }
+        }
+
+        # we need to wait one second for the client querybuf excess memory to be
+        # trimmed by cron, otherwise the INFO used_memory and CONFIG maxmemory
+        # below (on slow machines) won't be "atomic" and won't trigger eviction.
+        after 1100
+
+        # set the memory limit which will cause a few keys to be evicted
+        # we need to make sure to evict keynames of a total size of more than
+        # 16kb since the (PROTO_REPLY_CHUNK_BYTES), only after that the
+        # invalidation messages have a chance to trigger further eviction.
+        set used [s used_memory]
+        set limit [expr {$used - 40000}]
+        r config set maxmemory $limit
+
+        # make sure some eviction happened
+        set evicted [s evicted_keys]
+        if {$::verbose} { puts "evicted: $evicted" }
+
+        # make sure we didn't drain the database
+        assert_range [r dbsize] 200 300
+
+        assert_range $evicted 10 50
+        foreach rd $clients {
+            $rd read ;# make sure we have some invalidation message waiting
+            $rd close
+        }
+
+        # eviction continues (known problem described in #8069)
+        # for now this test only make sures the eviction loop itself doesn't
+        # have feedback loop
+        set evicted [s evicted_keys]
+        if {$::verbose} { puts "evicted: $evicted" }
+    }
+}
+}; #run_solo

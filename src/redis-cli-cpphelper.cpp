@@ -109,7 +109,6 @@ extern "C" void freeClusterManager(void) {
 }
 
 /* This function returns a random master node, return NULL if none */
-
 static clusterManagerNode *clusterManagerNodeMasterRandom() {
     int master_count = 0;
     int idx;
@@ -140,7 +139,7 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
     int force_fix = config.cluster_manager_command.flags &
                     CLUSTER_MANAGER_CMD_FLAG_FIX_WITH_UNREACHABLE_MASTERS;
     /* we want explicit manual confirmation from users for all the fix cases */
-    int force = 0;
+    int ignore_force = 1;
 
     dictIterator *iter = nullptr;
 
@@ -213,7 +212,7 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
                "across the cluster:\n");
         clusterManagerPrintSlotsList(none);
         if (confirmWithYes("Fix these slots by covering with a random node?",
-                           force)) {
+                           ignore_force)) {
             listIter li;
             listNode *ln;
             listRewind(none, &li);
@@ -240,7 +239,7 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
         printf("The following uncovered slots have keys in just one node:\n");
         clusterManagerPrintSlotsList(single);
         if (confirmWithYes("Fix these slots by covering with those nodes?",
-                           force)) {
+                           ignore_force)) {
             listIter li;
             listNode *ln;
             listRewind(single, &li);
@@ -272,7 +271,7 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
         printf("The following uncovered slots have keys in multiple nodes:\n");
         clusterManagerPrintSlotsList(multi);
         if (confirmWithYes("Fix these slots by moving keys "
-                           "into a single node?", force)) {
+                           "into a single node?", ignore_force)) {
             listIter li;
             listNode *ln;
             listRewind(multi, &li);
@@ -335,6 +334,7 @@ cleanup:
     if (multi) listRelease(multi);
     return fixed;
 }
+
 
 /* Return the anti-affinity score, which is a measure of the amount of
  * violations of anti-affinity in the current cluster layout, that is, how
@@ -759,7 +759,9 @@ static void getKeyTypes(dict *types_dict, redisReply *keys, typeinfo **types) {
 
     /* Pipeline TYPE commands */
     for(i=0;i<keys->elements;i++) {
-        redisAppendCommand(context, "TYPE %s", keys->element[i]->str);
+        const char* argv[] = {"TYPE", keys->element[i]->str};
+        size_t lens[] = {4, keys->element[i]->len};
+        redisAppendCommandArgv(context, 2, argv, lens);
     }
 
     /* Retrieve types */
@@ -856,19 +858,19 @@ void findBigKeys(int memkeys, unsigned memkeys_samples) {
             sampled++;
 
             if(type->biggest<sizes[i]) {
-                printf(
-                   "[%05.2f%%] Biggest %-6s found so far '%s' with %llu %s\n",
-                   pct, type->name, keys->element[i]->str, sizes[i],
-                   !memkeys? type->sizeunit: "bytes");
-
                 /* Keep track of biggest key name for this type */
                 if (type->biggest_key)
                     sdsfree(type->biggest_key);
-                type->biggest_key = sdsnew(keys->element[i]->str);
+                type->biggest_key = sdscatrepr(sdsempty(), keys->element[i]->str, keys->element[i]->len);
                 if(!type->biggest_key) {
                     fprintf(stderr, "Failed to allocate memory for key!\n");
                     exit(1);
                 }
+
+                printf(
+                   "[%05.2f%%] Biggest %-6s found so far '%s' with %llu %s\n",
+                   pct, type->name, type->biggest_key, sizes[i],
+                   !memkeys? type->sizeunit: "bytes");
 
                 /* Keep track of the biggest size for this type */
                 type->biggest = sizes[i];

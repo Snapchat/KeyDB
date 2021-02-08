@@ -30,6 +30,7 @@
 
 #include "server.h"
 #include "cron.h"
+#include "t_nhash.h"
 #include <math.h>
 #include <ctype.h>
 #include <mutex>
@@ -41,14 +42,15 @@
 /* ===================== Creation and parsing of objects ==================== */
 
 robj *createObject(int type, void *ptr) {
-    robj *o = (robj*)zcalloc(sizeof(*o), MALLOC_SHARED);
+    size_t mvccExtraBytes = g_pserver->fActiveReplica ? sizeof(redisObjectExtended) : 0;
+    char *oB = (char*)zcalloc(sizeof(robj)+mvccExtraBytes, MALLOC_SHARED);
+    robj *o = reinterpret_cast<robj*>(oB + mvccExtraBytes);
+    
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
     o->m_ptr = ptr;
     o->setrefcount(1);
-#ifdef ENABLE_MVCC
-    o->mvcc_tstamp = OBJ_MVCC_INVALID;
-#endif
+    setMvccTstamp(o, OBJ_MVCC_INVALID);
 
     /* Set the LRU to the current lruclock (minutes resolution), or
      * alternatively the LFU counter. */
@@ -98,15 +100,16 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     size_t allocsize = sizeof(struct sdshdr8)+len+1;
     if (allocsize < sizeof(void*))
         allocsize = sizeof(void*);
-    robj *o = (robj*)zcalloc(sizeof(robj)+allocsize-sizeof(o->m_ptr), MALLOC_SHARED);
+
+    size_t mvccExtraBytes = g_pserver->fActiveReplica ? sizeof(redisObjectExtended) : 0;
+    char *oB = (char*)zcalloc(sizeof(robj)+allocsize-sizeof(redisObject::m_ptr)+mvccExtraBytes, MALLOC_SHARED);
+    robj *o = reinterpret_cast<robj*>(oB + mvccExtraBytes);
     struct sdshdr8 *sh = (sdshdr8*)(&o->m_ptr);
 
     o->type = OBJ_STRING;
     o->encoding = OBJ_ENCODING_EMBSTR;
     o->setrefcount(1);
-#ifdef ENABLE_MVCC
-    o->mvcc_tstamp = OBJ_MVCC_INVALID;
-#endif
+    setMvccTstamp(o, OBJ_MVCC_INVALID);
 
     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
@@ -134,13 +137,8 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
  *
  * The current limit of 52 is chosen so that the biggest string object
  * we allocate as EMBSTR will still fit into the 64 byte arena of jemalloc. */
-#ifdef ENABLE_MVCC
-#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 48
-#else
-#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 56
-#endif
+#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 52
 
-static_assert((sizeof(redisObject)+OBJ_ENCODING_EMBSTR_SIZE_LIMIT-8) == 64, "Max EMBSTR obj should be 64 bytes total");
 robj *createStringObject(const char *ptr, size_t len) {
     if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT)
         return createEmbeddedStringObject(ptr,len);
@@ -151,7 +149,7 @@ robj *createStringObject(const char *ptr, size_t len) {
 /* Create a string object from a long long value. When possible returns a
  * shared integer object, or at least an integer encoded one.
  *
- * If valueobj is non zero, the function avoids returning a a shared
+ * If valueobj is non zero, the function avoids returning a shared
  * integer, because the object is going to be used as value in the Redis key
  * space (for instance when the INCR command is used), so we want LFU/LRU
  * values specific for each key. */
@@ -275,7 +273,7 @@ robj *createZsetObject(void) {
     zset *zs = (zset*)zmalloc(sizeof(*zs), MALLOC_SHARED);
     robj *o;
 
-    zs->pdict = dictCreate(&zsetDictType,NULL);
+    zs->dict = dictCreate(&zsetDictType,NULL);
     zs->zsl = zslCreate();
     o = createObject(OBJ_ZSET,zs);
     o->encoding = OBJ_ENCODING_SKIPLIST;
@@ -312,8 +310,10 @@ void freeStringObject(robj_roptr o) {
 void freeListObject(robj_roptr o) {
     if (o->encoding == OBJ_ENCODING_QUICKLIST) {
         quicklistRelease((quicklist*)ptrFromObj(o));
+    } else if (o->encoding == OBJ_ENCODING_ZIPLIST) {
+        zfree(ptrFromObj(o));
     } else {
-        serverPanic("Unknown list encoding type");
+        serverPanic("Unknown list encoding type: %d", o->encoding);
     }
 }
 
@@ -335,7 +335,7 @@ void freeZsetObject(robj_roptr o) {
     switch (o->encoding) {
     case OBJ_ENCODING_SKIPLIST:
         zs = (zset*)ptrFromObj(o);
-        dictRelease(zs->pdict);
+        dictRelease(zs->dict);
         zslFree(zs->zsl);
         zfree(zs);
         break;
@@ -398,9 +398,14 @@ void decrRefCount(robj_roptr o) {
         case OBJ_MODULE: freeModuleObject(o); break;
         case OBJ_STREAM: freeStreamObject(o); break;
         case OBJ_CRON: freeCronObject(o); break;
+        case OBJ_NESTEDHASH: freeNestedHashObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
-        zfree(o.unsafe_robjcast());
+        if (g_pserver->fActiveReplica) {
+            zfree(reinterpret_cast<redisObjectExtended*>(o.unsafe_robjcast())-1);
+        } else {
+            zfree(o.unsafe_robjcast());
+        }
     } else {
         if (prev <= 0) serverPanic("decrRefCount against refcount <= 0");
     }
@@ -432,7 +437,7 @@ robj *resetRefCount(robj *obj) {
 
 int checkType(client *c, robj_roptr o, int type) {
     if (o->type != type) {
-        addReplyAsync(c,shared.wrongtypeerr);
+        addReply(c,shared.wrongtypeerr);
         return 1;
     }
     return 0;
@@ -800,6 +805,7 @@ const char *strEncoding(int encoding) {
     case OBJ_ENCODING_INTSET: return "intset";
     case OBJ_ENCODING_SKIPLIST: return "skiplist";
     case OBJ_ENCODING_EMBSTR: return "embstr";
+    case OBJ_ENCODING_STREAM: return "stream";
     default: return "unknown";
     }
 }
@@ -846,7 +852,7 @@ size_t objectComputeSize(robj_roptr o, size_t sample_size) {
         if(o->encoding == OBJ_ENCODING_INT) {
             asize = sizeof(*o);
         } else if(o->encoding == OBJ_ENCODING_RAW) {
-            asize = sdsAllocSize((sds)szFromObj(o))+sizeof(*o);
+            asize = sdsZmallocSize((sds)szFromObj(o))+sizeof(*o);
         } else if(o->encoding == OBJ_ENCODING_EMBSTR) {
             asize = sdslen(szFromObj(o))+2+sizeof(*o);
         } else {
@@ -874,7 +880,7 @@ size_t objectComputeSize(robj_roptr o, size_t sample_size) {
             asize = sizeof(*o)+sizeof(dict)+(sizeof(struct dictEntry*)*dictSlots(d));
             while((de = dictNext(di)) != NULL && samples < sample_size) {
                 ele = (sds)dictGetKey(de);
-                elesize += sizeof(struct dictEntry) + sdsAllocSize(ele);
+                elesize += sizeof(struct dictEntry) + sdsZmallocSize(ele);
                 samples++;
             }
             dictReleaseIterator(di);
@@ -889,14 +895,14 @@ size_t objectComputeSize(robj_roptr o, size_t sample_size) {
         if (o->encoding == OBJ_ENCODING_ZIPLIST) {
             asize = sizeof(*o)+(ziplistBlobLen((unsigned char*)ptrFromObj(o)));
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
-            d = ((zset*)ptrFromObj(o))->pdict;
+            d = ((zset*)ptrFromObj(o))->dict;
             zskiplist *zsl = ((zset*)ptrFromObj(o))->zsl;
             zskiplistNode *znode = zsl->header->level(0)->forward;
             asize = sizeof(*o)+sizeof(zset)+sizeof(zskiplist)+sizeof(dict)+
                     (sizeof(struct dictEntry*)*dictSlots(d))+
                     zmalloc_size(zsl->header);
             while(znode != NULL && samples < sample_size) {
-                elesize += sdsAllocSize(znode->ele);
+                elesize += sdsZmallocSize(znode->ele);
                 elesize += sizeof(struct dictEntry) + zmalloc_size(znode);
                 samples++;
                 znode = znode->level(0)->forward;
@@ -915,7 +921,7 @@ size_t objectComputeSize(robj_roptr o, size_t sample_size) {
             while((de = dictNext(di)) != NULL && samples < sample_size) {
                 ele = (sds)dictGetKey(de);
                 ele2 = (sds)dictGetVal(de);
-                elesize += sdsAllocSize(ele) + sdsAllocSize(ele2);
+                elesize += sdsZmallocSize(ele) + sdsZmallocSize(ele2);
                 elesize += sizeof(struct dictEntry);
                 samples++;
             }
@@ -1056,7 +1062,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
 
     mem = 0;
     if (g_pserver->aof_state != AOF_OFF) {
-        mem += sdsalloc(g_pserver->aof_buf);
+        mem += sdsZmallocSize(g_pserver->aof_buf);
         mem += aofRewriteBufferSize();
     }
     mh->aof_buffer = mem;
@@ -1284,7 +1290,7 @@ robj_roptr objectCommandLookupOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
-/* Object command allows to inspect the internals of an Redis Object.
+/* Object command allows to inspect the internals of a Redis Object.
  * Usage: OBJECT <refcount|encoding|idletime|freq> <key> */
 void objectCommand(client *c) {
     robj_roptr o;
@@ -1326,12 +1332,11 @@ NULL
          * because we update the access time only
          * when the key is read or overwritten. */
         addReplyLongLong(c,LFUDecrAndReturn(o.unsafe_robjcast()));
-#ifdef ENABLE_MVCC
     } else if (!strcasecmp(szFromObj(c->argv[1]), "lastmodified") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.null[c->resp]))
                 == nullptr) return;
-        addReplyLongLong(c, (g_pserver->mstime - (o->mvcc_tstamp >> MVCC_MS_SHIFT)) / 1000);
-#endif
+        uint64_t mvcc = mvccFromObj(o);
+        addReplyLongLong(c, (g_pserver->mstime - (mvcc >> MVCC_MS_SHIFT)) / 1000);
     } else {
         addReplySubcommandSyntaxError(c);
     }
@@ -1374,11 +1379,11 @@ NULL
 
         auto itr = c->db->find(c->argv[2]);
         if (itr == nullptr) {
-            addReplyNull(c, shared.nullbulk);
+            addReplyNull(c);
             return;
         }
         size_t usage = objectComputeSize(itr.val(),samples);
-        usage += sdsAllocSize(itr.key());
+        usage += sdsZmallocSize(itr.key());
         usage += sizeof(dictEntry);
         addReplyLongLong(c,usage);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"stats") && c->argc == 2) {
@@ -1515,7 +1520,11 @@ void redisObject::setrefcount(unsigned ref)
 
 sds serializeStoredStringObject(sds str, robj_roptr o)
 {
+    uint64_t mvcc;
+    mvcc = mvccFromObj(o);
+    str = sdscatlen(str, &mvcc, sizeof(mvcc));
     str = sdscatlen(str, &(*o), sizeof(robj));
+    static_assert((sizeof(robj) + sizeof(mvcc)) == sizeof(redisObjectStack), "");
     switch (o->encoding)
     {
     case OBJ_ENCODING_RAW:
@@ -1539,31 +1548,34 @@ sds serializeStoredStringObject(sds str, robj_roptr o)
 
 robj *deserializeStoredStringObject(const char *data, size_t cb)
 {
-    const robj *oT = (const robj*)data;
+    uint64_t mvcc = *reinterpret_cast<const uint64_t*>(data);
+    const robj *oT = (const robj*)(data+sizeof(uint64_t));
     robj *newObject = nullptr;
     switch (oT->encoding)
     {
     case OBJ_ENCODING_INT:
-        serverAssert(cb == sizeof(robj));
-        [[fallthrough]];
+        newObject = createObject(OBJ_STRING, nullptr);
+        newObject->encoding = oT->encoding;
+        newObject->m_ptr = oT->m_ptr;
+        return newObject;
+
     case OBJ_ENCODING_EMBSTR:
-        newObject = (robj*)zmalloc(cb, MALLOC_LOCAL);
-        memcpy(newObject, data, cb);
-        newObject->SetFExpires(false);
-        newObject->setrefcount(1);
+        newObject = createEmbeddedStringObject(szFromObj(oT), sdslen(szFromObj(oT)));
         return newObject;
 
     case OBJ_ENCODING_RAW:
-        newObject = (robj*)zmalloc(sizeof(robj), MALLOC_SHARED);
-        memcpy(newObject, data, sizeof(robj));
-        newObject->m_ptr = sdsnewlen(SDS_NOINIT,cb-sizeof(robj));
-        memcpy(newObject->m_ptr, data+sizeof(robj), cb-sizeof(robj));
-        newObject->SetFExpires(false);
-        newObject->setrefcount(1);
+        newObject = createObject(OBJ_STRING, sdsnewlen(SDS_NOINIT,cb-sizeof(robj)-sizeof(uint64_t)));
+        newObject->lru = oT->lru;
+        memcpy(newObject->m_ptr, data+sizeof(robj)+sizeof(mvcc), cb-sizeof(robj)-sizeof(mvcc));
         return newObject;
+
+    default:
+        serverPanic("Unknown string object encoding from storage");
     }
-    serverPanic("Unknown string object encoding from storage");
-    return nullptr;
+    setMvccTstamp(newObject, mvcc);
+    newObject->setrefcount(1);
+
+    return newObject;
 }
 
 robj *deserializeStoredObjectCore(const void *data, size_t cb)
@@ -1591,11 +1603,9 @@ robj *deserializeStoredObjectCore(const void *data, size_t cb)
                     decrRefCount(auxkey);
                     goto eoferr;
                 }
-#ifdef ENABLE_MVCC
                 if (strcasecmp(szFromObj(auxkey), "mvcc-tstamp") == 0) {
-                    obj->mvcc_tstamp = strtoull(szFromObj(auxval), nullptr, 10);
+                    setMvccTstamp(obj, strtoull(szFromObj(auxval), nullptr, 10));
                 }
-#endif
                 decrRefCount(auxkey);
                 decrRefCount(auxval);
             }
@@ -1639,4 +1649,40 @@ sds serializeStoredObject(robj_roptr o, sds sdsPrefix)
             return (sds)rdb.io.buffer.ptr;
     }
     serverPanic("Attempting to store unknown object type");
+}
+
+redisObjectStack::redisObjectStack()
+{
+    // We need to ensure the Extended Object is first in the class layout
+    serverAssert(reinterpret_cast<ptrdiff_t>(static_cast<redisObject*>(this)) != reinterpret_cast<ptrdiff_t>(this));
+}
+
+void *allocPtrFromObj(robj_roptr o) {
+    if (g_pserver->fActiveReplica)
+        return reinterpret_cast<redisObjectExtended*>(o.unsafe_robjcast()) - 1;
+    return o.unsafe_robjcast();
+}
+
+robj *objFromAllocPtr(void *pv) {
+    if (pv != nullptr && g_pserver->fActiveReplica) {
+        return reinterpret_cast<robj*>(reinterpret_cast<redisObjectExtended*>(pv)+1);
+    } 
+    return reinterpret_cast<robj*>(pv);
+}
+
+uint64_t mvccFromObj(robj_roptr o)
+{
+    if (g_pserver->fActiveReplica) {
+        redisObjectExtended *oe = reinterpret_cast<redisObjectExtended*>(o.unsafe_robjcast()) - 1;
+        return oe->mvcc_tstamp;
+    }
+    return OBJ_MVCC_INVALID;
+}
+
+void setMvccTstamp(robj *o, uint64_t mvcc)
+{
+    if (!g_pserver->fActiveReplica)
+        return;
+    redisObjectExtended *oe = reinterpret_cast<redisObjectExtended*>(o) - 1;
+    oe->mvcc_tstamp = mvcc;
 }

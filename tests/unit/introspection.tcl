@@ -1,7 +1,7 @@
 start_server {tags {"introspection"}} {
     test {CLIENT LIST} {
         r client list
-    } {*addr=*:* fd=* age=* idle=* flags=N db=9 sub=0 psub=0 multi=-1 qbuf=26 qbuf-free=* obl=0 oll=0 omem=0 events=r cmd=client*}
+    } {*addr=*:* fd=* age=* idle=* flags=N db=9 sub=0 psub=0 multi=-1 qbuf=26 qbuf-free=* argv-mem=* obl=0 oll=0 omem=0 tot-mem=* events=r cmd=client*}
 
     test {MONITOR can log executed commands} {
         set rd [redis_deferring_client]
@@ -67,6 +67,7 @@ start_server {tags {"introspection"}} {
             io-threads-do-reads
             tcp-backlog
             always-show-logo
+            enable-motd
             syslog-enabled
             cluster-enabled
             aclfile
@@ -78,17 +79,8 @@ start_server {tags {"introspection"}} {
             syslog-facility
             databases
             port
-            io-threads
             tls-port
-            tls-prefer-server-ciphers
-            tls-cert-file
-            tls-key-file
-            tls-dh-params-file
-            tls-ca-cert-file
-            tls-ca-cert-dir
-            tls-protocols
-            tls-ciphers
-            tls-ciphersuites
+            io-threads
             logfile
             unixsocketperm
             slaveof
@@ -99,9 +91,27 @@ start_server {tags {"introspection"}} {
             bio_cpulist
             aof_rewrite_cpulist
             bgsave_cpulist
-	    storage-cache-mode
-	    storage-provider-options
-	    use-fork
+	        storage-cache-mode
+	        storage-provider-options
+	        use-fork
+            active-replica
+        }
+
+        if {!$::tls} {
+            append skip_configs {
+                tls-prefer-server-ciphers
+                tls-session-cache-timeout
+                tls-session-cache-size
+                tls-session-caching
+                tls-cert-file
+                tls-key-file
+                tls-dh-params-file
+                tls-ca-cert-file
+                tls-ca-cert-dir
+                tls-protocols
+                tls-ciphers
+                tls-ciphersuites
+            }
         }
 
         set configs {}
@@ -130,4 +140,28 @@ start_server {tags {"introspection"}} {
 
         }
     }
+
+    # Do a force-all config rewrite and make sure we're able to parse
+    # it.
+    test {CONFIG REWRITE sanity} {
+        # Capture state of config before
+        set configs {}
+        foreach {k v} [r config get *] {
+            dict set configs $k $v
+        }
+
+        # Rewrite entire configuration, restart and confirm the
+        # server is able to parse it and start.
+        assert_equal [r debug config-rewrite-force-all] "OK"
+        restart_server 0 0
+        assert_equal [r ping] "PONG"
+
+        # Verify no changes were introduced
+        dict for {k v} $configs {
+            assert_equal $v [lindex [r config get $k] 1] $k
+        }
+    }
+
+    # Config file at this point is at a wierd state, and includes all
+    # known keywords. Might be a good idea to avoid adding tests here.
 }

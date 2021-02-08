@@ -43,6 +43,7 @@
 void streamFreeCG(streamCG *cg);
 void streamFreeNACK(streamNACK *na);
 size_t streamReplyWithRangeFromConsumerPEL(client *c, stream *s, streamID *start, streamID *end, size_t count, streamConsumer *consumer);
+bool FInReplicaReplay();
 
 /* -----------------------------------------------------------------------
  * Low level stream encoding: a radix tree of listpacks.
@@ -817,7 +818,7 @@ static void addReplyStreamID(client *c, streamID *id) {
 
 static void addReplyStreamIDAsync(client *c, streamID *id) {
     sds replyid = sdscatfmt(sdsempty(),"%U-%U",id->ms,id->seq);
-    addReplyBulkSdsAsync(c,replyid);
+    addReplyBulkSds(c,replyid);
 }
 
 /* Similar to the above function, but just creates an object, usually useful
@@ -838,6 +839,9 @@ void streamPropagateXCLAIM(client *c, robj *key, streamCG *group, robj *groupnam
      *
      * Note that JUSTID is useful in order to avoid that XCLAIM will do
      * useless work in the replica side, trying to fetch the stream item. */
+    if (FInReplicaReplay())
+        return;
+
     robj *argv[14];
     argv[0] = createStringObject("XCLAIM",6);
     argv[1] = key;
@@ -964,7 +968,7 @@ size_t streamReplyWithRange(client *c, stream *s, streamID *start, streamID *end
     }
 
     if (!(flags & STREAM_RWR_RAWENTRIES))
-        arraylen_ptr = addReplyDeferredLenAsync(c);
+        arraylen_ptr = addReplyDeferredLen(c);
     streamIteratorStart(&si,s,start,end,rev);
     while(streamIteratorGetID(&si,&id,&numfields)) {
         /* Update the group last_id if needed. */
@@ -978,18 +982,18 @@ size_t streamReplyWithRange(client *c, stream *s, streamID *start, streamID *end
 
         /* Emit a two elements array for each item. The first is
          * the ID, the second is an array of field-value pairs. */
-        addReplyArrayLenAsync(c,2);
+        addReplyArrayLen(c,2);
         addReplyStreamIDAsync(c,&id);
 
-        addReplyArrayLenAsync(c,numfields*2);
+        addReplyArrayLen(c,numfields*2);
 
         /* Emit the field-value pairs. */
         while(numfields--) {
             unsigned char *key, *value;
             int64_t key_len, value_len;
             streamIteratorGetField(&si,&key,&value,&key_len,&value_len);
-            addReplyBulkCBufferAsync(c,key,key_len);
-            addReplyBulkCBufferAsync(c,value,value_len);
+            addReplyBulkCBuffer(c,key,key_len);
+            addReplyBulkCBuffer(c,value,value_len);
         }
 
         /* If a group is passed, we need to create an entry in the
@@ -1048,7 +1052,7 @@ size_t streamReplyWithRange(client *c, stream *s, streamID *start, streamID *end
         streamPropagateGroupID(c,spi->keyname,group,spi->groupname);
 
     streamIteratorStop(&si);
-    if (arraylen_ptr) setDeferredArrayLenAsync(c,arraylen_ptr,arraylen);
+    if (arraylen_ptr) setDeferredArrayLen(c,arraylen_ptr,arraylen);
     return arraylen;
 }
 
@@ -1203,7 +1207,7 @@ void xaddCommand(client *c) {
     int id_given = 0; /* Was an ID different than "*" specified? */
     long long maxlen = -1;  /* If left to -1 no trimming is performed. */
     int approx_maxlen = 0;  /* If 1 only delete whole radix tree nodes, so
-                               the maxium length is not applied verbatim. */
+                               the maximum length is not applied verbatim. */
     int maxlen_arg_idx = 0; /* Index of the count in MAXLEN, for rewriting. */
 
     /* Parse options. */
@@ -1847,6 +1851,7 @@ NULL
             o = createStreamObject();
             dbAdd(c->db,c->argv[2],o);
             s = (stream*)ptrFromObj(o);
+            signalModifiedKey(c,c->db,c->argv[2]);
         }
 
         streamCG *cg = streamCreateCG(s,grpname,sdslen(grpname),&id);
@@ -1891,14 +1896,14 @@ NULL
         g_pserver->dirty++;
         notifyKeyspaceEvent(NOTIFY_STREAM,"xgroup-delconsumer",
                             c->argv[2],c->db->id);
-    } else if (!strcasecmp(opt,"HELP")) {
+    } else if (c->argc == 2 && !strcasecmp(opt,"HELP")) {
         addReplyHelp(c, help);
     } else {
         addReplySubcommandSyntaxError(c);
     }
 }
 
-/* XSETID <stream> <groupname> <id>
+/* XSETID <stream> <id>
  *
  * Set the internal "last ID" of a stream. */
 void xsetidCommand(client *c) {
@@ -1987,7 +1992,7 @@ void xackCommand(client *c) {
  *
  * If start and stop are omitted, the command just outputs information about
  * the amount of pending messages for the key/group pair, together with
- * the minimum and maxium ID of pending messages.
+ * the minimum and maximum ID of pending messages.
  *
  * If start and stop are provided instead, the pending messages are returned
  * with informations about the current owner, number of deliveries and last

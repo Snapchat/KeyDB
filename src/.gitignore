@@ -2,4 +2,5 @@
 *.gcno
 *.gcov
 redis.info
+KeyDB.info
 lcov-html

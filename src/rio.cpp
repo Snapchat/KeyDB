@@ -102,6 +102,7 @@ static const rio rioBufferIO = {
     0,              /* current checksum */
     0,              /* flags */
     0,              /* bytes read or written */
+    0,              /* keys since last callback */
     0,              /* read/write chunk size */
     { { NULL, 0 } } /* union for io-specific vars */
 };
@@ -115,6 +116,7 @@ static const rio rioConstBufferIO = {
     0,              /* current checksum */
     0,              /* flags */
     0,              /* bytes read or written */
+    0,              /* keys since last callback */
     0,              /* read/write chunk size */
     { { NULL, 0 } } /* union for io-specific vars */
 };
@@ -177,6 +179,7 @@ static const rio rioFileIO = {
     0,              /* current checksum */
     0,              /* flags */
     0,              /* bytes read or written */
+    0,              /* keys since last callback */
     0,              /* read/write chunk size */
     { { NULL, 0 } } /* union for io-specific vars */
 };
@@ -272,6 +275,7 @@ static const rio rioConnIO = {
     0,              /* current checksum */
     0,              /* flags */
     0,              /* bytes read or written */
+    0,              /* keys since last callback */
     0,              /* read/write chunk size */
     { { NULL, 0 } } /* union for io-specific vars */
 };
@@ -390,6 +394,7 @@ static const rio rioFdIO = {
     0,              /* current checksum */
     0,              /* flags */
     0,              /* bytes read or written */
+    0,              /* keys since last callback */
     0,              /* read/write chunk size */
     { { NULL, 0 } } /* union for io-specific vars */
 };

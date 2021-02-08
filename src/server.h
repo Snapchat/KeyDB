@@ -611,6 +611,12 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define LL_WARNING 3
 #define LL_RAW (1<<10) /* Modifier to log without timestamp */
 
+/* Error severity levels */
+#define ERR_CRITICAL 0
+#define ERR_ERROR 1
+#define ERR_WARNING 2
+#define ERR_NOTICE 3
+
 /* Supervision options */
 #define SUPERVISED_NONE 0
 #define SUPERVISED_AUTODETECT 1
@@ -1822,6 +1828,7 @@ struct redisServerThreadVars {
     const redisDbPersistentDataSnapshot **rgdbSnapshot = nullptr;
     bool fRetrySetAofEvent = false;
     std::vector<client*> vecclientsProcess;
+    dictAsyncRehashCtl *rehashCtl = nullptr;
 
     int getRdbKeySaveDelay();
 private:
@@ -2529,7 +2536,7 @@ void addReplyBulkLongLong(client *c, long long ll);
 void addReply(client *c, robj_roptr obj);
 void addReplySds(client *c, sds s);
 void addReplyBulkSds(client *c, sds s);
-void addReplyErrorObject(client *c, robj *err);
+void addReplyErrorObject(client *c, robj *err, int severity);
 void addReplyErrorSds(client *c, sds err);
 void addReplyError(client *c, const char *err);
 void addReplyStatus(client *c, const char *status);

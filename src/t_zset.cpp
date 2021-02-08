@@ -245,7 +245,7 @@ int zslDelete(zskiplist *zsl, double score, sds ele, zskiplistNode **node) {
     return 0; /* not found */
 }
 
-/* Update the score of an elmenent inside the sorted set skiplist.
+/* Update the score of an element inside the sorted set skiplist.
  * Note that the element must exist and must match 'score'.
  * This function does not update the score in the hash table side, the
  * caller should take care of it.
@@ -1184,7 +1184,7 @@ void zsetConvert(robj *zobj, int encoding) {
             serverPanic("Unknown target encoding");
 
         zs = (zset*)zmalloc(sizeof(*zs), MALLOC_SHARED);
-        zs->pdict = dictCreate(&zsetDictType,NULL);
+        zs->dict = dictCreate(&zsetDictType,NULL);
         zs->zsl = zslCreate();
 
         eptr = ziplistIndex(zl,0);
@@ -1201,7 +1201,7 @@ void zsetConvert(robj *zobj, int encoding) {
                 ele = sdsnewlen((char*)vstr,vlen);
 
             node = zslInsert(zs->zsl,score,ele);
-            serverAssert(dictAdd(zs->pdict,ele,&node->score) == DICT_OK);
+            serverAssert(dictAdd(zs->dict,ele,&node->score) == DICT_OK);
             zzlNext(zl,&eptr,&sptr);
         }
 
@@ -1217,7 +1217,7 @@ void zsetConvert(robj *zobj, int encoding) {
         /* Approach similar to zslFree(), since we want to free the skiplist at
          * the same time as creating the ziplist. */
         zs = (zset*)zobj->m_ptr;
-        dictRelease(zs->pdict);
+        dictRelease(zs->dict);
         node = zs->zsl->header->level(0)->forward;
         zfree(zs->zsl->header);
         zfree(zs->zsl);
@@ -1260,7 +1260,7 @@ int zsetScore(robj_roptr zobj, sds member, double *score) {
         if (zzlFind((unsigned char*)zobj->m_ptr, member, score) == NULL) return C_ERR;
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = (zset*)zobj->m_ptr;
-        dictEntry *de = dictFind(zs->pdict, member);
+        dictEntry *de = dictFind(zs->dict, member);
         if (de == NULL) return C_ERR;
         *score = *(double*)dictGetVal(de);
     } else {
@@ -1373,7 +1373,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore) {
         zskiplistNode *znode;
         dictEntry *de;
 
-        de = dictFind(zs->pdict,ele);
+        de = dictFind(zs->dict,ele);
         if (de != NULL) {
             /* NX? Return, same element already exists. */
             if (nx) {
@@ -1405,7 +1405,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore) {
         } else if (!xx) {
             ele = sdsdup(ele);
             znode = zslInsert(zs->zsl,score,ele);
-            serverAssert(dictAdd(zs->pdict,ele,&znode->score) == DICT_OK);
+            serverAssert(dictAdd(zs->dict,ele,&znode->score) == DICT_OK);
             *flags |= ZADD_ADDED;
             if (newscore) *newscore = score;
             return 1;
@@ -1434,7 +1434,7 @@ int zsetDel(robj *zobj, sds ele) {
         dictEntry *de;
         double score;
 
-        de = dictUnlink(zs->pdict,ele);
+        de = dictUnlink(zs->dict,ele);
         if (de != NULL) {
             /* Get the score in order to delete from the skiplist later. */
             score = *(double*)dictGetVal(de);
@@ -1444,13 +1444,13 @@ int zsetDel(robj *zobj, sds ele) {
              * actually releases the SDS string representing the element,
              * which is shared between the skiplist and the hash table, so
              * we need to delete from the skiplist as the final step. */
-            dictFreeUnlinkedEntry(zs->pdict,de);
+            dictFreeUnlinkedEntry(zs->dict,de);
 
             /* Delete from skiplist. */
             int retval = zslDelete(zs->zsl,score,ele,NULL);
             serverAssert(retval);
 
-            if (htNeedsResize(zs->pdict)) dictResize(zs->pdict);
+            if (htNeedsResize(zs->dict)) dictResize(zs->dict);
             return 1;
         }
     } else {
@@ -1507,7 +1507,7 @@ long zsetRank(robj_roptr zobj, sds ele, int reverse) {
         dictEntry *de;
         double score;
 
-        de = dictFind(zs->pdict,ele);
+        de = dictFind(zs->dict,ele);
         if (de != NULL) {
             score = *(double*)dictGetVal(de);
             rank = zslGetRank(zsl,score,ele);
@@ -1758,17 +1758,17 @@ void zremrangeGenericCommand(client *c, int rangetype) {
         zset *zs = (zset*)zobj->m_ptr;
         switch(rangetype) {
         case ZRANGE_RANK:
-            deleted = zslDeleteRangeByRank(zs->zsl,start+1,end+1,zs->pdict);
+            deleted = zslDeleteRangeByRank(zs->zsl,start+1,end+1,zs->dict);
             break;
         case ZRANGE_SCORE:
-            deleted = zslDeleteRangeByScore(zs->zsl,&range,zs->pdict);
+            deleted = zslDeleteRangeByScore(zs->zsl,&range,zs->dict);
             break;
         case ZRANGE_LEX:
-            deleted = zslDeleteRangeByLex(zs->zsl,&lexrange,zs->pdict);
+            deleted = zslDeleteRangeByLex(zs->zsl,&lexrange,zs->dict);
             break;
         }
-        if (htNeedsResize(zs->pdict)) dictResize(zs->pdict);
-        if (dictSize(zs->pdict) == 0) {
+        if (htNeedsResize(zs->dict)) dictResize(zs->dict);
+        if (dictSize(zs->dict) == 0) {
             dbDelete(c->db,key);
             keyremoved = 1;
         }
@@ -1817,7 +1817,7 @@ struct zsetopsrc {
                 int ii;
             } is;
             struct {
-                dict *pdict;
+                ::dict *dict;
                 dictIterator *di;
                 dictEntry *de;
             } ht;
@@ -1872,7 +1872,7 @@ void zuiInitIterator(zsetopsrc *op) {
             it->is.is = (intset*)op->subject->m_ptr;
             it->is.ii = 0;
         } else if (op->encoding == OBJ_ENCODING_HT) {
-            it->ht.pdict = (dict*)op->subject->m_ptr;
+            it->ht.dict = (dict*)op->subject->m_ptr;
             it->ht.di = dictGetIterator((dict*)op->subject->m_ptr);
             it->ht.de = dictNext(it->ht.di);
         } else {
@@ -2117,7 +2117,7 @@ int zuiFind(zsetopsrc *op, zsetopval *val, double *score) {
         } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = (zset*)op->subject->m_ptr;
             dictEntry *de;
-            if ((de = dictFind(zs->pdict,val->ele)) != NULL) {
+            if ((de = dictFind(zs->dict,val->ele)) != NULL) {
                 *score = *(double*)dictGetVal(de);
                 return 1;
             } else {
@@ -2303,7 +2303,7 @@ void zunionInterGenericCommand(client *c, robj *dstkey, int op) {
                 if (j == setnum) {
                     tmp = zuiNewSdsFromValue(&zval);
                     znode = zslInsert(dstzset->zsl,score,tmp);
-                    dictAdd(dstzset->pdict,tmp,&znode->score);
+                    dictAdd(dstzset->dict,tmp,&znode->score);
                     if (sdslen(tmp) > maxelelen) maxelelen = sdslen(tmp);
                 }
             }
@@ -2363,13 +2363,13 @@ void zunionInterGenericCommand(client *c, robj *dstkey, int op) {
         /* We now are aware of the final size of the resulting sorted set,
          * let's resize the dictionary embedded inside the sorted set to the
          * right size, in order to save rehashing time. */
-        dictExpand(dstzset->pdict,dictSize(accumulator));
+        dictExpand(dstzset->dict,dictSize(accumulator));
 
         while((de = dictNext(di)) != NULL) {
             sds ele = (sds)dictGetKey(de);
             score = dictGetDoubleVal(de);
             znode = zslInsert(dstzset->zsl,score,ele);
-            dictAdd(dstzset->pdict,ele,&znode->score);
+            dictAdd(dstzset->dict,ele,&znode->score);
         }
         dictReleaseIterator(di);
         dictRelease(accumulator);
@@ -3165,11 +3165,11 @@ void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey
         return;
     }
 
-    void *arraylen_ptr = addReplyDeferredLenAsync(c);
+    void *arraylen_ptr = addReplyDeferredLen(c);
     long arraylen = 0;
 
     /* We emit the key only for the blocking variant. */
-    if (emitkey) addReplyBulkAsync(c,key);
+    if (emitkey) addReplyBulk(c,key);
 
     /* Remove the element. */
     do {
@@ -3219,8 +3219,8 @@ void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey
             signalModifiedKey(c,c->db,key);
         }
 
-        addReplyBulkCBufferAsync(c,ele,sdslen(ele));
-        addReplyDoubleAsync(c,score);
+        addReplyBulkCBuffer(c,ele,sdslen(ele));
+        addReplyDouble(c,score);
         sdsfree(ele);
         arraylen += 2;
 
@@ -3232,7 +3232,7 @@ void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey
         }
     } while(--count);
 
-    setDeferredArrayLenAsync(c,arraylen_ptr,arraylen + (emitkey != 0));
+    setDeferredArrayLen(c,arraylen_ptr,arraylen + (emitkey != 0));
 }
 
 /* ZPOPMIN key [<count>] */

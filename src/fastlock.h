@@ -85,4 +85,6 @@ struct fastlock
 #endif
 };
 
+#ifdef __cplusplus
 static_assert(offsetof(struct fastlock, m_ticket) == 64, "ensure padding is correct");
+#endif

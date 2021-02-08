@@ -77,6 +77,9 @@ uint64_t clusterGetMaxEpoch(void);
 int clusterBumpConfigEpochWithoutConsensus(void);
 void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8_t type, const unsigned char *payload, uint32_t len);
 
+#define RCVBUF_INIT_LEN 1024
+#define RCVBUF_MAX_PREALLOC (1<<20) /* 1MB */
+
 struct redisMaster *getFirstMaster()
 {
     serverAssert(listLength(g_pserver->masters) <= 1);
@@ -394,7 +397,7 @@ void clusterSaveConfigOrDie(int do_fsync) {
     }
 }
 
-/* Lock the cluster config using flock(), and leaks the file descritor used to
+/* Lock the cluster config using flock(), and leaks the file descriptor used to
  * acquire the lock so that the file will be locked forever.
  *
  * This works because we always update nodes.conf with a new version
@@ -435,7 +438,15 @@ int clusterLockConfig(char *filename) {
         return C_ERR;
     }
     /* Lock acquired: leak the 'fd' by not closing it, so that we'll retain the
-     * lock to the file as long as the process exists. */
+     * lock to the file as long as the process exists.
+     *
+     * After fork, the child process will get the fd opened by the parent process,
+     * we need save `fd` to `cluster_config_file_lock_fd`, so that in redisFork(),
+     * it will be closed in the child process.
+     * If it is not closed, when the main process is killed -9, but the child process
+     * (redis-aof-rewrite) is still alive, the fd(lock) will still be held by the
+     * child process, and the main process will fail to get lock, means fail to start. */
+    g_pserver->cluster_config_file_lock_fd = fd;
 #endif /* __sun */
 
     return C_OK;
@@ -490,6 +501,7 @@ void clusterInit(void) {
 
     /* Lock the cluster config file to make sure every node uses
      * its own nodes.conf. */
+    g_pserver->cluster_config_file_lock_fd = -1;
     if (clusterLockConfig(g_pserver->cluster_configfile) == C_ERR)
         exit(1);
 
@@ -557,13 +569,13 @@ void clusterInit(void) {
 
 /* Reset a node performing a soft or hard reset:
  *
- * 1) All other nodes are forget.
+ * 1) All other nodes are forgotten.
  * 2) All the assigned / open slots are released.
  * 3) If the node is a slave, it turns into a master.
- * 5) Only for hard reset: a new Node ID is generated.
- * 6) Only for hard reset: currentEpoch and configEpoch are set to 0.
- * 7) The new configuration is saved and the cluster state updated.
- * 8) If the node was a slave, the whole data set is flushed away. */
+ * 4) Only for hard reset: a new Node ID is generated.
+ * 5) Only for hard reset: currentEpoch and configEpoch are set to 0.
+ * 6) The new configuration is saved and the cluster state updated.
+ * 7) If the node was a slave, the whole data set is flushed away. */
 void clusterReset(int hard) {
     dictIterator *di;
     dictEntry *de;
@@ -630,7 +642,8 @@ clusterLink *createClusterLink(clusterNode *node) {
     clusterLink *link = (clusterLink*)zmalloc(sizeof(*link), MALLOC_LOCAL);
     link->ctime = mstime();
     link->sndbuf = sdsempty();
-    link->rcvbuf = sdsempty();
+    link->rcvbuf = (char*)zmalloc(link->rcvbuf_alloc = RCVBUF_INIT_LEN);
+    link->rcvbuf_len = 0;
     link->node = node;
     link->conn = NULL;
     return link;
@@ -657,7 +670,7 @@ void freeClusterLink(clusterLink *link) {
         link->conn = NULL;
     }
     sdsfree(link->sndbuf);
-    sdsfree(link->rcvbuf);
+    zfree(link->rcvbuf);
     if (link->node)
         link->node->link = NULL;
     zfree(link);
@@ -675,7 +688,7 @@ static void clusterConnAcceptHandler(connection *conn) {
 
     /* Create a link object we use to handle the connection.
      * It gets passed to the readable handler when data is available.
-     * Initiallly the link->node pointer is set to NULL as we don't know
+     * Initially the link->node pointer is set to NULL as we don't know
      * which node is, but the right node is references once we know the
      * node identity. */
     link = createClusterLink(NULL);
@@ -708,7 +721,17 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
 
-        connection *conn = g_pserver->tls_cluster ? connCreateAcceptedTLS(cfd,1) : connCreateAcceptedSocket(cfd);
+        connection *conn = g_pserver->tls_cluster ?
+            connCreateAcceptedTLS(cfd, TLS_CLIENT_AUTH_YES) : connCreateAcceptedSocket(cfd);
+
+        /* Make sure connection is not in an error state */
+        if (connGetState(conn) != CONN_STATE_ACCEPTING) {
+            serverLog(LL_VERBOSE,
+                "Error creating an accepting connection for cluster node: %s",
+                    connGetLastError(conn));
+            connClose(conn);
+            return;
+        }
         connNonBlock(conn);
         connEnableTcpNoDelay(conn);
 
@@ -727,6 +750,16 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
     }
+}
+
+/* Return the approximated number of sockets we are using in order to
+ * take the cluster bus connections. */
+unsigned long getClusterConnectionsCount(void) {
+    /* We decrement the number of nodes by one, since there is the
+     * "myself" node too in the list. Each node uses two file descriptors,
+     * one incoming and one outgoing, thus the multiplication by 2. */
+    return g_pserver->cluster_enabled ?
+           ((dictSize(g_pserver->cluster->nodes)-1)*2) : 0;
 }
 
 /* -----------------------------------------------------------------------------
@@ -1069,7 +1102,7 @@ uint64_t clusterGetMaxEpoch(void) {
  * 3) Persist the configuration on disk before sending packets with the
  *    new configuration.
  *
- * If the new config epoch is generated and assigend, C_OK is returned,
+ * If the new config epoch is generated and assigned, C_OK is returned,
  * otherwise C_ERR is returned (since the node has already the greatest
  * configuration around) and no operation is performed.
  *
@@ -1142,7 +1175,7 @@ int clusterBumpConfigEpochWithoutConsensus(void) {
  *
  * In general we want a system that eventually always ends with different
  * masters having different configuration epochs whatever happened, since
- * nothign is worse than a split-brain condition in a distributed system.
+ * nothing is worse than a split-brain condition in a distributed system.
  *
  * BEHAVIOR
  *
@@ -1201,7 +1234,7 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
  * entries from the black list. This is an O(N) operation but it is not a
  * problem since add / exists operations are called very infrequently and
  * the hash table is supposed to contain very little elements at max.
- * However without the cleanup during long uptimes and with some automated
+ * However without the cleanup during long uptime and with some automated
  * node add/removal procedures, entries could accumulate. */
 void clusterBlacklistCleanup(void) {
     dictIterator *di;
@@ -1292,8 +1325,11 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
     node->fail_time = mstime();
 
     /* Broadcast the failing node name to everybody, forcing all the other
-     * reachable nodes to flag the node as FAIL. */
-    if (nodeIsMaster(myself)) clusterSendFail(node->name);
+     * reachable nodes to flag the node as FAIL.
+     * We do that even if this node is a replica and not a master: anyway
+     * the failing state is triggered collecting failure reports from masters,
+     * so here the replica is only helping propagating this status. */
+    clusterSendFail(node->name);
     clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE|CLUSTER_TODO_SAVE_CONFIG);
 }
 
@@ -1352,12 +1388,12 @@ int clusterHandshakeInProgress(char *ip, int port, int cport) {
     return de != NULL;
 }
 
-/* Start an handshake with the specified address if there is not one
+/* Start a handshake with the specified address if there is not one
  * already in progress. Returns non-zero if the handshake was actually
  * started. On error zero is returned and errno is set to one of the
  * following values:
  *
- * EAGAIN - There is already an handshake in progress for this address.
+ * EAGAIN - There is already a handshake in progress for this address.
  * EINVAL - IP or port are not valid. */
 int clusterStartHandshake(char *ip, int port, int cport) {
     clusterNode *n;
@@ -1738,7 +1774,7 @@ int clusterProcessPacket(clusterLink *link) {
 
     /* Perform sanity checks */
     if (totlen < 16) return 1; /* At least signature, version, totlen, count. */
-    if (totlen > sdslen(link->rcvbuf)) return 1;
+    if (totlen > link->rcvbuf_len) return 1;
 
     if (ntohs(hdr->ver) != CLUSTER_PROTO_VER) {
         /* Can't handle messages of different versions. */
@@ -1786,7 +1822,7 @@ int clusterProcessPacket(clusterLink *link) {
     } else if (type == CLUSTERMSG_TYPE_MODULE) {
         uint32_t explen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
 
-        explen += sizeof(clusterMsgDataPublish) -
+        explen += sizeof(clusterMsgModule) -
                 3 + ntohl(hdr->data.module.msg.len);
         if (totlen != explen) return 1;
     }
@@ -1803,7 +1839,7 @@ int clusterProcessPacket(clusterLink *link) {
     if (sender) sender->data_received = now;
 
     if (sender && !nodeInHandshake(sender)) {
-        /* Update our curretEpoch if we see a newer epoch in the cluster. */
+        /* Update our currentEpoch if we see a newer epoch in the cluster. */
         senderCurrentEpoch = ntohu64(hdr->currentEpoch);
         senderConfigEpoch = ntohu64(hdr->configEpoch);
         if (senderCurrentEpoch > g_pserver->cluster->currentEpoch)
@@ -2295,7 +2331,7 @@ void clusterReadHandler(connection *conn) {
     unsigned int readlen, rcvbuflen;
 
     while(1) { /* Read as long as there is data to read. */
-        rcvbuflen = sdslen(link->rcvbuf);
+        rcvbuflen = link->rcvbuf_len;
         if (rcvbuflen < 8) {
             /* First, obtain the first 8 bytes to get the full message
              * length. */
@@ -2331,7 +2367,15 @@ void clusterReadHandler(connection *conn) {
             return;
         } else {
             /* Read data and recast the pointer to the new buffer. */
-            link->rcvbuf = sdscatlen(link->rcvbuf,buf,nread);
+            size_t unused = link->rcvbuf_alloc - link->rcvbuf_len;
+            if ((size_t)nread > unused) {
+                size_t required = link->rcvbuf_len + nread;
+                /* If less than 1mb, grow to twice the needed size, if larger grow by 1mb. */
+                link->rcvbuf_alloc = required < RCVBUF_MAX_PREALLOC ? required * 2: required + RCVBUF_MAX_PREALLOC;
+                link->rcvbuf = (char*)zrealloc(link->rcvbuf, link->rcvbuf_alloc);
+            }
+            memcpy(link->rcvbuf + link->rcvbuf_len, buf, nread);
+            link->rcvbuf_len += nread;
             hdr = (clusterMsg*) link->rcvbuf;
             rcvbuflen += nread;
         }
@@ -2339,8 +2383,11 @@ void clusterReadHandler(connection *conn) {
         /* Total length obtained? Process this packet. */
         if (rcvbuflen >= 8 && rcvbuflen == ntohl(hdr->totlen)) {
             if (clusterProcessPacket(link)) {
-                sdsfree(link->rcvbuf);
-                link->rcvbuf = sdsempty();
+                if (link->rcvbuf_alloc > RCVBUF_INIT_LEN) {
+                    zfree(link->rcvbuf);
+                    link->rcvbuf = (char*)zmalloc(link->rcvbuf_alloc = RCVBUF_INIT_LEN);
+                }
+                link->rcvbuf_len = 0;
             } else {
                 return; /* Link no longer valid. */
             }
@@ -2421,7 +2468,7 @@ void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
      * first byte is zero, they'll do auto discovery. */
     memset(hdr->myip,0,NET_IP_STR_LEN);
     if (g_pserver->cluster_announce_ip) {
-        strncpy(hdr->myip,g_pserver->cluster_announce_ip,NET_IP_STR_LEN);
+        strncpy(hdr->myip,g_pserver->cluster_announce_ip,NET_IP_STR_LEN-1);
         hdr->myip[NET_IP_STR_LEN-1] = '\0';
     }
 
@@ -2498,7 +2545,7 @@ void clusterSetGossipEntry(clusterMsg *hdr, int i, clusterNode *n) {
 }
 
 /* Send a PING or PONG packet to the specified node, making sure to add enough
- * gossip informations. */
+ * gossip information. */
 void clusterSendPing(clusterLink *link, int type) {
     unsigned char *buf;
     clusterMsg *hdr;
@@ -2518,7 +2565,7 @@ void clusterSendPing(clusterLink *link, int type) {
      * node_timeout we exchange with each other node at least 4 packets
      * (we ping in the worst case in node_timeout/2 time, and we also
      * receive two pings from the host), we have a total of 8 packets
-     * in the node_timeout*2 falure reports validity time. So we have
+     * in the node_timeout*2 failure reports validity time. So we have
      * that, for a single PFAIL node, we can expect to receive the following
      * number of failure reports (in the specified window of time):
      *
@@ -2545,7 +2592,7 @@ void clusterSendPing(clusterLink *link, int type) {
      * faster to propagate to go from PFAIL to FAIL state. */
     int pfail_wanted = g_pserver->cluster->stats_pfail_nodes;
 
-    /* Compute the maxium totlen to allocate our buffer. We'll fix the totlen
+    /* Compute the maximum totlen to allocate our buffer. We'll fix the totlen
      * later according to the number of gossip sections we really were able
      * to put inside the packet. */
     totlen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
@@ -2582,7 +2629,7 @@ void clusterSendPing(clusterLink *link, int type) {
         if (thisNode->flags & (CLUSTER_NODE_HANDSHAKE|CLUSTER_NODE_NOADDR) ||
             (thisNode->link == NULL && thisNode->numslots == 0))
         {
-            freshnodes--; /* Tecnically not correct, but saves CPU. */
+            freshnodes--; /* Technically not correct, but saves CPU. */
             continue;
         }
 
@@ -3167,7 +3214,7 @@ void clusterHandleSlaveFailover(void) {
         }
     }
 
-    /* If the previous failover attempt timedout and the retry time has
+    /* If the previous failover attempt timeout and the retry time has
      * elapsed, we can setup a new one. */
     if (auth_age > auth_retry_time) {
         g_pserver->cluster->failover_auth_time = mstime() +
@@ -3273,7 +3320,7 @@ void clusterHandleSlaveFailover(void) {
  *
  * Slave migration is the process that allows a slave of a master that is
  * already covered by at least another slave, to "migrate" to a master that
- * is orpaned, that is, left with no working slaves.
+ * is orphaned, that is, left with no working slaves.
  * ------------------------------------------------------------------------- */
 
 /* This function is responsible to decide if this replica should be migrated
@@ -3290,7 +3337,7 @@ void clusterHandleSlaveFailover(void) {
  * the nodes anyway, so we spend time into clusterHandleSlaveMigration()
  * if definitely needed.
  *
- * The fuction is called with a pre-computed max_slaves, that is the max
+ * The function is called with a pre-computed max_slaves, that is the max
  * number of working (not in FAIL state) slaves for a single master.
  *
  * Additional conditions for migration are examined inside the function.
@@ -3409,7 +3456,7 @@ void clusterHandleSlaveMigration(int max_slaves) {
  * data loss due to the asynchronous master-slave replication.
  * -------------------------------------------------------------------------- */
 
-/* Reset the manual failover state. This works for both masters and slavesa
+/* Reset the manual failover state. This works for both masters and slaves
  * as all the state about manual failover is cleared.
  *
  * The function can be used both to initialize the manual failover state at
@@ -3495,7 +3542,7 @@ void clusterCron(void) {
                  * duplicating the string. This way later we can check if
                  * the address really changed. */
                 prev_ip = zstrdup(prev_ip);
-                strncpy(myself->ip,g_pserver->cluster_announce_ip,NET_IP_STR_LEN);
+                strncpy(myself->ip,g_pserver->cluster_announce_ip,NET_IP_STR_LEN-1);
                 myself->ip[NET_IP_STR_LEN-1] = '\0';
             } else {
                 myself->ip[0] = '\0'; /* Force autodetection. */
@@ -3701,7 +3748,7 @@ void clusterCron(void) {
         replicationAddMaster(myself->slaveof->ip, myself->slaveof->port);
     }
 
-    /* Abourt a manual failover if the timeout is reached. */
+    /* Abort a manual failover if the timeout is reached. */
     manualFailoverCheckTimeout();
 
     if (nodeIsSlave(myself)) {
@@ -3806,12 +3853,12 @@ int clusterNodeSetSlotBit(clusterNode *n, int slot) {
          * target for replicas migration, if and only if at least one of
          * the other masters has slaves right now.
          *
-         * Normally masters are valid targerts of replica migration if:
+         * Normally masters are valid targets of replica migration if:
          * 1. The used to have slaves (but no longer have).
          * 2. They are slaves failing over a master that used to have slaves.
          *
          * However new masters with slots assigned are considered valid
-         * migration tagets if the rest of the cluster is not a slave-less.
+         * migration targets if the rest of the cluster is not a slave-less.
          *
          * See https://github.com/antirez/redis/issues/3043 for more info. */
         if (n->numslots == 1 && clusterMastersHaveSlaves())
@@ -3995,7 +4042,7 @@ void clusterUpdateState(void) {
  *    A) If no other node is in charge according to the current cluster
  *       configuration, we add these slots to our node.
  *    B) If according to our config other nodes are already in charge for
- *       this lots, we set the slots as IMPORTING from our point of view
+ *       this slots, we set the slots as IMPORTING from our point of view
  *       in order to justify we have those slots, and in order to make
  *       keydb-trib aware of the issue, so that it can try to fix it.
  * 2) If we find data in a DB different than DB0 we return C_ERR to
@@ -4141,11 +4188,15 @@ sds clusterGenNodeDescription(clusterNode *node) {
     else
         ci = sdscatlen(ci," - ",3);
 
+    unsigned long long nodeEpoch = node->configEpoch;
+    if (nodeIsSlave(node) && node->slaveof) {
+        nodeEpoch = node->slaveof->configEpoch;
+    }
     /* Latency from the POV of this node, config epoch, link status */
     ci = sdscatprintf(ci,"%lld %lld %llu %s",
         (long long) node->ping_sent,
         (long long) node->pong_received,
-        (unsigned long long) node->configEpoch,
+        nodeEpoch,
         (node->link || node->flags & CLUSTER_NODE_MYSELF) ?
                     "connected" : "disconnected");
 
@@ -4521,7 +4572,7 @@ NULL
             }
             /* If this slot is in migrating status but we have no keys
              * for it assigning the slot to another node will clear
-             * the migratig status. */
+             * the migrating status. */
             if (countKeysInSlot(slot) == 0 &&
                 g_pserver->cluster->migrating_slots_to[slot])
                 g_pserver->cluster->migrating_slots_to[slot] = NULL;
@@ -4866,7 +4917,7 @@ NULL
                 g_pserver->cluster->currentEpoch = epoch;
             /* No need to fsync the config here since in the unlucky event
              * of a failure to persist the config, the conflict resolution code
-             * will assign an unique config to this node. */
+             * will assign a unique config to this node. */
             clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE|
                                  CLUSTER_TODO_SAVE_CONFIG);
             addReply(c,shared.ok);
@@ -4915,16 +4966,15 @@ void createDumpPayload(rio *payload, robj_roptr o, robj *key) {
     unsigned char buf[2];
     uint64_t crc;
 
-    /* Serialize the object in a RDB-like format. It consist of an object type
+    /* Serialize the object in an RDB-like format. It consist of an object type
      * byte followed by the serialized object. This is understood by RESTORE. */
     rioInitWithBuffer(payload,sdsempty());
     serverAssert(rdbSaveObjectType(payload,o));
     serverAssert(rdbSaveObject(payload,o,key));
-#ifdef ENABLE_MVCC
     char szT[32];
-    snprintf(szT, 32, "%" PRIu64, o->mvcc_tstamp);
+    uint64_t mvcc = mvccFromObj(o);
+    snprintf(szT, 32, "%" PRIu64, mvcc);
     serverAssert(rdbSaveAuxFieldStrStr(payload,"mvcc-tstamp", szT) != -1);
-#endif
 
     /* Write the footer, this is how it looks like:
      * ----------------+---------------------+---------------+
@@ -4989,6 +5039,51 @@ void dumpCommand(client *c) {
     return;
 }
 
+/* KEYDB.MVCCRESTORE key mvcc expire serialized-value */
+void mvccrestoreCommand(client *c) {
+    long long mvcc, expire;
+    robj *key = c->argv[1], *obj = nullptr;
+    int type;
+    
+    if (getLongLongFromObjectOrReply(c, c->argv[2], &mvcc, "Invalid MVCC Tstamp") != C_OK)
+        return;
+
+    if (getLongLongFromObjectOrReply(c, c->argv[3], &expire, "Invalid expire") != C_OK)
+        return;
+
+    /* Verify RDB version and data checksum unles the client is already a replica or master */
+    if (!(c->flags & (CLIENT_SLAVE | CLIENT_MASTER))) {
+        if (verifyDumpPayload((unsigned char*)ptrFromObj(c->argv[4]),sdslen(szFromObj(c->argv[4]))) == C_ERR)
+        {
+            addReplyError(c,"DUMP payload version or checksum are wrong");
+            return;
+        }
+    }
+
+    rio payload;
+    rioInitWithBuffer(&payload,szFromObj(c->argv[4]));
+    if (((type = rdbLoadObjectType(&payload)) == -1) ||
+        ((obj = rdbLoadObject(type,&payload,szFromObj(key), OBJ_MVCC_INVALID)) == NULL))
+    {
+        addReplyError(c,"Bad data format");
+        return;
+    }
+    setMvccTstamp(obj, mvcc);
+
+    /* Create the key and set the TTL if any */
+    if (dbMerge(c->db,key,obj,true)) {
+        if (expire >= 0) {
+            setExpire(c,c->db,key,nullptr,expire);
+        }
+        signalModifiedKey(c,c->db,key);
+        notifyKeyspaceEvent(NOTIFY_GENERIC,"restore",key,c->db->id);
+    } else {
+        decrRefCount(obj);
+    }
+    addReply(c,shared.ok);
+    g_pserver->dirty++;
+}
+
 /* RESTORE key ttl serialized-value [REPLACE] */
 void restoreCommand(client *c) {
     long long ttl, lfu_freq = -1, lru_idle = -1, lru_clock = -1;
@@ -5031,7 +5126,8 @@ void restoreCommand(client *c) {
     }
 
     /* Make sure this key does not already exist here... */
-    if (!replace && lookupKeyWrite(c->db,c->argv[1]) != NULL) {
+    robj *key = c->argv[1];
+    if (!replace && lookupKeyWrite(c->db,key) != NULL) {
         addReply(c,shared.busykeyerr);
         return;
     }
@@ -5053,7 +5149,7 @@ void restoreCommand(client *c) {
 
     rioInitWithBuffer(&payload,szFromObj(c->argv[3]));
     if (((type = rdbLoadObjectType(&payload)) == -1) ||
-        ((obj = rdbLoadObject(type,&payload,szFromObj(c->argv[1]), OBJ_MVCC_INVALID)) == NULL))
+        ((obj = rdbLoadObject(type,&payload,szFromObj(key), OBJ_MVCC_INVALID)) == NULL))
     {
         addReplyError(c,"Bad data format");
         return;
@@ -5066,28 +5162,40 @@ void restoreCommand(client *c) {
             decrRefCount(auxkey);
             goto eoferr;
         }
-#ifdef ENABLE_MVCC
         if (strcasecmp(szFromObj(auxkey), "mvcc-tstamp") == 0) {
-            obj->mvcc_tstamp = strtoull(szFromObj(auxval), nullptr, 10);
+            setMvccTstamp(obj, strtoull(szFromObj(auxval), nullptr, 10));
         }
-#endif
         decrRefCount(auxkey);
         decrRefCount(auxval);
     }
 eoferr:
 
     /* Remove the old key if needed. */
-    if (replace) dbDelete(c->db,c->argv[1]);
+    int deleted = 0;
+    if (replace)
+        deleted = dbDelete(c->db,key);
+
+    if (ttl && !absttl) ttl+=mstime();
+    if (ttl && checkAlreadyExpired(ttl)) {
+        if (deleted) {
+            rewriteClientCommandVector(c,2,shared.del,key);
+            signalModifiedKey(c,c->db,key);
+            notifyKeyspaceEvent(NOTIFY_GENERIC,"del",key,c->db->id);
+            g_pserver->dirty++;
+        }
+        decrRefCount(obj);
+        addReply(c, shared.ok);
+        return;
+    }
 
     /* Create the key and set the TTL if any */
-    dbAdd(c->db,c->argv[1],obj);
+    dbAdd(c->db,key,obj);
     if (ttl) {
-        if (!absttl) ttl+=mstime();
-        setExpire(c,c->db,c->argv[1],nullptr,ttl);
+        setExpire(c,c->db,key,nullptr,ttl);
     }
     objectSetLRUOrLFU(obj,lfu_freq,lru_idle,lru_clock,1000);
-    signalModifiedKey(c,c->db,c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_GENERIC,"restore",c->argv[1],c->db->id);
+    signalModifiedKey(c,c->db,key);
+    notifyKeyspaceEvent(NOTIFY_GENERIC,"restore",key,c->db->id);
     addReply(c,shared.ok);
     g_pserver->dirty++;
 }
@@ -5596,7 +5704,7 @@ void readwriteCommand(client *c) {
  *    resharding in progress).
  *
  * On success the function returns the node that is able to serve the request.
- * If the node is not 'myself' a redirection must be perfomed. The kind of
+ * If the node is not 'myself' a redirection must be performed. The kind of
  * redirection is specified setting the integer passed by reference
  * 'error_code', which will be set to CLUSTER_REDIR_ASK or
  * CLUSTER_REDIR_MOVED.
@@ -5674,7 +5782,10 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
         margc = ms->commands[i].argc;
         margv = ms->commands[i].argv;
 
-        keyindex = getKeysFromCommand(mcmd,margv,margc,&numkeys);
+        getKeysResult result = GETKEYS_RESULT_INIT;
+        numkeys = getKeysFromCommand(mcmd,margv,margc,&result);
+        keyindex = result.keys;
+
         for (j = 0; j < numkeys; j++) {
             robj *thiskey = margv[keyindex[j]];
             int thisslot = keyHashSlot((char*)ptrFromObj(thiskey),
@@ -5692,7 +5803,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
                  * not trapped earlier in processCommand(). Report the same
                  * error to the client. */
                 if (n == NULL) {
-                    getKeysFreeResult(keyindex);
+                    getKeysFreeResult(&result);
                     if (error_code)
                         *error_code = CLUSTER_REDIR_DOWN_UNBOUND;
                     return NULL;
@@ -5716,7 +5827,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
                 if (!equalStringObjects(firstkey,thiskey)) {
                     if (slot != thisslot) {
                         /* Error: multiple keys from different slots. */
-                        getKeysFreeResult(keyindex);
+                        getKeysFreeResult(&result);
                         if (error_code)
                             *error_code = CLUSTER_REDIR_CROSS_SLOT;
                         return NULL;
@@ -5728,14 +5839,14 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
                 }
             }
 
-            /* Migarting / Improrting slot? Count keys we don't have. */
+            /* Migrating / Importing slot? Count keys we don't have. */
             if ((migrating_slot || importing_slot) &&
                 lookupKeyRead(g_pserver->db[0],thiskey) == nullptr)
             {
                 missing_keys++;
             }
         }
-        getKeysFreeResult(keyindex);
+        getKeysFreeResult(&result);
     }
 
     /* No key at all in command? then we can serve the request
@@ -5797,10 +5908,12 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
     }
 
     /* Handle the read-only client case reading from a slave: if this
-     * node is a slave and the request is about an hash slot our master
+     * node is a slave and the request is about a hash slot our master
      * is serving, we can reply without redirection. */
+    int is_readonly_command = (c->cmd->flags & CMD_READONLY) ||
+                              (c->cmd->proc == execCommand && !(c->mstate.cmd_inv_flags & CMD_READONLY));
     if (c->flags & CLIENT_READONLY &&
-        (cmd->flags & CMD_READONLY || cmd->proc == evalCommand ||
+        (is_readonly_command || cmd->proc == evalCommand ||
          cmd->proc == evalShaCommand) &&
         nodeIsSlave(myself) &&
         myself->slaveof == n)
@@ -5809,7 +5922,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
     }
 
     /* Base case: just return the right node. However if this node is not
-     * myself, set error_code to MOVED since we need to issue a rediretion. */
+     * myself, set error_code to MOVED since we need to issue a redirection. */
     if (n != myself && error_code) *error_code = CLUSTER_REDIR_MOVED;
     return n;
 }
@@ -5855,7 +5968,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
  * 3) The client may remain blocked forever (or up to the max timeout time)
  *    waiting for a key change that will never happen.
  *
- * If the client is found to be blocked into an hash slot this node no
+ * If the client is found to be blocked into a hash slot this node no
  * longer handles, the client is sent a redirection error, and the function
  * returns 1. Otherwise 0 is returned and no operation is performed. */
 int clusterRedirectBlockedClientIfNeeded(client *c) {
@@ -5883,6 +5996,15 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
             robj *key = (robj*)dictGetKey(de);
             int slot = keyHashSlot((char*)ptrFromObj(key), sdslen(szFromObj(key)));
             clusterNode *node = g_pserver->cluster->slots[slot];
+
+            /* if the client is read-only and attempting to access key that our
+             * replica can handle, allow it. */
+            if ((c->flags & CLIENT_READONLY) &&
+                (c->lastcmd->flags & CMD_READONLY) &&
+                nodeIsSlave(myself) && myself->slaveof == node)
+            {
+                node = myself;
+            }
 
             /* We send an error and unblock the client if:
              * 1) The slot is unassigned, emitting a cluster down error.

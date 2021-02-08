@@ -86,8 +86,12 @@ connection *connCreateSocket() {
 /* Create a new socket-type connection that is already associated with
  * an accepted connection.
  *
- * The socket is not read for I/O until connAccept() was called and
+ * The socket is not ready for I/O until connAccept() was called and
  * invoked the connection-level accept handler.
+ *
+ * Callers should use connGetState() and verify the created connection
+ * is not in an error state (which is not possible for a socket connection,
+ * but could but possible with other protocols).
  */
 connection *connCreateAcceptedSocket(int fd) {
     connection *conn = connCreateSocket();
@@ -165,7 +169,12 @@ static int connSocketWrite(connection *conn, const void *data, size_t data_len) 
     int ret = write(conn->fd, data, data_len);
     if (ret < 0 && errno != EAGAIN) {
         conn->last_errno = errno;
-        conn->state.store(CONN_STATE_ERROR, std::memory_order_relaxed);
+
+        /* Don't overwrite the state of a connection that is not already
+         * connected, not to mess with handler callbacks.
+         */
+        ConnectionState expected = CONN_STATE_CONNECTED;
+        conn->state.compare_exchange_strong(expected, CONN_STATE_ERROR, std::memory_order_relaxed);
     }
 
     return ret;
@@ -177,7 +186,12 @@ static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
         conn->state.store(CONN_STATE_CLOSED, std::memory_order_release);
     } else if (ret < 0 && errno != EAGAIN) {
         conn->last_errno = errno;
-        conn->state.store(CONN_STATE_ERROR, std::memory_order_release);
+
+        /* Don't overwrite the state of a connection that is not already
+         * connected, not to mess with handler callbacks.
+         */
+        ConnectionState expected = CONN_STATE_CONNECTED;
+        conn->state.compare_exchange_strong(expected, CONN_STATE_ERROR, std::memory_order_release);
     }
 
     return ret;
@@ -259,8 +273,9 @@ void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientData, in
     if (conn->state.load(std::memory_order_relaxed) == CONN_STATE_CONNECTING &&
             (mask & AE_WRITABLE) && conn->conn_handler) {
 
-        if (connGetSocketError(conn)) {
-            conn->last_errno = errno;
+        int conn_error = connGetSocketError(conn);
+        if (conn_error) {
+            conn->last_errno = conn_error;
             conn->state.store(CONN_STATE_ERROR, std::memory_order_release);
         } else {
             conn->state.store(CONN_STATE_CONNECTED, std::memory_order_release);
@@ -353,6 +368,11 @@ static ssize_t connSocketSyncReadLine(connection *conn, char *ptr, ssize_t size,
     return syncReadLine(conn->fd, ptr, size, timeout);
 }
 
+static int connSocketGetType(struct connection *conn) {
+    (void) conn;
+
+    return CONN_TYPE_SOCKET;
+}
 
 ConnectionType CT_Socket = {
     connSocketEventHandler,
@@ -367,7 +387,9 @@ ConnectionType CT_Socket = {
     connSocketBlockingConnect,
     connSocketSyncWrite,
     connSocketSyncRead,
-    connSocketSyncReadLine
+    connSocketSyncReadLine,
+    nullptr,
+    connSocketGetType
 };
 
 

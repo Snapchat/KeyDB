@@ -8,6 +8,8 @@
 
 ##### Have feedback?  Take our quick survey: https://www.surveymonkey.com/r/Y9XNS93
 
+##### KeyDB is Hiring! We are currently building out our dev team. If you are interested please see the posting here: https://keydb.dev/careers.html
+
 What is KeyDB?
 --------------
 
@@ -15,11 +17,13 @@ KeyDB is a high performance fork of Redis with a focus on multithreading, memory
 
 KeyDB maintains full compatibility with the Redis protocol, modules, and scripts.  This includes the atomicity guarantees for scripts and transactions.  Because KeyDB keeps in sync with Redis development KeyDB is a superset of Redis functionality, making KeyDB a drop in replacement for existing Redis deployments.
 
-On the same hardware KeyDB can perform twice as many queries per second as Redis, with 60% lower latency. Active-Replication simplifies hot-spare failover allowing you to easily distribute writes over replicas and use simple TCP based load balancing/failover. KeyDB's higher performance allows you to do more on less hardware which reduces operation costs and complexity.
+On the same hardware KeyDB can achieve significantly higher throughput than Redis. Active-Replication simplifies hot-spare failover allowing you to easily distribute writes over replicas and use simple TCP based load balancing/failover. KeyDB's higher performance allows you to do more on less hardware which reduces operation costs and complexity.
 
-<img src="https://keydb.dev/assets/img/blog/5x_opspersecVSdatasize.PNG"/>
+The chart below compares several KeyDB and Redis setups, including the latest Redis6 io-threads option, and TLS benchmarks.
 
-See the full benchmark results and setup information here: https://docs.keydb.dev/blog/2019/10/07/blog-post/
+<img src="https://docs.keydb.dev/img/blog/2020-09-15/ops_comparison.png"/>
+
+See the full benchmark results and setup information here: https://docs.keydb.dev/blog/2020/09/29/blog-post/
 
 Why fork Redis?
 ---------------
@@ -82,6 +86,8 @@ Building KeyDB
 
 KeyDB can be compiled and is tested for use on Linux.  KeyDB currently relies on SO_REUSEPORT's load balancing behavior which is available only in Linux.  When we support marshalling connections across threads we plan to support other operating systems such as FreeBSD.
 
+More on CentOS/Archlinux/Alpine/Debian/Ubuntu dependencies and builds can be found here: https://docs.keydb.dev/docs/build/
+
 Install dependencies:
 
     % sudo apt install build-essential nasm autotools-dev autoconf libjemalloc-dev tcl tcl-dev uuid-dev libcurl4-openssl-dev
@@ -95,9 +101,14 @@ libssl-dev on Debian/Ubuntu) and run:
 
     % make BUILD_TLS=yes
 
-You can enable flash support with:
+To build with systemd support, you'll need systemd development libraries (such 
+as libsystemd-dev on Debian/Ubuntu or systemd-devel on CentOS) and run:
 
-    % make MALLOC=memkind
+    % make USE_SYSTEMD=yes
+
+To append a suffix to KeyDB program names, use:
+
+    % make PROG_SUFFIX="-alt"
 
 ***Note that the following dependencies may be needed: 
     % sudo apt-get install autoconf autotools-dev libnuma-dev libtool
@@ -112,7 +123,7 @@ installed):
 Fixing build problems with dependencies or cached build options
 ---------
 
-KeyDB has some dependencies which are included into the `deps` directory.
+KeyDB has some dependencies which are included in the `deps` directory.
 `make` does not automatically rebuild dependencies even if something in
 the source code of dependencies changes.
 
@@ -139,7 +150,7 @@ with a 64 bit target, or the other way around, you need to perform a
 In case of build errors when trying to build a 32 bit binary of KeyDB, try
 the following steps:
 
-* Install the packages libc6-dev-i386 (also try g++-multilib).
+* Install the package libc6-dev-i386 (also try g++-multilib).
 * Try using the following command line instead of `make 32bit`:
   `make CFLAGS="-m32 -march=native" LDFLAGS="-m32"`
 
@@ -164,14 +175,14 @@ Verbose build
 -------------
 
 KeyDB will build with a user friendly colorized output by default.
-If you want to see a more verbose output use the following:
+If you want to see a more verbose output, use the following:
 
     % make V=1
 
 Running KeyDB
 -------------
 
-To run KeyDB with the default configuration just type:
+To run KeyDB with the default configuration, just type:
 
     % cd src
     % ./keydb-pro-server
@@ -224,7 +235,7 @@ You can find the list of all the available commands at https://docs.keydb.dev/do
 Installing KeyDB
 -----------------
 
-In order to install KeyDB binaries into /usr/local/bin just use:
+In order to install KeyDB binaries into /usr/local/bin, just use:
 
     % make install
 
@@ -233,8 +244,8 @@ different destination.
 
 Make install will just install binaries in your system, but will not configure
 init scripts and configuration files in the appropriate place. This is not
-needed if you want just to play a bit with KeyDB, but if you are installing
-it the proper way for a production system, we have a script doing this
+needed if you just want to play a bit with KeyDB, but if you are installing
+it the proper way for a production system, we have a script that does this
 for Ubuntu and Debian systems:
 
     % cd utils

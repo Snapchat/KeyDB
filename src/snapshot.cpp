@@ -494,7 +494,7 @@ dict_iter redisDbPersistentDataSnapshot::random_cache_threadsafe(bool fPrimaryOn
     if (dictSize(m_pdict) == 0)
         return dict_iter(nullptr);
     dictEntry *de = dictGetRandomKey(m_pdict);
-    return dict_iter(de);
+    return dict_iter(m_pdict, de);
 }
 
 dict_iter redisDbPersistentData::find_cached_threadsafe(const char *key) const
@@ -508,7 +508,7 @@ dict_iter redisDbPersistentData::find_cached_threadsafe(const char *key) const
         if (itr != nullptr)
             return itr;
     }
-    return dict_iter(de);
+    return dict_iter(m_pdict, de);
 }
 
 struct scan_callback_data

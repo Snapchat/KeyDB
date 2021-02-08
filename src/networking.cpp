@@ -495,7 +495,7 @@ void addReplyErrorLength(client *c, const char *s, size_t len) {
 }
 
 /* Do some actions after an error reply was sent (Log if needed, updates stats, etc.) */
-void afterErrorReply(client *c, const char *s, size_t len) {
+void afterErrorReply(client *c, const char *s, size_t len, int severity = ERR_CRITICAL) {
     /* Sometimes it could be normal that a replica replies to a master with
      * an error and this function gets called. Actually the error will never
      * be sent because addReply*() against master clients has no effect...
@@ -523,9 +523,30 @@ void afterErrorReply(client *c, const char *s, size_t len) {
 
         if (len > 4096) len = 4096;
         const char *cmdname = c->lastcmd ? c->lastcmd->name : "<unknown>";
-        serverLog(LL_WARNING,"== CRITICAL == This %s is sending an error "
-                             "to its %s: '%.*s' after processing the command "
-                             "'%s'", from, to, (int)len, s, cmdname);
+        switch (severity) {
+            case ERR_NOTICE:
+                serverLog(LL_NOTICE,"== NOTICE == This %s is rejecting a command "
+                    "from its %s: '%.*s' after processing the command "
+                    "'%s'", from, to, (int)len, s, cmdname);
+            break;
+            case ERR_WARNING:
+                serverLog(LL_WARNING,"== WARNING == This %s is rejecting a command "
+                    "from its %s: '%.*s' after processing the command "
+                    "'%s'", from, to, (int)len, s, cmdname);
+            break;
+            case ERR_ERROR:
+                serverLog(LL_WARNING,"== ERROR == This %s is sending an error "
+                    "to its %s: '%.*s' after processing the command "
+                    "'%s'", from, to, (int)len, s, cmdname);
+            break;
+            case ERR_CRITICAL:
+            default:
+                serverLog(LL_WARNING,"== CRITICAL == This %s is sending an error "
+                    "to its %s: '%.*s' after processing the command "
+                    "'%s'", from, to, (int)len, s, cmdname);
+            break;
+        }
+
         if (ctype == CLIENT_TYPE_MASTER && g_pserver->repl_backlog &&
             g_pserver->repl_backlog_histlen > 0)
         {
@@ -537,9 +558,9 @@ void afterErrorReply(client *c, const char *s, size_t len) {
 
 /* The 'err' object is expected to start with -ERRORCODE and end with \r\n.
  * Unlike addReplyErrorSds and others alike which rely on addReplyErrorLength. */
-void addReplyErrorObject(client *c, robj *err) {
+void addReplyErrorObject(client *c, robj *err, int severity) {
     addReply(c, err);
-    afterErrorReply(c, szFromObj(err), sdslen(szFromObj(err))-2); /* Ignore trailing \r\n */
+    afterErrorReply(c, szFromObj(err), sdslen(szFromObj(err))-2, severity); /* Ignore trailing \r\n */
 }
 
 void addReplyError(client *c, const char *err) {
@@ -3302,6 +3323,8 @@ void flushSlavesOutputBuffers(void) {
     listIter li;
     listNode *ln;
 
+    flushReplBacklogToClients();
+
     listRewind(g_pserver->slaves,&li);
     while((ln = listNext(&li))) {
         client *replica = (client*)listNodeValue(ln);
@@ -3469,6 +3492,16 @@ void processEventsWhileBlocked(int iel) {
     AeLocker locker;
     locker.arm(nullptr);
     locker.release();
+
+    // Try to complete any async rehashes (this would normally happen in dbCron, but that won't run here)
+    for (int idb = 0; idb < cserver.dbnum; ++idb) {
+        redisDb *db = g_pserver->db[idb];
+        while (db->dictUnsafeKeyOnly()->asyncdata != nullptr) {
+            if (!db->dictUnsafeKeyOnly()->asyncdata->done)
+                break;
+            dictCompleteRehashAsync(db->dictUnsafeKeyOnly()->asyncdata, false /*fFree*/);
+        }
+    }
 
     // Restore it so the calling code is not confused
     if (fReplBacklog && !serverTL->el->stop) {

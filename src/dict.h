@@ -36,6 +36,8 @@
 #include <stdint.h>
 
 #ifdef __cplusplus
+#include <vector>
+#include <atomic>
 extern "C" {
 #endif
 
@@ -81,12 +83,40 @@ typedef struct dictht {
     unsigned long used;
 } dictht;
 
+#ifdef __cplusplus
+struct dictAsyncRehashCtl {
+    struct workItem {
+        dictEntry *de;
+        uint64_t hash;
+        workItem(dictEntry *de) {
+            this->de = de;
+        }
+    };
+
+    static const int c_targetQueueSize = 512;
+    dictEntry *deGCList = nullptr;
+    struct dict *dict = nullptr;
+    std::vector<workItem> queue;
+    size_t hashIdx = 0;
+    bool release = false;
+    dictAsyncRehashCtl *next = nullptr;
+    std::atomic<bool> done { false };
+
+    dictAsyncRehashCtl(struct dict *d, dictAsyncRehashCtl *next) : dict(d), next(next) {
+        queue.reserve(c_targetQueueSize);
+    }
+};
+#else
+struct  dictAsyncRehashCtl;
+#endif
+
 typedef struct dict {
     dictType *type;
     void *privdata;
     dictht ht[2];
     long rehashidx; /* rehashing not in progress if rehashidx == -1 */
     unsigned long iterators; /* number of iterators currently running */
+    dictAsyncRehashCtl *asyncdata;
 } dict;
 
 /* If safe is set to 1 this is a safe iterator, that means, you can call
@@ -192,6 +222,12 @@ uint64_t dictGetHash(dict *d, const void *key);
 dictEntry **dictFindEntryRefByPtrAndHash(dict *d, const void *oldptr, uint64_t hash);
 void dictForceRehash(dict *d);
 int dictMerge(dict *dst, dict *src);
+
+/* Async Rehash Functions */
+dictAsyncRehashCtl *dictRehashAsyncStart(dict *d, int buckets = dictAsyncRehashCtl::c_targetQueueSize);
+void dictRehashAsync(dictAsyncRehashCtl *ctl);
+bool dictRehashSomeAsync(dictAsyncRehashCtl *ctl, size_t hashes);
+void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl, bool fFree);
 
 /* Hash table types */
 extern dictType dictTypeHeapStringCopyKey;

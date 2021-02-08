@@ -246,7 +246,7 @@ test_slave_buffers {slave buffer are counted correctly} 1000000 10 0 1
 # test again with fewer (and bigger) commands without pipeline, but with eviction
 test_slave_buffers "replica buffer don't induce eviction" 100000 100 1 0
 
-start_server {tags {"maxmemory"}} {
+start_server {tags {"maxmemory"} overrides {server-threads 1}} {
     test {client tracking don't cause eviction feedback loop} {
         r config set maxmemory 0
         r config set maxmemory-policy allkeys-lru

@@ -20,7 +20,7 @@ jobs:
       run: ./utils/gen-test-certs.sh
     - name: test-tls
       run: |
-        sudo apt-get -y install tcl8.5 tcl-tls
+        sudo apt-get -y install tcl tcl-tls
         ./runtest --clients 2 --verbose --tls
     - name: cluster-test
       run: |

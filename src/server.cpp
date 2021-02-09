@@ -1836,7 +1836,7 @@ void databasesCron(bool fMainThread) {
                 serverAssert(serverTL->rehashCtl == nullptr);
                 /* Are we async rehashing? And if so is it time to re-calibrate? */
                 /* The recalibration limit is a prime number to ensure balancing across threads */
-                if (rehashes_per_ms > 0 && async_rehashes < 131 && cserver.active_defrag_enabled) {
+                if (rehashes_per_ms > 0 && async_rehashes < 131 && !cserver.active_defrag_enabled) {
                     serverTL->rehashCtl = dictRehashAsyncStart(g_pserver->db[rehash_db].dict, rehashes_per_ms);
                     ++async_rehashes;
                 }

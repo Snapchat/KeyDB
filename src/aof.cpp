@@ -741,7 +741,7 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
 /* In Redis commands are always executed in the context of a client, so in
  * order to load the append only file we need to create a fake client. */
 struct client *createAOFClient(void) {
-    struct client *c =(client*) zmalloc(sizeof(*c), MALLOC_LOCAL);
+    struct client *c = new client();
 
     selectDb(c,0);
     c->id = CLIENT_ID_AOF; /* So modules can identify it's the AOF client. */
@@ -752,7 +752,6 @@ struct client *createAOFClient(void) {
     c->querybuf_peak = 0;
     c->argc = 0;
     c->argv = NULL;
-    c->argv_len_sum = 0;
     c->bufpos = 0;
     c->flags = 0;
     c->fPendingAsyncWrite = FALSE;
@@ -783,7 +782,7 @@ void freeFakeClientArgv(struct client *c) {
     for (j = 0; j < c->argc; j++)
         decrRefCount(c->argv[j]);
     zfree(c->argv);
-    c->argv_len_sum = 0;
+    c->argv_len_sumActive = 0;
 }
 
 void freeFakeClient(struct client *c) {
@@ -793,7 +792,7 @@ void freeFakeClient(struct client *c) {
     freeClientMultiState(c);
     fastlock_unlock(&c->lock);
     fastlock_free(&c->lock);
-    zfree(c);
+    delete c;
 }
 
 /* Replay the append log file. On success C_OK is returned. On non fatal

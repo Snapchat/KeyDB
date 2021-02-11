@@ -1749,7 +1749,7 @@ size_t ClientsPeakMemInput[CLIENTS_PEAK_MEM_USAGE_SLOTS];
 size_t ClientsPeakMemOutput[CLIENTS_PEAK_MEM_USAGE_SLOTS];
 
 int clientsCronTrackExpansiveClients(client *c) {
-    size_t in_usage = sdsZmallocSize(c->querybuf) + c->argv_len_sum;
+    size_t in_usage = sdsZmallocSize(c->querybuf) + c->argv_len_sum();
     size_t out_usage = getClientOutputBufferMemoryUsage(c);
     int i = g_pserver->unixtime % CLIENTS_PEAK_MEM_USAGE_SLOTS;
     int zeroidx = (i+1) % CLIENTS_PEAK_MEM_USAGE_SLOTS;
@@ -1786,7 +1786,7 @@ int clientsCronTrackClientsMemUsage(client *c) {
     mem += getClientOutputBufferMemoryUsage(c);
     mem += sdsZmallocSize(c->querybuf);
     mem += zmalloc_size(c);
-    mem += c->argv_len_sum;
+    mem += c->argv_len_sum();
     if (c->argv) mem += zmalloc_size(c->argv);
     /* Now that we have the memory used by the client, remove the old
      * value from the old category, and add it back. */

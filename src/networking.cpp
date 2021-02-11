@@ -102,7 +102,7 @@ void linkClient(client *c) {
 }
 
 client *createClient(connection *conn, int iel) {
-    client *c = (client*)zmalloc(sizeof(client), MALLOC_LOCAL);
+    client *c = new client;
     serverAssert(conn == nullptr || (iel == (serverTL - g_pserver->rgthreadvar)));
 
     c->iel = iel;
@@ -124,7 +124,6 @@ client *createClient(connection *conn, int iel) {
     uint64_t client_id;
     client_id = g_pserver->next_client_id.fetch_add(1);
     c->iel = iel;
-    fastlock_init(&c->lock, "client");
     c->id = client_id;
     c->resp = 2;
     c->conn = conn;
@@ -137,7 +136,6 @@ client *createClient(connection *conn, int iel) {
     c->reqtype = 0;
     c->argc = 0;
     c->argv = NULL;
-    c->argv_len_sum = 0;
     c->cmd = c->lastcmd = NULL;
     c->puser = DefaultUser;
     c->multibulklen = 0;
@@ -157,6 +155,7 @@ client *createClient(connection *conn, int iel) {
     c->reploff = 0;
     c->reploff_skipped = 0;
     c->read_reploff = 0;
+    c->reploff_cmd = 0;
     c->repl_ack_off = 0;
     c->repl_ack_time = 0;
     c->slave_listening_port = 0;
@@ -201,6 +200,13 @@ client *createClient(connection *conn, int iel) {
     initClientMultiState(c);
     AssertCorrectThread(c);
     return c;
+}
+
+size_t client::argv_len_sum() const {
+    size_t sum = 0;
+    for (auto &cmd : vecqueuedcmd)
+        sum += cmd.argv_len_sum;
+    return sum + argv_len_sumActive;
 }
 
 /* This function puts the client in the queue of clients that should write
@@ -1343,7 +1349,7 @@ static void freeClientArgv(client *c) {
         decrRefCount(c->argv[j]);
     c->argc = 0;
     c->cmd = NULL;
-    c->argv_len_sum = 0;
+    c->argv_len_sumActive = 0;
 }
 
 void disconnectSlavesExcept(unsigned char *uuid)
@@ -1574,12 +1580,12 @@ bool freeClient(client *c) {
     zfree(c->replyAsync);
     if (c->name) decrRefCount(c->name);
     zfree(c->argv);
-    c->argv_len_sum = 0;
+    c->argv_len_sumActive = 0;
     freeClientMultiState(c);
     sdsfree(c->peerid);
     ulock.unlock();
     fastlock_free(&c->lock);
-    zfree(c);
+    delete c;
     return true;
 }
 
@@ -1918,9 +1924,6 @@ void resetClient(client *c) {
     redisCommandProc *prevcmd = c->cmd ? c->cmd->proc : NULL;
 
     freeClientArgv(c);
-    c->reqtype = 0;
-    c->multibulklen = 0;
-    c->bulklen = -1;
 
     /* We clear the ASKING flag as well if we are not inside a MULTI, and
      * if what we just executed is not the ASKING command itself. */
@@ -2042,16 +2045,13 @@ int processInlineBuffer(client *c) {
 
     /* Setup argv array on client structure */
     if (argc) {
-        if (c->argv) zfree(c->argv);
-        c->argv = (robj**)zmalloc(sizeof(robj*)*argc, MALLOC_LOCAL);
-        c->argv_len_sum = 0;
-    }
-
-    /* Create redis objects for all arguments. */
-    for (c->argc = 0, j = 0; j < argc; j++) {
-        c->argv[c->argc] = createObject(OBJ_STRING,argv[j]);
-        c->argc++;
-        c->argv_len_sum += sdslen(argv[j]);
+        /* Create redis objects for all arguments. */
+        c->vecqueuedcmd.emplace_back(argc);
+        auto &cmd = c->vecqueuedcmd.back();
+        for (cmd.argc = 0, j = 0; j < argc; j++) {
+            cmd.argv[cmd.argc++] = createObject(OBJ_STRING,argv[j]);
+            cmd.argv_len_sum += sdslen(argv[j]);
+        }
     }
     sds_free(argv);
     return C_OK;
@@ -2141,9 +2141,7 @@ int processMultibulkBuffer(client *c) {
         c->multibulklen = ll;
 
         /* Setup argv array on client structure */
-        if (c->argv) zfree(c->argv);
-        c->argv = (robj**)zmalloc(sizeof(robj*)*c->multibulklen, MALLOC_LOCAL);
-        c->argv_len_sum = 0;
+        c->vecqueuedcmd.emplace_back(c->multibulklen);
     }
 
     serverAssertWithInfo(c,NULL,c->multibulklen > 0);
@@ -2211,21 +2209,22 @@ int processMultibulkBuffer(client *c) {
             /* Optimization: if the buffer contains JUST our bulk element
              * instead of creating a new object by *copying* the sds we
              * just use the current sds string. */
+            auto &cmd = c->vecqueuedcmd.back();
             if (c->qb_pos == 0 &&
                 c->bulklen >= PROTO_MBULK_BIG_ARG &&
                 sdslen(c->querybuf) == (size_t)(c->bulklen+2))
             {
-                c->argv[c->argc++] = createObject(OBJ_STRING,c->querybuf);
-                c->argv_len_sum += c->bulklen;
+                cmd.argv[cmd.argc++] = createObject(OBJ_STRING,c->querybuf);
+                cmd.argv_len_sum += c->bulklen;
                 sdsIncrLen(c->querybuf,-2); /* remove CRLF */
                 /* Assume that if we saw a fat argument we'll see another one
                  * likely... */
                 c->querybuf = sdsnewlen(SDS_NOINIT,c->bulklen+2);
                 sdsclear(c->querybuf);
             } else {
-                c->argv[c->argc++] =
+                cmd.argv[cmd.argc++] =
                     createStringObject(c->querybuf+c->qb_pos,c->bulklen);
-                c->argv_len_sum += c->bulklen;
+                cmd.argv_len_sum += c->bulklen;
                 c->qb_pos += c->bulklen+2;
             }
             c->bulklen = -1;
@@ -2249,7 +2248,8 @@ void commandProcessed(client *c, int flags) {
     long long prev_offset = c->reploff;
     if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
         /* Update the applied replication offset of our master. */
-        c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
+        serverAssert(c->reploff <= c->reploff_cmd);
+        c->reploff = c->reploff_cmd;
     }
 
     /* Don't reset the client structure for clients blocked in a
@@ -2306,34 +2306,34 @@ int processCommandAndResetClient(client *c, int flags) {
     return deadclient ? C_ERR : C_OK;
 }
 
-/* This function is called every time, in the client structure 'c', there is
- * more query buffer to process, because we read more data from the socket
- * or because a client was blocked and later reactivated, so there could be
- * pending query buffer, already representing a full command, to process. */
-void processInputBuffer(client *c, int callFlags) {
-    AssertCorrectThread(c);
+static bool FClientReady(client *c) {
+    /* Return if clients are paused. */
+    if (!(c->flags & CLIENT_SLAVE) && clientsArePaused()) return false;
+
+    /* Immediately abort if the client is in the middle of something. */
+    if (c->flags & CLIENT_BLOCKED) return false;
+
+    /* Don't process input from the master while there is a busy script
+        * condition on the replica. We want just to accumulate the replication
+        * stream (instead of replying -BUSY like we do with other clients) and
+        * later resume the processing. */
+    if (g_pserver->lua_timedout && c->flags & CLIENT_MASTER) return false;
+
+    /* CLIENT_CLOSE_AFTER_REPLY closes the connection once the reply is
+        * written to the client. Make sure to not let the reply grow after
+        * this flag has been set (i.e. don't process more commands).
+        *
+        * The same applies for clients we want to terminate ASAP. */
+    if (c->flags & (CLIENT_CLOSE_AFTER_REPLY|CLIENT_CLOSE_ASAP)) return false;
+
+    return true;
+}
+
+void parseClientCommandBuffer(client *c) {
+    if (!FClientReady(c))
+        return;
     
-    /* Keep processing while there is something in the input buffer */
-    while(c->qb_pos < sdslen(c->querybuf)) {
-        /* Return if clients are paused. */
-        if (!(c->flags & CLIENT_SLAVE) && clientsArePaused()) break;
-
-        /* Immediately abort if the client is in the middle of something. */
-        if (c->flags & CLIENT_BLOCKED) break;
-
-        /* Don't process input from the master while there is a busy script
-         * condition on the replica. We want just to accumulate the replication
-         * stream (instead of replying -BUSY like we do with other clients) and
-         * later resume the processing. */
-        if (g_pserver->lua_timedout && c->flags & CLIENT_MASTER) break;
-
-        /* CLIENT_CLOSE_AFTER_REPLY closes the connection once the reply is
-         * written to the client. Make sure to not let the reply grow after
-         * this flag has been set (i.e. don't process more commands).
-         *
-         * The same applies for clients we want to terminate ASAP. */
-        if (c->flags & (CLIENT_CLOSE_AFTER_REPLY|CLIENT_CLOSE_ASAP)) break;
-
+    while(c->qb_pos < sdslen(c->querybuf)) {    
         /* Determine request type when unknown. */
         if (!c->reqtype) {
             if (c->querybuf[c->qb_pos] == '*') {
@@ -2343,6 +2343,7 @@ void processInputBuffer(client *c, int callFlags) {
             }
         }
 
+        size_t cqueries = c->vecqueuedcmd.size();
         if (c->reqtype == PROTO_REQ_INLINE) {
             if (processInlineBuffer(c) != C_OK) break;
         } else if (c->reqtype == PROTO_REQ_MULTIBULK) {
@@ -2350,6 +2351,61 @@ void processInputBuffer(client *c, int callFlags) {
         } else {
             serverPanic("Unknown request type");
         }
+        if (!c->vecqueuedcmd.empty() && (c->vecqueuedcmd.back().argc <= 0 || c->vecqueuedcmd.back().argv == nullptr)) {
+            c->vecqueuedcmd.pop_back();
+        } else if (!c->vecqueuedcmd.empty()) {
+            if (c->flags & CLIENT_MASTER) c->vecqueuedcmd.back().reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
+            serverAssert(c->vecqueuedcmd.back().reploff >= 0);
+        }
+
+        /* Prefetch if we have a storage provider and we're not in the global lock */
+        if (cqueries < c->vecqueuedcmd.size() && g_pserver->m_pstorageFactory != nullptr && !GlobalLocksAcquired()) {
+            auto &query = c->vecqueuedcmd.back();
+            if (query.argc > 0 && query.argc == query.argcMax) {
+                c->db->prefetchKeysAsync(query);
+            }
+        }
+        c->reqtype = 0;
+        c->multibulklen = 0;
+        c->bulklen = -1;
+        c->reqtype = 0;
+    }
+
+    /* Trim to pos */
+    if (c->qb_pos) {
+        sdsrange(c->querybuf,c->qb_pos,-1);
+        c->qb_pos = 0;
+    }
+}
+
+/* This function is called every time, in the client structure 'c', there is
+ * more query buffer to process, because we read more data from the socket
+ * or because a client was blocked and later reactivated, so there could be
+ * pending query buffer, already representing a full command, to process. */
+void processInputBuffer(client *c, bool fParse, int callFlags) {
+    AssertCorrectThread(c);
+    
+    if (fParse)
+        parseClientCommandBuffer(c);
+
+    /* Keep processing while there is something in the input buffer */
+    while (!c->vecqueuedcmd.empty()) {
+        /* Return if we're still parsing this command */
+        auto &cmd = c->vecqueuedcmd.front();
+        if (cmd.argc != cmd.argcMax) break;
+
+        if (!FClientReady(c)) break;
+
+        zfree(c->argv);
+        c->argc = cmd.argc;
+        c->argv = cmd.argv;
+        cmd.argv = nullptr;
+        c->argv_len_sumActive = cmd.argv_len_sum;
+        cmd.argv_len_sum = 0;
+        c->reploff_cmd = cmd.reploff;
+        serverAssert(c->argv != nullptr);
+
+        c->vecqueuedcmd.erase(c->vecqueuedcmd.begin());
 
         /* Multibulk processing could see a <= 0 length. */
         if (c->argc == 0) {
@@ -2363,12 +2419,6 @@ void processInputBuffer(client *c, int callFlags) {
                 return;
             }
         }
-    }
-
-    /* Trim to pos */
-    if (c->qb_pos) {
-        sdsrange(c->querybuf,c->qb_pos,-1);
-        c->qb_pos = 0;
     }
 }
 
@@ -2450,6 +2500,8 @@ void readQueryFromClient(connection *conn) {
         return;
     }
 
+    parseClientCommandBuffer(c);
+
     serverTL->vecclientsProcess.push_back(c);
 }
 
@@ -2461,7 +2513,7 @@ void processClients()
         /* There is more data in the client input buffer, continue parsing it
         * in case to check if there is a full command to execute. */
         std::unique_lock<fastlock> ul(c->lock);
-        processInputBuffer(c, CMD_CALL_FULL);
+        processInputBuffer(c, false /*fParse*/, CMD_CALL_FULL);
     }
 
     if (listLength(serverTL->clients_pending_asyncwrite))
@@ -2568,7 +2620,7 @@ sds catClientInfoString(sds s, client *client) {
     /* For efficiency (less work keeping track of the argv memory), it doesn't include the used memory
      * i.e. unused sds space and internal fragmentation, just the string length. but this is enough to
      * spot problematic clients. */
-    total_mem += client->argv_len_sum;
+    total_mem += client->argv_len_sum();
     if (client->argv)
         total_mem += zmalloc_size(client->argv);
 
@@ -2587,7 +2639,7 @@ sds catClientInfoString(sds s, client *client) {
         (client->flags & CLIENT_MULTI) ? client->mstate.count : -1,
         (unsigned long long) sdslen(client->querybuf),
         (unsigned long long) sdsavail(client->querybuf),
-        (unsigned long long) client->argv_len_sum,
+        (unsigned long long) client->argv_len_sum(),
         (unsigned long long) client->bufpos,
         (unsigned long long) listLength(client->reply),
         (unsigned long long) obufmem, /* should not include client->buf since we want to see 0 for static clients. */
@@ -3144,10 +3196,10 @@ void rewriteClientCommandVector(client *c, int argc, ...) {
     /* Replace argv and argc with our new versions. */
     c->argv = argv;
     c->argc = argc;
-    c->argv_len_sum = 0;
+    c->argv_len_sumActive = 0;
     for (j = 0; j < c->argc; j++)
         if (c->argv[j])
-            c->argv_len_sum += getStringObjectLen(c->argv[j]);
+            c->argv_len_sumActive += getStringObjectLen(c->argv[j]);
     c->cmd = lookupCommandOrOriginal((sds)ptrFromObj(c->argv[0]));
     serverAssertWithInfo(c,NULL,c->cmd != NULL);
     va_end(ap);
@@ -3160,10 +3212,10 @@ void replaceClientCommandVector(client *c, int argc, robj **argv) {
     zfree(c->argv);
     c->argv = argv;
     c->argc = argc;
-    c->argv_len_sum = 0;
+    c->argv_len_sumActive = 0;
     for (j = 0; j < c->argc; j++)
         if (c->argv[j])
-            c->argv_len_sum += getStringObjectLen(c->argv[j]);
+            c->argv_len_sumActive += getStringObjectLen(c->argv[j]);
     c->cmd = lookupCommandOrOriginal((sds)ptrFromObj(c->argv[0]));
     serverAssertWithInfo(c,NULL,c->cmd != NULL);
 }
@@ -3188,8 +3240,8 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
         c->argv[i] = NULL;
     }
     oldval = c->argv[i];
-    if (oldval) c->argv_len_sum -= getStringObjectLen(oldval);
-    if (newval) c->argv_len_sum += getStringObjectLen(newval);
+    if (oldval) c->argv_len_sumActive -= getStringObjectLen(oldval);
+    if (newval) c->argv_len_sumActive += getStringObjectLen(newval);
     c->argv[i] = newval;
     incrRefCount(newval);
     if (oldval) decrRefCount(oldval);

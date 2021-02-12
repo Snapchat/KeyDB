@@ -2362,7 +2362,7 @@ void parseClientCommandBuffer(client *c) {
         if (cqueries < c->vecqueuedcmd.size() && g_pserver->m_pstorageFactory != nullptr && !GlobalLocksAcquired()) {
             auto &query = c->vecqueuedcmd.back();
             if (query.argc > 0 && query.argc == query.argcMax) {
-                c->db->prefetchKeysAsync(query);
+                c->db->prefetchKeysAsync(c, query);
             }
         }
         c->reqtype = 0;

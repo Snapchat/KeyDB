@@ -2959,7 +2959,7 @@ int dbnumFromDb(redisDb *db)
     serverPanic("invalid database pointer");
 }
 
-void redisDbPersistentData::prefetchKeysAsync(parsed_command &command)
+void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command)
 {
     if (m_spstorage == nullptr)
         return;
@@ -2967,7 +2967,7 @@ void redisDbPersistentData::prefetchKeysAsync(parsed_command &command)
     AeLocker lock;
 
     std::vector<robj*> veckeys;
-    lock.arm(nullptr);
+    lock.arm(c);
     getKeysResult result = GETKEYS_RESULT_INIT;
     auto cmd = lookupCommand(szFromObj(command.argv[0]));
     int numkeys = getKeysFromCommand(cmd, command.argv, command.argc, &result);
@@ -3000,7 +3000,7 @@ void redisDbPersistentData::prefetchKeysAsync(parsed_command &command)
         vecInserts.emplace_back(sharedKey, o, std::move(spexpire));
     }
 
-    lock.arm(nullptr);
+    lock.arm(c);
     for (auto &tuple : vecInserts)
     {
         sds sharedKey = std::get<0>(tuple);

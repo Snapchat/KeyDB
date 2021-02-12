@@ -3104,21 +3104,9 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
         }
     }
 
-    if (pipe(pvar->module_blocked_pipe) == -1) {
-        serverLog(LL_WARNING,
-            "Can't create the pipe for module blocking commands: %s",
-            strerror(errno));
-        exit(1);
-    }
-
-    /* Make the pipe non blocking. This is just a best effort aware mechanism
-     * and we do not want to block not in the read nor in the write half. */
-    anetNonBlock(NULL,pvar->module_blocked_pipe[0]);
-    anetNonBlock(NULL,pvar->module_blocked_pipe[1]);
-
     /* Register a readable event for the pipe used to awake the event loop
      * when a blocked client in a module needs attention. */
-    if (aeCreateFileEvent(pvar->el, pvar->module_blocked_pipe[0], AE_READABLE,
+    if (aeCreateFileEvent(pvar->el, g_pserver->module_blocked_pipe[0], AE_READABLE,
         moduleBlockedClientPipeReadable,NULL) == AE_ERR) {
             serverPanic(
                 "Error registering the readable event for the module "
@@ -5685,6 +5673,8 @@ void *workerThreadMain(void *parg)
     {
     }
     serverAssert(!GlobalLocksAcquired());
+    if (serverTL->hasModuleGIL)
+        moduleReleaseGIL(true);
     aeDeleteEventLoop(el);
 
     return NULL;

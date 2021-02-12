@@ -1384,9 +1384,6 @@ struct redisServerThreadVars {
     int cclients;
     client *current_client; /* Current client */
     long fixed_time_expire = 0;     /* If > 0, expire keys against server.mstime. */
-    int module_blocked_pipe[2]; /* Pipe used to awake the event loop if a
-                                client blocked on a module command needs
-                                to be processed. */
     client *lua_client = nullptr;   /* The "fake client" to query Redis from Lua */
     struct fastlock lockPendingWrite { "thread pending write" };
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
@@ -1394,6 +1391,7 @@ struct redisServerThreadVars {
     bool fRetrySetAofEvent = false;
     std::vector<client*> vecclientsProcess;
     dictAsyncRehashCtl *rehashCtl = nullptr;
+    bool hasModuleGIL = false; /* Does this thread own the moduleGIL lock? */
 };
 
 struct redisMaster {
@@ -1858,6 +1856,10 @@ struct redisServer {
 
     long long repl_batch_offStart = -1;
     long long repl_batch_idxStart = -1;
+
+    int module_blocked_pipe[2]; /* Pipe used to awake the event loop if a
+                            client blocked on a module command needs
+                            to be processed. */
 };
 
 typedef struct pubsubPattern {
@@ -2000,9 +2002,9 @@ void moduleHandleBlockedClients(int iel);
 void moduleBlockedClientTimedOut(client *c);
 void moduleBlockedClientPipeReadable(aeEventLoop *el, int fd, void *privdata, int mask);
 size_t moduleCount(void);
-void moduleAcquireGIL(int fServerThread);
-int moduleTryAcquireGIL(bool fServerThread);
-void moduleReleaseGIL(int fServerThread);
+void moduleAcquireGIL(int fServerThread, int fExclusive = FALSE);
+int moduleTryAcquireGIL(bool fServerThread, int fExclusive = FALSE);
+void moduleReleaseGIL(int fServerThread, int fExclusive = FALSE);
 void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid);
 void moduleCallCommandFilters(client *c);
 int moduleHasCommandFilters();

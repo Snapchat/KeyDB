@@ -1136,7 +1136,7 @@ public:
     bool removeCachedValue(const char *key);
     void removeAllCachedValues();
 
-    void prefetchKeysAsync(struct parsed_command &command);
+    void prefetchKeysAsync(client *c, struct parsed_command &command);
 
     bool FSnapshot() const { return m_spdbSnapshotHOLDER != nullptr; }
 

@@ -5725,9 +5725,8 @@ void *workerThreadMain(void *parg)
     catch (ShutdownException)
     {
     }
+    moduleReleaseGIL(true);
     serverAssert(!GlobalLocksAcquired());
-    if (serverTL->hasModuleGIL)
-        moduleReleaseGIL(true);
     aeDeleteEventLoop(el);
 
     return NULL;

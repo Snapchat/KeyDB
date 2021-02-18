@@ -1391,7 +1391,6 @@ struct redisServerThreadVars {
     bool fRetrySetAofEvent = false;
     std::vector<client*> vecclientsProcess;
     dictAsyncRehashCtl *rehashCtl = nullptr;
-    bool hasModuleGIL = false; /* Does this thread own the moduleGIL lock? */
 };
 
 struct redisMaster {

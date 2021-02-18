@@ -329,6 +329,8 @@ static int s_cAcquisitionsModule = 0;
 static std::mutex s_mutex;
 static std::condition_variable s_cv;
 static std::recursive_mutex s_mutexModule;
+static redisServerThreadVars vars;      /* Server thread local variables to be used by module threads */
+thread_local bool g_fModuleThread = false;
 
 typedef void (*RedisModuleForkDoneHandler) (int exitcode, int bysignal, void *user_data);
 
@@ -4772,6 +4774,10 @@ int moduleClientIsBlockedOnKeys(client *c) {
  * RedisModule_BlockClientOnKeys() is accessible from the timeout
  * callback via RM_GetBlockedClientPrivateData). */
 int RM_UnblockClient(RedisModuleBlockedClient *bc, void *privdata) {
+    if (serverTL == nullptr) {
+        serverTL = &vars;
+        g_fModuleThread = true;
+    }
     if (bc->blocked_on_keys) {
         /* In theory the user should always pass the timeout handler as an
          * argument, but better to be safe than sorry. */
@@ -5045,15 +5051,14 @@ void RM_FreeThreadSafeContext(RedisModuleCtx *ctx) {
     zfree(ctx);
 }
 
-static redisServerThreadVars vars;
-thread_local bool g_fModuleThread = false;
+
 /* Acquire the server lock before executing a thread safe API call.
  * This is not needed for `RedisModule_Reply*` calls when there is
  * a blocked client connected to the thread safe context. */
 void RM_ThreadSafeContextLock(RedisModuleCtx *ctx) {
     UNUSED(ctx);
     if (serverTL == nullptr) {
-        serverTL = &vars;    // arbitrary module threads get the main thread context
+        serverTL = &vars;
         g_fModuleThread = true;
     }
     moduleAcquireGIL(FALSE /*fServerThread*/, true /*fExclusive*/);
@@ -5102,7 +5107,6 @@ void moduleAcquireGIL(int fServerThread, int fExclusive) {
     if (fServerThread)
     {
         ++s_cAcquisitionsServer;
-        serverTL->hasModuleGIL = true;
     }
     else
     {
@@ -5138,7 +5142,6 @@ int moduleTryAcquireGIL(bool fServerThread, int fExclusive) {
     if (fServerThread)
     {
         ++s_cAcquisitionsServer;
-        serverTL->hasModuleGIL = true;
     }
     else
     {
@@ -5163,7 +5166,6 @@ void moduleReleaseGIL(int fServerThread, int fExclusive) {
     if (fServerThread)
     {
         --s_cAcquisitionsServer;
-        serverTL->hasModuleGIL = false;
     }
     else
     {

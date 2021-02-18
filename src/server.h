@@ -1390,7 +1390,6 @@ struct redisServerThreadVars {
     long unsigned commandsExecuted = 0;
     bool fRetrySetAofEvent = false;
     std::vector<client*> vecclientsProcess;
-    bool hasModuleGIL = false; /* Does this thread own the moduleGIL lock? */
 };
 
 struct redisMaster {

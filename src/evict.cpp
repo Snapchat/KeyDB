@@ -500,6 +500,9 @@ int freeMemoryIfNeeded(bool fQuickCycle, bool fPreSnapshot) {
     int ckeysFailed = 0;
     int keys_freed = 0;
 
+    if (g_pserver->maxstorage && g_pserver->m_pstorageFactory != nullptr && g_pserver->m_pstorageFactory->totalDiskspaceUsed() >= g_pserver->maxstorage)
+        goto cant_free_storage;
+
     /* When clients are paused the dataset should be static not just from the
      * POV of clients not being able to write, but also from the POV of
      * expires and evictions of keys not being performed. */
@@ -726,8 +729,10 @@ cant_free:
         latencyEndMonitor(lazyfree_latency);
         latencyAddSampleIfNeeded("eviction-lazyfree",lazyfree_latency);
     }
+
     latencyEndMonitor(latency);
     latencyAddSampleIfNeeded("eviction-cycle",latency);
+cant_free_storage:
     return result;
 }
 

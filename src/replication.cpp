@@ -1902,6 +1902,7 @@ void readSyncBulkPayload(connection *conn) {
     int use_diskless_load = useDisklessLoad();
     const dbBackup *diskless_load_backup = NULL;
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+    rsi.fForceSetKey = !!g_pserver->fActiveReplica;
     int empty_db_flags = g_pserver->repl_slave_lazy_flush ? EMPTYDB_ASYNC :
                                                         EMPTYDB_NO_FLAGS;
     off_t left;

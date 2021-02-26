@@ -2002,7 +2002,7 @@ void databasesCron(bool fMainThread) {
  * info or not using the 'update_daylight_info' argument. Normally we update
  * such info only when calling this function from serverCron() but not when
  * calling it from call(). */
-void updateCachedTime(int update_daylight_info) {
+void updateCachedTime() {
     long long t = ustime();
     __atomic_store(&g_pserver->ustime, &t, __ATOMIC_RELAXED);
     t /= 1000;
@@ -2015,12 +2015,10 @@ void updateCachedTime(int update_daylight_info) {
      * context is safe since we will never fork() while here, in the main
      * thread. The logging function will call a thread safe version of
      * localtime that has no locks. */
-    if (update_daylight_info) {
-        struct tm tm;
-        time_t ut = g_pserver->unixtime;
-        localtime_r(&ut,&tm);
-        __atomic_store(&g_pserver->daylight_active, &tm.tm_isdst, __ATOMIC_RELAXED);
-    }
+    struct tm tm;
+    time_t ut = g_pserver->unixtime;
+    localtime_r(&ut,&tm);
+    __atomic_store(&g_pserver->daylight_active, &tm.tm_isdst, __ATOMIC_RELAXED);
 }
 
 void checkChildrenDone(void) {
@@ -2171,9 +2169,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Software watchdog: deliver the SIGALRM that will reach the signal
      * handler if we don't return here fast enough. */
     if (g_pserver->watchdog_period) watchdogScheduleSignal(g_pserver->watchdog_period);
-
-    /* Update the time cache. */
-    updateCachedTime(1);
 
     /* Unpause clients if enough time has elapsed */
     unpauseClientsIfNecessary();
@@ -2812,7 +2807,7 @@ void initMasterInfo(redisMaster *master)
 void initServerConfig(void) {
     int j;
 
-    updateCachedTime(true);
+    updateCachedTime();
     getRandomHexChars(g_pserver->runid,CONFIG_RUN_ID_SIZE);
     g_pserver->runid[CONFIG_RUN_ID_SIZE] = '\0';
     changeReplicationId();
@@ -3915,7 +3910,6 @@ void call(client *c, int flags) {
 
     /* Call the command. */
     dirty = g_pserver->dirty;
-    updateCachedTime(0);
     incrementMvccTstamp();
     start = g_pserver->ustime;
     try {
@@ -6072,6 +6066,13 @@ void OnTerminate()
     serverPanic("std::teminate() called");
 }
 
+void *timeThreadMain(void*) {
+    while (true) {
+        updateCachedTime();
+        usleep(1);
+    }
+} 
+
 void *workerThreadMain(void *parg)
 {
     int iel = (int)((int64_t)parg);
@@ -6418,6 +6419,8 @@ int main(int argc, char **argv) {
     
     setOOMScoreAdj(-1);
     serverAssert(cserver.cthreads > 0 && cserver.cthreads <= MAX_EVENT_LOOPS);
+
+    pthread_create(&cserver.time_thread_id, nullptr, timeThreadMain, nullptr);
 
     pthread_attr_t tattr;
     pthread_attr_init(&tattr);

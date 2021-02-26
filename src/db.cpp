@@ -2834,9 +2834,9 @@ bool redisDbPersistentData::removeCachedValue(const char *key)
 
 void redisDbPersistentData::trackChanges(bool fBulk)
 {
-    m_fTrackingChanges++;
+    m_fTrackingChanges.fetch_add(1, std::memory_order_relaxed);
     if (fBulk)
-        m_fAllChanged++;
+        m_fAllChanged.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void redisDbPersistentData::removeAllCachedValues()

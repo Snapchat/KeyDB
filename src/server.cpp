@@ -2650,10 +2650,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
 
     serverAssert(serverTL->gcEpoch.isReset());
     serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
-    aeAcquireLock();
     for (int idb = 0; idb < cserver.dbnum; ++idb)
         g_pserver->db[idb]->trackChanges(false);
-    aeReleaseLock();
 }
 
 /* =========================== Server initialization ======================== */

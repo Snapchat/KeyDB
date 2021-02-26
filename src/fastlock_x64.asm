@@ -190,10 +190,11 @@ fastlock_unlock:
 	mov dword ptr [rdi], -1      # pidOwner = -1 (we don't own it anymore)
 	mov esi, [rdi+64]            # get current active (this one)
 	inc esi                      # bump it to the next thread
+	sfence                       # ensure whatever was written in the lock is visible
 	mov word ptr [rdi+64], si    # give up our ticket (note: lock is not required here because the spinlock itself guards this variable)
-	mfence                       # sync other threads
 	# At this point the lock is removed, however we must wake up any pending futexs
-	mov edx, [rdi+64+4]          # load the futex mask
+	mov rdx, [rdi+64]            # load the futex mask, note we intentionally also read the ticket we just wrote to ensure this is ordered with the above mov
+	shr rdx, 32                  # isolate the mask
 	bt edx, esi                  # is the next thread waiting on a futex?
 	jc unlock_futex              # unlock the futex if necessary
 	ret                          # if not we're done.

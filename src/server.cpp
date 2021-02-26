@@ -3911,6 +3911,7 @@ void call(client *c, int flags) {
     /* Call the command. */
     dirty = g_pserver->dirty;
     incrementMvccTstamp();
+    __atomic_load(&g_pserver->ustime, &start, __ATOMIC_SEQ_CST);
     start = g_pserver->ustime;
     try {
         c->cmd->proc(c);
@@ -3922,7 +3923,9 @@ void call(client *c, int flags) {
         addReplyError(c, sz);
     }
     serverTL->commandsExecuted++;
-    duration = ustime()-start;
+    ustime_t end;
+    __atomic_load(&g_pserver->ustime, &end, __ATOMIC_SEQ_CST);
+    duration = end-start;
     dirty = g_pserver->dirty-dirty;
     if (dirty < 0) dirty = 0;
 

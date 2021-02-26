@@ -149,12 +149,15 @@ IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *pr
     if (fUnclean || iter != nullptr)
     {
         count = 0;
-        if (fUnclean)
-            printf("\tDatabase was not shutdown cleanly, recomputing metrics\n");
         auto opts = rocksdb::ReadOptions();
         opts.tailing = true;
         std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(opts, spcolfamily.get()));
-        for (it->SeekToFirst(); it->Valid(); it->Next()) {
+
+        it->SeekToFirst();
+        if (fUnclean && it->Valid())
+            printf("\tDatabase was not shutdown cleanly, recomputing metrics\n");
+        
+        for (;it->Valid(); it->Next()) {
             if (FInternalKey(it->key().data(), it->key().size()))
                 continue;
             if (iter != nullptr)

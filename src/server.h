@@ -1172,8 +1172,8 @@ private:
     // Keyspace
     dict *m_pdict = nullptr;                 /* The keyspace for this DB */
     dict *m_pdictTombstone = nullptr;        /* Track deletes when we have a snapshot */
-    int m_fTrackingChanges = 0;     // Note: Stack based
-    int m_fAllChanged = 0;
+    std::atomic<int> m_fTrackingChanges {0};     // Note: Stack based
+    std::atomic<int> m_fAllChanged {0};
     std::set<changedesc, changedescCmp> m_setchanged;
     size_t m_cnewKeysPending = 0;
     std::shared_ptr<StorageCache> m_spstorage = nullptr;

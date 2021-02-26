@@ -525,7 +525,6 @@ void handleClientsBlockedOnKeys(void) {
              * lookup, invalidating the first one.
              * See https://github.com/antirez/redis/pull/6554. */
             serverTL->fixed_time_expire++;
-            updateCachedTime(0);
 
             /* Serve clients blocked on the key. */
             robj *o = lookupKeyWrite(rl->db,rl->key);

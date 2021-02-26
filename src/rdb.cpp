@@ -2341,10 +2341,6 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         (g_pserver->loading_process_events_interval_keys &&
         (r->keys_since_last_callback >= g_pserver->loading_process_events_interval_keys)))
     {
-        /* The DB can take some non trivial amount of time to load. Update
-         * our cached time since it is used to create and update the last
-         * interaction time with clients and for other important things. */
-        updateCachedTime(0);
         listIter li;
         listNode *ln;
         listRewind(g_pserver->masters, &li);

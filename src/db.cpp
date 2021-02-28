@@ -2834,9 +2834,9 @@ bool redisDbPersistentData::removeCachedValue(const char *key)
 
 void redisDbPersistentData::trackChanges(bool fBulk)
 {
-    m_fTrackingChanges++;
+    m_fTrackingChanges.fetch_add(1, std::memory_order_relaxed);
     if (fBulk)
-        m_fAllChanged++;
+        m_fAllChanged.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void redisDbPersistentData::removeAllCachedValues()
@@ -2959,24 +2959,27 @@ int dbnumFromDb(redisDb *db)
     serverPanic("invalid database pointer");
 }
 
-void redisDbPersistentData::prefetchKeysAsync(AeLocker &lock, client *c)
+void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command)
 {
     if (m_spstorage == nullptr)
         return;
 
+    AeLocker lock;
+
     std::vector<robj*> veckeys;
     lock.arm(c);
-    getKeysResult* result = nullptr;
-    int numkeys = getKeysFromCommand(c->cmd, c->argv, c->argc, result);
+    getKeysResult result = GETKEYS_RESULT_INIT;
+    auto cmd = lookupCommand(szFromObj(command.argv[0]));
+    int numkeys = getKeysFromCommand(cmd, command.argv, command.argc, &result);
     for (int ikey = 0; ikey < numkeys; ++ikey)
     {
-        robj *objKey = c->argv[result->keys[ikey]];
+        robj *objKey = command.argv[result.keys[ikey]];
         if (this->find_cached_threadsafe(szFromObj(objKey)) == nullptr)
             veckeys.push_back(objKey);
     }
     lock.disarm();
 
-    getKeysFreeResult(result);
+    getKeysFreeResult(&result);
 
     std::vector<std::tuple<sds, robj*, std::unique_ptr<expireEntry>>> vecInserts;
     for (robj *objKey : veckeys)

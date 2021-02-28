@@ -690,7 +690,7 @@ struct redisCommand redisCommandTable[] = {
      * failure detection, and a loading server is considered to be
      * not available. */
     {"ping",pingCommand,-1,
-     "ok-stale fast @connection @replication",
+     "ok-stale ok-loading fast @connection @replication",
      0,NULL,0,0,0,0,0,0},
 
     {"echo",echoCommand,2,
@@ -1558,14 +1558,14 @@ void tryResizeHashTables(int dbid) {
  * table will use two tables for a long time. So we try to use 1 millisecond
  * of CPU time at every call of this function to perform some rehashing.
  *
- * The function returns 1 if some rehashing was performed, otherwise 0
+ * The function returns the number of rehashes if some rehashing was performed, otherwise 0
  * is returned. */
 int redisDbPersistentData::incrementallyRehash() {
     /* Keys dictionary */
     if (dictIsRehashing(m_pdict) || dictIsRehashing(m_pdictTombstone)) {
-        dictRehashMilliseconds(m_pdict,1);
-        dictRehashMilliseconds(m_pdictTombstone,1);
-        return 1; /* already used our millisecond for this loop... */
+        int result = dictRehashMilliseconds(m_pdict,1);
+        result += dictRehashMilliseconds(m_pdictTombstone,1);
+        return result; /* already used our millisecond for this loop... */
     }
     return 0;
 }
@@ -1749,7 +1749,7 @@ size_t ClientsPeakMemInput[CLIENTS_PEAK_MEM_USAGE_SLOTS];
 size_t ClientsPeakMemOutput[CLIENTS_PEAK_MEM_USAGE_SLOTS];
 
 int clientsCronTrackExpansiveClients(client *c) {
-    size_t in_usage = sdsZmallocSize(c->querybuf) + c->argv_len_sum;
+    size_t in_usage = sdsZmallocSize(c->querybuf) + c->argv_len_sum();
     size_t out_usage = getClientOutputBufferMemoryUsage(c);
     int i = g_pserver->unixtime % CLIENTS_PEAK_MEM_USAGE_SLOTS;
     int zeroidx = (i+1) % CLIENTS_PEAK_MEM_USAGE_SLOTS;
@@ -1786,7 +1786,7 @@ int clientsCronTrackClientsMemUsage(client *c) {
     mem += getClientOutputBufferMemoryUsage(c);
     mem += sdsZmallocSize(c->querybuf);
     mem += zmalloc_size(c);
-    mem += c->argv_len_sum;
+    mem += c->argv_len_sum();
     if (c->argv) mem += zmalloc_size(c->argv);
     /* Now that we have the memory used by the client, remove the old
      * value from the old category, and add it back. */
@@ -1884,22 +1884,32 @@ bool expireOwnKeys()
     return false;
 }
 
+int hash_spin_worker() {
+    auto ctl = serverTL->rehashCtl;
+    return dictRehashSomeAsync(ctl, 1);
+}
+
 /* This function handles 'background' operations we are required to do
  * incrementally in Redis databases, such as active key expiring, resizing,
  * rehashing. */
-void databasesCron(void) {
-    /* Expire keys by random sampling. Not required for slaves
-     * as master will synthesize DELs for us. */
-    if (g_pserver->active_expire_enabled) {
-        if (expireOwnKeys()) {
-            activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
-        } else {
-            expireSlaveKeys();
+void databasesCron(bool fMainThread) {
+    serverAssert(GlobalLocksAcquired());
+    static int rehashes_per_ms = 0;
+    static int async_rehashes = 0;
+    if (fMainThread) {
+        /* Expire keys by random sampling. Not required for slaves
+        * as master will synthesize DELs for us. */
+        if (g_pserver->active_expire_enabled) {
+            if (expireOwnKeys()) {
+                activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
+            } else {
+                expireSlaveKeys();
+            }
         }
-    }
 
-    /* Defrag keys gradually. */
-    activeDefragCycle();
+        /* Defrag keys gradually. */
+        activeDefragCycle();
+    }
 
     /* Perform hash tables rehashing if needed, but only if there are no
      * other processes saving the DB on disk. Otherwise rehashing is bad
@@ -1916,27 +1926,69 @@ void databasesCron(void) {
         /* Don't test more DBs than we have. */
         if (dbs_per_call > cserver.dbnum) dbs_per_call = cserver.dbnum;
 
-        /* Resize */
-        for (j = 0; j < dbs_per_call; j++) {
-            tryResizeHashTables(resize_db % cserver.dbnum);
-            resize_db++;
+        if (fMainThread) {
+            /* Resize */
+            for (j = 0; j < dbs_per_call; j++) {
+                tryResizeHashTables(resize_db % cserver.dbnum);
+                resize_db++;
+            }
         }
 
         /* Rehash */
         if (g_pserver->activerehashing) {
             for (j = 0; j < dbs_per_call; j++) {
-                int work_done = g_pserver->db[rehash_db]->incrementallyRehash();
-                if (work_done) {
-                    /* If the function did some work, stop here, we'll do
-                     * more at the next cron loop. */
+                if (serverTL->rehashCtl != nullptr) {
+                    if (dictRehashSomeAsync(serverTL->rehashCtl, 5)) {
+                        break;
+                    } else {
+                        dictCompleteRehashAsync(serverTL->rehashCtl, true /*fFree*/);
+                        serverTL->rehashCtl = nullptr;
+                    }
+                }
+
+                serverAssert(serverTL->rehashCtl == nullptr);
+                ::dict *dict = g_pserver->db[rehash_db]->dictUnsafeKeyOnly();
+                /* Are we async rehashing? And if so is it time to re-calibrate? */
+                /* The recalibration limit is a prime number to ensure balancing across threads */
+                if (rehashes_per_ms > 0 && async_rehashes < 131 && !cserver.active_defrag_enabled && cserver.cthreads > 1) {
+                    serverTL->rehashCtl = dictRehashAsyncStart(dict, rehashes_per_ms);
+                    ++async_rehashes;
+                }
+                if (serverTL->rehashCtl)
                     break;
-                } else {
-                    /* If this db didn't need rehash, we'll try the next one. */
+                
+                // Before starting anything new, can we end the rehash of a blocked thread?
+                if (dict->asyncdata != nullptr) {
+                    auto asyncdata = dict->asyncdata;
+                    if (asyncdata->done) {
+                        dictCompleteRehashAsync(asyncdata, false /*fFree*/);    // Don't free because we don't own the pointer
+                        serverAssert(dict->asyncdata != asyncdata);
+                        break;  // completion can be expensive, don't do anything else
+                    }
+                }
+
+                rehashes_per_ms = g_pserver->db[rehash_db]->incrementallyRehash();
+                async_rehashes = 0;
+                if (rehashes_per_ms > 0) {
+                    /* If the function did some work, stop here, we'll do
+                    * more at the next cron loop. */
+                    if (!cserver.active_defrag_enabled) {
+                        serverLog(LL_VERBOSE, "Calibrated rehashes per ms: %d", rehashes_per_ms);
+                    }
+                    break;
+                } else if (dict->asyncdata == nullptr) {
+                    /* If this db didn't need rehash and we have none in flight, we'll try the next one. */
                     rehash_db++;
                     rehash_db %= cserver.dbnum;
                 }
             }
         }
+    }
+
+    if (serverTL->rehashCtl) {
+        setAeLockSetThreadSpinWorker(hash_spin_worker);
+    } else {
+        setAeLockSetThreadSpinWorker(nullptr);
     }
 }
 
@@ -1950,7 +2002,7 @@ void databasesCron(void) {
  * info or not using the 'update_daylight_info' argument. Normally we update
  * such info only when calling this function from serverCron() but not when
  * calling it from call(). */
-void updateCachedTime(int update_daylight_info) {
+void updateCachedTime() {
     long long t = ustime();
     __atomic_store(&g_pserver->ustime, &t, __ATOMIC_RELAXED);
     t /= 1000;
@@ -1963,12 +2015,10 @@ void updateCachedTime(int update_daylight_info) {
      * context is safe since we will never fork() while here, in the main
      * thread. The logging function will call a thread safe version of
      * localtime that has no locks. */
-    if (update_daylight_info) {
-        struct tm tm;
-        time_t ut = g_pserver->unixtime;
-        localtime_r(&ut,&tm);
-        __atomic_store(&g_pserver->daylight_active, &tm.tm_isdst, __ATOMIC_RELAXED);
-    }
+    struct tm tm;
+    time_t ut = g_pserver->unixtime;
+    localtime_r(&ut,&tm);
+    __atomic_store(&g_pserver->daylight_active, &tm.tm_isdst, __ATOMIC_RELAXED);
 }
 
 void checkChildrenDone(void) {
@@ -2120,9 +2170,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * handler if we don't return here fast enough. */
     if (g_pserver->watchdog_period) watchdogScheduleSignal(g_pserver->watchdog_period);
 
-    /* Update the time cache. */
-    updateCachedTime(1);
-
     /* Unpause clients if enough time has elapsed */
     unpauseClientsIfNecessary();
 
@@ -2232,7 +2279,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     clientsCron(IDX_EVENT_LOOP_MAIN);
 
     /* Handle background operations on Redis databases. */
-    databasesCron();
+    databasesCron(true /* fMainThread */);
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
@@ -2413,6 +2460,9 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
         processUnblockedClients(iel);
     }
 
+    /* Handle background operations on Redis databases. */
+    databasesCron(false /* fMainThread */);
+
     /* Unpause clients if enough time has elapsed */
     unpauseClientsIfNecessary();
     
@@ -2537,6 +2587,18 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     int aof_state = g_pserver->aof_state;
 
+    mstime_t commit_latency;
+    latencyStartMonitor(commit_latency);
+    if (g_pserver->m_pstorageFactory != nullptr)
+    {
+        locker.disarm();
+        for (redisDb *db : vecdb)
+            db->commitChanges();
+        locker.arm();
+    }
+    latencyEndMonitor(commit_latency);
+    latencyAddSampleIfNeeded("storage-commit", commit_latency);
+
     /* We try to handle writes at the end so we don't have to reacquire the lock,
         but if there is a pending async close we need to ensure the writes happen
         first so perform it here */
@@ -2547,16 +2609,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         locker.arm();
         fSentReplies = true;
     }
-
-    mstime_t commit_latency;
-    latencyStartMonitor(commit_latency);
-    if (g_pserver->m_pstorageFactory != nullptr)
-    {
-        for (redisDb *db : vecdb)
-            db->commitChanges();
-    }
-    latencyEndMonitor(commit_latency);
-    latencyAddSampleIfNeeded("storage-commit", commit_latency);
     
     if (!serverTL->gcEpoch.isReset())
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);
@@ -2598,10 +2650,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
 
     serverAssert(serverTL->gcEpoch.isReset());
     serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
-    aeAcquireLock();
     for (int idb = 0; idb < cserver.dbnum; ++idb)
         g_pserver->db[idb]->trackChanges(false);
-    aeReleaseLock();
 }
 
 /* =========================== Server initialization ======================== */
@@ -2755,7 +2805,7 @@ void initMasterInfo(redisMaster *master)
 void initServerConfig(void) {
     int j;
 
-    updateCachedTime(true);
+    updateCachedTime();
     getRandomHexChars(g_pserver->runid,CONFIG_RUN_ID_SIZE);
     g_pserver->runid[CONFIG_RUN_ID_SIZE] = '\0';
     changeReplicationId();
@@ -3002,7 +3052,7 @@ int setOOMScoreAdj(int process_class) {
     int val;
     char buf[64];
 
-    val = g_pserver->oom_score_adj_base + g_pserver->oom_score_adj_values[process_class];
+    val = g_pserver->oom_score_adj_values[process_class];
     if (g_pserver->oom_score_adj == OOM_SCORE_RELATIVE)
         val += g_pserver->oom_score_adj_base;
     if (val > 1000) val = 1000;
@@ -3858,8 +3908,8 @@ void call(client *c, int flags) {
 
     /* Call the command. */
     dirty = g_pserver->dirty;
-    updateCachedTime(0);
     incrementMvccTstamp();
+    __atomic_load(&g_pserver->ustime, &start, __ATOMIC_SEQ_CST);
     start = g_pserver->ustime;
     try {
         c->cmd->proc(c);
@@ -3871,7 +3921,9 @@ void call(client *c, int flags) {
         addReplyError(c, sz);
     }
     serverTL->commandsExecuted++;
-    duration = ustime()-start;
+    ustime_t end;
+    __atomic_load(&g_pserver->ustime, &end, __ATOMIC_SEQ_CST);
+    duration = end-start;
     dirty = g_pserver->dirty-dirty;
     if (dirty < 0) dirty = 0;
 
@@ -4028,13 +4080,14 @@ void call(client *c, int flags) {
  * If there's a transaction is flags it as dirty, and if the command is EXEC,
  * it aborts the transaction.
  * Note: 'reply' is expected to end with \r\n */
-void rejectCommand(client *c, robj *reply) {
+void rejectCommand(client *c, robj *reply, int severity = ERR_CRITICAL) {
     flagTransaction(c);
     if (c->cmd && c->cmd->proc == execCommand) {
         execCommandAbort(c, szFromObj(reply));
-    } else {
+    }
+    else {
         /* using addReplyError* rather than addReply so that the error can be logged. */
-        addReplyErrorObject(c, reply);
+        addReplyErrorObject(c, reply, severity);
     }
 }
 
@@ -4283,7 +4336,7 @@ int processCommand(client *c, int callFlags) {
         /* Active Replicas can execute read only commands, and optionally write commands */
         if (!(g_pserver->loading == LOADING_REPLICATION && g_pserver->fActiveReplica && ((c->cmd->flags & CMD_READONLY) || g_pserver->fWriteDuringActiveLoad)))
         {
-            rejectCommand(c, shared.loadingerr);
+            rejectCommand(c, shared.loadingerr, ERR_WARNING);
             return C_OK;
         }
     }
@@ -4345,7 +4398,7 @@ bool client::postFunction(std::function<void(client *)> fn, bool fLock) {
         std::lock_guard<decltype(this->lock)> lock(this->lock);
         fn(this);
         --casyncOpsPending;
-    }, false, fLock) == AE_OK;
+    }, fLock) == AE_OK;
 }
 
 /*================================== Shutdown =============================== */
@@ -4474,6 +4527,8 @@ int prepareForShutdown(int flags) {
     /* Best effort flush of replica output buffers, so that we hopefully
      * send them pending writes. */
     flushSlavesOutputBuffers();
+    g_pserver->repl_batch_idxStart = -1;
+    g_pserver->repl_batch_offStart = -1;
 
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
@@ -5484,7 +5539,7 @@ int linuxMadvFreeForkBugCheck(void) {
     const long map_size = 3 * 4096;
 
     /* Create a memory map that's in our full control (not one used by the allocator). */
-    p = mmap(NULL, map_size, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    p = (char*)mmap(NULL, map_size, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
     serverAssert(p != MAP_FAILED);
 
     q = p + 4096;
@@ -6012,6 +6067,13 @@ void OnTerminate()
     serverPanic("std::teminate() called");
 }
 
+void *timeThreadMain(void*) {
+    while (true) {
+        updateCachedTime();
+        usleep(1);
+    }
+} 
+
 void *workerThreadMain(void *parg)
 {
     int iel = (int)((int64_t)parg);
@@ -6358,6 +6420,8 @@ int main(int argc, char **argv) {
     
     setOOMScoreAdj(-1);
     serverAssert(cserver.cthreads > 0 && cserver.cthreads <= MAX_EVENT_LOOPS);
+
+    pthread_create(&cserver.time_thread_id, nullptr, timeThreadMain, nullptr);
 
     pthread_attr_t tattr;
     pthread_attr_init(&tattr);

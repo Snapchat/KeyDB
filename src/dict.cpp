@@ -128,6 +128,7 @@ int _dictInit(dict *d, dictType *type,
     d->privdata = privDataPtr;
     d->rehashidx = -1;
     d->iterators = 0;
+    d->asyncdata = nullptr;
     return DICT_OK;
 }
 
@@ -141,15 +142,15 @@ int dictResize(dict *d)
     minimal = d->ht[0].used;
     if (minimal < DICT_HT_INITIAL_SIZE)
         minimal = DICT_HT_INITIAL_SIZE;
-    return dictExpand(d, minimal);
+    return dictExpand(d, minimal, false /*fShirnk*/);
 }
 
 /* Expand or create the hash table */
-int dictExpand(dict *d, unsigned long size)
+int dictExpand(dict *d, unsigned long size, bool fShrink)
 {
     /* the size is invalid if it is smaller than the number of
      * elements already inside the hash table */
-    if (dictIsRehashing(d) || d->ht[0].used > size)
+    if (dictIsRehashing(d) || (d->ht[0].used > size && !fShrink) || size == 0)
         return DICT_ERR;
 
     dictht n; /* the new hash table */
@@ -263,7 +264,7 @@ int dictMerge(dict *dst, dict *src)
         return DICT_OK;
     }
 
-    dictExpand(dst, dictSize(dst)+dictSize(src));    // start dst rehashing if necessary
+    dictExpand(dst, dictSize(dst)+dictSize(src), false /* fShrink */);    // start dst rehashing if necessary
     auto &htDst = dictIsRehashing(dst) ? dst->ht[1] : dst->ht[0];
     for (int iht = 0; iht < 2; ++iht)
     {
@@ -328,13 +329,13 @@ int dictMerge(dict *dst, dict *src)
 int dictRehash(dict *d, int n) {
     int empty_visits = n*10; /* Max number of empty buckets to visit. */
     if (!dictIsRehashing(d)) return 0;
+    if (d->asyncdata) return 0;
 
     while(n-- && d->ht[0].used != 0) {
         dictEntry *de, *nextde;
 
         /* Note that rehashidx can't overflow as we are sure there are more
          * elements because ht[0].used != 0 */
-        assert(d->ht[0].size > (unsigned long)d->rehashidx);
         while(d->ht[0].table[d->rehashidx] == NULL) {
             d->rehashidx++;
             if (--empty_visits == 0) return 1;
@@ -368,6 +369,144 @@ int dictRehash(dict *d, int n) {
 
     /* More to rehash... */
     return 1;
+}
+
+dictAsyncRehashCtl *dictRehashAsyncStart(dict *d, int buckets) {
+    if (!dictIsRehashing(d)) return 0;
+
+    d->asyncdata = new dictAsyncRehashCtl(d, d->asyncdata);
+
+    int empty_visits = buckets * 10;
+
+    while (d->asyncdata->queue.size() < (size_t)buckets && d->rehashidx < d->ht[0].size) {
+        dictEntry *de;
+
+        /* Note that rehashidx can't overflow as we are sure there are more
+         * elements because ht[0].used != 0 */
+        while(d->ht[0].table[d->rehashidx] == NULL) {
+            d->rehashidx++;
+            if (--empty_visits == 0) goto LDone;
+            if (d->rehashidx >= d->ht[0].size) goto LDone;
+        }
+
+        de = d->ht[0].table[d->rehashidx];
+        // We have to queue every node in the bucket, even if we go over our target size
+        while (de != nullptr) {
+            d->asyncdata->queue.emplace_back(de);
+            de = de->next;
+        }
+        d->rehashidx++;
+    }
+
+LDone:
+    if (d->asyncdata->queue.empty()) {
+        // We didn't find any work to do (can happen if there is a large gap in the hash table)
+        auto asyncT = d->asyncdata;
+        d->asyncdata = d->asyncdata->next;
+        delete asyncT;
+        return nullptr;
+    }
+    return d->asyncdata;
+}
+
+void dictRehashAsync(dictAsyncRehashCtl *ctl) {
+    for (size_t idx = ctl->hashIdx; idx < ctl->queue.size(); ++idx) {
+        auto &wi = ctl->queue[idx];
+        wi.hash = dictHashKey(ctl->dict, dictGetKey(wi.de));
+    }
+    ctl->hashIdx = ctl->queue.size();
+    ctl->done = true;
+}
+
+bool dictRehashSomeAsync(dictAsyncRehashCtl *ctl, size_t hashes) {
+    size_t max = std::min(ctl->hashIdx + hashes, ctl->queue.size());
+    for (; ctl->hashIdx < max; ++ctl->hashIdx) {
+        auto &wi = ctl->queue[ctl->hashIdx];
+        wi.hash = dictHashKey(ctl->dict, dictGetKey(wi.de));
+    }
+
+    if (ctl->hashIdx == ctl->queue.size()) ctl->done = true;
+    return ctl->hashIdx < ctl->queue.size();
+}
+
+void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl, bool fFree) {
+    dict *d = ctl->dict;
+    assert(ctl->done);
+    
+    // Unlink ourselves
+    bool fUnlinked = false;
+    dictAsyncRehashCtl **pprev = &d->asyncdata;
+
+    while (*pprev != nullptr) {
+        if (*pprev == ctl) {
+            *pprev = ctl->next;
+            fUnlinked = true;
+            break;
+        }
+        pprev = &((*pprev)->next);
+    }
+
+    if (fUnlinked) {
+        if (ctl->next != nullptr && ctl->deGCList != nullptr) {
+            // An older work item may depend on our free list, so pass our free list to them
+            dictEntry **deGC = &ctl->next->deGCList;
+            while (*deGC != nullptr) deGC = &((*deGC)->next);
+            *deGC = ctl->deGCList;
+            ctl->deGCList = nullptr;
+        }
+    }
+
+    if (fUnlinked && !ctl->release) {
+        if (d->ht[0].table != nullptr) {    // can be null if we're cleared during the rehash
+            for (auto &wi : ctl->queue) {
+                // We need to remove it from the source hash table, and store it in the dest.
+                //  Note that it may have been deleted in the meantime and therefore not exist.
+                //  In this case it will be in the garbage collection list
+                
+                dictEntry **pdePrev = &d->ht[0].table[wi.hash & d->ht[0].sizemask];
+                while (*pdePrev != nullptr && *pdePrev != wi.de) {
+                    pdePrev = &((*pdePrev)->next);
+                }
+                if (*pdePrev != nullptr) {  // The element may be NULL if its in the GC list
+                    assert(*pdePrev == wi.de);
+                    *pdePrev = wi.de->next;
+                    // Now link it to the dest hash table
+                    wi.de->next = d->ht[1].table[wi.hash & d->ht[1].sizemask];
+                    d->ht[1].table[wi.hash & d->ht[1].sizemask] = wi.de;
+                    d->ht[0].used--;
+                    d->ht[1].used++;
+                }
+            }
+        }
+
+        /* Check if we already rehashed the whole table... */
+        if (d->ht[0].used == 0 && d->asyncdata == nullptr) {
+            zfree(d->ht[0].table);
+            d->ht[0] = d->ht[1];
+            _dictReset(&d->ht[1]);
+            d->rehashidx = -1;
+        }
+    }
+
+    if (fFree) {
+        while (ctl->deGCList != nullptr) {
+            auto next = ctl->deGCList->next;
+            dictFreeKey(d, ctl->deGCList);
+            dictFreeVal(d, ctl->deGCList);
+            zfree(ctl->deGCList);
+            ctl->deGCList = next;
+        }
+
+        // Was the dictionary free'd while we were in flight?
+        if (ctl->release) {
+            if (d->asyncdata != nullptr)
+                d->asyncdata->release = true;
+            else
+                dictRelease(d);
+        }
+
+        delete ctl;
+    }
 }
 
 long long timeInMilliseconds(void) {
@@ -527,9 +666,14 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
                 else
                     d->ht[table].table[idx] = he->next;
                 if (!nofree) {
-                    dictFreeKey(d, he);
-                    dictFreeVal(d, he);
-                    zfree(he);
+                    if (table == 0 && d->asyncdata != nullptr && idx < d->rehashidx) {
+                        he->next = d->asyncdata->deGCList;
+                        d->asyncdata->deGCList = he->next;
+                    } else {
+                        dictFreeKey(d, he);
+                        dictFreeVal(d, he);
+                        zfree(he);
+                    }
                 }
                 d->ht[table].used--;
                 return he;
@@ -539,6 +683,8 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
         }
         if (!dictIsRehashing(d)) break;
     }
+
+    _dictExpandIfNeeded(d);
     return NULL; /* not found */
 }
 
@@ -577,9 +723,14 @@ dictEntry *dictUnlink(dict *ht, const void *key) {
  * to dictUnlink(). It's safe to call this function with 'he' = NULL. */
 void dictFreeUnlinkedEntry(dict *d, dictEntry *he) {
     if (he == NULL) return;
-    dictFreeKey(d, he);
-    dictFreeVal(d, he);
-    zfree(he);
+    if (d->asyncdata) {
+        he->next = d->asyncdata->deGCList;
+        d->asyncdata->deGCList = he;
+    } else { 
+        dictFreeKey(d, he);
+        dictFreeVal(d, he);
+        zfree(he);
+    }
 }
 
 /* Destroy an entire dictionary */
@@ -595,9 +746,14 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
         if ((he = ht->table[i]) == NULL) continue;
         while(he) {
             nextHe = he->next;
-            dictFreeKey(d, he);
-            dictFreeVal(d, he);
-            zfree(he);
+            if (d->asyncdata && i < d->rehashidx) {
+                he->next = d->asyncdata->deGCList;
+                d->asyncdata->deGCList = he;
+            } else {
+                dictFreeKey(d, he);
+                dictFreeVal(d, he);
+                zfree(he);
+            }
             ht->used--;
             he = nextHe;
         }
@@ -612,6 +768,10 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
 /* Clear & Release the hash table */
 void dictRelease(dict *d)
 {
+    if (d->asyncdata) {
+        d->asyncdata->release = true;
+        return;
+    }
     _dictClear(d,&d->ht[0],NULL);
     _dictClear(d,&d->ht[1],NULL);
     zfree(d);
@@ -1111,7 +1271,7 @@ static int _dictExpandIfNeeded(dict *d)
     if (dictIsRehashing(d)) return DICT_OK;
 
     /* If the hash table is empty expand it to the initial size. */
-    if (d->ht[0].size == 0) return dictExpand(d, DICT_HT_INITIAL_SIZE);
+    if (d->ht[0].size == 0) return dictExpand(d, DICT_HT_INITIAL_SIZE, false /*fShrink*/);
 
     /* If we reached the 1:1 ratio, and we are allowed to resize the hash
      * table (global setting) or we should avoid it but the ratio between
@@ -1121,7 +1281,12 @@ static int _dictExpandIfNeeded(dict *d)
         (dict_can_resize ||
          d->ht[0].used/d->ht[0].size > dict_force_resize_ratio))
     {
-        return dictExpand(d, d->ht[0].used*2);
+        return dictExpand(d, d->ht[0].used*2, false /*fShrink*/);
+    }
+    else if (d->ht[0].used > 0 && d->ht[0].used * 16 < d->ht[0].size && dict_can_resize)
+    {
+        // If the dictionary has shurnk a lot we'll need to shrink the hash table instead
+        return dictExpand(d, d->ht[0].used*2, true /*fShrink*/);
     }
     return DICT_OK;
 }

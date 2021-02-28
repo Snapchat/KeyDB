@@ -121,7 +121,7 @@ void processUnblockedClients(int iel) {
          * the code is conceptually more correct this way. */
         if (!(c->flags & CLIENT_BLOCKED)) {
             if (c->querybuf && sdslen(c->querybuf) > 0) {
-                processInputBuffer(c, CMD_CALL_FULL);
+                processInputBuffer(c, true /*fParse*/, CMD_CALL_FULL);
             }
         }
         fastlock_unlock(&c->lock);
@@ -525,7 +525,6 @@ void handleClientsBlockedOnKeys(void) {
              * lookup, invalidating the first one.
              * See https://github.com/antirez/redis/pull/6554. */
             serverTL->fixed_time_expire++;
-            updateCachedTime(0);
 
             /* Serve clients blocked on the key. */
             robj *o = lookupKeyWrite(rl->db,rl->key);

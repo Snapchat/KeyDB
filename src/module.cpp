@@ -5046,7 +5046,7 @@ void RM_FreeThreadSafeContext(RedisModuleCtx *ctx) {
     zfree(ctx);
 }
 
-static bool g_fModuleThread = false;
+thread_local bool g_fModuleThread = false;
 /* Acquire the server lock before executing a thread safe API call.
  * This is not needed for `RedisModule_Reply*` calls when there is
  * a blocked client connected to the thread safe context. */
@@ -5105,7 +5105,14 @@ void moduleAcquireGIL(int fServerThread) {
     }
     else
     {
-        s_mutexModule.lock();
+        // It is possible that another module thread holds the GIL (and s_mutexModule as a result). 
+        // When said thread goes to release the GIL, it will wait for s_mutex, which this thread owns. 
+        // This thread is however waiting for the GIL (and s_mutexModule) that the other thread owns.
+        // As a result, a deadlock has occured. 
+        // We release the lock on s_mutex and wait until we are able to safely acquire the GIL 
+        // in order to prevent this deadlock from occuring. 
+        while (!s_mutexModule.try_lock())
+            s_cv.wait(lock);         
         ++s_cAcquisitionsModule;
         fModuleGILWlocked++;
     }
@@ -5644,6 +5651,9 @@ int moduleTimerHandler(struct aeEventLoop *eventLoop, long long id, void *client
  * (If the time it takes to execute 'callback' is negligible the two
  * statements above mean the same) */
 RedisModuleTimerID RM_CreateTimer(RedisModuleCtx *ctx, mstime_t period, RedisModuleTimerProc callback, void *data) {
+    static uint64_t pending_key;
+    static mstime_t pending_period = -1; 
+
     RedisModuleTimer *timer = (RedisModuleTimer*)zmalloc(sizeof(*timer), MALLOC_LOCAL);
     timer->module = ctx->module;
     timer->callback = callback;
@@ -5662,32 +5672,40 @@ RedisModuleTimerID RM_CreateTimer(RedisModuleCtx *ctx, mstime_t period, RedisMod
         }
     }
 
+    bool fNeedPost = (pending_period < 0);    // If pending_period is already set, then a PostFunction is in flight and we don't need to set a new one
+    if (pending_period < 0 || period < pending_period) {
+        pending_period = period;
+        pending_key = key;
+    }
+
     /* We need to install the main event loop timer if it's not already
      * installed, or we may need to refresh its period if we just installed
      * a timer that will expire sooner than any other else (i.e. the timer
      * we just installed is the first timer in the Timers rax). */
-    if (aeTimer != -1) {
-        raxIterator ri;
-        raxStart(&ri,Timers);
-        raxSeek(&ri,"^",NULL,0);
-        raxNext(&ri);
-        if (memcmp(ri.key,&key,sizeof(key)) == 0) {
-            /* This is the first key, we need to re-install the timer according
-             * to the just added event. */
-            aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [&]{
-                aeDeleteTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,aeTimer);
-            }, true /* synchronous */, false /* fLock */);
-            aeTimer = -1;
-        }
-        raxStop(&ri);
-    }
+    if (fNeedPost) {
+        aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, []{
+            if (aeTimer != -1) {
+                raxIterator ri;
+                raxStart(&ri,Timers);
+                raxSeek(&ri,"^",NULL,0);
+                raxNext(&ri);
+                if (memcmp(ri.key,&pending_key,sizeof(key)) == 0) {
+                    /* This is the first key, we need to re-install the timer according
+                    * to the just added event. */
+                    aeDeleteTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,aeTimer);
+                    aeTimer = -1;
+                }
+                raxStop(&ri);
+            }
 
-    /* If we have no main timer (the old one was invalidated, or this is the
-     * first module timer we have), install one. */
-    if (aeTimer == -1) {
-        aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [&]{
-            aeTimer = aeCreateTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,period,moduleTimerHandler,NULL,NULL);
-        }, true /* synchronous */, false /* fLock */);
+            /* If we have no main timer (the old one was invalidated, or this is the
+            * first module timer we have), install one. */
+            if (aeTimer == -1) {
+                aeTimer = aeCreateTimeEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el,pending_period,moduleTimerHandler,NULL,NULL);
+            }
+
+            pending_period = -1;
+        });
     }
 
     return key;

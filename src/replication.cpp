@@ -1902,6 +1902,7 @@ void readSyncBulkPayload(connection *conn) {
     int use_diskless_load = useDisklessLoad();
     const dbBackup *diskless_load_backup = NULL;
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+    rsi.fForceSetKey = !!g_pserver->fActiveReplica;
     int empty_db_flags = g_pserver->repl_slave_lazy_flush ? EMPTYDB_ASYNC :
                                                         EMPTYDB_NO_FLAGS;
     off_t left;
@@ -3432,6 +3433,13 @@ void replicationCacheMaster(redisMaster *mi, client *c) {
      * offsets, including pending transactions, already populated arguments,
      * pending outputs to the master. */
     sdsclear(mi->master->querybuf);
+    if (!mi->master->vecqueuedcmd.empty()) {
+        // Clear out everything except for partially parsed commands (which we'll cache)
+        auto cmd = std::move(mi->master->vecqueuedcmd.front());
+        mi->master->vecqueuedcmd.clear();
+        if (cmd.argc != cmd.argcMax)
+            mi->master->vecqueuedcmd.emplace_back(std::move(cmd));
+    }
     sdsclear(mi->master->pending_querybuf);
     mi->master->read_reploff = mi->master->reploff;
     if (c->flags & CLIENT_MULTI) discardTransaction(c);
@@ -4307,10 +4315,12 @@ void replicaReplayCommand(client *c)
     cFake->authenticated = c->authenticated;
     cFake->puser = c->puser;
     cFake->querybuf = sdscatsds(cFake->querybuf,(sds)ptrFromObj(c->argv[2]));
+    cFake->read_reploff = sdslen(cFake->querybuf);
+    cFake->reploff = 0;
     selectDb(cFake, c->db->id);
     auto ccmdPrev = serverTL->commandsExecuted;
     cFake->flags |= CLIENT_MASTER | CLIENT_PREVENT_REPL_PROP;
-    processInputBuffer(cFake, (CMD_CALL_FULL & (~CMD_CALL_PROPAGATE)));
+    processInputBuffer(cFake, true /*fParse*/, (CMD_CALL_FULL & (~CMD_CALL_PROPAGATE)));
     cFake->flags &= ~(CLIENT_MASTER | CLIENT_PREVENT_REPL_PROP);
     bool fExec = ccmdPrev != serverTL->commandsExecuted;
     cFake->lock.unlock();

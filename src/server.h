@@ -611,6 +611,12 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define LL_WARNING 3
 #define LL_RAW (1<<10) /* Modifier to log without timestamp */
 
+/* Error severity levels */
+#define ERR_CRITICAL 0
+#define ERR_ERROR 1
+#define ERR_WARNING 2
+#define ERR_NOTICE 3
+
 /* Supervision options */
 #define SUPERVISED_NONE 0
 #define SUPERVISED_AUTODETECT 1
@@ -1130,7 +1136,7 @@ public:
     bool removeCachedValue(const char *key);
     void removeAllCachedValues();
 
-    void prefetchKeysAsync(class AeLocker &locker, client *c);
+    void prefetchKeysAsync(client *c, struct parsed_command &command);
 
     bool FSnapshot() const { return m_spdbSnapshotHOLDER != nullptr; }
 
@@ -1166,8 +1172,8 @@ private:
     // Keyspace
     dict *m_pdict = nullptr;                 /* The keyspace for this DB */
     dict *m_pdictTombstone = nullptr;        /* Track deletes when we have a snapshot */
-    int m_fTrackingChanges = 0;     // Note: Stack based
-    int m_fAllChanged = 0;
+    std::atomic<int> m_fTrackingChanges {0};     // Note: Stack based
+    std::atomic<int> m_fAllChanged {0};
     std::set<changedesc, changedescCmp> m_setchanged;
     size_t m_cnewKeysPending = 0;
     std::shared_ptr<StorageCache> m_spstorage = nullptr;
@@ -1437,7 +1443,53 @@ typedef struct {
                                       need more reserved IDs use UINT64_MAX-1,
                                       -2, ... and so forth. */
 
-typedef struct client {
+struct parsed_command {
+    robj** argv = nullptr;
+    int argc = 0;
+    int argcMax;
+    long long reploff = 0;
+    size_t argv_len_sum = 0;    /* Sum of lengths of objects in argv list. */
+
+    parsed_command(int maxargs) {
+        argv = (robj**)zmalloc(sizeof(robj*)*maxargs);
+        argcMax = maxargs;
+    }
+
+    parsed_command &operator=(parsed_command &&o) {
+        argv = o.argv;
+        argc = o.argc;
+        argcMax = o.argcMax;
+        reploff = o.reploff;
+        o.argv = nullptr;
+        o.argc = 0;
+        o.argcMax = 0;
+        o.reploff = 0;
+        return *this;
+    }
+
+    parsed_command(parsed_command &o) = delete;
+    parsed_command(parsed_command &&o) {
+        argv = o.argv;
+        argc = o.argc;
+        argcMax = o.argcMax;
+        reploff = o.reploff;
+        o.argv = nullptr;
+        o.argc = 0;
+        o.argcMax = 0;
+        o.reploff = 0;
+    }
+
+    ~parsed_command() {
+        if (argv != nullptr) {
+            for (int i = 0; i < argc; ++i) {
+                decrRefCount(argv[i]);
+            }
+            zfree(argv);
+        }
+    }
+};
+
+struct client {
     uint64_t id;            /* Client incremental unique ID. */
     connection *conn;
     int resp;               /* RESP protocol version. Can be 2 or 3. */
@@ -1450,9 +1502,6 @@ typedef struct client {
                                replication stream that we are receiving from
                                the master. */
     size_t querybuf_peak;   /* Recent (100ms or more) peak of querybuf size. */
-    int argc;               /* Num of arguments of current command. */
-    robj **argv;            /* Arguments of current command. */
-    size_t argv_len_sum;    /* Sum of lengths of objects in argv list. */
     struct redisCommand *cmd, *lastcmd;  /* Last command executed. */
     user *puser;             /* User associated with this connection. If the
                                user is set to NULL the connection can do
@@ -1482,6 +1531,7 @@ typedef struct client {
     long long read_reploff; /* Read replication offset if this is a master. */
     long long reploff;      /* Applied replication offset if this is a master. */
     long long reploff_skipped;  /* Repl backlog we did not send to this client */
+    long long reploff_cmd;  /* The replication offset of the executing command, reploff gets set to this after the execution completes */
     long long repl_ack_off; /* Replication ack offset, if this is a replica. */
     long long repl_ack_time;/* Replication ack time, if this is a replica. */
     long long psync_initial_offset; /* FULLRESYNC reply offset other slaves
@@ -1539,12 +1589,17 @@ typedef struct client {
     uint64_t mvccCheckpoint = 0;    // the MVCC checkpoint of our last write
 
     int iel; /* the event loop index we're registered with */
-    struct fastlock lock;
+    struct fastlock lock {"client"};
     int master_error;
+    std::vector<parsed_command> vecqueuedcmd;
+    int argc;
+    robj **argv;
+    size_t argv_len_sumActive = 0;
 
     // post a function from a non-client thread to run on its client thread
     bool postFunction(std::function<void(client *)> fn, bool fLock = true);
-} client;
+    size_t argv_len_sum() const;
+};
 
 struct saveparam {
     time_t seconds;
@@ -1822,6 +1877,7 @@ struct redisServerThreadVars {
     const redisDbPersistentDataSnapshot **rgdbSnapshot = nullptr;
     bool fRetrySetAofEvent = false;
     std::vector<client*> vecclientsProcess;
+    dictAsyncRehashCtl *rehashCtl = nullptr;
 
     int getRdbKeySaveDelay();
 private:
@@ -1864,6 +1920,7 @@ struct redisServerConst {
     pid_t pid;                  /* Main process pid. */
     time_t stat_starttime;          /* Server start time */
     pthread_t main_thread_id;         /* Main thread id */
+    pthread_t time_thread_id;
     char *configfile;           /* Absolute config file path, or NULL */
     char *executable;           /* Absolute executable file path. */
     char **exec_argv;           /* Executable argv vector (copy). */
@@ -2174,6 +2231,7 @@ struct redisServer {
     /* Limits */
     unsigned int maxclients;            /* Max number of simultaneous clients */
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
+    unsigned long long maxstorage;  /* Max number of bytes to use in a storage provider */
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Precision of random sampling */
     int lfu_log_factor;             /* LFU logarithmic counter factor. */
@@ -2509,7 +2567,7 @@ void setDeferredMapLen(client *c, void *node, long length);
 void setDeferredSetLen(client *c, void *node, long length);
 void setDeferredAttributeLen(client *c, void *node, long length);
 void setDeferredPushLen(client *c, void *node, long length);
-void processInputBuffer(client *c, int callFlags);
+void processInputBuffer(client *c, bool fParse, int callFlags);
 void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void acceptTLSHandler(aeEventLoop *el, int fd, void *privdata, int mask);
@@ -2529,7 +2587,7 @@ void addReplyBulkLongLong(client *c, long long ll);
 void addReply(client *c, robj_roptr obj);
 void addReplySds(client *c, sds s);
 void addReplyBulkSds(client *c, sds s);
-void addReplyErrorObject(client *c, robj *err);
+void addReplyErrorObject(client *c, robj *err, int severity);
 void addReplyErrorSds(client *c, sds err);
 void addReplyError(client *c, const char *err);
 void addReplyStatus(client *c, const char *status);
@@ -2908,7 +2966,7 @@ void populateCommandTable(void);
 void resetCommandTableStats(void);
 void adjustOpenFilesLimit(void);
 void closeListeningSockets(int unlink_unix_socket);
-void updateCachedTime(int update_daylight_info);
+void updateCachedTime();
 void resetServerStats(void);
 void activeDefragCycle(void);
 unsigned int getLRUClock(void);

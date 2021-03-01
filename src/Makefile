@@ -227,6 +227,7 @@ endif
 ifeq ($(BUILD_WITH_SYSTEMD),yes)
 	FINAL_LIBS+=$(shell $(PKG_CONFIG) --libs libsystemd)
 	FINAL_CFLAGS+= -DHAVE_LIBSYSTEMD
+	FINAL_CXXFLAGS+= -DHAVE_LIBSYSTEMD
 endif
 
 ifeq ($(MALLOC),tcmalloc)

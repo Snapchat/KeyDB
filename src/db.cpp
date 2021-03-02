@@ -2970,6 +2970,8 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
     lock.arm(c);
     getKeysResult result = GETKEYS_RESULT_INIT;
     auto cmd = lookupCommand(szFromObj(command.argv[0]));
+    if (cmd == nullptr)
+        return; // Bad command? It's not for us to judge, just bail
     int numkeys = getKeysFromCommand(cmd, command.argv, command.argc, &result);
     for (int ikey = 0; ikey < numkeys; ++ikey)
     {
@@ -2994,10 +2996,14 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
                 serverAssert(o != nullptr);
         }, &sharedKey);
 
-        if (sharedKey == nullptr)
-            sharedKey = sdsdupshared(szFromObj(objKey));
+        if (o != nullptr) {
+            if (sharedKey == nullptr)
+                sharedKey = sdsdupshared(szFromObj(objKey));
 
-        vecInserts.emplace_back(sharedKey, o, std::move(spexpire));
+            vecInserts.emplace_back(sharedKey, o, std::move(spexpire));
+        } else if (sharedKey != nullptr) {
+            sdsfree(sharedKey);
+        }
     }
 
     lock.arm(c);

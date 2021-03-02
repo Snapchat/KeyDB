@@ -1042,6 +1042,7 @@ class redisDbPersistentDataSnapshot;
 class redisDbPersistentData
 {
     friend void dictDbKeyDestructor(void *privdata, void *key);
+    friend void changedescDtor(void*, void*);
     friend class redisDbPersistentDataSnapshot;
 
 public:
@@ -1153,13 +1154,6 @@ private:
 
         changedesc(const char *strkey, bool fUpdate) : strkey(strkey), fUpdate(fUpdate) {}
     };
-    struct changedescCmp
-    {
-        using is_transparent = void;    // C++14 to allow comparisons with different types
-        bool operator()(const changedesc &a, const changedesc &b) const { return a.strkey < b.strkey; }
-        bool operator()(const changedesc &a, const char *key) const { return a.strkey < sdsview(key); }
-        bool operator()(const char *key, const changedesc &b) const { return sdsview(key) < b.strkey; }
-    };
 
     static void serializeAndStoreChange(StorageCache *storage, redisDbPersistentData *db, const changedesc &change);
 
@@ -1174,7 +1168,7 @@ private:
     dict *m_pdictTombstone = nullptr;        /* Track deletes when we have a snapshot */
     std::atomic<int> m_fTrackingChanges {0};     // Note: Stack based
     std::atomic<int> m_fAllChanged {0};
-    std::set<changedesc, changedescCmp> m_setchanged;
+    dict *m_dictChanged = nullptr;
     size_t m_cnewKeysPending = 0;
     std::shared_ptr<StorageCache> m_spstorage = nullptr;
 
@@ -1189,7 +1183,7 @@ private:
     const redisDbPersistentDataSnapshot *m_pdbSnapshotASYNC = nullptr;
     
     const redisDbPersistentDataSnapshot *m_pdbSnapshotStorageFlush = nullptr;
-    std::set<changedesc, changedescCmp> m_setchangedStorageFlush;
+    dict *m_dictChangedStorageFlush = nullptr;
     
     int m_refCount = 0;
 };

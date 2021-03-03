@@ -2157,6 +2157,14 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(id);
     UNUSED(clientData);
 
+    if (serverTL->rehashCtl != nullptr && !serverTL->rehashCtl->done) {
+        aeReleaseLock();
+        // If there is not enough lock contention we may not have made enough progress on the async
+        //  rehash.  Ensure we finish it outside the lock.
+        dictRehashSomeAsync(serverTL->rehashCtl, serverTL->rehashCtl->queue.size());
+        aeAcquireLock();
+    }
+
     /* If another threads unblocked one of our clients, and this thread has been idle
         then beforeSleep won't have a chance to process the unblocking.  So we also
         process them here in the cron job to ensure they don't starve.
@@ -2447,6 +2455,14 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
 {
     UNUSED(id);
     UNUSED(clientData);
+
+    if (serverTL->rehashCtl != nullptr && !serverTL->rehashCtl->done) {
+        aeReleaseLock();
+        // If there is not enough lock contention we may not have made enough progress on the async
+        //  rehash.  Ensure we finish it outside the lock.
+        dictRehashSomeAsync(serverTL->rehashCtl, serverTL->rehashCtl->queue.size());
+        aeAcquireLock();
+    }
 
     int iel = ielFromEventLoop(eventLoop);
     serverAssert(iel != IDX_EVENT_LOOP_MAIN);

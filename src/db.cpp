@@ -620,6 +620,7 @@ const dbBackup *backupDb(void) {
 /* Discard a previously created backup, this can be slow (similar to FLUSHALL)
  * Arguments are similar to the ones of emptyDb, see EMPTYDB_ flags. */
 void discardDbBackup(const dbBackup *backup, int flags, void(callback)(void*)) {
+    UNUSED(callback);
     int async = (flags & EMPTYDB_ASYNC);
 
     /* Release main DBs backup . */

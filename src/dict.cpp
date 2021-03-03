@@ -378,7 +378,7 @@ dictAsyncRehashCtl *dictRehashAsyncStart(dict *d, int buckets) {
 
     int empty_visits = buckets * 10;
 
-    while (d->asyncdata->queue.size() < (size_t)buckets && d->rehashidx < d->ht[0].size) {
+    while (d->asyncdata->queue.size() < (size_t)buckets && (size_t)d->rehashidx < d->ht[0].size) {
         dictEntry *de;
 
         /* Note that rehashidx can't overflow as we are sure there are more
@@ -386,7 +386,7 @@ dictAsyncRehashCtl *dictRehashAsyncStart(dict *d, int buckets) {
         while(d->ht[0].table[d->rehashidx] == NULL) {
             d->rehashidx++;
             if (--empty_visits == 0) goto LDone;
-            if (d->rehashidx >= d->ht[0].size) goto LDone;
+            if ((size_t)d->rehashidx >= d->ht[0].size) goto LDone;
         }
 
         de = d->ht[0].table[d->rehashidx];
@@ -666,7 +666,7 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
                 else
                     d->ht[table].table[idx] = he->next;
                 if (!nofree) {
-                    if (table == 0 && d->asyncdata != nullptr && idx < d->rehashidx) {
+                    if (table == 0 && d->asyncdata != nullptr && (ssize_t)idx < d->rehashidx) {
                         he->next = d->asyncdata->deGCList;
                         d->asyncdata->deGCList = he->next;
                     } else {
@@ -746,7 +746,7 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
         if ((he = ht->table[i]) == NULL) continue;
         while(he) {
             nextHe = he->next;
-            if (d->asyncdata && i < d->rehashidx) {
+            if (d->asyncdata && (ssize_t)i < d->rehashidx) {
                 he->next = d->asyncdata->deGCList;
                 d->asyncdata->deGCList = he;
             } else {

@@ -1267,6 +1267,7 @@ unsigned long dictScan(dict *d,
 /* Expand the hash table if needed */
 static int _dictExpandIfNeeded(dict *d)
 {
+    static const size_t SHRINK_FACTOR = 4;
     /* Incremental rehashing already in progress. Return. */
     if (dictIsRehashing(d)) return DICT_OK;
 
@@ -1283,10 +1284,10 @@ static int _dictExpandIfNeeded(dict *d)
     {
         return dictExpand(d, d->ht[0].used*2, false /*fShrink*/);
     }
-    else if (d->ht[0].used > 0 && d->ht[0].used * 16 < d->ht[0].size && dict_can_resize)
+    else if (d->ht[0].used > 0 && d->ht[0].size >= (1024*SHRINK_FACTOR) && (d->ht[0].used * 16) < d->ht[0].size && dict_can_resize)
     {
         // If the dictionary has shurnk a lot we'll need to shrink the hash table instead
-        return dictExpand(d, d->ht[0].used*2, true /*fShrink*/);
+        return dictExpand(d, d->ht[0].size/SHRINK_FACTOR, true /*fShrink*/);
     }
     return DICT_OK;
 }

@@ -4,12 +4,11 @@
 class StorageCache
 {
     std::shared_ptr<IStorage> m_spstorage;
-    std::unique_ptr<semiorderedset<sdsimmutablestring, sdsview, true>> m_setkeys;
+    dict *m_pdict = nullptr;
+    int m_collisionCount = 0;
     mutable fastlock m_lock {"StorageCache"};
 
-    StorageCache(IStorage *storage)
-        : m_spstorage(storage)
-    {}
+    StorageCache(IStorage *storage);
 
     void cacheKey(sds key);
     void cacheKey(const char *rgchKey, size_t cchKey);
@@ -31,9 +30,10 @@ class StorageCache
 public:
     static StorageCache *create(IStorageFactory *pfactory, int db, IStorageFactory::key_load_iterator fn, void *privdata) {
         StorageCache *cache = new StorageCache(nullptr);
-        if (pfactory->FSlow())
+        if (!pfactory->FSlow())
         {
-            cache->m_setkeys = std::make_unique<semiorderedset<sdsimmutablestring, sdsview, true>>(20);
+            dictRelease(cache->m_pdict);
+            cache->m_pdict = nullptr;
         }
         load_iter_data data = {cache, fn, privdata};
         cache->m_spstorage = std::shared_ptr<IStorage>(pfactory->create(db, key_load_itr, (void*)&data));
@@ -42,7 +42,7 @@ public:
 
     void clear();
     void insert(sds key, const void *data, size_t cbdata, bool fOverwrite);
-    void retrieve(sds key, IStorage::callbackSingle fn, sds *sharedKeyOut) const;
+    void retrieve(sds key, IStorage::callbackSingle fn) const;
     bool erase(sds key);
 
     bool enumerate(IStorage::callback fn) const { return m_spstorage->enumerate(fn); }

@@ -1042,7 +1042,6 @@ class redisDbPersistentDataSnapshot;
 class redisDbPersistentData
 {
     friend void dictDbKeyDestructor(void *privdata, void *key);
-    friend void changedescDtor(void*, void*);
     friend class redisDbPersistentDataSnapshot;
 
 public:
@@ -1110,7 +1109,7 @@ public:
 
     void setStorageProvider(StorageCache *pstorage);
 
-    void trackChanges(bool fBulk);
+    void trackChanges(bool fBulk, size_t sizeHint = 0);
 
     // Process and commit changes for secondary storage.  Note that process and commit are seperated
     //  to allow you to release the global lock before commiting.  To prevent deadlocks you *must*
@@ -1147,15 +1146,7 @@ protected:
     uint64_t m_mvccCheckpoint = 0;
 
 private:
-    struct changedesc
-    {
-        sdsimmutablestring strkey;
-        bool fUpdate;
-
-        changedesc(const char *strkey, bool fUpdate) : strkey(strkey), fUpdate(fUpdate) {}
-    };
-
-    static void serializeAndStoreChange(StorageCache *storage, redisDbPersistentData *db, const changedesc &change);
+    static void serializeAndStoreChange(StorageCache *storage, redisDbPersistentData *db, const char *key, bool fUpdate);
 
     void ensure(const char *key);
     void ensure(const char *key, dictEntry **de);

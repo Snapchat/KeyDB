@@ -8,7 +8,7 @@ class StorageCache
     int m_collisionCount = 0;
     mutable fastlock m_lock {"StorageCache"};
 
-    StorageCache(IStorage *storage);
+    StorageCache(IStorage *storage, bool fNoCache);
 
     void cacheKey(sds key);
     void cacheKey(const char *rgchKey, size_t cchKey);
@@ -29,12 +29,7 @@ class StorageCache
 
 public:
     static StorageCache *create(IStorageFactory *pfactory, int db, IStorageFactory::key_load_iterator fn, void *privdata) {
-        StorageCache *cache = new StorageCache(nullptr);
-        if (!pfactory->FSlow())
-        {
-            dictRelease(cache->m_pdict);
-            cache->m_pdict = nullptr;
-        }
+        StorageCache *cache = new StorageCache(nullptr, pfactory->FSlow() /*fCache*/);
         load_iter_data data = {cache, fn, privdata};
         cache->m_spstorage = std::shared_ptr<IStorage>(pfactory->create(db, key_load_itr, (void*)&data));
         return cache;

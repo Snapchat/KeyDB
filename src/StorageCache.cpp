@@ -18,10 +18,11 @@ dictType dbStorageCacheType = {
     NULL                        /* val destructor */
 };
 
-StorageCache::StorageCache(IStorage *storage)
+StorageCache::StorageCache(IStorage *storage, bool fCache)
         : m_spstorage(storage)
 {
-    m_pdict = dictCreate(&dbStorageCacheType, nullptr);
+    if (fCache)
+        m_pdict = dictCreate(&dbStorageCacheType, nullptr);
 }
 
 void StorageCache::clear()
@@ -94,7 +95,7 @@ const StorageCache *StorageCache::clone()
 {
     std::unique_lock<fastlock> ul(m_lock);
     // Clones never clone the cache
-    StorageCache *cacheNew = new StorageCache(const_cast<IStorage*>(m_spstorage->clone()));
+    StorageCache *cacheNew = new StorageCache(const_cast<IStorage*>(m_spstorage->clone()), false /*fCache*/);
     return cacheNew;
 }
 

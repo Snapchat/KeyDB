@@ -201,8 +201,6 @@ int dictMerge(dict *dst, dict *src)
         std::swap(dst->iterators, src->iterators);
     }
 
-    src->rehashidx = -1;
-
     if (!dictIsRehashing(dst) && !dictIsRehashing(src))
     {
         if (dst->ht[0].size >= src->ht[0].size)

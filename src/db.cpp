@@ -53,6 +53,15 @@ void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add);
 std::unique_ptr<expireEntry> deserializeExpire(sds key, const char *str, size_t cch, size_t *poffset);
 sds serializeStoredObjectAndExpire(redisDbPersistentData *db, const char *key, robj_roptr o);
 
+dictType dictChangeDescType {
+    dictSdsHash,                /* hash function */
+    NULL,                       /* key dup */
+    NULL,                       /* val dup */
+    dictSdsKeyCompare,          /* key compare */
+    dictSdsDestructor,          /* key destructor */
+    nullptr                     /* val destructor */
+};
+
 /* Update LFU when an object is accessed.
  * Firstly, decrement the counter if the decrement time is reached.
  * Then logarithmically increment the counter, and update the access time. */
@@ -419,12 +428,13 @@ bool redisDbPersistentData::syncDelete(robj *key)
     fDeleted = (dictDelete(m_pdict,ptrFromObj(key)) == DICT_OK) || fDeleted;
 
     if (fDeleted) {
-        auto itrChange = m_setchanged.find(szFromObj(key));
-        if (itrChange != m_setchanged.end())
+        dictEntry *de = dictUnlink(m_dictChanged, szFromObj(key));
+        if (de != nullptr)
         {
-            if (!itrChange->fUpdate)
+            bool fUpdate = (bool)dictGetVal(de);
+            if (!fUpdate)
                 --m_cnewKeysPending;
-            m_setchanged.erase(itrChange);
+            dictFreeUnlinkedEntry(m_dictChanged, de);
         }
         
         if (m_pdbSnapshot != nullptr)
@@ -604,6 +614,7 @@ const dbBackup *backupDb(void) {
 /* Discard a previously created backup, this can be slow (similar to FLUSHALL)
  * Arguments are similar to the ones of emptyDb, see EMPTYDB_ flags. */
 void discardDbBackup(const dbBackup *backup, int flags, void(callback)(void*)) {
+    UNUSED(callback);
     int async = (flags & EMPTYDB_ASYNC);
 
     /* Release main DBs backup . */
@@ -2505,7 +2516,7 @@ void redisDbPersistentData::clear(void(callback)(void*))
     dictEmpty(m_pdict,callback);
     if (m_fTrackingChanges)
     {
-        m_setchanged.clear();
+        dictEmpty(m_dictChanged, nullptr);
         m_cnewKeysPending = 0;
         m_fAllChanged++;
     }
@@ -2624,20 +2635,18 @@ LNotFound:
     {
         if (dictSize(m_pdict) != size())    // if all keys are cached then no point in looking up the database
         {
-            sds sdsNewKey = nullptr;  // the storage cache will give us its cached key if available
             robj *o = nullptr;
+            sds sdsNewKey = sdsdupshared(sdsKey);
             std::unique_ptr<expireEntry> spexpire;
             m_spstorage->retrieve((sds)sdsKey, [&](const char *, size_t, const void *data, size_t cb){
                 size_t offset = 0;
-                spexpire = deserializeExpire((sds)sdsNewKey, (const char*)data, cb, &offset);    
-                o = deserializeStoredObject(this, sdsKey, reinterpret_cast<const char*>(data) + offset, cb - offset);
+                spexpire = deserializeExpire(sdsNewKey, (const char*)data, cb, &offset);    
+                o = deserializeStoredObject(this, sdsNewKey, reinterpret_cast<const char*>(data) + offset, cb - offset);
                 serverAssert(o != nullptr);
-            }, &sdsNewKey);
+            });
             
             if (o != nullptr)
             {
-                if (sdsNewKey == nullptr)
-                    sdsNewKey = sdsdupshared(sdsKey);
                 dictAdd(m_pdict, sdsNewKey, o);
                 o->SetFExpires(spexpire != nullptr);
 
@@ -2650,11 +2659,8 @@ LNotFound:
                     serverAssert(m_setexpire->find(sdsKey) != m_setexpire->end());
                 }
                 serverAssert(o->FExpires() == (m_setexpire->find(sdsKey) != m_setexpire->end()));
-            }
-            else
-            {
-                if (sdsNewKey != nullptr)
-                    sdsfree(sdsNewKey); // BUG but don't bother crashing
+            } else {
+                sdsfree(sdsNewKey);
             }
 
             *pde = dictFind(m_pdict, sdsKey);
@@ -2688,14 +2694,14 @@ void redisDbPersistentData::storeDatabase()
     dictReleaseIterator(di);
 }
 
-/* static */ void redisDbPersistentData::serializeAndStoreChange(StorageCache *storage, redisDbPersistentData *db, const redisDbPersistentData::changedesc &change)
+/* static */ void redisDbPersistentData::serializeAndStoreChange(StorageCache *storage, redisDbPersistentData *db, const char *key, bool fUpdate)
 {
-    auto itr = db->find_cached_threadsafe(change.strkey.get());
+    auto itr = db->find_cached_threadsafe(key);
     if (itr == nullptr)
         return;
     robj *o = itr.val();
     sds temp = serializeStoredObjectAndExpire(db, (const char*) itr.key(), o);
-    storage->insert((sds)change.strkey.get(), temp, sdslen(temp), change.fUpdate);
+    storage->insert((sds)key, temp, sdslen(temp), fUpdate);
     sdsfree(temp);
 }
 
@@ -2708,17 +2714,20 @@ bool redisDbPersistentData::processChanges(bool fSnapshot)
 
     if (m_spstorage != nullptr)
     {
-        if (!m_fAllChanged && m_setchanged.empty() && m_cnewKeysPending == 0)
+        if (!m_fAllChanged && dictSize(m_dictChanged) == 0 && m_cnewKeysPending == 0)
             return false;
         m_spstorage->beginWriteBatch();
         serverAssert(m_pdbSnapshotStorageFlush == nullptr);
-        if (fSnapshot && !m_fAllChanged && m_setchanged.size() > 100)
+        if (fSnapshot && !m_fAllChanged && dictSize(m_dictChanged) > 100)
         {
             // Do a snapshot based process if possible
             m_pdbSnapshotStorageFlush = createSnapshot(getMvccTstamp(), true /* optional */);
             if (m_pdbSnapshotStorageFlush)
             {
-                m_setchangedStorageFlush = std::move(m_setchanged);
+                if (m_dictChangedStorageFlush)
+                    dictRelease(m_dictChangedStorageFlush);
+                m_dictChangedStorageFlush = m_dictChanged;
+                m_dictChanged = dictCreate(&dictChangeDescType, nullptr);
             }
         }
         
@@ -2732,13 +2741,16 @@ bool redisDbPersistentData::processChanges(bool fSnapshot)
             }
             else
             {
-                for (auto &change : m_setchanged)
+                dictIterator *di = dictGetIterator(m_dictChanged);
+                dictEntry *de;
+                while ((de = dictNext(di)) != nullptr)
                 {
-                    serializeAndStoreChange(m_spstorage.get(), this, change);
+                    serializeAndStoreChange(m_spstorage.get(), this, (const char*)dictGetKey(de), (bool)dictGetVal(de));
                 }
+                dictReleaseIterator(di);
             }
         }
-        m_setchanged.clear();
+        dictEmpty(m_dictChanged, nullptr);
         m_cnewKeysPending = 0;
     }
     return (m_spstorage != nullptr);
@@ -2748,12 +2760,15 @@ void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **
 {
     if (m_pdbSnapshotStorageFlush)
     {
-
-        for (auto &change : m_setchangedStorageFlush)
+        dictIterator *di = dictGetIterator(m_dictChangedStorageFlush);
+        dictEntry *de;
+        while ((de = dictNext(di)) != nullptr)
         {
-            serializeAndStoreChange(m_spstorage.get(), (redisDbPersistentData*)m_pdbSnapshotStorageFlush, change);
+            serializeAndStoreChange(m_spstorage.get(), (redisDbPersistentData*)m_pdbSnapshotStorageFlush, (const char*)dictGetKey(de), (bool)dictGetVal(de));
         }
-        m_setchangedStorageFlush.clear();
+        dictReleaseIterator(di);
+        dictRelease(m_dictChangedStorageFlush);
+        m_dictChangedStorageFlush = nullptr;
         *psnapshotFree = m_pdbSnapshotStorageFlush;
         m_pdbSnapshotStorageFlush = nullptr;
     }
@@ -2773,6 +2788,12 @@ redisDbPersistentData::~redisDbPersistentData()
     dictRelease(m_pdict);
     if (m_pdictTombstone)
         dictRelease(m_pdictTombstone);
+
+    if (m_dictChanged)
+        dictRelease(m_dictChanged);
+    if (m_dictChangedStorageFlush)
+        dictRelease(m_dictChangedStorageFlush);
+    
     delete m_setexpire;
 }
 
@@ -2815,8 +2836,8 @@ bool redisDbPersistentData::removeCachedValue(const char *key)
     if (m_spstorage != nullptr)
         m_spstorage->batch_lock();
     
-    auto itr = m_setchanged.find(key);
-    if (itr != m_setchanged.end())
+    dictEntry *de = dictFind(m_dictChanged, key);
+    if (de != nullptr)
     {
         if (m_spstorage != nullptr)
             m_spstorage->batch_unlock();
@@ -2832,11 +2853,18 @@ bool redisDbPersistentData::removeCachedValue(const char *key)
     return true;
 }
 
-void redisDbPersistentData::trackChanges(bool fBulk)
+void redisDbPersistentData::trackChanges(bool fBulk, size_t sizeHint)
 {
     m_fTrackingChanges.fetch_add(1, std::memory_order_relaxed);
     if (fBulk)
         m_fAllChanged.fetch_add(1, std::memory_order_acq_rel);
+
+    if (m_dictChanged == nullptr) {
+        m_dictChanged = dictCreate(&dictChangeDescType, nullptr);
+    }
+
+    if (sizeHint > 0)
+        dictExpand(m_dictChanged, sizeHint, false);
 }
 
 void redisDbPersistentData::removeAllCachedValues()
@@ -2849,15 +2877,24 @@ void redisDbPersistentData::removeAllCachedValues()
         trackChanges(false);
     }
 
-    dictEmpty(m_pdict, nullptr);
+    if (m_pdict->iterators == 0) {
+        dict *dT = m_pdict;
+        m_pdict = dictCreate(&dbDictType, this);
+        dictExpand(m_pdict, dictSize(dT)/2, false); // Make room for about half so we don't excessively rehash
+        g_pserver->asyncworkqueue->AddWorkFunction([dT]{
+            dictRelease(dT);
+        }, true);
+    } else {
+        dictEmpty(m_pdict, nullptr);
+    }
 }
 
 void redisDbPersistentData::trackkey(const char *key, bool fUpdate)
 {
     if (m_fTrackingChanges && !m_fAllChanged && m_spstorage) {
-        auto itr = m_setchanged.find(key);
-        if (itr == m_setchanged.end()) {
-            m_setchanged.emplace(sdsdupshared(key), fUpdate);
+        dictEntry *de = dictFind(m_dictChanged, key);
+        if (de == nullptr) {
+            dictAdd(m_dictChanged, (void*)sdsdupshared(key), (void*)fUpdate);
             if (!fUpdate)
                 ++m_cnewKeysPending;
         }
@@ -2970,6 +3007,8 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
     lock.arm(c);
     getKeysResult result = GETKEYS_RESULT_INIT;
     auto cmd = lookupCommand(szFromObj(command.argv[0]));
+    if (cmd == nullptr)
+        return; // Bad command? It's not for us to judge, just bail
     int numkeys = getKeysFromCommand(cmd, command.argv, command.argc, &result);
     for (int ikey = 0; ikey < numkeys; ++ikey)
     {
@@ -2984,20 +3023,21 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
     std::vector<std::tuple<sds, robj*, std::unique_ptr<expireEntry>>> vecInserts;
     for (robj *objKey : veckeys)
     {
-        sds sharedKey = nullptr;
+        sds sharedKey = sdsdupshared((sds)szFromObj(objKey));
         std::unique_ptr<expireEntry> spexpire;
         robj *o = nullptr;
         m_spstorage->retrieve((sds)szFromObj(objKey), [&](const char *, size_t, const void *data, size_t cb){
                 size_t offset = 0;
-                spexpire = deserializeExpire((sds)szFromObj(objKey), (const char*)data, cb, &offset);    
-                o = deserializeStoredObject(this, szFromObj(objKey), reinterpret_cast<const char*>(data) + offset, cb - offset);
+                spexpire = deserializeExpire(sharedKey, (const char*)data, cb, &offset);    
+                o = deserializeStoredObject(this, sharedKey, reinterpret_cast<const char*>(data) + offset, cb - offset);
                 serverAssert(o != nullptr);
-        }, &sharedKey);
+        });
 
-        if (sharedKey == nullptr)
-            sharedKey = sdsdupshared(szFromObj(objKey));
-
-        vecInserts.emplace_back(sharedKey, o, std::move(spexpire));
+        if (o != nullptr) {
+            vecInserts.emplace_back(sharedKey, o, std::move(spexpire));
+        } else if (sharedKey != nullptr) {
+            sdsfree(sharedKey);
+        }
     }
 
     lock.arm(c);

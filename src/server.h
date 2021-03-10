@@ -1109,7 +1109,7 @@ public:
 
     void setStorageProvider(StorageCache *pstorage);
 
-    void trackChanges(bool fBulk);
+    void trackChanges(bool fBulk, size_t sizeHint = 0);
 
     // Process and commit changes for secondary storage.  Note that process and commit are seperated
     //  to allow you to release the global lock before commiting.  To prevent deadlocks you *must*
@@ -1146,22 +1146,7 @@ protected:
     uint64_t m_mvccCheckpoint = 0;
 
 private:
-    struct changedesc
-    {
-        sdsimmutablestring strkey;
-        bool fUpdate;
-
-        changedesc(const char *strkey, bool fUpdate) : strkey(strkey), fUpdate(fUpdate) {}
-    };
-    struct changedescCmp
-    {
-        using is_transparent = void;    // C++14 to allow comparisons with different types
-        bool operator()(const changedesc &a, const changedesc &b) const { return a.strkey < b.strkey; }
-        bool operator()(const changedesc &a, const char *key) const { return a.strkey < sdsview(key); }
-        bool operator()(const char *key, const changedesc &b) const { return sdsview(key) < b.strkey; }
-    };
-
-    static void serializeAndStoreChange(StorageCache *storage, redisDbPersistentData *db, const changedesc &change);
+    static void serializeAndStoreChange(StorageCache *storage, redisDbPersistentData *db, const char *key, bool fUpdate);
 
     void ensure(const char *key);
     void ensure(const char *key, dictEntry **de);
@@ -1174,7 +1159,7 @@ private:
     dict *m_pdictTombstone = nullptr;        /* Track deletes when we have a snapshot */
     std::atomic<int> m_fTrackingChanges {0};     // Note: Stack based
     std::atomic<int> m_fAllChanged {0};
-    std::set<changedesc, changedescCmp> m_setchanged;
+    dict *m_dictChanged = nullptr;
     size_t m_cnewKeysPending = 0;
     std::shared_ptr<StorageCache> m_spstorage = nullptr;
 
@@ -1189,7 +1174,7 @@ private:
     const redisDbPersistentDataSnapshot *m_pdbSnapshotASYNC = nullptr;
     
     const redisDbPersistentDataSnapshot *m_pdbSnapshotStorageFlush = nullptr;
-    std::set<changedesc, changedescCmp> m_setchangedStorageFlush;
+    dict *m_dictChangedStorageFlush = nullptr;
     
     int m_refCount = 0;
 };

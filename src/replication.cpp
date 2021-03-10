@@ -3434,12 +3434,9 @@ void replicationCacheMaster(redisMaster *mi, client *c) {
      * pending outputs to the master. */
     sdsclear(mi->master->querybuf);
     if (!mi->master->vecqueuedcmd.empty()) {
-        // Clear out everything except for partially parsed commands (which we'll cache)
-        auto cmd = std::move(mi->master->vecqueuedcmd.front());
         mi->master->vecqueuedcmd.clear();
-        if (cmd.argc != cmd.argcMax)
-            mi->master->vecqueuedcmd.emplace_back(std::move(cmd));
     }
+    mi->master->multibulklen = 0;
     sdsclear(mi->master->pending_querybuf);
     mi->master->read_reploff = mi->master->reploff;
     if (c->flags & CLIENT_MULTI) discardTransaction(c);

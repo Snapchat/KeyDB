@@ -201,8 +201,6 @@ int dictMerge(dict *dst, dict *src)
         std::swap(dst->iterators, src->iterators);
     }
 
-    src->rehashidx = -1;
-
     if (!dictIsRehashing(dst) && !dictIsRehashing(src))
     {
         if (dst->ht[0].size >= src->ht[0].size)
@@ -378,7 +376,7 @@ dictAsyncRehashCtl *dictRehashAsyncStart(dict *d, int buckets) {
 
     int empty_visits = buckets * 10;
 
-    while (d->asyncdata->queue.size() < (size_t)buckets && d->rehashidx < d->ht[0].size) {
+    while (d->asyncdata->queue.size() < (size_t)buckets && (size_t)d->rehashidx < d->ht[0].size) {
         dictEntry *de;
 
         /* Note that rehashidx can't overflow as we are sure there are more
@@ -386,7 +384,7 @@ dictAsyncRehashCtl *dictRehashAsyncStart(dict *d, int buckets) {
         while(d->ht[0].table[d->rehashidx] == NULL) {
             d->rehashidx++;
             if (--empty_visits == 0) goto LDone;
-            if (d->rehashidx >= d->ht[0].size) goto LDone;
+            if ((size_t)d->rehashidx >= d->ht[0].size) goto LDone;
         }
 
         de = d->ht[0].table[d->rehashidx];
@@ -666,7 +664,7 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
                 else
                     d->ht[table].table[idx] = he->next;
                 if (!nofree) {
-                    if (table == 0 && d->asyncdata != nullptr && idx < d->rehashidx) {
+                    if (table == 0 && d->asyncdata != nullptr && (ssize_t)idx < d->rehashidx) {
                         he->next = d->asyncdata->deGCList;
                         d->asyncdata->deGCList = he->next;
                     } else {
@@ -746,7 +744,7 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
         if ((he = ht->table[i]) == NULL) continue;
         while(he) {
             nextHe = he->next;
-            if (d->asyncdata && i < d->rehashidx) {
+            if (d->asyncdata && (ssize_t)i < d->rehashidx) {
                 he->next = d->asyncdata->deGCList;
                 d->asyncdata->deGCList = he;
             } else {
@@ -1267,6 +1265,7 @@ unsigned long dictScan(dict *d,
 /* Expand the hash table if needed */
 static int _dictExpandIfNeeded(dict *d)
 {
+    static const size_t SHRINK_FACTOR = 4;
     /* Incremental rehashing already in progress. Return. */
     if (dictIsRehashing(d)) return DICT_OK;
 
@@ -1283,10 +1282,10 @@ static int _dictExpandIfNeeded(dict *d)
     {
         return dictExpand(d, d->ht[0].used*2, false /*fShrink*/);
     }
-    else if (d->ht[0].used > 0 && d->ht[0].used * 16 < d->ht[0].size && dict_can_resize)
+    else if (d->ht[0].used > 0 && d->ht[0].size >= (1024*SHRINK_FACTOR) && (d->ht[0].used * 16) < d->ht[0].size && dict_can_resize)
     {
         // If the dictionary has shurnk a lot we'll need to shrink the hash table instead
-        return dictExpand(d, d->ht[0].used*2, true /*fShrink*/);
+        return dictExpand(d, d->ht[0].size/SHRINK_FACTOR, true /*fShrink*/);
     }
     return DICT_OK;
 }

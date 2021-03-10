@@ -93,7 +93,17 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
 
     auto spdb = std::unique_ptr<redisDbPersistentDataSnapshot>(new (MALLOC_LOCAL) redisDbPersistentDataSnapshot());
     
-    dictRehashMilliseconds(m_pdict, 50);   // Give us the best chance at a fast cleanup
+    // We can't have async rehash modifying these.  Setting the asyncdata list to null
+    //  will cause us to throw away the async work rather than modify the tables in flight
+    if (m_pdict->asyncdata != nullptr) {
+        m_pdict->asyncdata = nullptr;
+        m_pdict->rehashidx = 0;
+    }
+    if (m_pdictTombstone->asyncdata != nullptr) {
+        m_pdictTombstone->rehashidx = 0;
+        m_pdictTombstone->asyncdata = nullptr;
+    }
+
     spdb->m_fAllChanged = false;
     spdb->m_fTrackingChanges = 0;
     spdb->m_pdict = m_pdict;

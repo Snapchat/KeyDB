@@ -1146,8 +1146,14 @@ int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEn
     if (rdbSaveObject(rdb,val,key) == -1) return -1;
 
     /* Delay return if required (for testing) */
-    if (serverTL->getRdbKeySaveDelay())
-        usleep(serverTL->getRdbKeySaveDelay());
+    if (serverTL->getRdbKeySaveDelay()) {
+        int sleepTime = serverTL->getRdbKeySaveDelay();
+        while (!g_pserver->rdbThreadVars.fRdbThreadCancel && sleepTime > 0) {
+            int sleepThisTime = std::min(100, sleepTime);
+            usleep(sleepThisTime);
+            sleepTime -= sleepThisTime;
+        }
+    }
 
     /* Save expire entry after as it will apply to the previously loaded key */
     /*  This is because we update the expire datastructure directly without buffering */
@@ -2364,6 +2370,21 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
     }
 }
 
+class EvictionPolicyCleanup
+{
+    int oldpolicy;
+
+public:
+    EvictionPolicyCleanup() {
+        oldpolicy = g_pserver->maxmemory_policy;
+        g_pserver->maxmemory_policy = MAXMEMORY_ALLKEYS_RANDOM;
+    }
+
+    ~EvictionPolicyCleanup() {
+        g_pserver->maxmemory_policy = oldpolicy;
+    }
+};
+
 /* Load an RDB file from the rio stream 'rdb'. On success C_OK is returned,
  * otherwise C_ERR is returned and 'errno' is set accordingly. */
 int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
@@ -2380,9 +2401,13 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     sds key = nullptr;
     bool fLastKeyExpired = false;
 
+    // If we're running flash we may evict during load.  We want a fast eviction function
+    //  because there isn't any difference in use times between keys anyways
+    EvictionPolicyCleanup ecleanup;
+
     for (int idb = 0; idb < cserver.dbnum; ++idb)
     {
-        g_pserver->db[idb]->trackChanges(true);
+        g_pserver->db[idb]->trackChanges(true, 1024);
     }
 
     rdb->update_cksum = rdbLoadProgressCallback;
@@ -2403,7 +2428,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
     now = mstime();
     lru_clock = LRU_CLOCK();
-    
+
     while(1) {
         robj *val;
 
@@ -2645,17 +2670,23 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         } else {
             /* If we have a storage provider check if we need to evict some keys to stay under our memory limit,
                 do this every 16 keys to limit the perf impact */
-            if (g_pserver->m_pstorageFactory && (ckeysLoaded % 16) == 0)
+            if (g_pserver->m_pstorageFactory && (ckeysLoaded % 128) == 0)
             {
-                if (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK || (ckeysLoaded % (1024)) == 0)
+                bool fHighMemory = (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK);
+                if (fHighMemory || (ckeysLoaded % (1024)) == 0)
                 {
                     for (int idb = 0; idb < cserver.dbnum; ++idb)
                     {
                         if (g_pserver->db[idb]->processChanges(false))
                             g_pserver->db[idb]->commitChanges();
-                        g_pserver->db[idb]->trackChanges(false);
+                        if (fHighMemory && !(rsi && rsi->fForceSetKey)) {
+                            g_pserver->db[idb]->removeAllCachedValues();    // During load we don't go through the normal eviction unless we're merging (i.e. an active replica)
+                            fHighMemory = false;    // we took care of it
+                        }
+                        g_pserver->db[idb]->trackChanges(false, 1024);
                     }
-                    freeMemoryIfNeeded(false /*fQuickCycle*/, false /* fPreSnapshot*/);
+                    if (fHighMemory)
+                        freeMemoryIfNeeded(false /*fQuickCycle*/, false /* fPreSnapshot*/);
                 }
             }
             

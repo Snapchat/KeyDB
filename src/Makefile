@@ -55,7 +55,9 @@ ifneq ($(strip $(SANITIZE)),)
 	USEASM=false
 endif
 
-
+ifeq ($(CHECKED),true)
+	CXXFLAGS+= -DCHECKED_BUILD
+endif
 
 # Do we use our assembly spinlock? X64 only
 ifeq ($(uname_S),Linux)

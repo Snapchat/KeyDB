@@ -393,7 +393,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
 #ifdef CHECKED_BUILD
             serverAssert(m_spdbSnapshotHOLDER->m_pdbSnapshot->find_cached_threadsafe((const char*)dictGetKey(de)) != nullptr);
 #endif
-            dictAdd(m_spdbSnapshotHOLDER->m_pdictTombstone, sdsdupshared((sds)dictGetKey(de)), nullptr);
+            dictAdd(m_spdbSnapshotHOLDER->m_pdictTombstone, sdsdupshared((sds)dictGetKey(de)), dictGetVal(de));
             continue;
         }
         else if (deSnapshot == nullptr)

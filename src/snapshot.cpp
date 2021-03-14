@@ -56,34 +56,6 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
         }
     }
 
-    if (m_pdbSnapshot != nullptr && m_pdbSnapshot == m_pdbSnapshotASYNC && m_spdbSnapshotHOLDER->m_refCount == 1 && dictSize(m_pdictTombstone) < c_elementsSmallLimit)
-    {
-        serverLog(LL_WARNING, "Reusing old snapshot");
-        // is there an existing snapshot only owned by us?
-        
-        dictIterator *di = dictGetIterator(m_pdictTombstone);
-        dictEntry *de;
-        while ((de = dictNext(di)) != nullptr)
-        {
-            if (dictDelete(m_pdbSnapshot->m_pdict, dictGetKey(de)) != DICT_OK)
-                dictAdd(m_spdbSnapshotHOLDER->m_pdictTombstone, sdsdupshared((sds)dictGetKey(de)), nullptr);
-        }
-        dictReleaseIterator(di);
-
-        dictForceRehash(m_spdbSnapshotHOLDER->m_pdictTombstone);
-        dictMerge(m_pdbSnapshot->m_pdict, m_pdict);
-        dictEmpty(m_pdictTombstone, nullptr);
-        {
-        std::unique_lock<fastlock> ul(g_expireLock);
-        (*m_spdbSnapshotHOLDER->m_setexpire) = *m_setexpire;
-        }
-
-        m_pdbSnapshotASYNC = nullptr;
-        serverAssert(m_pdbSnapshot->m_pdict->iterators == 1);
-        serverAssert(m_spdbSnapshotHOLDER->m_refCount == 1);
-        return m_pdbSnapshot;
-    }
-
     // See if we have too many levels and can bail out of this to reduce load
     if (fOptional && (levels >= 6))
     {

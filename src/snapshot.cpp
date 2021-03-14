@@ -403,7 +403,8 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
         }
         
         // Delete the object from the source dict, we don't use dictDelete to avoid a second search
-        splazy->vecde.push_back(deSnapshot);
+        if (deSnapshot != nullptr)
+            splazy->vecde.push_back(deSnapshot);
         *dePrev = deSnapshot->next;
         ht->used--;
     }

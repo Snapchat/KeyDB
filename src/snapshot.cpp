@@ -161,7 +161,7 @@ void redisDbPersistentData::recursiveFreeSnapshots(redisDbPersistentDataSnapshot
 
         //psnapshot->m_pdict->iterators--;
         psnapshot->m_spdbSnapshotHOLDER.release();
-        //psnapshot->m_pdbSnapshot = nullptr;
+        psnapshot->m_pdbSnapshot = nullptr;
         g_pserver->garbageCollector.enqueue(serverTL->gcEpoch, std::unique_ptr<redisDbPersistentDataSnapshot>(psnapshot));
         serverLog(LL_VERBOSE, "Garbage collected snapshot");
     }
@@ -427,12 +427,12 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     if (m_pdbSnapshot != nullptr && m_spdbSnapshotHOLDER->m_pdbSnapshot != nullptr)
     {
         m_pdbSnapshot = m_spdbSnapshotHOLDER->m_pdbSnapshot;
-        m_spdbSnapshotHOLDER->m_pdbSnapshot = nullptr;
     }
     else
     {
         m_pdbSnapshot = nullptr;
     }
+    m_spdbSnapshotHOLDER->m_pdbSnapshot = nullptr;
 
     // Fixup the about to free'd snapshots iterator count so the dtor doesn't complain
     if (m_refCount)

@@ -127,6 +127,10 @@ class Client(asyncore.dispatcher):
         self.buf += _buildResp("lpush", key, val)
         self.callbacks.append(callback)
 
+    def delete(self, key, callback = default_result_handler):
+        self.buf += _buildResp("del", key)
+        self.callbacks.append(callback)
+
     def scan(self, iter, match=None, count=None, callback = default_result_handler):
         args = ["scan", str(iter)]
         if match != None:
@@ -159,6 +163,12 @@ def handle_set_response(c, resp):
         assert(resp[0] == ord('+'))
     c.set("str_" + getrandomkey(), 'bardsklfjkldsjfdlsjflksdfjklsdjflksd kldsjflksd jlkdsjf lksdjklds jrfklsdjfklsdjfkl', handle_set_response)
 
+def handle_del_response(c, resp):
+    global ops
+    if resp != None:
+        ops = ops + 1
+    c.delete("list_" + getrandomkey(), handle_del_response)
+
 def scan_callback(c, resp):
     global ops
     nextstart = int(resp[0])
@@ -185,6 +195,9 @@ def main():
 
     scan_client = Client('127.0.0.1', 6379)
     scan_client.scan(0, count=500, callback=scan_callback)
+
+    del_client = Client('127.0.0.1', 6379)
+    handle_del_response(del_client, None)
 
     threading.Thread(target=stats_thread).start()
     asyncore.loop()

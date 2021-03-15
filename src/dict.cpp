@@ -195,7 +195,7 @@ int dictMerge(dict *dst, dict *src)
     }
 
     size_t expectedSize = dictSize(src) + dictSize(dst);
-    if (dictSize(src) > dictSize(dst))
+    if (dictSize(src) > dictSize(dst) && src->asyncdata == nullptr && dst->asyncdata == nullptr)
     {
         std::swap(*dst, *src);
         std::swap(dst->iterators, src->iterators);

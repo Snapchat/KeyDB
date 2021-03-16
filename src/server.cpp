@@ -2424,18 +2424,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         }
     }
 
-    run_with_period(100) {
-        bool fAnySnapshots = false;
-        for (int idb = 0; idb < cserver.dbnum && !fAnySnapshots; ++idb)
-            fAnySnapshots = fAnySnapshots || g_pserver->db[0]->FSnapshot();
-        if (fAnySnapshots)
-        {
-            g_pserver->asyncworkqueue->AddWorkFunction([]{
-                g_pserver->db[0]->consolidate_snapshot();
-            }, true /*HiPri*/);
-        }
-    }
-    
     /* Fire the cron loop modules event. */
     RedisModuleCronLoopV1 ei = {REDISMODULE_CRON_LOOP_VERSION,g_pserver->hz};
     moduleFireServerEvent(REDISMODULE_EVENT_CRON_LOOP,

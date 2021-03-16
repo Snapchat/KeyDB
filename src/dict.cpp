@@ -129,6 +129,7 @@ int _dictInit(dict *d, dictType *type,
     d->rehashidx = -1;
     d->iterators = 0;
     d->asyncdata = nullptr;
+    d->refcount = 1;
     return DICT_OK;
 }
 
@@ -369,8 +370,14 @@ int dictRehash(dict *d, int n) {
     return 1;
 }
 
+dictAsyncRehashCtl::dictAsyncRehashCtl(struct dict *d, dictAsyncRehashCtl *next) : dict(d), next(next) {
+    queue.reserve(c_targetQueueSize);
+    __atomic_fetch_add(&d->refcount, 1, __ATOMIC_RELEASE);
+}
+
 dictAsyncRehashCtl *dictRehashAsyncStart(dict *d, int buckets) {
-    if (!dictIsRehashing(d)) return 0;
+    assert(d->type->asyncfree != nullptr);
+    if (!dictIsRehashing(d) || d->iterators != 0) return nullptr;
 
     d->asyncdata = new dictAsyncRehashCtl(d, d->asyncdata);
 
@@ -454,7 +461,7 @@ void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl, bool fFree) {
         }
     }
 
-    if (fUnlinked && !ctl->release) {
+    if (fUnlinked && !ctl->abondon) {
         if (d->ht[0].table != nullptr) {    // can be null if we're cleared during the rehash
             for (auto &wi : ctl->queue) {
                 // We need to remove it from the source hash table, and store it in the dest.
@@ -487,23 +494,10 @@ void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl, bool fFree) {
     }
 
     if (fFree) {
-        while (ctl->deGCList != nullptr) {
-            auto next = ctl->deGCList->next;
-            dictFreeKey(d, ctl->deGCList);
-            dictFreeVal(d, ctl->deGCList);
-            zfree(ctl->deGCList);
-            ctl->deGCList = next;
-        }
+        d->type->asyncfree(ctl);
 
-        // Was the dictionary free'd while we were in flight?
-        if (ctl->release) {
-            if (d->asyncdata != nullptr)
-                d->asyncdata->release = true;
-            else
-                dictRelease(d);
-        }
-
-        delete ctl;
+        // Remove our reference
+        dictRelease(d);
     }
 }
 
@@ -512,6 +506,16 @@ long long timeInMilliseconds(void) {
 
     gettimeofday(&tv,NULL);
     return (((long long)tv.tv_sec)*1000)+(tv.tv_usec/1000);
+}
+
+dictAsyncRehashCtl::~dictAsyncRehashCtl() {
+    while (deGCList != nullptr) {
+        auto next = deGCList->next;
+        dictFreeKey(dict, deGCList);
+        dictFreeVal(dict, deGCList);
+        zfree(deGCList);
+        deGCList = next;
+    }
 }
 
 /* Rehash in ms+"delta" milliseconds. The value of "delta" is larger 
@@ -537,7 +541,7 @@ int dictRehashMilliseconds(dict *d, int ms) {
  * dictionary so that the hash table automatically migrates from H1 to H2
  * while it is actively used. */
 static void _dictRehashStep(dict *d) {
-    unsigned long iterators;
+    unsigned iterators;
     __atomic_load(&d->iterators, &iterators, __ATOMIC_RELAXED);
     if (iterators == 0) dictRehash(d,2);
 }
@@ -766,13 +770,11 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
 /* Clear & Release the hash table */
 void dictRelease(dict *d)
 {
-    if (d->asyncdata) {
-        d->asyncdata->release = true;
-        return;
+    if (__atomic_sub_fetch(&d->refcount, 1, __ATOMIC_ACQ_REL) == 0) {
+        _dictClear(d,&d->ht[0],NULL);
+        _dictClear(d,&d->ht[1],NULL);
+        zfree(d);
     }
-    _dictClear(d,&d->ht[0],NULL);
-    _dictClear(d,&d->ht[1],NULL);
-    zfree(d);
 }
 
 dictEntry *dictFindWithPrev(dict *d, const void *key, uint64_t h, dictEntry ***dePrevPtr, dictht **pht, bool fShallowCompare)
@@ -1460,7 +1462,7 @@ void dictGetStats(char *buf, size_t bufsize, dict *d) {
 
 void dictForceRehash(dict *d)
 {
-    unsigned long iterators;
+    unsigned iterators;
     __atomic_load(&d->iterators, &iterators, __ATOMIC_RELAXED);
     while (iterators == 0 && dictIsRehashing(d)) _dictRehashStep(d);
 }

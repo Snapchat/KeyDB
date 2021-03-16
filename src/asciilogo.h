@@ -32,7 +32,7 @@ const char *ascii_logo =
 "                  _                                                   \n"
 "               _-(+)-_                                                \n"
 "            _-- /   \\ --_                                            \n"
-"         _--   /     \\   --_            KeyDB Pro %s (%s/%d) %s bit  \n"
+"         _--   /     \\   --_            KeyDB Enterprise %s (%s/%d) %s bit  \n"
 "     __--     /       \\     --__                                     \n"
 "    (+) _    /         \\    _ (+)       Running in %s mode\n"
 "     |   -- /           \\ --   |        Port: %d\n"

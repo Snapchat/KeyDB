@@ -4,18 +4,17 @@ import sched, time
 import socket
 import asyncore
 import threading
+import argparse
 import sys
 from pprint import pprint
-
-# Parameters
-numclients = 50
-#numkeys = 1000000
-numkeys  = 100000
 
 # Globals
 ops=0
 s = sched.scheduler(time.time, time.sleep)
 g_exit = False
+numclients = 0
+numkeys = 0
+runtime = 0
 
 def _buildResp(*args):
     result = "*" + str(len(args)) + "\r\n"
@@ -127,6 +126,10 @@ class Client(asyncore.dispatcher):
         self.buf += _buildResp("lpush", key, val)
         self.callbacks.append(callback)
 
+    def blpop(self, *keys, timeout=0, callback=default_result_handler):
+        self.buf += _buildResp("blpop", *keys, str(timeout))
+        self.callbacks.append(callback)
+
     def delete(self, key, callback = default_result_handler):
         self.buf += _buildResp("del", key)
         self.callbacks.append(callback)
@@ -149,12 +152,18 @@ class Client(asyncore.dispatcher):
 def getrandomkey():
     return str(random.randrange(0, numkeys))
 
-def handle_lpush_response(c, resp):
+def handle_lpush_response(c, resp, delay=0):
     global ops
     if resp != None:
         ops = ops + 1
         assert(resp[0] == ord(':'))
     c.lpush("list_" + getrandomkey(), 'bardsklfjkldsjfdlsjflksdfjklsdjflksd kldsjflksd jlkdsjf lksdjklds jrfklsdjfklsdjfkl', handle_lpush_response)
+
+def handle_blpop_response(c, resp):
+    global ops
+    if resp != None:
+        ops = ops + 1
+    c.blpop("list_" + getrandomkey(), callback=handle_blpop_response)
 
 def handle_set_response(c, resp):
     global ops
@@ -178,19 +187,28 @@ def scan_callback(c, resp):
 def stats_thread():
     global ops
     global g_exit
-    while not g_exit:
+    global runtime
+    i = 0
+    while not g_exit and not (runtime and i > runtime):
         time.sleep(1)
         print("Ops per second: " + str(ops))
         ops = 0
+        i += 1
+    g_exit = True
 
-def main():
-    global g_exit
-    clients = []
-
+def init_blocking():
     for i in range(numclients):
-        clients.append(Client('127.0.0.1', 6379))
+        c = Client('127.0.0.1', 6379)
+        if i % 2:
+            handle_lpush_response(c, None, delay=1)
+        else:
+            handle_blpop_response(c, None)
+
+def init_lpush():
+    for i in range(numclients):
+        c = Client('127.0.0.1', 6379)
         for i in range (10):
-            handle_lpush_response(clients[-1], None)
+            handle_lpush_response(c, None)
         #handle_set_response(clients[-1], None)
 
     scan_client = Client('127.0.0.1', 6379)
@@ -199,11 +217,33 @@ def main():
     del_client = Client('127.0.0.1', 6379)
     handle_del_response(del_client, None)
 
+def main(test):
+    global g_exit
+
+    try:
+        globals()[f"init_{test}"]()
+    except KeyError:
+        print(f"Test \"{test}\" not found. Exiting...")
+        exit()
+
     threading.Thread(target=stats_thread).start()
     asyncore.loop()
     g_exit = True
     sys.exit(0)
     print("DONE")
 
+parser = argparse.ArgumentParser(description="Test use cases for KeyDB.")
+parser.add_argument('test', choices=[x[5:] for x in filter(lambda name: name.startswith("init_"), globals().keys())])
+parser.add_argument('-c', '--clients', type=int, default=50)
+parser.add_argument('-k', '--keys', type=int, default=100000)
+parser.add_argument('-t', '--runtime', type=int, default=0)
+
 if __name__ == "__main__":
-    main()
+    try:
+        args = parser.parse_args()
+    except:
+        exit()
+    numclients = args.clients
+    numkeys = args.keys
+    runtime = args.runtime
+    main(args.test)

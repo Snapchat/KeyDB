@@ -26,6 +26,17 @@ public:
     std::vector<dictEntry*> vecde;
 };
 
+void discontinueAsyncRehash(dict *d) {
+    if (d->asyncdata != nullptr) {
+        auto adata = d->asyncdata;
+        while (adata != nullptr) {
+            adata->abondon = true;
+            adata = adata->next;
+        }
+        d->rehashidx = 0;
+    }
+}
+
 const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint64_t mvccCheckpoint, bool fOptional)
 {
     serverAssert(GlobalLocksAcquired());
@@ -67,14 +78,8 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     
     // We can't have async rehash modifying these.  Setting the asyncdata list to null
     //  will cause us to throw away the async work rather than modify the tables in flight
-    if (m_pdict->asyncdata != nullptr) {
-        m_pdict->asyncdata = nullptr;
-        m_pdict->rehashidx = 0;
-    }
-    if (m_pdictTombstone->asyncdata != nullptr) {
-        m_pdictTombstone->rehashidx = 0;
-        m_pdictTombstone->asyncdata = nullptr;
-    }
+    discontinueAsyncRehash(m_pdict);
+    discontinueAsyncRehash(m_pdictTombstone);
 
     spdb->m_fAllChanged = false;
     spdb->m_fTrackingChanges = 0;
@@ -124,6 +129,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
         m_pdbSnapshotASYNC = nullptr;
     }
 
+    std::atomic_thread_fence(std::memory_order_seq_cst);
     return m_pdbSnapshot;
 }
 
@@ -318,6 +324,12 @@ bool redisDbPersistentDataSnapshot::freeTombstoneObjects(int depth)
 
     dictForceRehash(dictTombstoneNew);
     aeAcquireLock();
+    if (m_pdbSnapshot->m_pdict->asyncdata != nullptr) {
+        // In this case we use the asyncdata to free us, not our own lazy free
+        for (auto de : splazy->vecde)
+            dictFreeUnlinkedEntry(m_pdbSnapshot->m_pdict, de);
+        splazy->vecde.clear();
+    }
     dict *dT = m_pdbSnapshot->m_pdict;
     splazy->vecdictLazyFree.push_back(m_pdictTombstone);
     __atomic_store(&m_pdictTombstone, &dictTombstoneNew, __ATOMIC_RELEASE);
@@ -402,9 +414,14 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
         }
         
         // Delete the object from the source dict, we don't use dictDelete to avoid a second search
-        if (deSnapshot != nullptr)
-            splazy->vecde.push_back(deSnapshot);
-        *dePrev = deSnapshot->next;
+        *dePrev = deSnapshot->next; // Unlink it first
+        if (deSnapshot != nullptr) {
+            if (m_spdbSnapshotHOLDER->m_pdict->asyncdata != nullptr) {
+                dictFreeUnlinkedEntry(m_spdbSnapshotHOLDER->m_pdict, deSnapshot);
+            } else {
+                splazy->vecde.push_back(deSnapshot);
+            }
+        }
         ht->used--;
     }
 
@@ -640,4 +657,18 @@ bool redisDbPersistentDataSnapshot::FStale() const
     // 0.5 seconds considered stale;
     static const uint64_t msStale = 500;
     return ((getMvccTstamp() - m_mvccCheckpoint) >> MVCC_MS_SHIFT) >= msStale;
+}
+
+void dictGCAsyncFree(dictAsyncRehashCtl *async) {
+    if (async->deGCList != nullptr && serverTL != nullptr && !serverTL->gcEpoch.isReset()) {
+        auto splazy = std::make_unique<LazyFree>();
+        auto *de = async->deGCList;
+        while (de != nullptr) {
+            splazy->vecde.push_back(de);
+            de = de->next;
+        }
+        async->deGCList = nullptr;
+        g_pserver->garbageCollector.enqueue(serverTL->gcEpoch, std::move(splazy));
+    }
+    delete async;
 }

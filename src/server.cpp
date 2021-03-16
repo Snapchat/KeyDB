@@ -1359,6 +1359,8 @@ uint64_t dictEncObjHash(const void *key) {
     }
 }
 
+void dictGCAsyncFree(dictAsyncRehashCtl *async);
+
 /* Generic hash table type where keys are Redis Objects, Values
  * dummy pointers. */
 dictType objectKeyPointerValueDictType = {
@@ -1407,8 +1409,9 @@ dictType dbDictType = {
     NULL,                       /* key dup */
     NULL,                       /* val dup */
     dictSdsKeyCompare,          /* key compare */
-    dictDbKeyDestructor,          /* key destructor */
-    dictObjectDestructor   /* val destructor */
+    dictDbKeyDestructor,        /* key destructor */
+    dictObjectDestructor,       /* val destructor */
+    dictGCAsyncFree             /* async free destructor */
 };
 
 /* db->pdict, keys are sds strings, vals are Redis objects. */

@@ -433,7 +433,7 @@ extern "C" void fastlock_unlock(struct fastlock *lock)
         serverAssert(pidT >= 0);  // unlock after free
         int t = -1;
         __atomic_store(&lock->m_pidOwner, &t, __ATOMIC_RELEASE);
-        std::atomic_thread_fence(std::memory_order_release);
+        std::atomic_thread_fence(std::memory_order_acq_rel);
         ANNOTATE_RWLOCK_RELEASED(lock, true);
         uint16_t activeNew = __atomic_add_fetch(&lock->m_ticket.m_active, 1, __ATOMIC_RELEASE);  // on x86 the atomic is not required here, but ASM handles that case
 #ifdef __linux__

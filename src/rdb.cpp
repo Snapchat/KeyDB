@@ -2370,21 +2370,6 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
     }
 }
 
-class EvictionPolicyCleanup
-{
-    int oldpolicy;
-
-public:
-    EvictionPolicyCleanup() {
-        oldpolicy = g_pserver->maxmemory_policy;
-        g_pserver->maxmemory_policy = MAXMEMORY_ALLKEYS_RANDOM;
-    }
-
-    ~EvictionPolicyCleanup() {
-        g_pserver->maxmemory_policy = oldpolicy;
-    }
-};
-
 /* Load an RDB file from the rio stream 'rdb'. On success C_OK is returned,
  * otherwise C_ERR is returned and 'errno' is set accordingly. */
 int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
@@ -2400,10 +2385,6 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     robj *subexpireKey = nullptr;
     sds key = nullptr;
     bool fLastKeyExpired = false;
-
-    // If we're running flash we may evict during load.  We want a fast eviction function
-    //  because there isn't any difference in use times between keys anyways
-    EvictionPolicyCleanup ecleanup;
 
     for (int idb = 0; idb < cserver.dbnum; ++idb)
     {

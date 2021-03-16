@@ -1045,9 +1045,9 @@ class redisDbPersistentData
     friend class redisDbPersistentDataSnapshot;
 
 public:
+    redisDbPersistentData();
     virtual ~redisDbPersistentData();
 
-    redisDbPersistentData() = default;
     redisDbPersistentData(redisDbPersistentData &&) = default;
 
     size_t slots() const { return dictSlots(m_pdict); }

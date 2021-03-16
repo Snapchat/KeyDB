@@ -3926,7 +3926,7 @@ void call(client *c, int flags) {
     dirty = g_pserver->dirty;
     incrementMvccTstamp();
     __atomic_load(&g_pserver->ustime, &start, __ATOMIC_SEQ_CST);
-    start = g_pserver->ustime;
+
     try {
         c->cmd->proc(c);
     } catch (robj_roptr o) {
@@ -5403,10 +5403,12 @@ sds genRedisInfoString(const char *section) {
             vkeys = g_pserver->db[j]->expireSize();
 
             // Adjust TTL by the current time
-            g_pserver->db[j]->avg_ttl -= (g_pserver->mstime - g_pserver->db[j]->last_expire_set);
+            mstime_t mstime;
+            __atomic_load(&g_pserver->mstime, &mstime, __ATOMIC_ACQUIRE);
+            g_pserver->db[j]->avg_ttl -= (mstime - g_pserver->db[j]->last_expire_set);
             if (g_pserver->db[j]->avg_ttl < 0)
                 g_pserver->db[j]->avg_ttl = 0;
-            g_pserver->db[j]->last_expire_set = g_pserver->mstime;
+            g_pserver->db[j]->last_expire_set = mstime;
             
             if (keys || vkeys) {
                 info = sdscatprintf(info,

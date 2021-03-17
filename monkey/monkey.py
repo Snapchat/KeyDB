@@ -1,17 +1,13 @@
-import keydb
 import random
-import sched, time
+import time
 import socket
 import asyncore
 import threading
 import argparse
-import sys
 from pprint import pprint
 
 # Globals
 ops = {}
-s = sched.scheduler(time.time, time.sleep)
-g_exit = False
 numclients = 0
 numkeys = 0
 runtime = 0
@@ -208,16 +204,13 @@ def clear_ops():
 
 def stats_thread():
     global ops
-    global g_exit
     global runtime
     i = 0
-    while not g_exit and not (runtime and i >= runtime):
+    while i < runtime or not runtime:
         time.sleep(1)
         print("Ops per second: " + str({k:v for (k,v) in ops.items() if v}))
-        #print(f"Blocked threads: {len(list(filter(lambda x: x.blocked, clients)))}")
         clear_ops()
         i += 1
-    g_exit = True
     asyncore.close_all()
 
 def flush_db_sync():
@@ -253,8 +246,6 @@ def init_lpush():
     handle_del_response(del_client)
 
 def main(test, flush):
-    global g_exit
-
     clear_ops()
 
     if flush:
@@ -272,7 +263,6 @@ def main(test, flush):
 
     threading.Thread(target=stats_thread).start()
     asyncore.loop()
-    g_exit = True
     print("Done.")
 
 parser = argparse.ArgumentParser(description="Test use cases for KeyDB.")

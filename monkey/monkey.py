@@ -236,7 +236,7 @@ def init_lpush():
     for i in range(numclients):
         clients.append(Client('127.0.0.1', 6379))
         for i in range (10):
-            handle_lpush_response(c)
+            handle_lpush_response(clients[-1])
         #handle_set_response(clients[-1], None)
 
     scan_client = Client('127.0.0.1', 6379)

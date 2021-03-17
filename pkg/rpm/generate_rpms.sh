@@ -31,8 +31,8 @@ sed -i '3d' $DIR/keydb_build/keydb.spec
 sed -i -E "2a\Release     : $release%{?dist}" $DIR/keydb_build/keydb.spec
 
 # yum install -y scl-utils centos-release-scl rpm-build
-mkdir -p /root/rpmbuild/BUILDROOT/keydb-pro-$version-$release.$dist.$arch
-cp -r $DIR/keydb_build/keydb_rpm/* /root/rpmbuild/BUILDROOT/keydb-pro-$version-$release.$dist.$arch/
+mkdir -p /root/rpmbuild/BUILDROOT/keydb-enterprise-$version-$release.$dist.$arch
+cp -r $DIR/keydb_build/keydb_rpm/* /root/rpmbuild/BUILDROOT/keydb-enterprise-$version-$release.$dist.$arch/
 rpmbuild -bb $DIR/keydb_build/keydb.spec
 mv /root/rpmbuild/RPMS/$arch/* $DIR/rpm_files_generated
 

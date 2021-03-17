@@ -181,8 +181,7 @@ def handle_blpop_response(c, resp=None):
     global ops
     if resp != None:
         ops['blpop'] += 1
-    else:
-        c.blpop("list_" + getrandomkey(), callback=handle_blpop_response)
+    c.blpop("list_" + getrandomkey(), callback=handle_blpop_response)
 
 def handle_set_response(c, resp=None):
     global ops
@@ -214,7 +213,7 @@ def stats_thread():
     i = 0
     while not g_exit and not (runtime and i > runtime):
         time.sleep(1)
-        print("Ops per second: " + str(ops))
+        print("Ops per second: " + str({k:v for (k,v) in ops.items() if v}))
         #print(f"Blocked threads: {len(list(filter(lambda x: x.blocked, clients)))}")
         clear_ops()
         i += 1
@@ -229,7 +228,7 @@ def flush_db_sync():
 
 def init_blocking():
     global clients
-    if numkeys > 5 * numclients:
+    if numkeys > 100 * numclients:
         print("WARNING: High ratio of keys to clients. Most lpushes will not be popped and unblocking will take a long time!")
     for i in range(numclients):
         clients.append(Client('127.0.0.1', 6379))
@@ -264,6 +263,10 @@ def main(test, flush):
         globals()[f"init_{test}"]()
     except KeyError:
         print(f"Test \"{test}\" not found. Exiting...")
+        exit()
+    except ConnectionRefusedError:
+        print("Could not connect to server. Is it running?")
+        print("Exiting...")
         exit()
 
     threading.Thread(target=stats_thread).start()

@@ -49,6 +49,11 @@ void AsyncWorkQueue::WorkerThreadMain()
     }
 
     listRelease(vars.clients_pending_asyncwrite);
+
+    std::unique_lock<fastlock> lockf(serverTL->lockPendingWrite);
+    serverTL->vecclientsProcess.clear();
+    serverTL->clients_pending_write.clear();
+    std::atomic_thread_fence(std::memory_order_seq_cst);
 }
 
 bool AsyncWorkQueue::removeClientAsyncWrites(client *c)

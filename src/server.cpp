@@ -1359,6 +1359,8 @@ uint64_t dictEncObjHash(const void *key) {
     }
 }
 
+void dictGCAsyncFree(dictAsyncRehashCtl *async);
+
 /* Generic hash table type where keys are Redis Objects, Values
  * dummy pointers. */
 dictType objectKeyPointerValueDictType = {
@@ -1407,8 +1409,9 @@ dictType dbDictType = {
     NULL,                       /* key dup */
     NULL,                       /* val dup */
     dictSdsKeyCompare,          /* key compare */
-    dictDbKeyDestructor,          /* key destructor */
-    dictObjectDestructor   /* val destructor */
+    dictDbKeyDestructor,        /* key destructor */
+    dictObjectDestructor,       /* val destructor */
+    dictGCAsyncFree             /* async free destructor */
 };
 
 /* db->pdict, keys are sds strings, vals are Redis objects. */
@@ -2424,18 +2427,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         }
     }
 
-    run_with_period(100) {
-        bool fAnySnapshots = false;
-        for (int idb = 0; idb < cserver.dbnum && !fAnySnapshots; ++idb)
-            fAnySnapshots = fAnySnapshots || g_pserver->db[0]->FSnapshot();
-        if (fAnySnapshots)
-        {
-            g_pserver->asyncworkqueue->AddWorkFunction([]{
-                g_pserver->db[0]->consolidate_snapshot();
-            }, true /*HiPri*/);
-        }
-    }
-    
     /* Fire the cron loop modules event. */
     RedisModuleCronLoopV1 ei = {REDISMODULE_CRON_LOOP_VERSION,g_pserver->hz};
     moduleFireServerEvent(REDISMODULE_EVENT_CRON_LOOP,
@@ -3926,7 +3917,7 @@ void call(client *c, int flags) {
     dirty = g_pserver->dirty;
     incrementMvccTstamp();
     __atomic_load(&g_pserver->ustime, &start, __ATOMIC_SEQ_CST);
-    start = g_pserver->ustime;
+
     try {
         c->cmd->proc(c);
     } catch (robj_roptr o) {
@@ -5403,10 +5394,12 @@ sds genRedisInfoString(const char *section) {
             vkeys = g_pserver->db[j]->expireSize();
 
             // Adjust TTL by the current time
-            g_pserver->db[j]->avg_ttl -= (g_pserver->mstime - g_pserver->db[j]->last_expire_set);
+            mstime_t mstime;
+            __atomic_load(&g_pserver->mstime, &mstime, __ATOMIC_ACQUIRE);
+            g_pserver->db[j]->avg_ttl -= (mstime - g_pserver->db[j]->last_expire_set);
             if (g_pserver->db[j]->avg_ttl < 0)
                 g_pserver->db[j]->avg_ttl = 0;
-            g_pserver->db[j]->last_expire_set = g_pserver->mstime;
+            g_pserver->db[j]->last_expire_set = mstime;
             
             if (keys || vkeys) {
                 info = sdscatprintf(info,

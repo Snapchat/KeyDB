@@ -1045,9 +1045,9 @@ class redisDbPersistentData
     friend class redisDbPersistentDataSnapshot;
 
 public:
+    redisDbPersistentData();
     virtual ~redisDbPersistentData();
 
-    redisDbPersistentData() = default;
     redisDbPersistentData(redisDbPersistentData &&) = default;
 
     size_t slots() const { return dictSlots(m_pdict); }
@@ -1130,8 +1130,6 @@ public:
     void endSnapshotAsync(const redisDbPersistentDataSnapshot *psnapshot);
     void restoreSnapshot(const redisDbPersistentDataSnapshot *psnapshot);
 
-    void consolidate_snapshot();
-
     bool FStorageProvider() { return m_spstorage != nullptr; }
     bool removeCachedValue(const char *key);
     void removeAllCachedValues();
@@ -1187,7 +1185,6 @@ private:
 
 protected:
     static void gcDisposeSnapshot(redisDbPersistentDataSnapshot *psnapshot);
-    void consolidate_children(redisDbPersistentData *pdbPrimary, bool fForce);
     bool freeTombstoneObjects(int depth);
 
 public:
@@ -1289,7 +1286,6 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::createSnapshot;
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::restoreSnapshot;
-    using redisDbPersistentData::consolidate_snapshot;
     using redisDbPersistentData::removeAllCachedValues;
     using redisDbPersistentData::dictUnsafeKeyOnly;
     using redisDbPersistentData::resortExpire;

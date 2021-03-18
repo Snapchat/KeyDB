@@ -1713,7 +1713,8 @@ void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when) 
 
     /* Update TTL stats (exponential moving average) */
     /*  Note: We never have to update this on expiry since we reduce it by the current elapsed time here */
-    long long now = g_pserver->mstime;
+    mstime_t now;
+    __atomic_load(&g_pserver->mstime, &now, __ATOMIC_ACQUIRE);
     db->avg_ttl -= (now - db->last_expire_set); // reduce the TTL by the time that has elapsed
     if (db->expireSize() == 0)
         db->avg_ttl = 0;
@@ -1894,7 +1895,7 @@ int keyIsExpired(const redisDbPersistentDataSnapshot *db, robj *key) {
      * open object in a next call, if the next call will see the key expired,
      * while the first did not. */
     else if (serverTL->fixed_time_expire > 0) {
-        now = g_pserver->mstime;
+        __atomic_load(&g_pserver->mstime, &now, __ATOMIC_ACQUIRE);
     }
     /* For the other cases, we want to use the most fresh time we have. */
     else {
@@ -2588,6 +2589,7 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
 {
     serverAssert(sdsKey != nullptr);
     serverAssert(FImplies(*pde != nullptr, dictGetVal(*pde) != nullptr));    // early versions set a NULL object, this is no longer valid
+    serverAssert(m_refCount == 0);
     std::unique_lock<fastlock> ul(g_expireLock);
 
     // First see if the key can be obtained from a snapshot
@@ -2781,7 +2783,7 @@ redisDbPersistentData::~redisDbPersistentData()
     if (m_spdbSnapshotHOLDER != nullptr)
         endSnapshot(m_spdbSnapshotHOLDER.get());
     
-    //serverAssert(m_pdbSnapshot == nullptr);
+    serverAssert(m_pdbSnapshot == nullptr);
     serverAssert(m_refCount == 0);
     //serverAssert(m_pdict->iterators == 0);
     serverAssert(m_pdictTombstone == nullptr || m_pdictTombstone->iterators == 0);
@@ -2853,15 +2855,15 @@ bool redisDbPersistentData::removeCachedValue(const char *key)
     return true;
 }
 
+redisDbPersistentData::redisDbPersistentData() {
+    m_dictChanged = dictCreate(&dictChangeDescType, nullptr);
+}
+
 void redisDbPersistentData::trackChanges(bool fBulk, size_t sizeHint)
 {
     m_fTrackingChanges.fetch_add(1, std::memory_order_relaxed);
     if (fBulk)
         m_fAllChanged.fetch_add(1, std::memory_order_acq_rel);
-
-    if (m_dictChanged == nullptr) {
-        m_dictChanged = dictCreate(&dictChangeDescType, nullptr);
-    }
 
     if (sizeHint > 0)
         dictExpand(m_dictChanged, sizeHint, false);

@@ -29,6 +29,11 @@ class GarbageCollector
     };
 
 public:
+    ~GarbageCollector() {
+        // Silence TSAN errors
+        m_lock.lock();
+    }
+
     uint64_t startEpoch()
     {
         std::unique_lock<fastlock> lock(m_lock);
@@ -41,6 +46,7 @@ public:
     {
         std::unique_lock<fastlock> lock(m_lock);
         m_vecepochs.clear();
+        m_setepochOutstanding.clear();
     }
 
     void endEpoch(uint64_t epoch, bool fNoFree = false)

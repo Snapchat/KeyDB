@@ -195,7 +195,7 @@ void sdsfree(const char *s) {
     if ((flags & SDS_TYPE_MASK) == SDS_TYPE_REFCOUNTED)
     {
         SDS_HDR_VAR_REFCOUNTED(s);
-        if (__atomic_fetch_sub(&sh->refcount, 1, __ATOMIC_RELAXED) > 1)
+        if (__atomic_fetch_sub(&sh->refcount, 1, __ATOMIC_ACQ_REL) > 1)
             return;
     }
     s_free((char*)s-sdsHdrSize(s[-1]));

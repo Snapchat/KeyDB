@@ -53,6 +53,7 @@ extern "C" {
 
 /* Unused arguments generate annoying warnings... */
 #define DICT_NOTUSED(V) ((void) V)
+struct dictAsyncRehashCtl;
 
 typedef struct dictEntry {
     void *key;
@@ -72,6 +73,7 @@ typedef struct dictType {
     int (*keyCompare)(void *privdata, const void *key1, const void *key2);
     void (*keyDestructor)(void *privdata, void *key);
     void (*valDestructor)(void *privdata, void *obj);
+    void (*asyncfree)(dictAsyncRehashCtl *);
 } dictType;
 
 /* This is our hash table structure. Every dictionary has two of this as we
@@ -98,13 +100,12 @@ struct dictAsyncRehashCtl {
     struct dict *dict = nullptr;
     std::vector<workItem> queue;
     size_t hashIdx = 0;
-    bool release = false;
     dictAsyncRehashCtl *next = nullptr;
     std::atomic<bool> done { false };
+    std::atomic<bool> abondon { false };
 
-    dictAsyncRehashCtl(struct dict *d, dictAsyncRehashCtl *next) : dict(d), next(next) {
-        queue.reserve(c_targetQueueSize);
-    }
+    dictAsyncRehashCtl(struct dict *d, dictAsyncRehashCtl *next);
+    ~dictAsyncRehashCtl();
 };
 #else
 struct  dictAsyncRehashCtl;
@@ -115,7 +116,8 @@ typedef struct dict {
     void *privdata;
     dictht ht[2];
     long rehashidx; /* rehashing not in progress if rehashidx == -1 */
-    unsigned long iterators; /* number of iterators currently running */
+    unsigned iterators; /* number of iterators currently running */
+    unsigned refcount;
     dictAsyncRehashCtl *asyncdata;
 } dict;
 

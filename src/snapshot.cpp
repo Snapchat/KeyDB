@@ -26,6 +26,17 @@ public:
     std::vector<dictEntry*> vecde;
 };
 
+void discontinueAsyncRehash(dict *d) {
+    if (d->asyncdata != nullptr) {
+        auto adata = d->asyncdata;
+        while (adata != nullptr) {
+            adata->abondon = true;
+            adata = adata->next;
+        }
+        d->rehashidx = 0;
+    }
+}
+
 const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint64_t mvccCheckpoint, bool fOptional)
 {
     serverAssert(GlobalLocksAcquired());
@@ -56,34 +67,6 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
         }
     }
 
-    if (m_pdbSnapshot != nullptr && m_pdbSnapshot == m_pdbSnapshotASYNC && m_spdbSnapshotHOLDER->m_refCount == 1 && dictSize(m_pdictTombstone) < c_elementsSmallLimit)
-    {
-        serverLog(LL_WARNING, "Reusing old snapshot");
-        // is there an existing snapshot only owned by us?
-        
-        dictIterator *di = dictGetIterator(m_pdictTombstone);
-        dictEntry *de;
-        while ((de = dictNext(di)) != nullptr)
-        {
-            if (dictDelete(m_pdbSnapshot->m_pdict, dictGetKey(de)) != DICT_OK)
-                dictAdd(m_spdbSnapshotHOLDER->m_pdictTombstone, sdsdupshared((sds)dictGetKey(de)), nullptr);
-        }
-        dictReleaseIterator(di);
-
-        dictForceRehash(m_spdbSnapshotHOLDER->m_pdictTombstone);
-        dictMerge(m_pdbSnapshot->m_pdict, m_pdict);
-        dictEmpty(m_pdictTombstone, nullptr);
-        {
-        std::unique_lock<fastlock> ul(g_expireLock);
-        (*m_spdbSnapshotHOLDER->m_setexpire) = *m_setexpire;
-        }
-
-        m_pdbSnapshotASYNC = nullptr;
-        serverAssert(m_pdbSnapshot->m_pdict->iterators == 1);
-        serverAssert(m_spdbSnapshotHOLDER->m_refCount == 1);
-        return m_pdbSnapshot;
-    }
-
     // See if we have too many levels and can bail out of this to reduce load
     if (fOptional && (levels >= 6))
     {
@@ -95,14 +78,8 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     
     // We can't have async rehash modifying these.  Setting the asyncdata list to null
     //  will cause us to throw away the async work rather than modify the tables in flight
-    if (m_pdict->asyncdata != nullptr) {
-        m_pdict->asyncdata = nullptr;
-        m_pdict->rehashidx = 0;
-    }
-    if (m_pdictTombstone->asyncdata != nullptr) {
-        m_pdictTombstone->rehashidx = 0;
-        m_pdictTombstone->asyncdata = nullptr;
-    }
+    discontinueAsyncRehash(m_pdict);
+    discontinueAsyncRehash(m_pdictTombstone);
 
     spdb->m_fAllChanged = false;
     spdb->m_fTrackingChanges = 0;
@@ -125,7 +102,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     }
 
     if (dictIsRehashing(spdb->m_pdict) || dictIsRehashing(spdb->m_pdictTombstone)) {
-        serverLog(LL_NOTICE, "NOTICE: Suboptimal snapshot");
+        serverLog(LL_VERBOSE, "NOTICE: Suboptimal snapshot");
     }
 
     m_pdict = dictCreate(&dbDictType,this);
@@ -152,6 +129,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
         m_pdbSnapshotASYNC = nullptr;
     }
 
+    std::atomic_thread_fence(std::memory_order_seq_cst);
     return m_pdbSnapshot;
 }
 
@@ -189,7 +167,7 @@ void redisDbPersistentData::recursiveFreeSnapshots(redisDbPersistentDataSnapshot
 
         //psnapshot->m_pdict->iterators--;
         psnapshot->m_spdbSnapshotHOLDER.release();
-        //psnapshot->m_pdbSnapshot = nullptr;
+        psnapshot->m_pdbSnapshot = nullptr;
         g_pserver->garbageCollector.enqueue(serverTL->gcEpoch, std::unique_ptr<redisDbPersistentDataSnapshot>(psnapshot));
         serverLog(LL_VERBOSE, "Garbage collected snapshot");
     }
@@ -275,7 +253,6 @@ void redisDbPersistentData::endSnapshotAsync(const redisDbPersistentDataSnapshot
         aeReleaseLock();
         return;
     }
-    const_cast<redisDbPersistentDataSnapshot*>(psnapshotT)->consolidate_children(this, true);
     
     // Final Cleanup
     aeAcquireLock(); latencyStartMonitor(latency);
@@ -347,6 +324,12 @@ bool redisDbPersistentDataSnapshot::freeTombstoneObjects(int depth)
 
     dictForceRehash(dictTombstoneNew);
     aeAcquireLock();
+    if (m_pdbSnapshot->m_pdict->asyncdata != nullptr) {
+        // In this case we use the asyncdata to free us, not our own lazy free
+        for (auto de : splazy->vecde)
+            dictFreeUnlinkedEntry(m_pdbSnapshot->m_pdict, de);
+        splazy->vecde.clear();
+    }
     dict *dT = m_pdbSnapshot->m_pdict;
     splazy->vecdictLazyFree.push_back(m_pdictTombstone);
     __atomic_store(&m_pdictTombstone, &dictTombstoneNew, __ATOMIC_RELEASE);
@@ -421,7 +404,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
 #ifdef CHECKED_BUILD
             serverAssert(m_spdbSnapshotHOLDER->m_pdbSnapshot->find_cached_threadsafe((const char*)dictGetKey(de)) != nullptr);
 #endif
-            dictAdd(m_spdbSnapshotHOLDER->m_pdictTombstone, sdsdupshared((sds)dictGetKey(de)), nullptr);
+            dictAdd(m_spdbSnapshotHOLDER->m_pdictTombstone, sdsdupshared((sds)dictGetKey(de)), dictGetVal(de));
             continue;
         }
         else if (deSnapshot == nullptr)
@@ -431,8 +414,14 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
         }
         
         // Delete the object from the source dict, we don't use dictDelete to avoid a second search
-        splazy->vecde.push_back(deSnapshot);
-        *dePrev = deSnapshot->next;
+        *dePrev = deSnapshot->next; // Unlink it first
+        if (deSnapshot != nullptr) {
+            if (m_spdbSnapshotHOLDER->m_pdict->asyncdata != nullptr) {
+                dictFreeUnlinkedEntry(m_spdbSnapshotHOLDER->m_pdict, deSnapshot);
+            } else {
+                splazy->vecde.push_back(deSnapshot);
+            }
+        }
         ht->used--;
     }
 
@@ -454,12 +443,12 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     if (m_pdbSnapshot != nullptr && m_spdbSnapshotHOLDER->m_pdbSnapshot != nullptr)
     {
         m_pdbSnapshot = m_spdbSnapshotHOLDER->m_pdbSnapshot;
-        m_spdbSnapshotHOLDER->m_pdbSnapshot = nullptr;
     }
     else
     {
         m_pdbSnapshot = nullptr;
     }
+    m_spdbSnapshotHOLDER->m_pdbSnapshot = nullptr;
 
     // Fixup the about to free'd snapshots iterator count so the dtor doesn't complain
     if (m_refCount)
@@ -663,111 +652,23 @@ int redisDbPersistentDataSnapshot::snapshot_depth() const
     return 0;
 }
 
-
-void redisDbPersistentData::consolidate_snapshot()
-{
-    aeAcquireLock();
-    auto psnapshot = (m_pdbSnapshot != nullptr) ? m_spdbSnapshotHOLDER.get() : nullptr;
-    if (psnapshot == nullptr || psnapshot->snapshot_depth() == 0)
-    {
-        aeReleaseLock();
-        return;
-    }
-
-    psnapshot->m_refCount++;    // ensure it's not free'd
-    aeReleaseLock();
-    psnapshot->consolidate_children(this, false /* fForce */);
-    aeAcquireLock();
-    endSnapshot(psnapshot);
-    aeReleaseLock();
-}
-
-// only call this on the "real" database to consolidate the first child
-void redisDbPersistentDataSnapshot::consolidate_children(redisDbPersistentData *pdbPrimary, bool fForce)
-{
-    std::unique_lock<fastlock> lock(s_lock, std::defer_lock);
-    if (!lock.try_lock())
-        return; // this is a best effort function
-
-    if (!fForce && snapshot_depth() < 2)
-        return;
-
-    auto spdb = std::unique_ptr<redisDbPersistentDataSnapshot>(new (MALLOC_LOCAL) redisDbPersistentDataSnapshot());
-    spdb->initialize();
-    dictExpand(spdb->m_pdict, m_pdbSnapshot->size());
-
-    volatile size_t skipped = 0;
-    m_pdbSnapshot->iterate_threadsafe([&](const char *key, robj_roptr o) {
-        if (o != nullptr || !m_spstorage) {
-            dictAdd(spdb->m_pdict, sdsdupshared(key), o.unsafe_robjcast());
-            if (o != nullptr) {
-                incrRefCount(o);
-            }
-        } else {
-            ++skipped;
-        }
-        return true;
-    }, true /*fKeyOnly*/, true /*fCacheOnly*/);
-    spdb->m_spstorage = m_pdbSnapshot->m_spstorage;
-    {
-    std::unique_lock<fastlock> ul(g_expireLock);
-    delete spdb->m_setexpire;
-    spdb->m_setexpire = new (MALLOC_LOCAL) expireset(*m_pdbSnapshot->m_setexpire);
-    }
-
-    spdb->m_pdict->iterators++;
-
-    if (m_spstorage) {
-        serverAssert(spdb->size() == m_pdbSnapshot->size());
-    } else {
-        serverAssert((spdb->size()+skipped) == m_pdbSnapshot->size());
-    }
-
-    // Now wire us in (Acquire the LOCK)
-    AeLocker locker;
-    locker.arm(nullptr);
-
-    int depth = 0;
-    redisDbPersistentDataSnapshot *psnapshotT = pdbPrimary->m_spdbSnapshotHOLDER.get();
-    while (psnapshotT != nullptr)
-    {
-        ++depth;
-        if (psnapshotT == this)
-            break;
-        psnapshotT = psnapshotT->m_spdbSnapshotHOLDER.get();
-    }
-    if (psnapshotT != this)
-    {
-        locker.disarm();    // don't run spdb's dtor in the lock
-        return; // we were unlinked and this was a waste of time
-    }
-
-    serverLog(LL_VERBOSE, "cleaned %d snapshots", snapshot_depth()-1);
-    spdb->m_refCount = depth;
-    // Drop our refs from this snapshot and its children
-    psnapshotT = this;
-    std::vector<redisDbPersistentDataSnapshot*> vecT;
-    while ((psnapshotT = psnapshotT->m_spdbSnapshotHOLDER.get()) != nullptr)
-    {
-        vecT.push_back(psnapshotT);
-    }
-    for (auto itr = vecT.rbegin(); itr != vecT.rend(); ++itr)
-    {
-        psnapshotT = *itr;
-        psnapshotT->m_refCount -= (depth-1);    // -1 because dispose will sub another
-        gcDisposeSnapshot(psnapshotT);
-    }
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    m_spdbSnapshotHOLDER.release(); // GC has responsibility for it now
-    m_spdbSnapshotHOLDER = std::move(spdb);
-    const redisDbPersistentDataSnapshot *ptrT = m_spdbSnapshotHOLDER.get();
-    __atomic_store(&m_pdbSnapshot, &ptrT, __ATOMIC_SEQ_CST);
-    locker.disarm();    // ensure we're not locked for any dtors
-}
-
 bool redisDbPersistentDataSnapshot::FStale() const
 {
     // 0.5 seconds considered stale;
     static const uint64_t msStale = 500;
     return ((getMvccTstamp() - m_mvccCheckpoint) >> MVCC_MS_SHIFT) >= msStale;
+}
+
+void dictGCAsyncFree(dictAsyncRehashCtl *async) {
+    if (async->deGCList != nullptr && serverTL != nullptr && !serverTL->gcEpoch.isReset()) {
+        auto splazy = std::make_unique<LazyFree>();
+        auto *de = async->deGCList;
+        while (de != nullptr) {
+            splazy->vecde.push_back(de);
+            de = de->next;
+        }
+        async->deGCList = nullptr;
+        g_pserver->garbageCollector.enqueue(serverTL->gcEpoch, std::move(splazy));
+    }
+    delete async;
 }

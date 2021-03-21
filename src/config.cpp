@@ -730,7 +730,7 @@ void loadServerConfigFromString(char *config) {
             g_sdsProvider = sdsdup(argv[1]);
             if (argc > 2)
                 g_sdsArgs = sdsdup(argv[2]);
-        } else if (!strcasecmp(argv[0],"enable-pro") && (argc == 1 || argc == 2)) {
+        } else if (!strcasecmp(argv[0],"enable-enterprise") && (argc == 1 || argc == 2)) {
             if (argc == 2)
             {
                 if (!FValidKey(argv[1], strlen(argv[1]))) {

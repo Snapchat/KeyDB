@@ -1,7 +1,9 @@
 set server_path [tmpdir server.log]
 set system_name [string tolower [exec uname -s]]
+# ldd --version returns 1 under musl for unknown reasons. If this check stops working, that may be why
+set is_musl [catch {exec ldd --version}]
 
-if {$system_name eq {linux} || $system_name eq {darwin}} {
+if {$system_name eq {linux} && $is_musl eq 0 || $system_name eq {darwin}} {
     start_server [list overrides [list dir $server_path]] {
         test "Server is able to generate a stack trace on selected systems" {
             r config set watchdog-period 200

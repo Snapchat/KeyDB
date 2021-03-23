@@ -25,28 +25,22 @@ do
 		case "${BINARY}" in
 		keydb-server)
 			NAME="keydb"
-			BINARY_EXEC="keydb-server"
-			BINARY_NAME="keydb-pro-server"
-			TARGET_NAME="keydb-pro-server"
 			;;
 		keydb-sentinel)
 			NAME="sentinel"
-			BINARY_EXEC="keydb-sentinel"
-			BINARY_NAME="keydb-sentinel"
-			TARGET_NAME="keydb-pro-sentinel"
 			;;
 		esac
 
 		case "${MODE}" in
 		default)
 			EXTRA="Alias=${NAME}.service"
-			TARGET="debian/${TARGET_NAME}.${BINARY}.service"
+			TARGET="debian/${BINARY}.service"
 			NAMESPACED="${NAME}"
 			DESCRIPTION="Advanced key-value store"
 			;;
 		templated)
 			EXTRA=""
-			TARGET="debian/${TARGET_NAME}.${BINARY}@.service"
+			TARGET="debian/${BINARY}@.service"
 			NAMESPACED="${NAME}-%i"
 			DESCRIPTION="Advanced key-value store (%I)"
 			;;
@@ -94,7 +88,7 @@ Documentation=https://docs.keydb.dev, man:${BINARY}(1)
 
 [Service]
 Type=forking
-ExecStart=/usr/bin/${BINARY_NAME} /etc/keydb/${NAMESPACED}.conf
+ExecStart=/usr/bin/${BINARY} /etc/keydb/${NAMESPACED}.conf
 ExecStop=/bin/kill -s TERM \$MAINPID
 PIDFile=/var/run/${NAMESPACED}/${BINARY}.pid
 TimeoutStopSec=0

@@ -2783,7 +2783,7 @@ redisDbPersistentData::~redisDbPersistentData()
     if (m_spdbSnapshotHOLDER != nullptr)
         endSnapshot(m_spdbSnapshotHOLDER.get());
     
-    serverAssert(m_pdbSnapshot == nullptr);
+    //serverAssert(m_pdbSnapshot == nullptr);
     serverAssert(m_refCount == 0);
     //serverAssert(m_pdict->iterators == 0);
     serverAssert(m_pdictTombstone == nullptr || m_pdictTombstone->iterators == 0);

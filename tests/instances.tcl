@@ -41,7 +41,7 @@ if {[catch {cd tmp}]} {
 # the provided configuration file. Returns the PID of the process.
 proc exec_instance {type dirname cfgfile} {
     if {$type eq "redis"} {
-        set prgname keydb-pro-server
+        set prgname keydb-server
     } elseif {$type eq "sentinel"} {
         set prgname keydb-sentinel
     } else {

@@ -2747,8 +2747,8 @@ void syncWithMaster(connection *conn) {
         err = sendSynchronousCommand(mi, SYNC_CMD_READ,conn,NULL);
         if (err[0] == '-') {
             if (err[1] == 'E' && err[2] == 'R' && err[3] == 'R') {
-                // Replicating with non-pro
-                serverLog(LL_WARNING, "Replicating with non-pro server.");
+                // Replicating with non-enterprise
+                serverLog(LL_WARNING, "Replicating with non-enterprise server.");
             } else {
                 serverLog(LL_WARNING, "Recieved error from client: %s", err);
                 sdsfree(err);

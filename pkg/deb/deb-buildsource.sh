@@ -61,4 +61,4 @@ sudo pbuilder --build *.dsc  --logfile /mnt/pbuilderlog.log
 cp /var/cache/pbuilder/result/*$version*.deb ../deb_files_generated
 sudo pbuilder clean
 cd ../
-#rm -rf $pkg_name
+rm -rf $pkg_name

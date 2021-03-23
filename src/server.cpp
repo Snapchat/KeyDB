@@ -71,7 +71,7 @@
 
 int g_fTestMode = false;
 const char *motd_url = "http://api.keydb.dev/motd/motd_server_pro.txt";
-const char *motd_cache_file = "/.keydb-pro-server-motd";
+const char *motd_cache_file = "/.keydb-enterprise-server-motd";
 
 #ifdef __linux__
 #include <sys/mman.h>
@@ -5419,7 +5419,7 @@ sds genRedisInfoString(const char *section) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, 
             "# KeyDB\r\n"
-            "variant:pro\r\n"
+            "variant:enterprise\r\n"
             "license_status:%s\r\n"
             "mvcc_depth:%d\r\n",
             cserver.license_key ? "OK" : "Trial",
@@ -5653,19 +5653,19 @@ void version(void) {
 }
 
 void usage(void) {
-    fprintf(stderr,"Usage: ./keydb-pro-server [/path/to/keydb.conf] [options]\n");
-    fprintf(stderr,"       ./keydb-pro-server - (read config from stdin)\n");
-    fprintf(stderr,"       ./keydb-pro-server -v or --version\n");
-    fprintf(stderr,"       ./keydb-pro-server -h or --help\n");
-    fprintf(stderr,"       ./keydb-pro-server --test-memory <megabytes>\n\n");
+    fprintf(stderr,"Usage: ./keydb-server [/path/to/keydb.conf] [options]\n");
+    fprintf(stderr,"       ./keydb-server - (read config from stdin)\n");
+    fprintf(stderr,"       ./keydb-server -v or --version\n");
+    fprintf(stderr,"       ./keydb-server -h or --help\n");
+    fprintf(stderr,"       ./keydb-server --test-memory <megabytes>\n\n");
     fprintf(stderr,"Examples:\n");
-    fprintf(stderr,"       ./keydb-pro-server (run the server with default conf)\n");
-    fprintf(stderr,"       ./keydb-pro-server /etc/redis/6379.conf\n");
-    fprintf(stderr,"       ./keydb-pro-server --port 7777\n");
-    fprintf(stderr,"       ./keydb-pro-server --port 7777 --replicaof 127.0.0.1 8888\n");
-    fprintf(stderr,"       ./keydb-pro-server /etc/mykeydb.conf --loglevel verbose\n\n");
+    fprintf(stderr,"       ./keydb-server (run the server with default conf)\n");
+    fprintf(stderr,"       ./keydb-server /etc/redis/6379.conf\n");
+    fprintf(stderr,"       ./keydb-server --port 7777\n");
+    fprintf(stderr,"       ./keydb-server --port 7777 --replicaof 127.0.0.1 8888\n");
+    fprintf(stderr,"       ./keydb-server /etc/mykeydb.conf --loglevel verbose\n\n");
     fprintf(stderr,"Sentinel mode:\n");
-    fprintf(stderr,"       ./keydb-pro-server /etc/sentinel.conf --sentinel\n");
+    fprintf(stderr,"       ./keydb-server /etc/sentinel.conf --sentinel\n");
     exit(1);
 }
 
@@ -5710,7 +5710,7 @@ void redisAsciiArt(void) {
     if (cserver.license_key == nullptr && !g_pserver->sentinel_mode)
     {
 #ifndef NO_LICENSE_CHECK
-        serverLog(LL_WARNING, "!!!! KeyDB Pro is being run in trial mode  !!!!");
+        serverLog(LL_WARNING, "!!!! KeyDB Enterprise is being run in trial mode  !!!!");
         serverLog(LL_WARNING, "!!!! Execution will terminate in %d minutes !!!!", cserver.trial_timeout);
 #endif
     }
@@ -6253,7 +6253,7 @@ int main(int argc, char **argv) {
                 exit(0);
             } else {
                 fprintf(stderr,"Please specify the amount of memory to test in megabytes.\n");
-                fprintf(stderr,"Example: ./keydb-pro-server --test-memory 4096\n\n");
+                fprintf(stderr,"Example: ./keydb-server --test-memory 4096\n\n");
                 exit(1);
             }
         }

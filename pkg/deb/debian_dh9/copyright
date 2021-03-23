@@ -1,7 +1,7 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Contact: John Sully <john@eqalpha.com>
-Upstream-Name: keydb-pro
-Source: https://github.com/JohnSully/KeyDB-Pro
+Upstream-Name: keydb-enterprise
+Source: https://gitlab.eqalpha.com/keydb-dev/KeyDB-Pro
 
 Files: *
 Copyright: © 2006-2014 Salvatore Sanfilippo <antirez@gmail.com>

@@ -1855,7 +1855,7 @@ int rewriteConfig(char *path, int force_all) {
     rewriteConfigClientoutputbufferlimitOption(state);
     rewriteConfigYesNoOption(state,"active-replica",g_pserver->fActiveReplica,CONFIG_DEFAULT_ACTIVE_REPLICA);
     rewriteConfigStringOption(state, "version-override",KEYDB_SET_VERSION,KEYDB_REAL_VERSION);
-    rewriteConfigStringOption(state, "enable-pro", cserver.license_key, CONFIG_DEFAULT_LICENSE_KEY);
+    rewriteConfigStringOption(state, "enable-enterprise", cserver.license_key, CONFIG_DEFAULT_LICENSE_KEY);
     rewriteConfigOOMScoreAdjValuesOption(state);
 
     /* Rewrite Sentinel config if in Sentinel mode. */

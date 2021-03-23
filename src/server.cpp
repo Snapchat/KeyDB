@@ -2168,6 +2168,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         aeAcquireLock();
     }
 
+    if (g_pserver->maxmemory && g_pserver->m_pstorageFactory)
+        freeMemoryIfNeededAndSafe(false, false);
+
     /* If another threads unblocked one of our clients, and this thread has been idle
         then beforeSleep won't have a chance to process the unblocking.  So we also
         process them here in the cron job to ensure they don't starve.
@@ -2454,6 +2457,9 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
         dictRehashSomeAsync(serverTL->rehashCtl, serverTL->rehashCtl->queue.size());
         aeAcquireLock();
     }
+
+    if (g_pserver->maxmemory && g_pserver->m_pstorageFactory)
+        freeMemoryIfNeededAndSafe(false, false);
 
     int iel = ielFromEventLoop(eventLoop);
     serverAssert(iel != IDX_EVENT_LOOP_MAIN);

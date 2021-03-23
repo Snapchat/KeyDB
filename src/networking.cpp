@@ -2343,7 +2343,7 @@ void parseClientCommandBuffer(client *c) {
             }
         }
 
-        size_t cqueries = c->vecqueuedcmd.size();
+        size_t cqueriesStart = c->vecqueuedcmd.size();
         if (c->reqtype == PROTO_REQ_INLINE) {
             if (processInlineBuffer(c) != C_OK) break;
         } else if (c->reqtype == PROTO_REQ_MULTIBULK) {
@@ -2359,10 +2359,12 @@ void parseClientCommandBuffer(client *c) {
         }
 
         /* Prefetch if we have a storage provider and we're not in the global lock */
-        if (cqueries < c->vecqueuedcmd.size() && g_pserver->m_pstorageFactory != nullptr && !GlobalLocksAcquired()) {
+        if (cqueriesStart < c->vecqueuedcmd.size() && g_pserver->m_pstorageFactory != nullptr && !GlobalLocksAcquired()) {
             auto &query = c->vecqueuedcmd.back();
             if (query.argc > 0 && query.argc == query.argcMax) {
-                c->db->prefetchKeysAsync(c, query);
+                if (c->db->prefetchKeysAsync(c, query, c->vecqueuedcmd.size() == 1)) {
+                    c->vecqueuedcmd.erase(c->vecqueuedcmd.begin());
+                }
             }
         }
         c->reqtype = 0;

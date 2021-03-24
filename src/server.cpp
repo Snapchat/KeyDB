@@ -2514,12 +2514,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     serverAssert(g_pserver->repl_batch_offStart < 0);
     runAndPropogateToReplicas(processClients);
 
-    {
-        std::lock_guard<std::mutex> lock(time_thread_mutex);
-        sleeping_threads++;
-        serverAssert(sleeping_threads <= cserver.cthreads);
-    }
-
     /* Handle precise timeouts of blocked clients. */
     handleBlockedClientsTimeout();
 
@@ -2651,6 +2645,13 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     locker.disarm();
     if (!fSentReplies)
         handleClientsWithPendingWrites(iel, aof_state);
+
+    {
+        std::lock_guard<std::mutex> lock(time_thread_mutex);
+        sleeping_threads++;
+        serverAssert(sleeping_threads <= cserver.cthreads);
+    }
+
     if (moduleCount()) moduleReleaseGIL(TRUE /*fServerThread*/);
 
     /* Do NOT add anything below moduleReleaseGIL !!! */

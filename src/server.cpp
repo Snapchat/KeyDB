@@ -2514,9 +2514,11 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     serverAssert(g_pserver->repl_batch_offStart < 0);
     runAndPropogateToReplicas(processClients);
 
-    time_thread_mutex.lock();
-    sleeping_threads++;
-    time_thread_mutex.unlock();
+    {
+        std::lock_guard<std::mutex> lock(time_thread_mutex);
+        sleeping_threads++;
+        serverAssert(sleeping_threads <= cserver.cthreads);
+    }
 
     /* Handle precise timeouts of blocked clients. */
     handleBlockedClientsTimeout();
@@ -6088,9 +6090,9 @@ void OnTerminate()
 }
 
 void wakeTimeThread() {
-    time_thread_mutex.lock();
+    std::lock_guard<std::mutex> lock(time_thread_mutex);
     sleeping_threads--;
-    time_thread_mutex.unlock();
+    serverAssert(sleeping_threads >= 0);
     time_thread_cv.notify_one();
 }
 
@@ -6099,9 +6101,11 @@ void *timeThreadMain(void*) {
     delay.tv_sec = 0;
     delay.tv_nsec = 100;
     while (true) {
-        std::unique_lock<std::mutex> lock(time_thread_mutex);
-        if (sleeping_threads >= cserver.cthreads) {
-            time_thread_cv.wait(lock);
+        {
+            std::unique_lock<std::mutex> lock(time_thread_mutex);
+            if (sleeping_threads >= cserver.cthreads) {
+                time_thread_cv.wait(lock);
+            }
         }
         updateCachedTime();
         clock_nanosleep(CLOCK_REALTIME, 0, &delay, NULL);

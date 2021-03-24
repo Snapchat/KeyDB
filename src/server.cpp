@@ -5740,8 +5740,6 @@ static void sigShutdownHandler(int sig) {
         msg = "Received shutdown signal, scheduling shutdown...";
     };
 
-    wakeTimeThread();
-
     /* SIGINT is often delivered via Ctrl+C in an interactive session.
      * If we receive the signal the second time, we interpret this as
      * the user really wanting to quit ASAP without waiting to persist

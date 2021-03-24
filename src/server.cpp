@@ -61,6 +61,7 @@
 #include <algorithm>
 #include <uuid/uuid.h>
 #include <mutex>
+#include <condition_variable>
 #include "aelocker.h"
 #include "keycheck.h"
 #include "motd.h"
@@ -97,6 +98,10 @@ redisServer *g_pserver = &GlobalHidden::server;
 struct redisServerConst cserver;
 thread_local struct redisServerThreadVars *serverTL = NULL;   // thread local server vars
 volatile unsigned long lru_clock; /* Server global current LRU time. */
+std::mutex time_thread_mutex;
+std::condition_variable time_thread_cv;
+bool time_thread_running = false;
+void wakeTimeThread();
 
 /* Our command table.
  *
@@ -2509,6 +2514,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     serverAssert(g_pserver->repl_batch_offStart < 0);
     runAndPropogateToReplicas(processClients);
 
+    time_thread_running = false;
+
     /* Handle precise timeouts of blocked clients. */
     handleBlockedClientsTimeout();
 
@@ -2654,6 +2661,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
 
     /* Aquire the modules GIL so that their threads won't touch anything. */
     if (moduleCount()) moduleAcquireGIL(TRUE /*fServerThread*/);
+
+    wakeTimeThread();
 
     serverAssert(serverTL->gcEpoch.isReset());
     serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
@@ -5731,6 +5740,8 @@ static void sigShutdownHandler(int sig) {
         msg = "Received shutdown signal, scheduling shutdown...";
     };
 
+    wakeTimeThread();
+
     /* SIGINT is often delivered via Ctrl+C in an interactive session.
      * If we receive the signal the second time, we interpret this as
      * the user really wanting to quit ASAP without waiting to persist
@@ -6076,15 +6087,24 @@ void OnTerminate()
     serverPanic("std::teminate() called");
 }
 
+void wakeTimeThread() {
+    time_thread_running = true;
+    time_thread_cv.notify_one();
+}
+
 void *timeThreadMain(void*) {
     timespec delay;
     delay.tv_sec = 0;
     delay.tv_nsec = 100;
     while (true) {
+        std::unique_lock<std::mutex> lock(time_thread_mutex);
+        if (!time_thread_running) {
+            time_thread_cv.wait(lock);
+        }
         updateCachedTime();
         clock_nanosleep(CLOCK_REALTIME, 0, &delay, NULL);
     }
-} 
+}
 
 void *workerThreadMain(void *parg)
 {

@@ -100,6 +100,7 @@ struct dictAsyncRehashCtl {
     struct dict *dict = nullptr;
     std::vector<workItem> queue;
     size_t hashIdx = 0;
+    long rehashIdxBase;
     dictAsyncRehashCtl *next = nullptr;
     std::atomic<bool> done { false };
     std::atomic<bool> abondon { false };

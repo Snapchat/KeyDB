@@ -100,7 +100,7 @@ thread_local struct redisServerThreadVars *serverTL = NULL;   // thread local se
 volatile unsigned long lru_clock; /* Server global current LRU time. */
 std::mutex time_thread_mutex;
 std::condition_variable time_thread_cv;
-bool time_thread_running = false;
+int sleeping_threads = cserver.cthreads;
 void wakeTimeThread();
 
 /* Our command table.
@@ -2514,7 +2514,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     serverAssert(g_pserver->repl_batch_offStart < 0);
     runAndPropogateToReplicas(processClients);
 
-    time_thread_running = false;
+    time_thread_mutex.lock();
+    sleeping_threads++;
+    time_thread_mutex.unlock();
 
     /* Handle precise timeouts of blocked clients. */
     handleBlockedClientsTimeout();
@@ -6086,7 +6088,9 @@ void OnTerminate()
 }
 
 void wakeTimeThread() {
-    time_thread_running = true;
+    time_thread_mutex.lock();
+    sleeping_threads--;
+    time_thread_mutex.unlock();
     time_thread_cv.notify_one();
 }
 
@@ -6096,7 +6100,7 @@ void *timeThreadMain(void*) {
     delay.tv_nsec = 100;
     while (true) {
         std::unique_lock<std::mutex> lock(time_thread_mutex);
-        if (!time_thread_running) {
+        if (sleeping_threads >= cserver.cthreads) {
             time_thread_cv.wait(lock);
         }
         updateCachedTime();

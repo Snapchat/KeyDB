@@ -373,6 +373,7 @@ int dictRehash(dict *d, int n) {
 dictAsyncRehashCtl::dictAsyncRehashCtl(struct dict *d, dictAsyncRehashCtl *next) : dict(d), next(next) {
     queue.reserve(c_targetQueueSize);
     __atomic_fetch_add(&d->refcount, 1, __ATOMIC_RELEASE);
+    this->rehashIdxBase = d->rehashidx;
 }
 
 dictAsyncRehashCtl *dictRehashAsyncStart(dict *d, int buckets) {
@@ -931,12 +932,18 @@ dictEntry *dictGetRandomKey(dict *d)
     if (dictSize(d) == 0) return NULL;
     if (dictIsRehashing(d)) _dictRehashStep(d);
     if (dictIsRehashing(d)) {
+        long rehashidx = d->rehashidx;
+        auto async = d->asyncdata;
+        while (async != nullptr) {
+            rehashidx = std::min((long)async->rehashIdxBase, rehashidx);
+            async = async->next;
+        }
         do {
             /* We are sure there are no elements in indexes from 0
              * to rehashidx-1 */
-            h = d->rehashidx + (random() % (d->ht[0].size +
+            h = rehashidx + (random() % (d->ht[0].size +
                                             d->ht[1].size -
-                                            d->rehashidx));
+                                            rehashidx));
             he = (h >= d->ht[0].size) ? d->ht[1].table[h - d->ht[0].size] :
                                       d->ht[0].table[h];
         } while(he == NULL);

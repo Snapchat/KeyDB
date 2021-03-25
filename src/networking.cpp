@@ -312,6 +312,16 @@ int prepareClientToWrite(client *c) {
  * Low level functions to add more data to output buffers.
  * -------------------------------------------------------------------------- */
 
+void _clientAsyncReplyBufferReserve(client *c, size_t len) {
+    if (c->replyAsync != nullptr)
+        return;
+    size_t newsize = std::max(len, (size_t)PROTO_ASYNC_REPLY_CHUNK_BYTES);
+    clientReplyBlock *replyNew = (clientReplyBlock*)zmalloc(sizeof(clientReplyBlock) + newsize);
+    replyNew->size = zmalloc_usable(replyNew) - sizeof(clientReplyBlock);
+    replyNew->used = 0;
+    c->replyAsync = replyNew;
+}
+
 /* Attempts to add the reply to the static buffer in the client struct.
  * Returns C_ERR if the buffer is full, or the reply list is not empty,
  * in which case the reply must be added to the reply list. */

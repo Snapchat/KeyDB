@@ -4449,6 +4449,7 @@ void replicateSubkeyExpire(redisDb *db, robj_roptr key, robj_roptr subkey, long 
     sdsfree(szFromObj(&objTtl));
 }
 
+void _clientAsyncReplyBufferReserve(client *c, size_t len);
 void flushReplBacklogToClients()
 {
     serverAssert(GlobalLocksAcquired());
@@ -4486,6 +4487,8 @@ void flushReplBacklogToClients()
                 addReplyProto(replica, g_pserver->repl_backlog + g_pserver->repl_batch_idxStart, cbCopy);
             } else {
                 auto cbPhase1 = g_pserver->repl_backlog_size - g_pserver->repl_batch_idxStart;
+                if (fAsyncWrite)
+                    _clientAsyncReplyBufferReserve(replica, cbPhase1 + g_pserver->repl_backlog_idx);
                 addReplyProto(replica, g_pserver->repl_backlog + g_pserver->repl_batch_idxStart, cbPhase1);
                 addReplyProto(replica, g_pserver->repl_backlog, g_pserver->repl_backlog_idx);
                 serverAssert((cbPhase1 + g_pserver->repl_backlog_idx) == (g_pserver->master_repl_offset - g_pserver->repl_batch_offStart));

@@ -61,6 +61,7 @@
 #include <algorithm>
 #include <uuid/uuid.h>
 #include <mutex>
+#include <condition_variable>
 #include "aelocker.h"
 #include "keycheck.h"
 #include "motd.h"
@@ -97,6 +98,10 @@ redisServer *g_pserver = &GlobalHidden::server;
 struct redisServerConst cserver;
 thread_local struct redisServerThreadVars *serverTL = NULL;   // thread local server vars
 volatile unsigned long lru_clock; /* Server global current LRU time. */
+std::mutex time_thread_mutex;
+std::condition_variable time_thread_cv;
+int sleeping_threads = cserver.cthreads;
+void wakeTimeThread();
 
 /* Our command table.
  *
@@ -2640,6 +2645,13 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     locker.disarm();
     if (!fSentReplies)
         handleClientsWithPendingWrites(iel, aof_state);
+
+    {
+        std::lock_guard<std::mutex> lock(time_thread_mutex);
+        sleeping_threads++;
+        serverAssert(sleeping_threads <= cserver.cthreads);
+    }
+
     if (moduleCount()) moduleReleaseGIL(TRUE /*fServerThread*/);
 
     /* Do NOT add anything below moduleReleaseGIL !!! */
@@ -2654,6 +2666,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
 
     /* Aquire the modules GIL so that their threads won't touch anything. */
     if (moduleCount()) moduleAcquireGIL(TRUE /*fServerThread*/);
+
+    wakeTimeThread();
 
     serverAssert(serverTL->gcEpoch.isReset());
     serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
@@ -6076,15 +6090,28 @@ void OnTerminate()
     serverPanic("std::teminate() called");
 }
 
+void wakeTimeThread() {
+    std::lock_guard<std::mutex> lock(time_thread_mutex);
+    sleeping_threads--;
+    serverAssert(sleeping_threads >= 0);
+    time_thread_cv.notify_one();
+}
+
 void *timeThreadMain(void*) {
     timespec delay;
     delay.tv_sec = 0;
     delay.tv_nsec = 100;
     while (true) {
+        {
+            std::unique_lock<std::mutex> lock(time_thread_mutex);
+            if (sleeping_threads >= cserver.cthreads) {
+                time_thread_cv.wait(lock);
+            }
+        }
         updateCachedTime();
         clock_nanosleep(CLOCK_REALTIME, 0, &delay, NULL);
     }
-} 
+}
 
 void *workerThreadMain(void *parg)
 {

@@ -1,3 +1,12 @@
+keydb (6:6.0.18-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * 6.0.18 - This release contains a number of improvements to stability and performance. 
+  * Additional tests were added with improvements to existing test reliability
+  * Merged Redis 6.0.10 into KeyDB
+  * Issues resolved in this release: #214, #222, #238, #257, #273, #276, #285
+
+ -- Ben Schermel <ben@eqalpha.com>  Fri, 26 Mar 2021 16:00:00 +0000
+
 keydb (6:6.0.16-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * 6.0.16 - This release contains significant performance improvements as well as fixes to the following issues: #234, #236, #233, #207, #229, #231

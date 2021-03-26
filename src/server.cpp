@@ -6091,6 +6091,7 @@ void OnTerminate()
 }
 
 void wakeTimeThread() {
+    updateCachedTime();
     std::lock_guard<std::mutex> lock(time_thread_mutex);
     sleeping_threads--;
     serverAssert(sleeping_threads >= 0);

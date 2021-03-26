@@ -5938,6 +5938,8 @@ int main(int argc, char **argv) {
     {
         initServerThread(g_pserver->rgthreadvar+iel, iel == IDX_EVENT_LOOP_MAIN);
     }
+
+    initServerThread(&g_pserver->modulethreadvar, false);
     readOOMScoreAdj();
     initServer();
     initNetworking(cserver.cthreads > 1 /* fReusePort */);

@@ -2581,6 +2581,8 @@ void redisDbPersistentData::updateValue(dict_iter itr, robj *val)
 
 void redisDbPersistentData::ensure(const char *key)
 {
+    if (m_pdbSnapshot == nullptr && m_spstorage == nullptr)
+        return;
     dictEntry *de = dictFind(m_pdict, key);
     ensure(key, &de);
 }

@@ -35,6 +35,11 @@
 #include <signal.h>
 #include <ctype.h>
 
+// Needed for prefetch
+#if defined(__x86_64__) || defined(__i386__)
+#include <xmmintrin.h>
+#endif
+
 /* Database backup. */
 struct dbBackup {
     const redisDbPersistentDataSnapshot **dbarray;
@@ -3002,8 +3007,26 @@ int dbnumFromDb(redisDb *db)
 
 void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command)
 {
-    if (m_spstorage == nullptr)
+    if (m_spstorage == nullptr) {
+#if defined(__x86_64__) || defined(__i386__)
+        // We do a quick 'n dirty check for set & get.  Anything else is too slow.
+        //  Should the user do something weird like remap them then the worst that will
+        //  happen is we don't prefetch or we prefetch wrong data.  A mild perf hit, but
+        //  not dangerous
+        const char *cmd = szFromObj(command.argv[0]);
+        if (!strcasecmp(cmd, "set") || !strcasecmp(cmd, "get")) {
+            auto h = dictSdsHash(szFromObj(command.argv[1]));
+            for (int iht = 0; iht < 2; ++iht) {
+                auto hT = h & c->db->m_pdict->ht[iht].sizemask;
+                if (c->db->m_pdict->ht[iht].table != nullptr)
+                    _mm_prefetch(c->db->m_pdict->ht[iht].table[hT], _MM_HINT_T1);
+                if (!dictIsRehashing(c->db->m_pdict))
+                    break;
+            }
+        }
+#endif
         return;
+    }
 
     AeLocker lock;
 

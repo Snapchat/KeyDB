@@ -2358,8 +2358,8 @@ void parseClientCommandBuffer(client *c) {
             serverAssert(c->vecqueuedcmd.back().reploff >= 0);
         }
 
-        /* Prefetch if we have a storage provider and we're not in the global lock */
-        if (cqueries < c->vecqueuedcmd.size() && g_pserver->m_pstorageFactory != nullptr && !GlobalLocksAcquired()) {
+        /* Prefetch outside the lock for better perf */
+        if (cqueries < c->vecqueuedcmd.size() && !GlobalLocksAcquired()) {
             auto &query = c->vecqueuedcmd.back();
             if (query.argc > 0 && query.argc == query.argcMax) {
                 c->db->prefetchKeysAsync(c, query);

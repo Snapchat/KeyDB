@@ -329,7 +329,6 @@ static int s_cAcquisitionsModule = 0;
 static std::mutex s_mutex;
 static std::condition_variable s_cv;
 static std::recursive_mutex s_mutexModule;
-static redisServerThreadVars vars;      /* Server thread local variables to be used by module threads */
 thread_local bool g_fModuleThread = false;
 
 typedef void (*RedisModuleForkDoneHandler) (int exitcode, int bysignal, void *user_data);
@@ -4775,7 +4774,7 @@ int moduleClientIsBlockedOnKeys(client *c) {
  * callback via RM_GetBlockedClientPrivateData). */
 int RM_UnblockClient(RedisModuleBlockedClient *bc, void *privdata) {
     if (serverTL == nullptr) {
-        serverTL = &vars;
+        serverTL = &g_pserver->modulethreadvar; 
         g_fModuleThread = true;
     }
     if (bc->blocked_on_keys) {
@@ -5058,7 +5057,7 @@ void RM_FreeThreadSafeContext(RedisModuleCtx *ctx) {
 void RM_ThreadSafeContextLock(RedisModuleCtx *ctx) {
     UNUSED(ctx);
     if (serverTL == nullptr) {
-        serverTL = &vars;
+        serverTL = &g_pserver->modulethreadvar;
         g_fModuleThread = true;
     }
     moduleAcquireGIL(FALSE /*fServerThread*/, true /*fExclusive*/);

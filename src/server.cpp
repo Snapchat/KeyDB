@@ -2401,7 +2401,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     locker.disarm();
     if (!fSentReplies)
         handleClientsWithPendingWrites(iel, aof_state);
-    if (moduleCount()) moduleReleaseGIL(TRUE /*fServerThread*/);
+    moduleReleaseGIL(TRUE /*fServerThread*/);
 
     /* Do NOT add anything below moduleReleaseGIL !!! */
 }
@@ -2414,7 +2414,7 @@ void afterSleep(struct aeEventLoop *eventLoop) {
     /* Do NOT add anything above moduleAcquireGIL !!! */
 
     /* Aquire the modules GIL so that their threads won't touch anything. */
-    if (moduleCount()) moduleAcquireGIL(TRUE /*fServerThread*/);
+    moduleAcquireGIL(TRUE /*fServerThread*/);
 }
 
 /* =========================== Server initialization ======================== */

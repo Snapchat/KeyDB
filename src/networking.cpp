@@ -1672,7 +1672,7 @@ int writeToClient(client *c, int handler_installed) {
 
     ssize_t nwritten = 0, totwritten = 0;
     clientReplyBlock *o;
-    AssertCorrectThread(c);
+    serverAssertDebug(FCorrectThread(c));
 
     std::unique_lock<decltype(c->lock)> lock(c->lock);
    
@@ -1891,7 +1891,7 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
     processed += (int)vec.size();
 
     for (client *c : vec) {
-        AssertCorrectThread(c);
+        serverAssertDebug(FCorrectThread(c));
 
         uint64_t flags = c->flags.fetch_and(~CLIENT_PENDING_WRITE, std::memory_order_relaxed);
 
@@ -2438,8 +2438,8 @@ void readQueryFromClient(connection *conn) {
     int nread, readlen;
     size_t qblen;
 
-    serverAssert(FCorrectThread(c));
-    serverAssert(!GlobalLocksAcquired());
+    serverAssertDebug(FCorrectThread(c) sdfsdf);
+    serverAssertDebug(!GlobalLocksAcquired());
     
     AeLocker aelock;
     AssertCorrectThread(c);

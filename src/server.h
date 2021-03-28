@@ -1786,6 +1786,19 @@ class GarbageCollectorCollection
     GarbageCollector<redisDbPersistentDataSnapshot> garbageCollectorSnapshot;
     GarbageCollector<ICollectable> garbageCollectorGeneric;
 
+    class CPtrCollectable : public ICollectable 
+    {
+        void *m_pv;
+
+    public:
+        CPtrCollectable(void *pv) 
+            : m_pv(pv)
+            {}
+        ~CPtrCollectable() {
+            zfree(m_pv);
+        }
+    };
+
 public:
     struct Epoch
     {
@@ -1830,6 +1843,13 @@ public:
     void enqueue(Epoch e, std::unique_ptr<ICollectable> &&sp)
     {
         garbageCollectorGeneric.enqueue(e.epochGeneric, std::move(sp));
+    }
+
+    template<typename T>
+    void enqueueCPtr(Epoch e, T p)
+    {
+        auto sp = std::make_unique<CPtrCollectable>(reinterpret_cast<void*>(p));
+        enqueue(e, std::move(sp));
     }
 };
 

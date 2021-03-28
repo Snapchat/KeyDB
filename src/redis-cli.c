@@ -144,6 +144,11 @@ static void cliRefreshPrompt(void) {
     sdsfree(prompt);
 }
 
+struct dictEntry;
+void asyncFreeDictTable(struct dictEntry **de) {
+    zfree(de);
+}
+
 /* Return the name of the dotfile for the specified 'dotfilename'.
  * Normally it just concatenates user $HOME to the file specified
  * in 'dotfilename'. However if the environment variable 'envoverride'

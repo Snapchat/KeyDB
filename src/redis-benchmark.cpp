@@ -813,6 +813,10 @@ static int ipow(int base, int exp) {
     return result;
 }
 
+extern "C" void asyncFreeDictTable(dictEntry **de) {
+    zfree(de);
+}
+
 static void showLatencyReport(void) {
     int i, curlat = 0;
     int usbetweenlat = ipow(10, MAX_LATENCY_PRECISION-config.precision);

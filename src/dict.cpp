@@ -546,7 +546,7 @@ int dictRehashMilliseconds(dict *d, int ms) {
 static void _dictRehashStep(dict *d) {
     unsigned iterators;
     __atomic_load(&d->iterators, &iterators, __ATOMIC_RELAXED);
-    if (iterators == 0) dictRehash(d,2);
+    if (iterators == 0) dictRehash(d,1);
 }
 
 /* Add an element to the target hash table */

@@ -2479,6 +2479,15 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
     return 1000/g_pserver->hz;
 }
 
+extern "C" void asyncFreeDictTable(dictEntry **de)
+{
+    if (de == nullptr || serverTL == nullptr || serverTL->gcEpoch.isReset()) {
+        zfree(de);
+    } else {
+        g_pserver->garbageCollector.enqueueCPtr(serverTL->gcEpoch, de);
+    }
+}
+
 extern int ProcessingEventsWhileBlocked;
 void processClients();
 

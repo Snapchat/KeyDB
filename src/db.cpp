@@ -3013,15 +3013,19 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
         //  Should the user do something weird like remap them then the worst that will
         //  happen is we don't prefetch or we prefetch wrong data.  A mild perf hit, but
         //  not dangerous
-        const char *cmd = szFromObj(command.argv[0]);
-        if (!strcasecmp(cmd, "set") || !strcasecmp(cmd, "get")) {
-            auto h = dictSdsHash(szFromObj(command.argv[1]));
-            for (int iht = 0; iht < 2; ++iht) {
-                auto hT = h & c->db->m_pdict->ht[iht].sizemask;
-                if (c->db->m_pdict->ht[iht].table != nullptr)
-                    _mm_prefetch(c->db->m_pdict->ht[iht].table[hT], _MM_HINT_T1);
-                if (!dictIsRehashing(c->db->m_pdict))
-                    break;
+        if (command.argc >= 2) {
+            const char *cmd = szFromObj(command.argv[0]);
+            if (!strcasecmp(cmd, "set") || !strcasecmp(cmd, "get")) {
+                auto h = dictSdsHash(szFromObj(command.argv[1]));
+                for (int iht = 0; iht < 2; ++iht) {
+                    auto hT = h & c->db->m_pdict->ht[iht].sizemask;
+                    dictEntry **table;
+                    __atomic_load(&c->db->m_pdict->ht[iht].table, &table, __ATOMIC_RELAXED);
+                    if (table != nullptr)
+                        _mm_prefetch(table[hT], _MM_HINT_T2);
+                    if (!dictIsRehashing(c->db->m_pdict))
+                        break;
+                }
             }
         }
 #endif

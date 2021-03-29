@@ -29,4 +29,6 @@ $TCLSH tests/test_helper.tcl \
 --single unit/moduleapi/blockedclient \
 --single unit/moduleapi/moduleloadsave \
 --single unit/moduleapi/getkeys \
+--single unit/moduleapi/timers \
+--config server-threads 3 \
 "${@}"

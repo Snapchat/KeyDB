@@ -1389,6 +1389,8 @@ struct redisServerThreadVars {
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     long unsigned commandsExecuted = 0;
     bool fRetrySetAofEvent = false;
+    bool modulesEnabledThisAeLoop = false; /* In this loop of aeMain, were modules enabled before 
+                                              the thread went to sleep? */
     std::vector<client*> vecclientsProcess;
 };
 

@@ -2348,8 +2348,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     locker.disarm();
     if (!fSentReplies)
         handleClientsWithPendingWrites(iel, aof_state);
-    moduleReleaseGIL(TRUE /*fServerThread*/);
-
+    /* Determine whether the modules are enabled before sleeping, and use that result
+       both here, and after wakeup to avoid double acquire or release of the GIL */
+    serverTL->modulesEnabledThisAeLoop = !!moduleCount();
+    if (serverTL->modulesEnabledThisAeLoop) moduleReleaseGIL(TRUE /*fServerThread*/);
     /* Do NOT add anything below moduleReleaseGIL !!! */
 }
 
@@ -2360,8 +2362,10 @@ void afterSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
     /* Do NOT add anything above moduleAcquireGIL !!! */
 
-    /* Aquire the modules GIL so that their threads won't touch anything. */
-    moduleAcquireGIL(TRUE /*fServerThread*/);
+    /* Aquire the modules GIL so that their threads won't touch anything. 
+       Don't check here that modules are enabled, rather use the result from beforeSleep
+       Otherwise you may double acquire the GIL and cause deadlocks in the module */
+    if (serverTL->modulesEnabledThisAeLoop) moduleAcquireGIL(TRUE /*fServerThread*/);
 }
 
 /* =========================== Server initialization ======================== */

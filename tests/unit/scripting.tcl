@@ -430,6 +430,21 @@ start_server {tags {"scripting"}} {
         set res
     } {102}
 
+    test {EVAL with pipelined command (No crash)} {
+        r flushall
+        r config set lua-time-limit 1
+        set rd [redis_deferring_client]
+        $rd eval {for i=1,1000000 do redis.call('set', i, 'sdfdsfd') end} 0
+        $rd set testkey foo
+        $rd get testkey
+        after 1200
+        catch {r echo "foo"} err
+        assert_match {BUSY*} $err
+        $rd read
+        $rd close
+    }
+
+
     test {EVAL timeout from AOF} {
         # generate a long running script that is propagated to the AOF as script
         # make sure that the script times out during loading

@@ -2315,6 +2315,8 @@ void processInputBuffer(client *c, int callFlags) {
         /* Immediately abort if the client is in the middle of something. */
         if (c->flags & CLIENT_BLOCKED) break;
 
+        if (c->flags & CLIENT_EXECUTING_COMMAND) break;
+
         /* Don't process input from the master while there is a busy script
          * condition on the replica. We want just to accumulate the replication
          * stream (instead of replying -BUSY like we do with other clients) and
@@ -2349,13 +2351,16 @@ void processInputBuffer(client *c, int callFlags) {
         if (c->argc == 0) {
             resetClient(c);
         } else {
+            c->flags |= CLIENT_EXECUTING_COMMAND;
             /* We are finally ready to execute the command. */
             if (processCommandAndResetClient(c, callFlags) == C_ERR) {
                 /* If the client is no longer valid, we avoid exiting this
                  * loop and trimming the client buffer later. So we return
                  * ASAP in that case. */
+                c->flags &= ~CLIENT_EXECUTING_COMMAND;
                 return;
             }
+            c->flags &= ~CLIENT_EXECUTING_COMMAND;
         }
     }
 

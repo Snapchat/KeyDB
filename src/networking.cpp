@@ -2403,6 +2403,7 @@ void processInputBuffer(client *c, bool fParse, int callFlags) {
         /* Return if we're still parsing this command */
         auto &cmd = c->vecqueuedcmd.front();
         if (cmd.argc != cmd.argcMax) break;
+        if (c->flags & CLIENT_EXECUTING_COMMAND) break;
 
         if (!FClientReady(c)) break;
 
@@ -2421,13 +2422,16 @@ void processInputBuffer(client *c, bool fParse, int callFlags) {
         if (c->argc == 0) {
             resetClient(c);
         } else {
+            c->flags |= CLIENT_EXECUTING_COMMAND;
             /* We are finally ready to execute the command. */
             if (processCommandAndResetClient(c, callFlags) == C_ERR) {
                 /* If the client is no longer valid, we avoid exiting this
                  * loop and trimming the client buffer later. So we return
                  * ASAP in that case. */
+                c->flags &= ~CLIENT_EXECUTING_COMMAND;
                 return;
             }
+            c->flags &= ~CLIENT_EXECUTING_COMMAND;
         }
     }
 }

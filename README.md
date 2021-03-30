@@ -88,9 +88,13 @@ KeyDB can be compiled and is tested for use on Linux.  KeyDB currently relies on
 
 More on CentOS/Archlinux/Alpine/Debian/Ubuntu dependencies and builds can be found here: https://docs.keydb.dev/docs/build/
 
+Init and clone submodule dependencies:
+
+    % git submodule init && git submodule update
+
 Install dependencies:
 
-    % sudo apt install build-essential nasm autotools-dev autoconf libjemalloc-dev tcl tcl-dev uuid-dev libcurl4-openssl-dev
+    % sudo apt install build-essential nasm autotools-dev autoconf libjemalloc-dev tcl tcl-dev uuid-dev libcurl4-openssl-dev libbz2-dev libzstd-dev liblz4-dev libsnappy-dev
 
 Compiling is as simple as:
 

@@ -1794,7 +1794,13 @@ class GarbageCollectorCollection
         CPtrCollectable(void *pv) 
             : m_pv(pv)
             {}
-        ~CPtrCollectable() {
+
+        CPtrCollectable(CPtrCollectable &&move) {
+            m_pv = move.m_pv;
+            move.m_pv = nullptr;
+        }
+
+        virtual ~CPtrCollectable() {
             zfree(m_pv);
         }
     };
@@ -1810,6 +1816,20 @@ public:
             epochGeneric = 0;
         }
 
+        Epoch() = default;
+
+        Epoch (const Epoch &other) {
+            epochSnapshot = other.epochSnapshot;
+            epochGeneric = other.epochGeneric;
+        }
+
+        Epoch &operator=(const Epoch &other) {
+            serverAssert(isReset());
+            epochSnapshot = other.epochSnapshot;
+            epochGeneric = other.epochGeneric;
+            return *this;
+        }
+
         bool isReset() const {
             return epochSnapshot == 0 && epochGeneric == 0;
         }
@@ -1823,10 +1843,13 @@ public:
         return e;
     }
 
-    void endEpoch(Epoch e, bool fNoFree = false)
+    void endEpoch(Epoch &e, bool fNoFree = false)
     {
-        garbageCollectorSnapshot.endEpoch(e.epochSnapshot, fNoFree);
-        garbageCollectorGeneric.endEpoch(e.epochGeneric, fNoFree);
+        auto epochSnapshot = e.epochSnapshot;
+        auto epochGeneric = e.epochGeneric;
+        e.reset();  // We must do this early as GC'd dtors can themselves try to enqueue more data
+        garbageCollectorSnapshot.endEpoch(epochSnapshot, fNoFree);
+        garbageCollectorGeneric.endEpoch(epochGeneric, fNoFree);
     }
 
     void shutdown()

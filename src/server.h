@@ -1786,6 +1786,25 @@ class GarbageCollectorCollection
     GarbageCollector<redisDbPersistentDataSnapshot> garbageCollectorSnapshot;
     GarbageCollector<ICollectable> garbageCollectorGeneric;
 
+    class CPtrCollectable : public ICollectable 
+    {
+        void *m_pv;
+
+    public:
+        CPtrCollectable(void *pv) 
+            : m_pv(pv)
+            {}
+
+        CPtrCollectable(CPtrCollectable &&move) {
+            m_pv = move.m_pv;
+            move.m_pv = nullptr;
+        }
+
+        virtual ~CPtrCollectable() {
+            zfree(m_pv);
+        }
+    };
+
 public:
     struct Epoch
     {
@@ -1795,6 +1814,20 @@ public:
         void reset() {
             epochSnapshot = 0;
             epochGeneric = 0;
+        }
+
+        Epoch() = default;
+
+        Epoch (const Epoch &other) {
+            epochSnapshot = other.epochSnapshot;
+            epochGeneric = other.epochGeneric;
+        }
+
+        Epoch &operator=(const Epoch &other) {
+            serverAssert(isReset());
+            epochSnapshot = other.epochSnapshot;
+            epochGeneric = other.epochGeneric;
+            return *this;
         }
 
         bool isReset() const {
@@ -1810,10 +1843,13 @@ public:
         return e;
     }
 
-    void endEpoch(Epoch e, bool fNoFree = false)
+    void endEpoch(Epoch &e, bool fNoFree = false)
     {
-        garbageCollectorSnapshot.endEpoch(e.epochSnapshot, fNoFree);
-        garbageCollectorGeneric.endEpoch(e.epochGeneric, fNoFree);
+        auto epochSnapshot = e.epochSnapshot;
+        auto epochGeneric = e.epochGeneric;
+        e.reset();  // We must do this early as GC'd dtors can themselves try to enqueue more data
+        garbageCollectorSnapshot.endEpoch(epochSnapshot, fNoFree);
+        garbageCollectorGeneric.endEpoch(epochGeneric, fNoFree);
     }
 
     void shutdown()
@@ -1830,6 +1866,13 @@ public:
     void enqueue(Epoch e, std::unique_ptr<ICollectable> &&sp)
     {
         garbageCollectorGeneric.enqueue(e.epochGeneric, std::move(sp));
+    }
+
+    template<typename T>
+    void enqueueCPtr(Epoch e, T p)
+    {
+        auto sp = std::make_unique<CPtrCollectable>(reinterpret_cast<void*>(p));
+        enqueue(e, std::move(sp));
     }
 };
 

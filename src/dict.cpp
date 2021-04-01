@@ -74,6 +74,8 @@ static int _dictInit(dict *ht, dictType *type, void *privDataPtr);
 
 static uint8_t dict_hash_function_seed[16];
 
+extern "C" void asyncFreeDictTable(dictEntry **de);
+
 void dictSetHashFunctionSeed(uint8_t *seed) {
     memcpy(dict_hash_function_seed,seed,sizeof(dict_hash_function_seed));
 }
@@ -359,7 +361,7 @@ int dictRehash(dict *d, int n) {
 
     /* Check if we already rehashed the whole table... */
     if (d->ht[0].used == 0) {
-        zfree(d->ht[0].table);
+        asyncFreeDictTable(d->ht[0].table);
         d->ht[0] = d->ht[1];
         _dictReset(&d->ht[1]);
         d->rehashidx = -1;
@@ -487,7 +489,7 @@ void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl, bool fFree) {
 
         /* Check if we already rehashed the whole table... */
         if (d->ht[0].used == 0 && d->asyncdata == nullptr) {
-            zfree(d->ht[0].table);
+            asyncFreeDictTable(d->ht[0].table);
             d->ht[0] = d->ht[1];
             _dictReset(&d->ht[1]);
             d->rehashidx = -1;
@@ -544,7 +546,7 @@ int dictRehashMilliseconds(dict *d, int ms) {
 static void _dictRehashStep(dict *d) {
     unsigned iterators;
     __atomic_load(&d->iterators, &iterators, __ATOMIC_RELAXED);
-    if (iterators == 0) dictRehash(d,2);
+    if (iterators == 0) dictRehash(d,1);
 }
 
 /* Add an element to the target hash table */
@@ -762,7 +764,7 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
         }
     }
     /* Free the table and the allocated cache structure */
-    zfree(ht->table);
+    asyncFreeDictTable(ht->table);
     /* Re-initialize the table */
     _dictReset(ht);
     return DICT_OK; /* never fails */

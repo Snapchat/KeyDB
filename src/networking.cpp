@@ -312,6 +312,16 @@ int prepareClientToWrite(client *c) {
  * Low level functions to add more data to output buffers.
  * -------------------------------------------------------------------------- */
 
+void _clientAsyncReplyBufferReserve(client *c, size_t len) {
+    if (c->replyAsync != nullptr)
+        return;
+    size_t newsize = std::max(len, (size_t)PROTO_ASYNC_REPLY_CHUNK_BYTES);
+    clientReplyBlock *replyNew = (clientReplyBlock*)zmalloc(sizeof(clientReplyBlock) + newsize);
+    replyNew->size = zmalloc_usable(replyNew) - sizeof(clientReplyBlock);
+    replyNew->used = 0;
+    c->replyAsync = replyNew;
+}
+
 /* Attempts to add the reply to the static buffer in the client struct.
  * Returns C_ERR if the buffer is full, or the reply list is not empty,
  * in which case the reply must be added to the reply list. */
@@ -1662,7 +1672,7 @@ int writeToClient(client *c, int handler_installed) {
 
     ssize_t nwritten = 0, totwritten = 0;
     clientReplyBlock *o;
-    AssertCorrectThread(c);
+    serverAssertDebug(FCorrectThread(c));
 
     std::unique_lock<decltype(c->lock)> lock(c->lock);
    
@@ -1881,7 +1891,7 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
     processed += (int)vec.size();
 
     for (client *c : vec) {
-        AssertCorrectThread(c);
+        serverAssertDebug(FCorrectThread(c));
 
         uint64_t flags = c->flags.fetch_and(~CLIENT_PENDING_WRITE, std::memory_order_relaxed);
 
@@ -2358,8 +2368,8 @@ void parseClientCommandBuffer(client *c) {
             serverAssert(c->vecqueuedcmd.back().reploff >= 0);
         }
 
-        /* Prefetch if we have a storage provider and we're not in the global lock */
-        if (cqueriesStart < c->vecqueuedcmd.size() && g_pserver->m_pstorageFactory != nullptr && !GlobalLocksAcquired()) {
+        /* Prefetch outside the lock for better perf */
+        if (cqueries < c->vecqueuedcmd.size() && !GlobalLocksAcquired()) {
             auto &query = c->vecqueuedcmd.back();
             if (query.argc > 0 && query.argc == query.argcMax) {
                 if (c->db->prefetchKeysAsync(c, query, c->vecqueuedcmd.size() == 1)) {
@@ -2430,8 +2440,8 @@ void readQueryFromClient(connection *conn) {
     int nread, readlen;
     size_t qblen;
 
-    serverAssert(FCorrectThread(c));
-    serverAssert(!GlobalLocksAcquired());
+    serverAssertDebug(FCorrectThread(c) sdfsdf);
+    serverAssertDebug(!GlobalLocksAcquired());
     
     AeLocker aelock;
     AssertCorrectThread(c);

@@ -2464,7 +2464,7 @@ void redisDb::storageProviderInitialize()
 
 bool redisDbPersistentData::insert(char *key, robj *o, bool fAssumeNew)
 {
-    if (!fAssumeNew)
+    if (!fAssumeNew && (g_pserver->m_pstorageFactory != nullptr || m_pdbSnapshot != nullptr))
         ensure(key);
     int res = dictAdd(m_pdict, key, o);
     serverAssert(FImplies(fAssumeNew, res == DICT_OK));

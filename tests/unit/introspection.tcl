@@ -90,6 +90,7 @@ start_server {tags {"introspection"}} {
             server_cpulist
             bio_cpulist
             aof_rewrite_cpulist
+            time-thread-priority
             bgsave_cpulist
 	        storage-cache-mode
 	        storage-provider-options

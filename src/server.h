@@ -2000,6 +2000,7 @@ struct redisServerConst {
     int storage_memory_model = STORAGE_WRITETHROUGH;
     char *storage_conf = nullptr;
     int fForkBgSave = false;
+    int time_thread_priority = false;
 };
 
 struct redisServer {

@@ -1850,6 +1850,11 @@ public:
         garbageCollectorGeneric.endEpoch(epochGeneric, fNoFree);
     }
 
+    bool empty()
+    {
+        return garbageCollectorGeneric.empty() && garbageCollectorSnapshot.empty();
+    }
+
     void shutdown()
     {
         garbageCollectorSnapshot.shutdown();

@@ -3005,7 +3005,7 @@ int dbnumFromDb(redisDb *db)
     serverPanic("invalid database pointer");
 }
 
-void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command)
+bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command, bool fExecOK)
 {
     if (m_spstorage == nullptr) {
 #if defined(__x86_64__) || defined(__i386__)
@@ -3039,7 +3039,7 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
     getKeysResult result = GETKEYS_RESULT_INIT;
     auto cmd = lookupCommand(szFromObj(command.argv[0]));
     if (cmd == nullptr)
-        return; // Bad command? It's not for us to judge, just bail
+        return false; // Bad command? It's not for us to judge, just bail
     int numkeys = getKeysFromCommand(cmd, command.argv, command.argc, &result);
     for (int ikey = 0; ikey < numkeys; ++ikey)
     {
@@ -3071,41 +3071,53 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
         }
     }
 
-    lock.arm(c);
-    for (auto &tuple : vecInserts)
-    {
-        sds sharedKey = std::get<0>(tuple);
-        robj *o = std::get<1>(tuple);
-        std::unique_ptr<expireEntry> spexpire = std::move(std::get<2>(tuple));
-
-        if (o != nullptr)
+    if (!vecInserts.empty()) {
+        lock.arm(c);
+        for (auto &tuple : vecInserts)
         {
-            if (this->find_cached_threadsafe(sharedKey) != nullptr)
+            sds sharedKey = std::get<0>(tuple);
+            robj *o = std::get<1>(tuple);
+            std::unique_ptr<expireEntry> spexpire = std::move(std::get<2>(tuple));
+
+            if (o != nullptr)
             {
-                // While unlocked this was already ensured
-                decrRefCount(o);
-                sdsfree(sharedKey);
+                if (this->find_cached_threadsafe(sharedKey) != nullptr)
+                {
+                    // While unlocked this was already ensured
+                    decrRefCount(o);
+                    sdsfree(sharedKey);
+                }
+                else
+                {
+                    dictAdd(m_pdict, sharedKey, o);
+                    o->SetFExpires(spexpire != nullptr);
+
+                    if (spexpire != nullptr)
+                    {
+                        auto itr = m_setexpire->find(sharedKey);
+                        if (itr != m_setexpire->end())
+                            m_setexpire->erase(itr);
+                        m_setexpire->insert(std::move(*spexpire));
+                        serverAssert(m_setexpire->find(sharedKey) != m_setexpire->end());
+                    }
+                    serverAssert(o->FExpires() == (m_setexpire->find(sharedKey) != m_setexpire->end()));
+                }
             }
             else
             {
-                dictAdd(m_pdict, sharedKey, o);
-                o->SetFExpires(spexpire != nullptr);
-
-                if (spexpire != nullptr)
-                {
-                    auto itr = m_setexpire->find(sharedKey);
-                    if (itr != m_setexpire->end())
-                        m_setexpire->erase(itr);
-                    m_setexpire->insert(std::move(*spexpire));
-                    serverAssert(m_setexpire->find(sharedKey) != m_setexpire->end());
-                }
-                serverAssert(o->FExpires() == (m_setexpire->find(sharedKey) != m_setexpire->end()));
+                if (sharedKey != nullptr)
+                    sdsfree(sharedKey); // BUG but don't bother crashing
             }
         }
-        else
-        {
-            if (sharedKey != nullptr)
-                sdsfree(sharedKey); // BUG but don't bother crashing
+        lock.disarm();
+    }
+
+    if (fExecOK && cmd->proc == getCommand && !vecInserts.empty()) {
+        robj *o = std::get<1>(vecInserts[0]);
+        if (o != nullptr) {
+            addReplyBulk(c, o);
+            return true;
         }
     }
+    return false;
 }

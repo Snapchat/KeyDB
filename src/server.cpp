@@ -2441,13 +2441,15 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     ProcessPendingAsyncWrites();
 
     run_with_period(10) {
-        // Server threads don't free the GC, but if we don't have a
-        //  a bgsave or some other async task then we'll hold onto the
-        //  data for too long
-        g_pserver->asyncworkqueue->AddWorkFunction([]{
-            auto epoch = g_pserver->garbageCollector.startEpoch();
-            g_pserver->garbageCollector.endEpoch(epoch);
-        });
+        if (!g_pserver->garbageCollector.empty()) {
+            // Server threads don't free the GC, but if we don't have a
+            //  a bgsave or some other async task then we'll hold onto the
+            //  data for too long
+            g_pserver->asyncworkqueue->AddWorkFunction([]{
+                auto epoch = g_pserver->garbageCollector.startEpoch();
+                g_pserver->garbageCollector.endEpoch(epoch);
+            });
+        }
     }
 
     g_pserver->cronloops++;

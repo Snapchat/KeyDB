@@ -1259,7 +1259,9 @@ void acceptOnThread(connection *conn, int flags, char *cip)
     }
     else
     {
-        ielTarget = chooseBestThreadForAccept();
+        // Cluster connections are more transient, so its not worth the cost to balance
+        //  we can trust that SO_REUSEPORT is doing its job of distributing connections
+        ielTarget = g_pserver->cluster_enabled ? ielCur : chooseBestThreadForAccept();
     }
 
     rgacceptsInFlight[ielTarget].fetch_add(1, std::memory_order_relaxed);

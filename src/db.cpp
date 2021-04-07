@@ -3029,7 +3029,7 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
             }
         }
 #endif
-        return;
+        return false;
     }
 
     AeLocker lock;

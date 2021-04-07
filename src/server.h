@@ -1134,7 +1134,7 @@ public:
     bool removeCachedValue(const char *key);
     void removeAllCachedValues();
 
-    void prefetchKeysAsync(client *c, struct parsed_command &command);
+    bool prefetchKeysAsync(client *c, struct parsed_command &command, bool fExecOK);
 
     bool FSnapshot() const { return m_spdbSnapshotHOLDER != nullptr; }
 
@@ -2000,6 +2000,7 @@ struct redisServerConst {
     int storage_memory_model = STORAGE_WRITETHROUGH;
     char *storage_conf = nullptr;
     int fForkBgSave = false;
+    int time_thread_priority = false;
 };
 
 struct redisServer {

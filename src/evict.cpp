@@ -587,7 +587,7 @@ int freeMemoryIfNeeded(bool fQuickCycle, bool fPreSnapshot) {
         /* volatile-random and allkeys-random policy */
         if (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM ||
                  g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_RANDOM
-                 || fEvictToStorage)
+                 || fFallback)
         {
             /* When evicting a random key, we try to evict a key for
              * each DB, so we use the static 'next_db' variable to

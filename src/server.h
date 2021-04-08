@@ -2391,6 +2391,8 @@ struct redisServer {
     char *aof_rewrite_cpulist; /* cpu affinity list of aof rewrite process. */
     char *bgsave_cpulist; /* cpu affinity list of bgsave process. */
 
+    int prefetch_enabled = 1;
+
     long long repl_batch_offStart = -1;
     long long repl_batch_idxStart = -1;
 

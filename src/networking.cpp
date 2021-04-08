@@ -2371,7 +2371,7 @@ void parseClientCommandBuffer(client *c) {
         }
 
         /* Prefetch outside the lock for better perf */
-        if (cqueriesStart < c->vecqueuedcmd.size() && !GlobalLocksAcquired()) {
+        if (g_pserver->prefetch_enabled && cqueriesStart < c->vecqueuedcmd.size() && !GlobalLocksAcquired()) {
             auto &query = c->vecqueuedcmd.back();
             if (query.argc > 0 && query.argc == query.argcMax) {
                 if (c->db->prefetchKeysAsync(c, query, c->vecqueuedcmd.size() == 1)) {

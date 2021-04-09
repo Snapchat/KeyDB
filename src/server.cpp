@@ -6462,9 +6462,6 @@ int main(int argc, char **argv) {
     serverAssert(cserver.cthreads > 0 && cserver.cthreads <= MAX_EVENT_LOOPS);
 
     pthread_create(&cserver.time_thread_id, nullptr, timeThreadMain, nullptr);
-    struct sched_param time_thread_priority;
-    time_thread_priority.sched_priority = sched_get_priority_max(SCHED_FIFO);
-    pthread_setschedparam(cserver.time_thread_id, SCHED_FIFO, &time_thread_priority);
 
     pthread_attr_t tattr;
     pthread_attr_init(&tattr);

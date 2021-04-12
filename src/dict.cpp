@@ -384,7 +384,7 @@ dictAsyncRehashCtl *dictRehashAsyncStart(dict *d, int buckets) {
 
     d->asyncdata = new dictAsyncRehashCtl(d, d->asyncdata);
 
-    int empty_visits = buckets * 10;
+    int empty_visits = buckets;
 
     while (d->asyncdata->queue.size() < (size_t)buckets && (size_t)d->rehashidx < d->ht[0].size) {
         dictEntry *de;

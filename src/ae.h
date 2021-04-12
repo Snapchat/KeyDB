@@ -169,6 +169,8 @@ void aeAcquireLock();
 int aeTryAcquireLock(int fWeak);
 void aeReleaseLock();
 int aeThreadOwnsLock();
+int aeLockContested(int threshold);
+int aeLockContention(); // returns the number of instantaneous threads waiting on the lock
 
 #ifdef __cplusplus
 }

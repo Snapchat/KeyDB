@@ -870,3 +870,19 @@ int aeThreadOwnsLock()
 {
     return g_lock.fOwnLock();
 }
+
+int aeLockContested(int threshold)
+{
+    return g_lock.m_ticket.m_active < static_cast<uint16_t>(g_lock.m_ticket.m_avail - threshold);
+}
+
+int aeLockContention()
+{
+    ticket ticketT;
+    __atomic_load(&g_lock.m_ticket.u, &ticketT.u, __ATOMIC_RELAXED);
+    int32_t avail = ticketT.m_avail;
+    int32_t active = ticketT.m_active;
+    if (avail < active)
+        avail += 0x10000;
+    return avail - active;
+}

@@ -2404,6 +2404,11 @@ struct redisServer {
     long long repl_batch_offStart = -1;
     long long repl_batch_idxStart = -1;
 
+    /* Lock Contention Ring Buffer */
+    static const size_t s_lockContentionSamples = 64;
+    uint16_t rglockSamples[s_lockContentionSamples];
+    unsigned ilockRingHead = 0;
+
     bool FRdbSaveInProgress() const { return rdbThreadVars.fRdbThreadActive; }
 };
 

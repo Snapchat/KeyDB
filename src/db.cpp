@@ -3021,8 +3021,13 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
                     auto hT = h & c->db->m_pdict->ht[iht].sizemask;
                     dictEntry **table;
                     __atomic_load(&c->db->m_pdict->ht[iht].table, &table, __ATOMIC_RELAXED);
-                    if (table != nullptr)
-                        _mm_prefetch(table[hT], _MM_HINT_T2);
+                    if (table != nullptr) {
+                        dictEntry *de = table[hT];
+                        while (de != nullptr) {
+                            _mm_prefetch(dictGetKey(de), _MM_HINT_T2);
+                            de = de->next;
+                        }
+                    }
                     if (!dictIsRehashing(c->db->m_pdict))
                         break;
                 }

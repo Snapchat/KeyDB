@@ -2442,6 +2442,14 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* CRON functions may trigger async writes, so do this last */
     ProcessPendingAsyncWrites();
 
+    // Measure lock contention from a different thread to be more accurate
+    g_pserver->asyncworkqueue->AddWorkFunction([]{
+        g_pserver->rglockSamples[g_pserver->ilockRingHead] = (uint16_t)aeLockContention();
+        ++g_pserver->ilockRingHead;
+        if (g_pserver->ilockRingHead >= redisServer::s_lockContentionSamples)
+            g_pserver->ilockRingHead = 0;
+    });
+
     g_pserver->cronloops++;
     return 1000/g_pserver->hz;
 }
@@ -5134,6 +5142,11 @@ sds genRedisInfoString(const char *section) {
 
     /* Stats */
     if (allsections || defsections || !strcasecmp(section,"stats")) {
+        double avgLockContention = 0;
+        for (unsigned i = 0; i < redisServer::s_lockContentionSamples; ++i)
+            avgLockContention += g_pserver->rglockSamples[i];
+        avgLockContention /= redisServer::s_lockContentionSamples;
+
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info,
             "# Stats\r\n"
@@ -5169,7 +5182,9 @@ sds genRedisInfoString(const char *section) {
             "tracking_total_prefixes:%lld\r\n"
             "unexpected_error_replies:%lld\r\n"
             "total_reads_processed:%lld\r\n"
-            "total_writes_processed:%lld\r\n",
+            "total_writes_processed:%lld\r\n"
+            "instantaneous_lock_contention:%d\r\n"
+            "avg_lock_contention:%f\r\n",
             g_pserver->stat_numconnections,
             g_pserver->stat_numcommands,
             getInstantaneousMetric(STATS_METRIC_COMMAND),
@@ -5202,7 +5217,9 @@ sds genRedisInfoString(const char *section) {
             (unsigned long long) trackingGetTotalPrefixes(),
             g_pserver->stat_unexpected_error_replies,
             g_pserver->stat_total_reads_processed.load(std::memory_order_relaxed),
-            g_pserver->stat_total_writes_processed.load(std::memory_order_relaxed));
+            g_pserver->stat_total_writes_processed.load(std::memory_order_relaxed),
+            aeLockContention(),
+            avgLockContention);
     }
 
     /* Replication */

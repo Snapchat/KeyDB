@@ -3076,6 +3076,7 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
         }
     }
 
+    bool fNoInsert = false;
     if (!vecInserts.empty()) {
         lock.arm(c);
         for (auto &tuple : vecInserts)
@@ -3091,9 +3092,16 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
                     // While unlocked this was already ensured
                     decrRefCount(o);
                     sdsfree(sharedKey);
+                    fNoInsert = true;
                 }
                 else
                 {
+                    if (spexpire != nullptr) {
+                        if (spexpire->when() < mstime()) {
+                            fNoInsert = true;
+                            break;
+                        }
+                    }
                     dictAdd(m_pdict, sharedKey, o);
                     o->SetFExpires(spexpire != nullptr);
 
@@ -3117,7 +3125,7 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
         lock.disarm();
     }
 
-    if (fExecOK && cmd->proc == getCommand && !vecInserts.empty()) {
+    if (fExecOK && !fNoInsert && cmd->proc == getCommand && !vecInserts.empty()) {
         robj *o = std::get<1>(vecInserts[0]);
         if (o != nullptr) {
             addReplyBulk(c, o);

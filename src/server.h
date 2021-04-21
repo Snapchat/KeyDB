@@ -1131,7 +1131,7 @@ public:
     void restoreSnapshot(const redisDbPersistentDataSnapshot *psnapshot);
 
     bool FStorageProvider() { return m_spstorage != nullptr; }
-    bool removeCachedValue(const char *key);
+    bool removeCachedValue(const char *key, dictEntry **ppde = nullptr);
     void removeAllCachedValues();
 
     bool prefetchKeysAsync(client *c, struct parsed_command &command, bool fExecOK);

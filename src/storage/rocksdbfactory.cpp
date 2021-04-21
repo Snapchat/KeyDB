@@ -5,6 +5,7 @@
 #include <rocksdb/utilities/options_util.h>
 #include <rocksdb/sst_file_manager.h>
 #include <rocksdb/utilities/convenience.h>
+#include <rocksdb/slice_transform.h>
 
 class RocksDBStorageFactory : public IStorageFactory
 {
@@ -70,6 +71,8 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
     options.compression = rocksdb::kNoCompression;
     options.enable_pipelined_write = true;
     options.sst_file_manager = m_pfilemanager;
+    options.allow_mmap_reads = true;
+    options.prefix_extractor.reset(rocksdb::NewFixedPrefixTransform(0));
     rocksdb::BlockBasedTableOptions table_options;
     table_options.block_size = 16 * 1024;
     table_options.cache_index_and_filter_blocks = true;

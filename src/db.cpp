@@ -2838,7 +2838,7 @@ size_t redisDbPersistentData::size() const
         + (m_pdbSnapshot ? (m_pdbSnapshot->size() - dictSize(m_pdictTombstone)) : 0); 
 }
 
-bool redisDbPersistentData::removeCachedValue(const char *key)
+bool redisDbPersistentData::removeCachedValue(const char *key, dictEntry **ppde)
 {
     serverAssert(m_spstorage != nullptr);
     // First ensure its not a pending key
@@ -2854,7 +2854,11 @@ bool redisDbPersistentData::removeCachedValue(const char *key)
     }
 
     // since we write ASAP the database already has a valid copy so safe to delete
-    dictDelete(m_pdict, key);
+    if (ppde != nullptr) {
+        *ppde = dictUnlink(m_pdict, key);
+    } else {
+        dictDelete(m_pdict, key);
+    }
 
     if (m_spstorage != nullptr)
         m_spstorage->batch_unlock();

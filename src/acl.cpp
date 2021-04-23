@@ -1546,7 +1546,7 @@ void ACLLoadUsersAtStartup(void) {
         sds errors = ACLLoadFromFile(g_pserver->acl_filename);
         if (errors) {
             serverLog(LL_WARNING,
-                "Aborting Redis startup because of ACL errors: %s", errors);
+                "Aborting KeyDB startup because of ACL errors: %s", errors);
             sdsfree(errors);
             exit(1);
         }
@@ -1840,7 +1840,7 @@ void aclCommand(client *c) {
     } else if (g_pserver->acl_filename[0] == '\0' &&
                (!strcasecmp(sub,"load") || !strcasecmp(sub,"save")))
     {
-        addReplyError(c,"This Redis instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a Redis configuration file set) in order to store users in the Redis configuration.");
+        addReplyError(c,"This KeyDB instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a KeyDB configuration file set) in order to store users in the KeyDB configuration.");
         return;
     } else if (!strcasecmp(sub,"load") && c->argc == 2) {
         sds errors = ACLLoadFromFile(g_pserver->acl_filename);

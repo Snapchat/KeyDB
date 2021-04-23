@@ -1775,7 +1775,7 @@ int getKeysUsingCommandTable(struct redisCommand *cmd,robj **argv, int argc, get
                 result->numkeys = 0;
                 return 0;
             } else {
-                serverPanic("Redis built-in command declared keys positions not matching the arity requirements.");
+                serverPanic("KeyDB built-in command declared keys positions not matching the arity requirements.");
             }
         }
         keys[i++] = j;

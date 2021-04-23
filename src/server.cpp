@@ -2451,13 +2451,13 @@ void createSharedObjects(void) {
     shared.noscripterr = makeObjectShared(createObject(OBJ_STRING,sdsnew(
         "-NOSCRIPT No matching script. Please use EVAL.\r\n")));
     shared.loadingerr = makeObjectShared(createObject(OBJ_STRING,sdsnew(
-        "-LOADING Redis is loading the dataset in memory\r\n")));
+        "-LOADING KeyDB is loading the dataset in memory\r\n")));
     shared.slowscripterr = makeObjectShared(createObject(OBJ_STRING,sdsnew(
-        "-BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n")));
+        "-BUSY KeyDB is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n")));
     shared.masterdownerr = makeObjectShared(createObject(OBJ_STRING,sdsnew(
         "-MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.\r\n")));
     shared.bgsaveerr = makeObjectShared(createObject(OBJ_STRING,sdsnew(
-        "-MISCONF Redis is configured to save RDB snapshots, but it is currently not able to persist on disk. Commands that may modify the data set are disabled, because this instance is configured to report errors during writes if RDB snapshotting fails (stop-writes-on-bgsave-error option). Please check the Redis logs for details about the RDB error.\r\n")));
+        "-MISCONF KeyDB is configured to save RDB snapshots, but it is currently not able to persist on disk. Commands that may modify the data set are disabled, because this instance is configured to report errors during writes if RDB snapshotting fails (stop-writes-on-bgsave-error option). Please check the KeyDB logs for details about the RDB error.\r\n")));
     shared.roslaveerr = makeObjectShared(createObject(OBJ_STRING,sdsnew(
         "-READONLY You can't write against a read only replica.\r\n")));
     shared.noautherr = makeObjectShared(createObject(OBJ_STRING,sdsnew(
@@ -4395,10 +4395,10 @@ void commandCommand(client *c) {
 
     if (c->argc == 2 && !strcasecmp((const char*)ptrFromObj(c->argv[1]),"help")) {
         const char *help[] = {
-"(no subcommand) -- Return details about all Redis commands.",
-"COUNT -- Return the total number of commands in this Redis g_pserver->",
-"GETKEYS <full-command> -- Return the keys from a full Redis command.",
-"INFO [command-name ...] -- Return details about multiple Redis commands.",
+"(no subcommand) -- Return details about all KeyDB commands.",
+"COUNT -- Return the total number of commands in this KeyDB server.",
+"GETKEYS <full-command> -- Return the keys from a full KeyDB command.",
+"INFO [command-name ...] -- Return details about multiple KeyDB commands.",
 NULL
         };
         addReplyHelp(c, help);
@@ -5578,7 +5578,7 @@ void loadDataFromDisk(void) {
 void redisOutOfMemoryHandler(size_t allocation_size) {
     serverLog(LL_WARNING,"Out Of Memory allocating %zu bytes!",
         allocation_size);
-    serverPanic("Redis aborting for OUT OF MEMORY. Allocating %zu bytes!", 
+    serverPanic("KeyDB aborting for OUT OF MEMORY. Allocating %zu bytes!", 
         allocation_size);
 }
 
@@ -5657,14 +5657,14 @@ int redisIsSupervised(int mode) {
             cserver.supervised_mode = SUPERVISED_SYSTEMD;
             serverLog(LL_WARNING,
                 "WARNING auto-supervised by systemd - you MUST set appropriate values for TimeoutStartSec and TimeoutStopSec in your service unit.");
-            return redisCommunicateSystemd("STATUS=Redis is loading...\n");
+            return redisCommunicateSystemd("STATUS=KeyDB is loading...\n");
         }
     } else if (mode == SUPERVISED_UPSTART) {
         return redisSupervisedUpstart();
     } else if (mode == SUPERVISED_SYSTEMD) {
         serverLog(LL_WARNING,
             "WARNING supervised by systemd - you MUST set appropriate values for TimeoutStartSec and TimeoutStopSec in your service unit.");
-        return redisCommunicateSystemd("STATUS=Redis is loading...\n");
+        return redisCommunicateSystemd("STATUS=KeyDB is loading...\n");
     }
 
     return 0;
@@ -5931,7 +5931,7 @@ int main(int argc, char **argv) {
             (int)getpid());
 
     if (argc == 1) {
-        serverLog(LL_WARNING, "WARNING: no config file specified, using the default config. In order to specify a config file use %s /path/to/%s.conf", argv[0], g_pserver->sentinel_mode ? "sentinel" : "redis");
+        serverLog(LL_WARNING, "WARNING: no config file specified, using the default config. In order to specify a config file use %s /path/to/%s.conf", argv[0], g_pserver->sentinel_mode ? "sentinel" : "keydb");
     } else {
         serverLog(LL_WARNING, "Configuration loaded");
     }
@@ -5962,7 +5962,7 @@ int main(int argc, char **argv) {
         if (linuxMadvFreeForkBugCheck()) {
             serverLog(LL_WARNING,"WARNING Your kernel has a bug that could lead to data corruption during background save. Please upgrade to the latest stable kernel.");
             if (!checkIgnoreWarning("ARM64-COW-BUG")) {
-                serverLog(LL_WARNING,"Redis will now exit to prevent data corruption. Note that it is possible to suppress this warning by setting the following config: ignore-warnings ARM64-COW-BUG");
+                serverLog(LL_WARNING,"KeyDB will now exit to prevent data corruption. Note that it is possible to suppress this warning by setting the following config: ignore-warnings ARM64-COW-BUG");
                 exit(1);
             }
         }

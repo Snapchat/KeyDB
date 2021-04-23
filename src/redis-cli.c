@@ -1582,17 +1582,17 @@ static void usage(void) {
 "  --lru-test <keys>  Simulate a cache workload with an 80-20 distribution.\n"
 "  --replica          Simulate a replica showing commands received from the master.\n"
 "  --rdb <filename>   Transfer an RDB dump from remote server to local file.\n"
-"  --pipe             Transfer raw Redis protocol from stdin to server.\n"
+"  --pipe             Transfer raw KeyDB protocol from stdin to server.\n"
 "  --pipe-timeout <n> In --pipe mode, abort with error if after sending all data.\n"
 "                     no reply is received within <n> seconds.\n"
 "                     Default timeout: %d. Use 0 to wait forever.\n",
     REDIS_CLI_DEFAULT_PIPE_TIMEOUT);
     fprintf(stderr,
-"  --bigkeys          Sample Redis keys looking for keys with many elements (complexity).\n"
-"  --memkeys          Sample Redis keys looking for keys consuming a lot of memory.\n"
-"  --memkeys-samples <n> Sample Redis keys looking for keys consuming a lot of memory.\n"
+"  --bigkeys          Sample KeyDB keys looking for keys with many elements (complexity).\n"
+"  --memkeys          Sample KeyDB keys looking for keys consuming a lot of memory.\n"
+"  --memkeys-samples <n> Sample KeyDB keys looking for keys consuming a lot of memory.\n"
 "                     And define number of key elements to sample\n"
-"  --hotkeys          Sample Redis keys looking for hot keys.\n"
+"  --hotkeys          Sample KeyDB keys looking for hot keys.\n"
 "                     only works when maxmemory-policy is *lfu.\n"
 "  --scan             List all keys using the SCAN command.\n"
 "  --pattern <pat>    Keys pattern when using the --scan, --bigkeys or --hotkeys\n"
@@ -2311,7 +2311,7 @@ static int clusterManagerNodeConnect(clusterManagerNode *node) {
         }
     }
     if (node->context->err) {
-        fprintf(stderr,"Could not connect to Redis at ");
+        fprintf(stderr,"Could not connect to KeyDB at ");
         fprintf(stderr,"%s:%d: %s\n", node->ip, node->port,
                 node->context->errstr);
         redisFree(node->context);
@@ -3909,7 +3909,7 @@ int clusterManagerFixOpenSlot(int slot) {
                     CLUSTER_MANAGER_CMD_FLAG_FIX_WITH_UNREACHABLE_MASTERS;
 
     if (cluster_manager.unreachable_masters > 0 && !force_fix) {
-        clusterManagerLogWarn("*** Fixing open slots with %d unreachable masters is dangerous: redis-cli will assume that slots about masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the --cluster-fix-with-unreachable-masters option.\n", cluster_manager.unreachable_masters);
+        clusterManagerLogWarn("*** Fixing open slots with %d unreachable masters is dangerous: keydb-cli will assume that slots about masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the --cluster-fix-with-unreachable-masters option.\n", cluster_manager.unreachable_masters);
         exit(1);
     }
 
@@ -4513,7 +4513,7 @@ static int clusterManagerCommandCreate(int argc, char **argv) {
     if (masters_count < 3) {
         clusterManagerLogErr(
             "*** ERROR: Invalid configuration for cluster creation.\n"
-            "*** Redis Cluster requires at least 3 master nodes.\n"
+            "*** KeyDB Cluster requires at least 3 master nodes.\n"
             "*** This is not possible with %d nodes and %d replicas per node.",
             node_len, replicas);
         clusterManagerLogErr("\n*** At least %d nodes are required.\n",
@@ -5399,7 +5399,7 @@ static int clusterManagerCommandImport(int argc, char **argv) {
     redisContext *src_ctx = redisConnect(src_ip, src_port);
     if (src_ctx->err) {
         success = 0;
-        fprintf(stderr,"Could not connect to Redis at %s:%d: %s.\n", src_ip,
+        fprintf(stderr,"Could not connect to KeyDB at %s:%d: %s.\n", src_ip,
                 src_port, src_ctx->errstr);
         goto cleanup;
     }

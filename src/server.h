@@ -1486,6 +1486,7 @@ struct redisServer {
                                    the actual 'hz' field value if dynamic-hz
                                    is enabled. */
     std::atomic<int> hz;        /* serverCron() calls frequency in hertz */
+    mode_t umask;               /* The umask value of the process on startup */
     int in_fork_child;          /* indication that this is a fork child */
     redisDb *db;
     ::dict *commands;             /* Command table */
@@ -2409,6 +2410,7 @@ size_t freeMemoryGetNotCountedMemory();
 int freeMemoryIfNeeded(void);
 int freeMemoryIfNeededAndSafe(void);
 int processCommand(client *c, int callFlags);
+int processPendingCommandsAndResetClient(client *c);
 void setupSignalHandlers(void);
 struct redisCommand *lookupCommand(sds name);
 struct redisCommand *lookupCommandByCString(const char *s);

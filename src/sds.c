@@ -105,7 +105,9 @@ sds sdsnewlen(const void *init, ssize_t initlen) {
     int hdrlen = sdsHdrSize(type);
     unsigned char *fp; /* flags pointer. */
 
+    assert(initlen + hdrlen + 1 > initlen); /* Catch size_t overflow */
     sh = s_malloc(hdrlen+initlen+1, MALLOC_SHARED);
+
     if (sh == NULL) return NULL;
     if (init==SDS_NOINIT)
         init = NULL;
@@ -246,6 +248,7 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
     len = sdslen(s);
     sh = (char*)s-sdsHdrSize(oldtype);
     newlen = (len+addlen);
+    assert(newlen > len);   /* Catch size_t overflow */
     if (newlen < SDS_MAX_PREALLOC)
         newlen *= 2;
     else
@@ -259,6 +262,7 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
     if (type == SDS_TYPE_5) type = SDS_TYPE_8;
 
     hdrlen = sdsHdrSize(type);
+    assert(hdrlen + newlen + 1 > len);  /* Catch size_t overflow */
     if (oldtype==type && (len+1024) >= avail) {
         // note: if we have a lot of free space don't use this as we don't want s_realloc copying
         //  uninitialized data

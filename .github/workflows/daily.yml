@@ -22,7 +22,7 @@ jobs:
           make
     - name: test
       run: |
-        sudo apt-get install tcl8.5
+        sudo apt-get install tcl8.6
         ./runtest --accurate --verbose
     - name: module api test
       run: ./runtest-moduleapi --verbose
@@ -43,7 +43,7 @@ jobs:
           make MALLOC=libc
     - name: test
       run: |
-        sudo apt-get install tcl8.5
+        sudo apt-get install tcl8.6
         ./runtest --accurate --verbose
     - name: module api test
       run: ./runtest-moduleapi --verbose
@@ -64,7 +64,7 @@ jobs:
         make BUILD_TLS=yes -j2
     - name: "test (tls)"
       run: |
-        sudo apt-get install tcl8.5 tcl-tls
+        sudo apt-get install tcl8.6 tcl-tls
         ./utils/gen-test-certs.sh
         ./runtest --accurate --verbose --tls
     - name: test
@@ -82,7 +82,7 @@ jobs:
           make -j4
     - name: test
       run: |
-        sudo apt-get -y install tcl8.5
+        sudo apt-get -y install tcl8.6
         ./runtest --clients 2 --verbose
     - name: module tests
       run: |
@@ -101,7 +101,7 @@ jobs:
     - name: test
       run: |
         sudo apt-get update
-        sudo apt-get install tcl8.5 valgrind -y
+        sudo apt-get install tcl8.6 valgrind -y
         ./runtest --valgrind --verbose --clients 1
     - name: module api test
       run: ./runtest-moduleapi --valgrind --verbose --clients 1

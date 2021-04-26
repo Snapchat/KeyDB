@@ -17,7 +17,7 @@ jobs:
       run: ./utils/gen-test-certs.sh
     - name: test-tls
       run: |
-        sudo apt-get -y install tcl tcl-tls
+        sudo apt-get -y install tcl8.6 tcl-tls
         ./runtest --clients 2 --verbose --tls
     - name: cluster-test
       run: |
@@ -28,7 +28,7 @@ jobs:
     - name: module tests
       run: |
           ./runtest-moduleapi
-        
+
   build-ubuntu-old:
     runs-on: ubuntu-16.04
     steps:

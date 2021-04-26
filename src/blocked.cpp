@@ -105,11 +105,15 @@ void processUnblockedClients(int iel) {
 
     while (listLength(unblocked_clients)) {
         ln = listFirst(unblocked_clients);
+        /* If clients are paused we yield for now, since
+         * we don't want to process any commands later. */
+        if (clientsArePaused()) return;
+
         serverAssert(ln != NULL);
         c = (client*)ln->value;
         listDelNode(unblocked_clients,ln);
         AssertCorrectThread(c);
-        
+
         fastlock_lock(&c->lock);
         c->flags &= ~CLIENT_UNBLOCKED;
 
@@ -118,6 +122,11 @@ void processUnblockedClients(int iel) {
          * client is not blocked before to proceed, but things may change and
          * the code is conceptually more correct this way. */
         if (!(c->flags & CLIENT_BLOCKED)) {
+            /* If we have a queued command, execute it now. */
+            if (processPendingCommandsAndResetClient(c) == C_ERR) {
+                continue;
+            }
+            /* Then process client if it has more data in it's buffer. */
             if (c->querybuf && sdslen(c->querybuf) > 0) {
                 processInputBuffer(c, CMD_CALL_FULL);
             }

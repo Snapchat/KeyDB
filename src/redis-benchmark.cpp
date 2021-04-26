@@ -52,6 +52,7 @@ extern "C" {
 #include "storage.h"
 #include "atomicvar.h"
 #include "crc16_slottable.h"
+#include "mt19937-64.h"
 
 #define UNUSED(V) ((void) V)
 #define RANDPTR_INITIAL_SIZE 8
@@ -533,6 +534,9 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                         * we need to randomize. */
                         for (j = 0; j < c->randlen; j++)
                             c->randptr[j] -= c->prefixlen;
+                        /* Fix the pointers to the slot hash tags */
+                        for (j = 0; j < c->staglen; j++)
+                            c->stagptr[j] -= c->prefixlen;
                         c->prefixlen = 0;
                     }
                     continue;
@@ -1531,8 +1535,8 @@ int main(int argc, const char **argv) {
     client c;
 
     storage_init(NULL, 0);
-
-    srandom(time(NULL));
+    srandom(time(NULL) ^ getpid());
+    init_genrand64(ustime() ^ getpid());
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
 

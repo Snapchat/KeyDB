@@ -30,5 +30,6 @@ $TCLSH tests/test_helper.tcl \
 --single unit/moduleapi/moduleloadsave \
 --single unit/moduleapi/getkeys \
 --single unit/moduleapi/timers \
+--single unit/moduleapi/zset \
 --config server-threads 3 \
 "${@}"

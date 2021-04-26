@@ -63,6 +63,7 @@
 #include "ae.h"
 #include "storage.h"
 #include "motd.h"
+#include "mt19937-64.h"
 
 #include "redis-cli.h"
 
@@ -6947,6 +6948,7 @@ static sds askPassword() {
 
 int main(int argc, char **argv) {
     int firstarg;
+    struct timeval tv;
 
     storage_init(NULL, 0);
     config.hostip = sdsnew("127.0.0.1");
@@ -7032,6 +7034,9 @@ int main(int argc, char **argv) {
         SSL_library_init();
     }
 #endif
+
+    gettimeofday(&tv, NULL);
+    init_genrand64(((long long) tv.tv_sec * 1000000 + tv.tv_usec) ^ getpid());
 
     /* Cluster Manager mode */
     if (CLUSTER_MANAGER_MODE()) {

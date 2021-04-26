@@ -37,6 +37,7 @@
 #include "storage.h"
 #include "cron.h"
 #include <thread>
+#include "mt19937-64.h"
 #include <time.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -457,11 +458,11 @@ struct redisCommand redisCommandTable[] = {
 
     {"zunionstore",zunionstoreCommand,-4,
      "write use-memory @sortedset",
-     0,zunionInterGetKeys,0,0,0,0,0,0},
+     0,zunionInterGetKeys,1,1,1,0,0,0},
 
     {"zinterstore",zinterstoreCommand,-4,
      "write use-memory @sortedset",
-     0,zunionInterGetKeys,0,0,0,0,0,0},
+     0,zunionInterGetKeys,1,1,1,0,0,0},
 
     {"zrange",zrangeCommand,-4,
      "read-only @sortedset",
@@ -933,7 +934,7 @@ struct redisCommand redisCommandTable[] = {
 
     {"georadius_ro",georadiusroCommand,-6,
      "read-only @geo",
-     0,georadiusGetKeys,1,1,1,0,0,0},
+     0,NULL,1,1,1,0,0,0},
 
     {"georadiusbymember",georadiusbymemberCommand,-5,
      "write use-memory @geo",
@@ -941,7 +942,7 @@ struct redisCommand redisCommandTable[] = {
 
     {"georadiusbymember_ro",georadiusbymemberroCommand,-5,
      "read-only @geo",
-     0,georadiusGetKeys,1,1,1,0,0,0},
+     0,NULL,1,1,1,0,0,0},
 
     {"geohash",geohashCommand,-2,
      "read-only @geo",
@@ -997,11 +998,11 @@ struct redisCommand redisCommandTable[] = {
 
     {"xread",xreadCommand,-4,
      "read-only @stream @blocking",
-     0,xreadGetKeys,1,1,1,0,0,0},
+     0,xreadGetKeys,0,0,0,0,0,0},
 
     {"xreadgroup",xreadCommand,-7,
      "write @stream @blocking",
-     0,xreadGetKeys,1,1,1,0,0,0},
+     0,xreadGetKeys,0,0,0,0,0,0},
 
     {"xgroup",xgroupCommand,-2,
      "write use-memory @stream",
@@ -5191,7 +5192,7 @@ static int smapsGetSharedDirty(unsigned long addr) {
     FILE *f;
 
     f = fopen("/proc/self/smaps", "r");
-    serverAssert(f);
+    if (!f) return -1;
 
     while (1) {
         if (!fgets(buf, sizeof(buf), f))
@@ -5202,8 +5203,8 @@ static int smapsGetSharedDirty(unsigned long addr) {
             in_mapping = from <= addr && addr < to;
 
         if (in_mapping && !memcmp(buf, "Shared_Dirty:", 13)) {
-            ret = sscanf(buf, "%*s %d", &val);
-            serverAssert(ret == 1);
+            sscanf(buf, "%*s %d", &val);
+            /* If parsing fails, we remain with val == -1 */
             break;
         }
     }
@@ -5217,23 +5218,33 @@ static int smapsGetSharedDirty(unsigned long addr) {
  * kernel is affected.
  * The bug was fixed in commit ff1712f953e27f0b0718762ec17d0adb15c9fd0b
  * titled: "arm64: pgtable: Ensure dirty bit is preserved across pte_wrprotect()"
- * Return 1 if the kernel seems to be affected, and 0 otherwise. */
+ * Return -1 on unexpected test failure, 1 if the kernel seems to be affected,
+ * and 0 otherwise. */
 int linuxMadvFreeForkBugCheck(void) {
-    int ret, pipefd[2];
+    int ret, pipefd[2] = { -1, -1 };
     pid_t pid;
-    char *p, *q, bug_found = 0;
-    const long map_size = 3 * 4096;
+    char *p = NULL, *q;
+    int bug_found = 0;
+    long page_size = sysconf(_SC_PAGESIZE);
+    long map_size = 3 * page_size;
 
     /* Create a memory map that's in our full control (not one used by the allocator). */
     p = (char*)mmap(NULL, map_size, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-    serverAssert(p != MAP_FAILED);
+    if (p == MAP_FAILED) {
+        serverLog(LL_WARNING, "Failed to mmap(): %s", strerror(errno));
+        return -1;
+    }
 
-    q = p + 4096;
+    q = p + page_size;
 
     /* Split the memory map in 3 pages by setting their protection as RO|RW|RO to prevent
      * Linux from merging this memory map with adjacent VMAs. */
-    ret = mprotect(q, 4096, PROT_READ | PROT_WRITE);
-    serverAssert(!ret);
+    ret = mprotect(q, page_size, PROT_READ | PROT_WRITE);
+    if (ret < 0) {
+        serverLog(LL_WARNING, "Failed to mprotect(): %s", strerror(errno));
+        bug_found = -1;
+        goto exit;
+    }
 
     /* Write to the page once to make it resident */
     *(volatile char*)q = 0;
@@ -5242,8 +5253,16 @@ int linuxMadvFreeForkBugCheck(void) {
 #ifndef MADV_FREE
 #define MADV_FREE 8
 #endif
-    ret = madvise(q, 4096, MADV_FREE);
-    serverAssert(!ret);
+    ret = madvise(q, page_size, MADV_FREE);
+    if (ret < 0) {
+        /* MADV_FREE is not available on older kernels that are presumably
+         * not affected. */
+        if (errno == EINVAL) goto exit;
+
+        serverLog(LL_WARNING, "Failed to madvise(): %s", strerror(errno));
+        bug_found = -1;
+        goto exit;
+    }
 
     /* Write to the page after being marked for freeing, this is supposed to take
      * ownership of that page again. */
@@ -5251,37 +5270,47 @@ int linuxMadvFreeForkBugCheck(void) {
 
     /* Create a pipe for the child to return the info to the parent. */
     ret = pipe(pipefd);
-    serverAssert(!ret);
+    if (ret < 0) {
+        serverLog(LL_WARNING, "Failed to create pipe: %s", strerror(errno));
+        bug_found = -1;
+        goto exit;
+    }
 
     /* Fork the process. */
     pid = fork();
-    serverAssert(pid >= 0);
-    if (!pid) {
-        /* Child: check if the page is marked as dirty, expecing 4 (kB).
+    if (pid < 0) {
+        serverLog(LL_WARNING, "Failed to fork: %s", strerror(errno));
+        bug_found = -1;
+        goto exit;
+    } else if (!pid) {
+        /* Child: check if the page is marked as dirty, page_size in kb.
          * A value of 0 means the kernel is affected by the bug. */
-        if (!smapsGetSharedDirty((unsigned long)q))
+        ret = smapsGetSharedDirty((unsigned long) q);
+        if (!ret)
             bug_found = 1;
+        else if (ret == -1)     /* Failed to read */
+            bug_found = -1;
 
-        ret = write(pipefd[1], &bug_found, 1);
-        serverAssert(ret == 1);
-
+        if (write(pipefd[1], &bug_found, sizeof(bug_found)) < 0)
+            serverLog(LL_WARNING, "Failed to write to parent: %s", strerror(errno));
         exit(0);
     } else {
         /* Read the result from the child. */
-        ret = read(pipefd[0], &bug_found, 1);
-        serverAssert(ret == 1);
+        ret = read(pipefd[0], &bug_found, sizeof(bug_found));
+        if (ret < 0) {
+            serverLog(LL_WARNING, "Failed to read from child: %s", strerror(errno));
+            bug_found = -1;
+        }
 
         /* Reap the child pid. */
-        serverAssert(waitpid(pid, NULL, 0) == pid);
+        waitpid(pid, NULL, 0);
     }
 
+exit:
     /* Cleanup */
-    ret = close(pipefd[0]);
-    serverAssert(!ret);
-    ret = close(pipefd[1]);
-    serverAssert(!ret);
-    ret = munmap(p, map_size);
-    serverAssert(!ret);
+    if (pipefd[0] != -1) close(pipefd[0]);
+    if (pipefd[1] != -1) close(pipefd[1]);
+    if (p != NULL) munmap(p, map_size);
 
     return bug_found;
 }
@@ -5803,8 +5832,15 @@ int main(int argc, char **argv) {
     zmalloc_set_oom_handler(redisOutOfMemoryHandler);
     srand(time(NULL)^getpid());
     gettimeofday(&tv,NULL);
+    init_genrand64(((long long) tv.tv_sec * 1000000 + tv.tv_usec) ^ getpid());
     crc64_init();
     serverAssert(g_pserver->repl_batch_offStart < 0);
+
+    /* Store umask value. Because umask(2) only offers a set-and-get API we have
+     * to reset it and restore it back. We do this early to avoid a potential
+     * race condition with threads that could be creating files or directories.
+     */
+    umask(server.umask = umask(0777));
 
     uint8_t hashseed[16];
     getRandomHexChars((char*)hashseed,sizeof(hashseed));
@@ -5959,10 +5995,17 @@ int main(int argc, char **argv) {
     #ifdef __linux__
         linuxMemoryWarnings();
     #if defined (__arm64__)
-        if (linuxMadvFreeForkBugCheck()) {
-            serverLog(LL_WARNING,"WARNING Your kernel has a bug that could lead to data corruption during background save. Please upgrade to the latest stable kernel.");
+        int ret;
+        if ((ret = linuxMadvFreeForkBugCheck())) {
+            if (ret == 1)
+                serverLog(LL_WARNING,"WARNING Your kernel has a bug that could lead to data corruption during background save. "
+                                     "Please upgrade to the latest stable kernel.");
+            else
+                serverLog(LL_WARNING, "Failed to test the kernel for a bug that could lead to data corruption during background save. "
+                                      "Your system could be affected, please report this error.");
             if (!checkIgnoreWarning("ARM64-COW-BUG")) {
-                serverLog(LL_WARNING,"Redis will now exit to prevent data corruption. Note that it is possible to suppress this warning by setting the following config: ignore-warnings ARM64-COW-BUG");
+                serverLog(LL_WARNING,"Redis will now exit to prevent data corruption. "
+                                     "Note that it is possible to suppress this warning by setting the following config: ignore-warnings ARM64-COW-BUG");
                 exit(1);
             }
         }

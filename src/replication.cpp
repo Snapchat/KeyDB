@@ -47,6 +47,9 @@
 #include <unordered_map>
 #include <string>
 
+#define BYPASS_BUFFER
+// #define BYPASS_PSYNC
+
 void replicationDiscardCachedMaster(redisMaster *mi);
 void replicationResurrectCachedMaster(redisMaster *mi, connection *conn);
 void replicationSendAck(redisMaster *mi);
@@ -58,6 +61,18 @@ static void propagateMasterStaleKeys();
  * because of replication, so that we can remove the RDB file in case
  * the instance is configured to have no persistence. */
 int RDBGeneratedByReplication = 0;
+
+void resizeReplicationBacklogForClients(long long newsize);
+
+void setReplIdx(client *c, long long idx, long long off){
+    if (prepareClientToWrite(c) != C_OK) return;
+    // serverLog(LL_NOTICE, "calling this garbage function w/ idx and off: %lld, %lld, %lld", idx, off, off-idx);
+    // serverLog(LL_NOTICE, "What is this value? %lld", c->repl_curr_idx);
+    if (c->repl_curr_idx == -1){
+        c->repl_curr_idx = idx;
+        c->repl_curr_off = off;
+    }
+}
 
 /* --------------------------- Utility functions ---------------------------- */
 
@@ -213,6 +228,8 @@ void resizeReplicationBacklog(long long newsize) {
         newsize = CONFIG_REPL_BACKLOG_MIN_SIZE;
     if (g_pserver->repl_backlog_size == newsize) return;
 
+    serverLog(LL_NOTICE, "WE HAD TO RESIZE from %lld to %lld", g_pserver->repl_backlog_size, newsize);
+
     if (g_pserver->repl_backlog != NULL) {
         /* What we actually do is to flush the old buffer and realloc a new
          * empty one. It will refill with new data incrementally.
@@ -240,6 +257,80 @@ void resizeReplicationBacklog(long long newsize) {
             zfree(g_pserver->repl_backlog);
             g_pserver->repl_backlog = backlog;
             g_pserver->repl_backlog_idx = g_pserver->repl_backlog_histlen;
+            g_pserver->repl_batch_idxStart = 0;
+        } else {
+            zfree(g_pserver->repl_backlog);
+            g_pserver->repl_backlog = (char*)zmalloc(newsize);
+            g_pserver->repl_backlog_histlen = 0;
+            g_pserver->repl_backlog_idx = 0;
+            /* Next byte we have is... the next since the buffer is empty. */
+            g_pserver->repl_backlog_off = g_pserver->master_repl_offset+1;
+        }
+    }
+    g_pserver->repl_backlog_size = newsize;
+}
+
+
+/* The above but for when clients need extra replication backlog because ??? */
+void resizeReplicationBacklogForClients(long long newsize) {
+    if (newsize < CONFIG_REPL_BACKLOG_MIN_SIZE)
+        newsize = CONFIG_REPL_BACKLOG_MIN_SIZE;
+    if (g_pserver->repl_backlog_size == newsize) return;
+
+    serverLog(LL_NOTICE, "WE HAD TO RESIZE from %lld to %lld", g_pserver->repl_backlog_size, newsize);
+    /* get the critical client size, i.e. the size of the data unflushed to clients */
+    long long earliest_off = LONG_LONG_MAX;
+    long long earliest_idx = -1;
+    listIter li;
+    listNode *ln;
+    listRewind(g_pserver->slaves, &li);
+    while ((ln = listNext(&li))) {
+        client *replica = (client*)listNodeValue(ln);
+        if (replica->repl_curr_off != -1 && replica->repl_curr_off < earliest_off){
+            earliest_off = replica->repl_curr_off;
+            earliest_idx = replica->repl_curr_idx;
+        }
+    }
+
+    if (g_pserver->repl_backlog != NULL) {
+        /* What we actually do is to flush the old buffer and realloc a new
+         * empty one. It will refill with new data incrementally.
+         * The reason is that copying a few gigabytes adds latency and even
+         * worse often we need to alloc additional space before freeing the
+         * old buffer. */
+
+        if (earliest_idx >= 0) {
+            // We need to keep critical data so we can't shrink less than the hot data in the buffer
+            newsize = std::max(newsize, g_pserver->master_repl_offset - earliest_off);
+            char *backlog = (char*)zmalloc(newsize);
+            g_pserver->repl_backlog_histlen = g_pserver->master_repl_offset - earliest_off;
+
+            if (g_pserver->repl_backlog_idx >= earliest_idx) {
+                auto cbActiveBacklog = g_pserver->repl_backlog_idx - earliest_idx;
+                memcpy(backlog, g_pserver->repl_backlog + earliest_idx, cbActiveBacklog);
+                serverLog(LL_NOTICE, "g_pserver->master_repl_offset: %lld, earliest_off: %lld, g_pserver->repl_backlog_idx: %lld, earliest_idx: %lld",
+                    g_pserver->master_repl_offset, earliest_off, g_pserver->repl_backlog_idx, earliest_idx);
+                serverAssert(g_pserver->repl_backlog_histlen == cbActiveBacklog);
+            } else {
+                auto cbPhase1 = g_pserver->repl_backlog_size - earliest_idx;
+                memcpy(backlog, g_pserver->repl_backlog + earliest_idx, cbPhase1);
+                memcpy(backlog + cbPhase1, g_pserver->repl_backlog, g_pserver->repl_backlog_idx);
+                auto cbActiveBacklog = cbPhase1 + g_pserver->repl_backlog_idx;
+                serverAssert(g_pserver->repl_backlog_histlen == cbActiveBacklog);
+            }
+            zfree(g_pserver->repl_backlog);
+            g_pserver->repl_backlog = backlog;
+            g_pserver->repl_backlog_idx = g_pserver->repl_backlog_histlen;
+            listRewind(g_pserver->slaves, &li);
+            /* Go through the clients and update their replication indicies */
+            while ((ln = listNext(&li))) {
+                client *replica = (client*)listNodeValue(ln);
+                if (replica->repl_curr_idx != -1){
+                    replica->repl_curr_idx -= earliest_idx;
+                    if (replica->repl_curr_idx < 0)
+                        replica->repl_curr_idx += g_pserver->repl_backlog_size;
+                }
+            }
             g_pserver->repl_batch_idxStart = 0;
         } else {
             zfree(g_pserver->repl_backlog);
@@ -683,6 +774,10 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
      * split the reply in two parts if we are cross-boundary. */
     len = g_pserver->repl_backlog_histlen - skip;
     serverLog(LL_DEBUG, "[PSYNC] Reply total length: %lld", len);
+    serverLog(LL_NOTICE, "Coming through from the addReplicationBacklog");
+#ifdef BYPASS_PSYNC
+    setReplIdx(c, j, offset);
+#else
     while(len) {
         long long thislen =
             ((g_pserver->repl_backlog_size - j) < len) ?
@@ -693,6 +788,8 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
         len -= thislen;
         j = 0;
     }
+#endif
+    serverLog(LL_NOTICE, "rdb transmitted? %d, pending replies? %d", c->transmittedRDB, clientHasPendingReplies(c));
     return g_pserver->repl_backlog_histlen - skip;
 }
 
@@ -730,6 +827,8 @@ int replicationSetupSlaveForFullResync(client *replica, long long offset) {
      * replica as well. Set replicaseldb to -1 in order to force to re-emit
      * a SELECT statement in the replication stream. */
     g_pserver->replicaseldb = -1;
+
+    serverLog(LL_NOTICE, "We are setting up here lad");
 
     /* Don't send this reply to slaves that approached us with
      * the old SYNC command. */
@@ -989,6 +1088,7 @@ void syncCommand(client *c) {
     if (!strcasecmp((const char*)ptrFromObj(c->argv[0]),"psync")) {
         if (masterTryPartialResynchronization(c) == C_OK) {
             g_pserver->stat_sync_partial_ok++;
+            // c->repl_curr_idx = g_pserver->repl_backlog_idx;
             return; /* No full resync needed, return. */
         } else {
             char *master_replid = (char*)ptrFromObj(c->argv[1]);
@@ -1016,6 +1116,7 @@ void syncCommand(client *c) {
         connDisableTcpNoDelay(c->conn); /* Non critical if it fails. */
     c->repldbfd = -1;
     c->flags |= CLIENT_SLAVE;
+    // c->repl_curr_idx = g_pserver->repl_backlog_idx;
     listAddNodeTail(g_pserver->slaves,c);
 
     /* Create the replication backlog if needed. */
@@ -1035,6 +1136,7 @@ void syncCommand(client *c) {
     if (g_pserver->FRdbSaveInProgress() &&
         g_pserver->rdb_child_type == RDB_CHILD_TYPE_DISK)
     {
+        serverLog(LL_NOTICE, "case 1");
         /* Ok a background save is in progress. Let's check if it is a good
          * one for replication, i.e. if there is another replica that is
          * registering differences since the server forked to save. */
@@ -1066,6 +1168,7 @@ void syncCommand(client *c) {
     } else if (g_pserver->FRdbSaveInProgress() &&
                g_pserver->rdb_child_type == RDB_CHILD_TYPE_SOCKET)
     {
+        serverLog(LL_NOTICE, "case 2");
         /* There is an RDB child process but it is writing directly to
          * children sockets. We need to wait for the next BGSAVE
          * in order to synchronize. */
@@ -1073,6 +1176,7 @@ void syncCommand(client *c) {
 
     /* CASE 3: There is no BGSAVE is progress. */
     } else {
+        serverLog(LL_NOTICE, "case 3");
         if (g_pserver->repl_diskless_sync && (c->slave_capa & SLAVE_CAPA_EOF)) {
             /* Diskless replication RDB child is created inside
              * replicationCron() since we want to delay its start a
@@ -1278,6 +1382,7 @@ void replconfCommand(client *c) {
  * 3) Update the count of "good replicas". */
 void putSlaveOnline(client *replica) {
     replica->replstate = SLAVE_STATE_ONLINE;
+    
     replica->repl_put_online_on_ack = 0;
     replica->repl_ack_time = g_pserver->unixtime; /* Prevent false timeout. */
     if (connSetWriteHandler(replica->conn, sendReplyToClient, true) == C_ERR) {
@@ -1415,11 +1520,13 @@ void sendBulkToSlave(connection *conn) {
 
     replica->repldboff += nwritten;
     g_pserver->stat_net_output_bytes += nwritten;
+    // replica->repl_curr_idx = g_pserver->repl_backlog_idx;
     if (replica->repldboff == replica->repldbsize) {
         close(replica->repldbfd);
         replica->repldbfd = -1;
         connSetWriteHandler(replica->conn,NULL);
         putSlaveOnline(replica);
+        serverLog(LL_NOTICE, "ABOUT TO DIE HERE");
     }
 }
 
@@ -4450,6 +4557,21 @@ void replicateSubkeyExpire(redisDb *db, robj_roptr key, robj_roptr subkey, long 
 }
 
 void _clientAsyncReplyBufferReserve(client *c, size_t len);
+
+/* Has the end of the replication backlog overflowed past the beginning? */
+bool replOverflowHasOccured(){
+    if (g_pserver->repl_backlog_idx > g_pserver->repl_batch_idxStart){
+        long long repl_idx_difference = g_pserver->repl_backlog_idx > g_pserver->repl_batch_idxStart ? 
+                g_pserver->repl_backlog_idx - g_pserver->repl_batch_idxStart :
+                (g_pserver->repl_backlog_size + g_pserver->repl_backlog_idx) - g_pserver->repl_batch_idxStart;
+
+        return g_pserver->master_repl_offset - g_pserver->repl_batch_offStart > repl_idx_difference;
+    }
+    return false;
+}
+
+thread_local int transmittedCount = 0;
+
 void flushReplBacklogToClients()
 {
     serverAssert(GlobalLocksAcquired());
@@ -4463,11 +4585,31 @@ void flushReplBacklogToClients()
         serverAssert(g_pserver->master_repl_offset - g_pserver->repl_batch_offStart <= g_pserver->repl_backlog_size);
         serverAssert(g_pserver->repl_batch_idxStart != g_pserver->repl_backlog_idx);
 
+        serverAssert(!replOverflowHasOccured());
         listIter li;
         listNode *ln;
         listRewind(g_pserver->slaves, &li);
+
+#if 0
+        // check for potential overflow first
         while ((ln = listNext(&li))) {
             client *replica = (client*)listNodeValue(ln);
+            // serverLog(LL_NOTICE, "replica state: %d", replica->replstate);
+
+            if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
+            if (replica->flags & CLIENT_CLOSE_ASAP) continue;
+            if (replica->repl_curr_idx == -1) continue;
+
+            std::unique_lock<fastlock> ul(replica->lock, std::defer_lock);
+            if (FCorrectThread(replica))
+                ul.lock();
+            else
+                fAsyncWrite = true;
+#endif
+
+        while ((ln = listNext(&li))) {
+            client *replica = (client*)listNodeValue(ln);
+            // serverLog(LL_NOTICE, "replica state: %d", replica->replstate);
 
             if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
             if (replica->flags & CLIENT_CLOSE_ASAP) continue;
@@ -4478,6 +4620,19 @@ void flushReplBacklogToClients()
             else
                 fAsyncWrite = true;
             
+
+#ifdef BYPASS_BUFFER
+            /* If we are online and the RDB has been sent, there is no need to feed the client buffer
+             * We will send our replies directly from the replication backlog instead */
+            if (replica->replstate == SLAVE_STATE_ONLINE && replica->transmittedRDB){
+                setReplIdx(replica, g_pserver->repl_batch_idxStart, g_pserver->repl_batch_offStart);
+                continue;
+            }
+#else
+            if (replica->replstate == SLAVE_STATE_ONLINE){
+                // serverLog(LL_NOTICE, "would be calling this garbage function w/ offset: %lld", g_pserver->repl_batch_idxStart);
+            }
+#endif
             if (g_pserver->repl_backlog_idx >= g_pserver->repl_batch_idxStart) {
                 long long cbCopy = g_pserver->repl_backlog_idx - g_pserver->repl_batch_idxStart;
                 serverAssert((g_pserver->master_repl_offset - g_pserver->repl_batch_offStart) == cbCopy);
@@ -4491,6 +4646,7 @@ void flushReplBacklogToClients()
                     _clientAsyncReplyBufferReserve(replica, cbPhase1 + g_pserver->repl_backlog_idx);
                 addReplyProto(replica, g_pserver->repl_backlog + g_pserver->repl_batch_idxStart, cbPhase1);
                 addReplyProto(replica, g_pserver->repl_backlog, g_pserver->repl_backlog_idx);
+
                 serverAssert((cbPhase1 + g_pserver->repl_backlog_idx) == (g_pserver->master_repl_offset - g_pserver->repl_batch_offStart));
             }
         }

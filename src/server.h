@@ -1516,6 +1516,8 @@ struct client {
     long long psync_initial_offset; /* FULLRESYNC reply offset other slaves
                                        copying this replica output buffer
                                        should use. */
+    long long repl_curr_idx = -1;  /* Replication index sent, if this is a replica */
+    long long repl_curr_off = -1;
     char replid[CONFIG_RUN_ID_SIZE+1]; /* Master replication ID (if master). */
     int slave_listening_port; /* As configured with: REPLCONF listening-port */
     char slave_ip[NET_IP_STR_LEN]; /* Optionally given by REPLCONF ip-address */
@@ -1574,6 +1576,9 @@ struct client {
     int argc;
     robj **argv;
     size_t argv_len_sumActive = 0;
+
+    bool transmittedRDB = false; /* Have we finished transmitting the RDB to this replica? */
+                                 /* If so, we can read from the replication backlog instead of the client buffer */
 
     // post a function from a non-client thread to run on its client thread
     bool postFunction(std::function<void(client *)> fn, bool fLock = true);
@@ -3470,6 +3475,8 @@ void mixDigest(unsigned char *digest, const void *ptr, size_t len);
 void xorDigest(unsigned char *digest, const void *ptr, size_t len);
 int populateCommandTableParseFlags(struct redisCommand *c, const char *strflags);
 
+
+
 int moduleGILAcquiredByModule(void);
 extern int g_fInCrash;
 static inline int GlobalLocksAcquired(void)  // Used in asserts to verify all global locks are correctly acquired for a server-thread to operate
@@ -3526,6 +3533,8 @@ void tlsInit(void);
 void tlsInitThread();
 int tlsConfigure(redisTLSContextConfig *ctx_config);
 
+int prepareClientToWrite(client *c);
+
 
 class ShutdownException
 {};
@@ -3538,3 +3547,5 @@ class ShutdownException
 int iAmMaster(void);
 
 #endif
+
+

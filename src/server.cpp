@@ -5832,7 +5832,7 @@ int main(int argc, char **argv) {
     zmalloc_set_oom_handler(redisOutOfMemoryHandler);
     srand(time(NULL)^getpid());
     gettimeofday(&tv,NULL);
-    init_genrand64(((long long) tv.tv_sec * 1000000 + tv.tv_usec) ^ getpid());
+    init_genrand64(((unsigned long long) tv.tv_sec * 1000000 + tv.tv_usec) ^ getpid());
     crc64_init();
     serverAssert(g_pserver->repl_batch_offStart < 0);
 

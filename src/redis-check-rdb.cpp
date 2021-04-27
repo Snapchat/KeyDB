@@ -351,6 +351,36 @@ err:
     return 1;
 }
 
+// TODO(Jesse): While merging Redis 6.0.11 I could not for the life of me get
+// this code to link correctly.  As a stop-gap I copy pasted code from
+// @mt19937_copy_paste here. Remove this code and figure out how to get that to
+// link!!!!!!
+// {
+#define JESSE_FIX_ME_IMMEDIATELY 1
+#if JESSE_FIX_ME_IMMEDIATELY
+
+#define NN 312
+#define MM 156
+#define MATRIX_A 0xB5026F5AA96619E9ULL
+#define UM 0xFFFFFFFF80000000ULL /* Most significant 33 bits */
+#define LM 0x7FFFFFFFULL /* Least significant 31 bits */
+
+
+/* The array for the state vector */
+static unsigned long long mt[NN];
+/* mti==NN+1 means mt[NN] is not initialized */
+static int mti=NN+1;
+/* initializes mt[NN] with a seed */
+void init_genrand64(unsigned long long seed)
+{
+    mt[0] = seed;
+    for (mti=1; mti<NN; mti++)
+        mt[mti] =  (6364136223846793005ULL * (mt[mti-1] ^ (mt[mti-1] >> 62)) + mti);
+}
+#endif
+// }
+
+
 /* RDB check main: called form server.c when Redis is executed with the
  * keydb-check-rdb alias, on during RDB loading errors.
  *
@@ -372,7 +402,7 @@ int redis_check_rdb_main(int argc, const char **argv, FILE *fp) {
     }
 
     gettimeofday(&tv, NULL);
-    init_genrand64(((long long) tv.tv_sec * 1000000 + tv.tv_usec) ^ getpid());
+    init_genrand64( (unsigned long long) ( ((long long) tv.tv_sec * 1000000 + tv.tv_usec) ^ getpid()  ));
 
     /* In order to call the loading functions we need to create the shared
      * integer objects, however since this function may be called from

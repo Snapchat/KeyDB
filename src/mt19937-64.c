@@ -57,6 +57,8 @@
 #include "mt19937-64.h"
 #include <stdio.h>
 
+// { @mt19937_copy_paste
+
 #define NN 312
 #define MM 156
 #define MATRIX_A 0xB5026F5AA96619E9ULL
@@ -76,6 +78,7 @@ void init_genrand64(unsigned long long seed)
     for (mti=1; mti<NN; mti++)
         mt[mti] =  (6364136223846793005ULL * (mt[mti-1] ^ (mt[mti-1] >> 62)) + mti);
 }
+// } @mt19937_copy_paste
 
 /* initialize by an array with array-length */
 /* init_key is the array for initializing keys */

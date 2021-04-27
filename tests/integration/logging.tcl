@@ -3,7 +3,21 @@ set system_name [string tolower [exec uname -s]]
 # ldd --version returns 1 under musl for unknown reasons. If this check stops working, that may be why
 set is_musl [catch {exec ldd --version}]
 
-if {$system_name eq {linux} && $is_musl eq 0 || $system_name eq {darwin}} {
+set system_supported 0
+
+# We only support darwin or Linux with glibc
+if {$system_name eq {darwin}} {
+    set system_supported 1
+} elseif {$system_name eq {linux}} {
+    # Avoid the test on libmusl, which does not support backtrace
+    set ldd [exec ldd src/keydb-server]
+    if {![string match {*libc.musl*} $ldd]} {
+        set system_supported 1
+    }
+}
+
+if {$system_supported} {
+    set server_path [tmpdir server.log]
     start_server [list overrides [list dir $server_path]] {
         test "Server is able to generate a stack trace on selected systems" {
             r config set watchdog-period 200

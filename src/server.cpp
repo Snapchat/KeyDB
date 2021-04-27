@@ -5840,7 +5840,7 @@ int main(int argc, char **argv) {
      * to reset it and restore it back. We do this early to avoid a potential
      * race condition with threads that could be creating files or directories.
      */
-    umask(server.umask = umask(0777));
+    umask(g_pserver->umask = umask(0777));
 
     uint8_t hashseed[16];
     getRandomHexChars((char*)hashseed,sizeof(hashseed));

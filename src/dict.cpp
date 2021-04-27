@@ -1320,7 +1320,7 @@ int compareCallback(void *privdata, const void *key1, const void *key2) {
 void freeCallback(void *privdata, void *val) {
     DICT_NOTUSED(privdata);
 
-    sdsfree(val);
+    sdsfree((const char*)val);
 }
 
 dictType BenchmarkDictType = {

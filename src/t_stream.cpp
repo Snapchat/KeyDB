@@ -2726,8 +2726,8 @@ NULL
     key = c->argv[2];
 
     /* Lookup the key now, this is common for all the subcommands but HELP. */
-    robj *o = lookupKeyReadOrReply(c,key,shared.nokeyerr);
-    if (o == NULL || checkType(c,o,OBJ_STREAM)) return;
+    robj_roptr o = lookupKeyReadOrReply(c,key,shared.nokeyerr);
+    if (o.unsafe_robjcast() == NULL || checkType(c,o,OBJ_STREAM)) return;
     s = (stream*)ptrFromObj(o);
 
     /* Dispatch the different subcommands. */

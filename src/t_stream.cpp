@@ -2727,7 +2727,7 @@ NULL
 
     /* Lookup the key now, this is common for all the subcommands but HELP. */
     robj_roptr o = lookupKeyReadOrReply(c,key,shared.nokeyerr);
-    if (o.unsafe_robjcast() == NULL || checkType(c,o,OBJ_STREAM)) return;
+    if (o == nullptr || checkType(c,o,OBJ_STREAM)) return;
     s = (stream*)ptrFromObj(o);
 
     /* Dispatch the different subcommands. */

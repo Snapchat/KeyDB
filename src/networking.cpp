@@ -3455,6 +3455,21 @@ void processEventsWhileBlocked(int iel) {
     listNode *ln;
     listRewind(g_pserver->clients, &li);
 
+    // TODO(Jesse): Upstream Redis used the following code here.  If tests fail
+    // it could be this.
+    //
+    // @6.2.2-merge
+#if 0
+    int item_id = 0;
+    while((ln = listNext(&li))) {
+        client *c = listNodeValue(ln);
+        c->flags &= ~CLIENT_PENDING_WRITE;
+        int target_id = item_id % (server.io_threads_num+1);
+        listAddNodeTail(io_threads_list[target_id],c);
+        item_id++;
+    }
+#endif
+
     // All client locks must be acquired *after* the global lock is reacquired to prevent deadlocks
     //  so unlock here, and save them for reacquisition later
     while ((ln = listNext(&li)) != nullptr)
@@ -3466,7 +3481,7 @@ void processEventsWhileBlocked(int iel) {
             vecclients.push_back(c);
         }
     }
-    
+
     /* Since we're about to release our lock we need to flush the repl backlog queue */
     bool fReplBacklog = g_pserver->repl_batch_offStart >= 0;
     if (fReplBacklog) {

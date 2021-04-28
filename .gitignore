@@ -1,4 +1,6 @@
-commits_to_merge
+next.sh
+commits_to_merge.remaining
+commits_to_merge.total
 make.sh
 to_merge
 Session.vim

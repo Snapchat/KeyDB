@@ -1275,6 +1275,13 @@ void xaddCommand(client *c) {
         return;
     }
 
+    /* Return ASAP if the stream has reached the last possible ID */
+    if (s->last_id.ms == UINT64_MAX && s->last_id.seq == UINT64_MAX) {
+        addReplyError(c,"The stream has exhausted the last possible ID, "
+                        "unable to add more items");
+        return;
+    }
+
     /* Append using the low level function and return the ID. */
     if (streamAppendItem(s,c->argv+field_pos,(c->argc-field_pos)/2,
         &id, id_given ? &id : NULL)

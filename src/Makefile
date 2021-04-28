@@ -304,6 +304,7 @@ KEYDB_BENCHMARK_OBJ=ae.o anet.o redis-benchmark.o adlist.o dict.o zmalloc.o siph
 KEYDB_CHECK_RDB_NAME=keydb-check-rdb$(PROG_SUFFIX)
 KEYDB_CHECK_AOF_NAME=keydb-check-aof$(PROG_SUFFIX)
 KEYDB_DIAGNOSTIC_NAME=keydb-diagnostic-tool$(PROG_SUFFIX)
+KEYDB_DIAGNOSTIC_OBJ=ae.o anet.o keydb-diagnostic-tool.o adlist.o dict.o zmalloc.o siphash.o keydb-diagnostic-tool.o storage-lite.o fastlock.o new.o $(ASM_OBJ)
 
 all: $(KEYDB_SERVER_NAME) $(KEYDB_SENTINEL_NAME) $(KEYDB_CLI_NAME) $(KEYDB_BENCHMARK_NAME) $(KEYDB_CHECK_RDB_NAME) $(KEYDB_CHECK_AOF_NAME) $(KEYDB_DIAGNOSTIC_NAME)
 	@echo ""
@@ -378,7 +379,7 @@ $(KEYDB_BENCHMARK_NAME): $(KEYDB_BENCHMARK_OBJ)
 	$(KEYDB_LD) -o $@ $^ ../deps/hiredis/libhiredis.a $(FINAL_LIBS)
 
 # keydb-diagnostic-tool
-$(KEYDB_DIAGNOSTIC_NAME): $(KEYDB_BENCHMARK_OBJ)
+$(KEYDB_DIAGNOSTIC_NAME): $(KEYDB_DIAGNOSTIC_OBJ)
 	$(KEYDB_LD) -o $@ $^ ../deps/hiredis/libhiredis.a $(FINAL_LIBS)
 
 dict-benchmark: dict.cpp zmalloc.cpp sds.c siphash.c

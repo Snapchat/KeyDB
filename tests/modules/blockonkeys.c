@@ -164,10 +164,10 @@ int bpopgt_reply_callback(RedisModuleCtx *ctx, RedisModuleString **argv, int arg
     long long *pgt = RedisModule_GetBlockedClientPrivateData(ctx);
 
     fsl_t *fsl;
-    if (!get_fsl(ctx, keyname, REDISMODULE_READ, 0, &fsl, 0) || !fsl)
+    if (!get_fsl(ctx, keyname, REDISMODULE_READ, 0, &fsl, 0))
         return REDISMODULE_ERR;
 
-    if (fsl->list[fsl->length-1] <= *pgt)
+    if (!fsl || fsl->list[fsl->length-1] <= *pgt)
         return REDISMODULE_ERR;
 
     RedisModule_ReplyWithLongLong(ctx, fsl->list[--fsl->length]);
@@ -207,6 +207,7 @@ int fsl_bpopgt(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         /* We use malloc so the tests in blockedonkeys.tcl can check for memory leaks */
         long long *pgt = RedisModule_Alloc(sizeof(long long));
         *pgt = gt;
+        /* Key is empty or has <2 elements, we must block */
         RedisModule_BlockClientOnKeys(ctx, bpopgt_reply_callback, bpopgt_timeout_callback,
                                       bpopgt_free_privdata, timeout, &argv[1], 1, pgt);
     } else {

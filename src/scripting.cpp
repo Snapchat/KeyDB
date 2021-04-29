@@ -667,15 +667,38 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
      * could enlarge the memory usage are not allowed, but only if this is the
      * first write in the context of this script, otherwise we can't stop
      * in the middle. */
+<<<<<<< HEAD:src/scripting.cpp
     if (g_pserver->maxmemory &&             /* Maxmemory is actually enabled. */
         !g_pserver->loading &&              /* Don't care about mem if loading. */
         !listLength(g_pserver->masters) &&           /* Slave must execute the script. */
         g_pserver->lua_write_dirty == 0 &&  /* Script had no side effects so far. */
         g_pserver->lua_oom &&               /* Detected OOM when script started. */
+||||||| 7ef2270ee:src/scripting.c
+    if (server.maxmemory &&             /* Maxmemory is actually enabled. */
+        !server.loading &&              /* Don't care about mem if loading. */
+        !server.masterhost &&           /* Slave must execute the script. */
+        server.lua_write_dirty == 0 &&  /* Script had no side effects so far. */
+=======
+    if (server.maxmemory &&             /* Maxmemory is actually enabled. */
+        !server.loading &&              /* Don't care about mem if loading. */
+        !server.masterhost &&           /* Slave must execute the script. */
+        server.lua_write_dirty == 0 &&  /* Script had no side effects so far. */
+        server.lua_oom &&               /* Detected OOM when script start. */
+>>>>>>> 38f6207f884f514e928513acb6560fdb375daa2e:src/scripting.c
         (cmd->flags & CMD_DENYOOM))
     {
+<<<<<<< HEAD:src/scripting.cpp
         luaPushError(lua, (char*)ptrFromObj(shared.oomerr));
         goto cleanup;
+||||||| 7ef2270ee:src/scripting.c
+        if (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK) {
+            luaPushError(lua, shared.oomerr->ptr);
+            goto cleanup;
+        }
+=======
+        luaPushError(lua, shared.oomerr->ptr);
+        goto cleanup;
+>>>>>>> 38f6207f884f514e928513acb6560fdb375daa2e:src/scripting.c
     }
 
     if (cmd->flags & CMD_RANDOM) g_pserver->lua_random_dirty = 1;

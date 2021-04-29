@@ -1959,7 +1959,6 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
          * triggering an error condition. */
         if (bysignal != SIGUSR1)
             g_pserver->aof_lastbgrewrite_status = C_ERR;
-
         serverLog(LL_WARNING,
             "Background AOF rewrite terminated by signal %d", bysignal);
     }

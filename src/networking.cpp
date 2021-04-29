@@ -3464,7 +3464,7 @@ void processEventsWhileBlocked(int iel) {
     while((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
         c->flags &= ~CLIENT_PENDING_WRITE;
-        int target_id = item_id % (server.io_threads_num+1);
+        int target_id = item_id % server.io_threads_num;
         listAddNodeTail(io_threads_list[target_id],c);
         item_id++;
     }

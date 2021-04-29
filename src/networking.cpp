@@ -1680,22 +1680,8 @@ int writeToClient(client *c, int handler_installed) {
     /* if this is a write to a replica, it's coming straight from the replication backlog */        
     long long repl_backlog_idx = g_pserver->repl_backlog_idx;
 
-    bool wroteFromClientBuffer = false; /* True if you wrote from the client buffer in this function call */ 
-
     while(clientHasPendingReplies(c)) {
-        wroteFromClientBuffer = true;
-        if (c->flags & CLIENT_SLAVE && listLength(c->reply) % 10 == 0){
-
-            serverLog(LL_NOTICE, "-----------------------------------------");
-            serverLog(LL_NOTICE, "replica w/ pending replies, with a reply list size of: %lu", listLength(c->reply));            
-            serverLog(LL_NOTICE, "repl_backlog_idx: %lld, repl_curr_idx: %lld, repl_backlog_size: %lld", repl_backlog_idx, c->repl_curr_idx, g_pserver->repl_backlog_size);
-            serverLog(LL_NOTICE, "repl_curr_off: %lld, master_repl_offset: %lld", c->repl_curr_off, g_pserver->master_repl_offset);
-            serverLog(LL_NOTICE, "-----------------------------------------");
-
-        }
         if (c->bufpos > 0) {
-            // serverLog(LL_NOTICE, "Sending reply %d", x);
-            // serverLog(LL_NOTICE, "SUSSUS AMOGUS, %ld", c->bufpos);
             nwritten = connWrite(c->conn,c->buf+c->sentlen,c->bufpos-c->sentlen);
             if (nwritten <= 0) break;
             c->sentlen += nwritten;
@@ -1753,9 +1739,7 @@ int writeToClient(client *c, int handler_installed) {
     /* If there are no more pending replies, then we have transmitted the RDB.
      * This means further replication commands will be taken straight from the
      * replication backlog from now on. */
-    if (c->flags & CLIENT_SLAVE && c->replstate == SLAVE_STATE_ONLINE && !clientHasPendingReplies(c)){
-        if (!c->transmittedRDB)
-            serverLog(LL_NOTICE, "---------->>>>>>>> TRANSMISSION OF THE RDB HAS COMPLETED <<<<<<<<----------");
+    if (c->flags & CLIENT_SLAVE && c->replstate == SLAVE_STATE_ONLINE && !clientHasPendingReplies(c) && c->replyAsync == nullptr){
         c->transmittedRDB = true;
     }
 
@@ -1775,49 +1759,27 @@ int writeToClient(client *c, int handler_installed) {
         /* wrap around case, v. rare */
         /* also v. buggy so there's that */
         } else {
-            serverLog(LL_NOTICE, "WRAP CASE");
-            serverLog(LL_NOTICE, "-----------------------------------------");
-            serverLog(LL_NOTICE, "requested to write: %ld", nrequested);
-            serverLog(LL_NOTICE, "actually written: %ld", nwritten);
-            serverLog(LL_NOTICE, "repl_backlog_idx: %lld, repl_curr_idx: %lld, repl_backlog_size: %lld", repl_backlog_idx, c->repl_curr_idx, g_pserver->repl_backlog_size);
-            serverLog(LL_NOTICE, "buf pos: %d, sentlen: %ld", c->bufpos, c->sentlen);
-            serverLog(LL_NOTICE, "nwritten: %ld", nwritten);
-            serverLog(LL_NOTICE, "-----------------------------------------");
-
             nrequested = repl_backlog_size + repl_backlog_idx - c->repl_curr_idx;
             nwritten = connWrite(c->conn, g_pserver->repl_backlog + c->repl_curr_idx, repl_backlog_size - c->repl_curr_idx);
             /* only attempt wrapping if we write the correct number of bytes */
             if (nwritten == repl_backlog_size - c->repl_curr_idx){
-                serverLog(LL_NOTICE, "SECOND STAGE");
-                serverLog(LL_NOTICE, "-----------------------------------------");
-                serverLog(LL_NOTICE, "requested to write: %ld", nrequested);
-                serverLog(LL_NOTICE, "actually written: %ld", nwritten);
-                serverLog(LL_NOTICE, "repl_backlog_idx: %lld, repl_curr_idx: %lld, repl_backlog_size: %lld", repl_backlog_idx, c->repl_curr_idx, g_pserver->repl_backlog_size);
-                serverLog(LL_NOTICE, "buf pos: %d, sentlen: %ld", c->bufpos, c->sentlen);
-                serverLog(LL_NOTICE, "-----------------------------------------");
-
                 long long nwrittenPart2 = connWrite(c->conn, g_pserver->repl_backlog, repl_backlog_idx);
                 if (nwrittenPart2 != -1)
                     nwritten += nwrittenPart2;
 
-                serverLog(LL_NOTICE, "nwrittenPart2: %lld", nwrittenPart2);
-                serverLog(LL_NOTICE, "-----------------------------------------");
-            } else {
-                serverLog(LL_NOTICE, "SUPER SHORT");
-            }
-                
+            }                
         }
 
         /* only update the replica's current index if bytes were sent */
 
         // if (nrequested != nwritten){
-        serverLog(LL_NOTICE, "-----------------------------------------");
-        serverLog(LL_NOTICE, "AFTER THE FACT");
-        serverLog(LL_NOTICE, "requested to write: %ld", nrequested);
-        serverLog(LL_NOTICE, "actually written: %ld", nwritten);
-        serverLog(LL_NOTICE, "repl_backlog_idx: %lld, repl_curr_idx: %lld, repl_backlog_size: %lld", repl_backlog_idx, c->repl_curr_idx, g_pserver->repl_backlog_size);
-        serverLog(LL_NOTICE, "repl_curr_off: %lld, master_repl_offset: %lld", c->repl_curr_off, g_pserver->master_repl_offset);
-        serverLog(LL_NOTICE, "-----------------------------------------");
+            // serverLog(LL_NOTICE, "-----------------------------------------");
+            // serverLog(LL_NOTICE, "AFTER THE FACT");
+            // serverLog(LL_NOTICE, "requested to write: %ld", nrequested);
+            // serverLog(LL_NOTICE, "actually written: %ld", nwritten);
+            // serverLog(LL_NOTICE, "repl_backlog_idx: %lld, repl_curr_idx: %lld, repl_backlog_size: %lld", repl_backlog_idx, c->repl_curr_idx, g_pserver->repl_backlog_size);
+            // serverLog(LL_NOTICE, "repl_curr_off: %lld, master_repl_offset: %lld", c->repl_curr_off, g_pserver->master_repl_offset);
+            // serverLog(LL_NOTICE, "-----------------------------------------");
         // }
 
 
@@ -1902,25 +1864,36 @@ void ProcessPendingAsyncWrites()
         serverAssert(c->fPendingAsyncWrite);
         if (c->flags & (CLIENT_CLOSE_ASAP | CLIENT_CLOSE_AFTER_REPLY))
         {
-            zfree(c->replyAsync);
-            c->replyAsync = nullptr;
+            if (c->replyAsync != nullptr){
+                zfree(c->replyAsync);
+                c->replyAsync = nullptr;
+            }
             c->fPendingAsyncWrite = FALSE;
             continue;
         }
 
-        int size = c->replyAsync->used;
+        /* since writes from master to replica can come directly from the replication backlog,
+         * writes may have been signalled without having been copied to the replyAsync buffer,
+         * thus causing the buffer to be NULL */ 
+        if (c->replyAsync != nullptr){
+            int size = c->replyAsync->used;
 
-        if (listLength(c->reply) == 0 && size <= (PROTO_REPLY_CHUNK_BYTES - c->bufpos)) {
-            memcpy(c->buf + c->bufpos, c->replyAsync->buf(), size);
-            c->bufpos += size;
-        } else {
-            c->reply_bytes += c->replyAsync->size;
-            listAddNodeTail(c->reply, c->replyAsync);
+            if (listLength(c->reply) == 0 && size <= (PROTO_REPLY_CHUNK_BYTES - c->bufpos)) {
+                memcpy(c->buf + c->bufpos, c->replyAsync->buf(), size);
+                c->bufpos += size;
+            } else {
+                c->reply_bytes += c->replyAsync->size;
+                listAddNodeTail(c->reply, c->replyAsync);
+                c->replyAsync = nullptr;
+            }
+
+            zfree(c->replyAsync);
             c->replyAsync = nullptr;
+        } else {
+            /* Only replicas should have empty async reply buffers */
+            serverAssert(c->flags & CLIENT_SLAVE);
         }
 
-        zfree(c->replyAsync);
-        c->replyAsync = nullptr;
         c->fPendingAsyncWrite = FALSE;
 
         // Now install the write event handler
@@ -1935,17 +1908,17 @@ void ProcessPendingAsyncWrites()
         {
             ae_flags |= AE_BARRIER;
         }
-        
+
         if (!((c->replstate == REPL_STATE_NONE ||
          (c->replstate == SLAVE_STATE_ONLINE && !c->repl_put_online_on_ack))))
             continue;
-
+        
         asyncCloseClientOnOutputBufferLimitReached(c);
         if (c->flags & CLIENT_CLOSE_ASAP)
             continue;   // we will never write this so don't post an op
-        
+
         std::atomic_thread_fence(std::memory_order_seq_cst);
-        
+
         if (FCorrectThread(c))
         {
             prepareClientToWrite(c); // queue an event
@@ -3386,7 +3359,12 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
  * that writes to said replica are using data from the replication backlog
  * as opposed to it's own internal buffer, this number should keep track of that */
 unsigned long getClientReplicationBacklogSharedUsage(client *c) {
-    return (c->repl_curr_idx == -1 && c->flags & CLIENT_SLAVE) ? 0 : g_pserver->master_repl_offset - c->repl_curr_off;
+    if (c->flags & CLIENT_SLAVE && c->repl_curr_idx != -1){
+        // serverLog(LL_NOTICE, "repl_backlog_size %lld, repl_backlog_idx %lld, master_repl_offset %lld, repl_curr_idx %lld, repl_curr_off %lld", 
+        //     g_pserver->repl_backlog_size, g_pserver->repl_backlog_idx, g_pserver->master_repl_offset, c->repl_curr_idx, c->repl_curr_off);
+    }
+    
+    return (!(c->flags & CLIENT_SLAVE) || c->repl_curr_idx == -1) ? 0 : g_pserver->master_repl_offset - c->repl_curr_off;
 }
 
 /* This function returns the number of bytes that Redis is

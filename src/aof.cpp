@@ -1249,6 +1249,10 @@ int rioWriteBulkStreamID(rio *r,streamID *id) {
 
     sds replyid = sdscatfmt(sdsempty(),"%U-%U",id->ms,id->seq);
     retval = rioWriteBulkString(r,replyid,sdslen(replyid));
+
+    // TODO(Jesse): Redis upstream conditionally checks for (retval == 0) and
+    // only frees this if that's true.  Do we have a UAF here?
+    // @6.2.2-merge
     sdsfree(replyid);
     return retval;
 }

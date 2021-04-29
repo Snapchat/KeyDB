@@ -293,6 +293,10 @@ int clusterLoadConfig(char *filename) {
                 sdsfreesplitres(argv,argc);
                 goto fmterr;
             }
+            if (stop < 0 || stop >= CLUSTER_SLOTS) {
+                sdsfreesplitres(argv,argc);
+                goto fmterr;
+            }
             while(start <= stop) clusterAddSlot(n, start++);
         }
 

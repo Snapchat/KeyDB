@@ -2419,7 +2419,7 @@ public:
         for (;;) {
             std::unique_lock<std::mutex> lock(queue.mutex);
             if (queue.queuejobs.empty() && queue.queuefn.empty()) {
-                if (queue.fExit)
+                if (queue.queuejobs.empty() && queue.queuefn.empty() && queue.fExit)
                     break;
                 queue.cv.wait(lock);
                 if (queue.queuejobs.empty() && queue.queuefn.empty() && queue.fExit)

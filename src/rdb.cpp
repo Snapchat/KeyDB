@@ -2336,41 +2336,6 @@ void stopSaving(int success) {
                           NULL);
 }
 
-/* Track loading progress in order to serve client's from time to time
-   and if needed calculate rdb checksum  */
-void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
-    if (g_pserver->rdb_checksum)
-        rioGenericUpdateChecksum(r, buf, len);
-    
-    if ((g_pserver->loading_process_events_interval_bytes &&
-        (r->processed_bytes + len)/g_pserver->loading_process_events_interval_bytes > r->processed_bytes/g_pserver->loading_process_events_interval_bytes) ||
-        (g_pserver->loading_process_events_interval_keys &&
-        (r->keys_since_last_callback >= g_pserver->loading_process_events_interval_keys)))
-    {
-        listIter li;
-        listNode *ln;
-        listRewind(g_pserver->masters, &li);
-        while ((ln = listNext(&li)))
-        {
-            struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
-            if (mi->repl_state == REPL_STATE_TRANSFER)
-                replicationSendNewlineToMaster(mi);
-        }
-        loadingProgress(r->processed_bytes);
-        processEventsWhileBlocked(serverTL - g_pserver->rgthreadvar);
-        processModuleLoadingProgressEvent(0);
-
-        robj *ping_argv[1];
-
-        ping_argv[0] = createStringObject("PING",4);
-        replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb, ping_argv, 1);
-        decrRefCount(ping_argv[0]);
-
-        r->keys_since_last_callback = 0;
-    }
-}
-
-
 struct rdbInsertJob
 {
     redisDb *db;
@@ -2393,6 +2358,7 @@ class rdbAsyncWorkThread
     bool fExit = false;
     std::atomic<size_t> ckeysLoaded;
     std::thread m_thread;
+    list *clients_pending_async_write = nullptr;
 
 public:
     
@@ -2405,10 +2371,14 @@ public:
     ~rdbAsyncWorkThread() {
         if (!fExit && m_thread.joinable())
             endWork();
+        if (clients_pending_async_write)
+            listRelease(clients_pending_async_write);
     }
 
     void start() {
-        m_thread = std::thread(&rdbAsyncWorkThread::loadWorkerThreadMain, this);
+        if (clients_pending_async_write == nullptr)
+            clients_pending_async_write = listCreate();
+        m_thread = std::thread(&rdbAsyncWorkThread::loadWorkerThreadMain, this, clients_pending_async_write);
     }
 
     void enqueue(rdbInsertJob &job) {
@@ -2435,18 +2405,24 @@ public:
         cv.notify_one();
         l.unlock();
         m_thread.join();
+        listJoin(serverTL->clients_pending_asyncwrite, clients_pending_async_write);
+        ProcessPendingAsyncWrites();
         return ckeysLoaded;
     }
 
-    static void loadWorkerThreadMain(rdbAsyncWorkThread *pqueue) {
+    static void loadWorkerThreadMain(rdbAsyncWorkThread *pqueue, list *clients_pending_asyncwrite) {
         rdbAsyncWorkThread &queue = *pqueue;
+        redisServerThreadVars vars;
+        vars.clients_pending_asyncwrite = clients_pending_asyncwrite;
+        serverTL = &vars;
+        aeSetThreadOwnsLockOverride(true);
         for (;;) {
             std::unique_lock<std::mutex> lock(queue.mutex);
             if (queue.queuejobs.empty() && queue.queuefn.empty()) {
                 if (queue.fExit)
                     break;
                 queue.cv.wait(lock);
-                if (queue.fExit)
+                if (queue.queuejobs.empty() && queue.queuefn.empty() && queue.fExit)
                     break;
             }
             
@@ -2518,8 +2494,47 @@ public:
                 }
             }
         }
+        aeSetThreadOwnsLockOverride(false);
     }
 };
+
+/* Track loading progress in order to serve client's from time to time
+   and if needed calculate rdb checksum  */
+void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
+    if (g_pserver->rdb_checksum)
+        rioGenericUpdateChecksum(r, buf, len);
+    
+    if ((g_pserver->loading_process_events_interval_bytes &&
+        (r->processed_bytes + len)/g_pserver->loading_process_events_interval_bytes > r->processed_bytes/g_pserver->loading_process_events_interval_bytes) ||
+        (g_pserver->loading_process_events_interval_keys &&
+        (r->keys_since_last_callback >= g_pserver->loading_process_events_interval_keys)))
+    {
+        rdbAsyncWorkThread *pwthread = reinterpret_cast<rdbAsyncWorkThread*>(r->chksum_arg);
+        pwthread->endWork();    // We can't have the work queue modifying the database while processEventsWhileBlocked does its thing
+        listIter li;
+        listNode *ln;
+        listRewind(g_pserver->masters, &li);
+        while ((ln = listNext(&li)))
+        {
+            struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
+            if (mi->repl_state == REPL_STATE_TRANSFER)
+                replicationSendNewlineToMaster(mi);
+        }
+        loadingProgress(r->processed_bytes);
+        processEventsWhileBlocked(serverTL - g_pserver->rgthreadvar);
+        processModuleLoadingProgressEvent(0);
+
+        robj *ping_argv[1];
+
+        ping_argv[0] = createStringObject("PING",4);
+        replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb, ping_argv, 1);
+        decrRefCount(ping_argv[0]);
+        pwthread->start();
+
+        r->keys_since_last_callback = 0;
+    }
+}
+
 
 /* Load an RDB file from the rio stream 'rdb'. On success C_OK is returned,
  * otherwise C_ERR is returned and 'errno' is set accordingly. */
@@ -2543,6 +2558,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     }
 
     rdb->update_cksum = rdbLoadProgressCallback;
+    rdb->chksum_arg = &wqueue;
     rdb->max_processing_chunk = g_pserver->loading_process_events_interval_bytes;
     if (rioRead(rdb,buf,9) == 0) goto eoferr;
     buf[9] = '\0';

@@ -99,6 +99,7 @@ static const rio rioBufferIO = {
     rioBufferTell,
     rioBufferFlush,
     NULL,           /* update_checksum */
+    NULL,           /* update checksum arg */
     0,              /* current checksum */
     0,              /* flags */
     0,              /* bytes read or written */
@@ -113,6 +114,7 @@ static const rio rioConstBufferIO = {
     rioBufferTell,
     rioBufferFlush,
     NULL,           /* update_checksum */
+    NULL,           /* update checksum arg */
     0,              /* current checksum */
     0,              /* flags */
     0,              /* bytes read or written */
@@ -176,6 +178,7 @@ static const rio rioFileIO = {
     rioFileTell,
     rioFileFlush,
     NULL,           /* update_checksum */
+    NULL,           /* update checksum arg */
     0,              /* current checksum */
     0,              /* flags */
     0,              /* bytes read or written */
@@ -272,6 +275,7 @@ static const rio rioConnIO = {
     rioConnTell,
     rioConnFlush,
     NULL,           /* update_checksum */
+    NULL,           /* update checksum arg */
     0,              /* current checksum */
     0,              /* flags */
     0,              /* bytes read or written */
@@ -391,6 +395,7 @@ static const rio rioFdIO = {
     rioFdTell,
     rioFdFlush,
     NULL,           /* update_checksum */
+    NULL,           /* update checksum arg */
     0,              /* current checksum */
     0,              /* flags */
     0,              /* bytes read or written */

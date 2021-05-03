@@ -2411,6 +2411,9 @@ struct redisServer {
     uint16_t rglockSamples[s_lockContentionSamples];
     unsigned ilockRingHead = 0;
 
+    long long repl_backlog_config_size = 1024*1024; /* This is a hack to ignore the resizing of the replication backlog
+                                                       when using it as a defacto for the client buffer */
+
     bool FRdbSaveInProgress() const { return rdbThreadVars.fRdbThreadActive; }
 };
 
@@ -2657,6 +2660,7 @@ sds getAllClientsInfoString(int type);
 void rewriteClientCommandVector(client *c, int argc, ...);
 void rewriteClientCommandArgument(client *c, int i, robj *newval);
 void replaceClientCommandVector(client *c, int argc, robj **argv);
+unsigned long getClientReplicationBacklogSharedUsage(client *c);
 unsigned long getClientOutputBufferMemoryUsage(client *c);
 int freeClientsInAsyncFreeQueue(int iel);
 void asyncCloseClientOnOutputBufferLimitReached(client *c);

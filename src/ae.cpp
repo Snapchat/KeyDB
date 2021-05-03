@@ -867,7 +867,7 @@ void aeReleaseLock()
     g_lock.unlock();
 }
 
-void aeSetThreadOwnsLockOverride(bool fOverride)
+void aeSetThreadOwnsLockOverride(int fOverride)
 {
     fOwnLockOverride = fOverride;
 }

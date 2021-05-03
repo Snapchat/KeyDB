@@ -86,5 +86,28 @@ start_server {tags {"repl"}} {
             }
             assert_equal [r debug digest] [r -1 debug digest]
         }
+
+        test {REPL Backlog handles large value} {
+            # initialize bigval to 64-bytes
+            r flushall
+            r config set repl-backlog-size 1K
+            r config set client-output-buffer-limit "replica 1024 1024 0"
+            set bigval "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            for {set i 0} { $i < 20 } { incr i } {
+                append bigval $bigval
+            }
+            r set bigkey $bigval
+            # We expect the replication to be disconnected so wait a bit
+            wait_for_condition 50 100 {
+                [s -1 master_link_status] eq {down}
+            } else {
+                fail "Memory limit exceeded but not detected"
+            }
+            wait_for_condition 50 100 {
+                [r debug digest] eq [r -1 debug digest]
+            } else {
+                fail "Replica did not reconnect"
+            }
+        }
     }
 }

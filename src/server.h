@@ -506,10 +506,8 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_PENDING_READ (1<<29) /* The client has pending reads and was put
                                        in the list of clients we can read
                                        from. */
-#define CLIENT_PENDING_COMMAND (1<<30) /* Used in threaded I/O to signal after
-                                          we return single threaded that the
-                                          client has already pending commands
-                                          to be executed. */
+#define CLIENT_EXECUTING_COMMAND (1<<30) /* Used to handle reentrency cases in processCommandWhileBlocked 
+                                            to ensure we don't process a client already executing */
 #define CLIENT_TRACKING (1ULL<<31) /* Client enabled keys tracking in order to
                                    perform client side caching. */
 #define CLIENT_TRACKING_BROKEN_REDIR (1ULL<<32) /* Target client is invalid. */
@@ -1509,6 +1507,7 @@ struct client {
     off_t repldboff;        /* Replication DB file offset. */
     off_t repldbsize;       /* Replication DB file size. */
     sds replpreamble;       /* Replication DB preamble. */
+    time_t repl_down_since; /* When client lost connection. */
     long long read_reploff; /* Read replication offset if this is a master. */
     long long reploff;      /* Applied replication offset if this is a master. */
     long long reploff_skipped;  /* Repl backlog we did not send to this client */

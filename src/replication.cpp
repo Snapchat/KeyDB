@@ -2748,8 +2748,8 @@ void syncWithMaster(connection *conn) {
         err = sendSynchronousCommand(mi, SYNC_CMD_READ,conn,NULL);
         if (err[0] == '-') {
             if (err[1] == 'E' && err[2] == 'R' && err[3] == 'R') {
-                // Replicating with non-pro
-                serverLog(LL_WARNING, "Replicating with non-pro server.");
+                // Replicating with non-enterprise
+                serverLog(LL_WARNING, "Replicating with non-enterprise server.");
             } else {
                 serverLog(LL_WARNING, "Recieved error from client: %s", err);
                 sdsfree(err);
@@ -3214,9 +3214,14 @@ void replicationHandleMasterDisconnection(redisMaster *mi) {
             moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
                                 REDISMODULE_SUBEVENT_MASTER_LINK_DOWN,
                                 NULL);
+        if (mi->master && mi->master->repl_down_since) {
+            mi->repl_down_since = mi->master->repl_down_since;
+        }
+        else {
+            mi->repl_down_since = g_pserver->unixtime;
+        }
         mi->master = NULL;
         mi->repl_state = REPL_STATE_CONNECT;
-        mi->repl_down_since = g_pserver->unixtime;
         /* We lost connection with our master, don't disconnect slaves yet,
         * maybe we'll be able to PSYNC with our master later. We'll disconnect
         * the slaves only if we'll have to do a full resync with our master. */
@@ -3535,6 +3540,7 @@ void replicationResurrectCachedMaster(redisMaster *mi, connection *conn) {
     mi->master->lastinteraction = g_pserver->unixtime;
     mi->repl_state = REPL_STATE_CONNECTED;
     mi->repl_down_since = 0;
+    mi->master->repl_down_since = 0;
 
     /* Normally changing the thread of a client is a BIG NONO,
         but this client was unlinked so its OK here */

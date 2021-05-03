@@ -6,6 +6,9 @@ version=$(grep KEYDB_REAL_VERSION $DIR/../../src/version.h | awk '{ printf $3 }'
 release=1 # by default this will always be 1 for keydb version structure. If build release version needs to be update you can modify here
 arch=$(uname -m)
 dist=el$(rpm -q --queryformat '%{VERSION}' centos-release | cut -d. -f1)
+if [[ "$dist" == "elpackage centos-release is not installed" ]]; then
+        dist=el$(rpm -q --queryformat '%{VERSION}' centos-linux-release  | cut -d. -f1)
+fi
 
 if [[ "$arch" != "aarch64" ]] && [[ "$arch" != "x86_64" ]]; then
 	echo "This script is only valid and tested for aarch64 and x86_64 architectures. You are trying to use: $arch"
@@ -31,8 +34,8 @@ sed -i '3d' $DIR/keydb_build/keydb.spec
 sed -i -E "2a\Release     : $release%{?dist}" $DIR/keydb_build/keydb.spec
 
 # yum install -y scl-utils centos-release-scl rpm-build
-mkdir -p /root/rpmbuild/BUILDROOT/keydb-pro-$version-$release.$dist.$arch
-cp -r $DIR/keydb_build/keydb_rpm/* /root/rpmbuild/BUILDROOT/keydb-pro-$version-$release.$dist.$arch/
+mkdir -p /root/rpmbuild/BUILDROOT/keydb-enterprise-$version-$release.$dist.$arch
+cp -r $DIR/keydb_build/keydb_rpm/* /root/rpmbuild/BUILDROOT/keydb-enterprise-$version-$release.$dist.$arch/
 rpmbuild -bb $DIR/keydb_build/keydb.spec
 mv /root/rpmbuild/RPMS/$arch/* $DIR/rpm_files_generated
 

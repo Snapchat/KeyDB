@@ -158,6 +158,7 @@ client *createClient(connection *conn, int iel) {
     c->reploff_cmd = 0;
     c->repl_ack_off = 0;
     c->repl_ack_time = 0;
+    c->repl_down_since = 0;
     c->slave_listening_port = 0;
     c->slave_ip[0] = '\0';
     c->slave_capa = SLAVE_CAPA_NONE;
@@ -1618,7 +1619,8 @@ void freeClientAsync(client *c) {
     AeLocker lock;
     lock.arm(c);
     if (c->flags & CLIENT_CLOSE_ASAP || c->flags & CLIENT_LUA) return;  // race condition after we acquire the lock
-    c->flags |= CLIENT_CLOSE_ASAP;    
+    c->flags |= CLIENT_CLOSE_ASAP;
+    c->repl_down_since = g_pserver->unixtime;
     std::unique_lock<fastlock> ul(lockasyncfree);
     listAddNodeTail(g_pserver->clients_to_close,c);
 }
@@ -2372,7 +2374,7 @@ void parseClientCommandBuffer(client *c) {
 
         /* Prefetch outside the lock for better perf */
         if (g_pserver->prefetch_enabled && cqueriesStart < c->vecqueuedcmd.size() &&
-            (g_pserver->m_pstorageFactory || aeLockContested(cserver.cthreads/2)) && !GlobalLocksAcquired()) {
+            (g_pserver->m_pstorageFactory || aeLockContested(cserver.cthreads/2) || cserver.cthreads == 1) && !GlobalLocksAcquired()) {
             auto &query = c->vecqueuedcmd.back();
             if (query.argc > 0 && query.argc == query.argcMax) {
                 if (c->db->prefetchKeysAsync(c, query, c->vecqueuedcmd.size() == 1)) {
@@ -2408,6 +2410,7 @@ void processInputBuffer(client *c, bool fParse, int callFlags) {
         /* Return if we're still parsing this command */
         auto &cmd = c->vecqueuedcmd.front();
         if (cmd.argc != cmd.argcMax) break;
+        if (c->flags & CLIENT_EXECUTING_COMMAND) break;
 
         if (!FClientReady(c)) break;
 
@@ -2426,13 +2429,16 @@ void processInputBuffer(client *c, bool fParse, int callFlags) {
         if (c->argc == 0) {
             resetClient(c);
         } else {
+            c->flags |= CLIENT_EXECUTING_COMMAND;
             /* We are finally ready to execute the command. */
             if (processCommandAndResetClient(c, callFlags) == C_ERR) {
                 /* If the client is no longer valid, we avoid exiting this
                  * loop and trimming the client buffer later. So we return
                  * ASAP in that case. */
+                c->flags &= ~CLIENT_EXECUTING_COMMAND;
                 return;
             }
+            c->flags &= ~CLIENT_EXECUTING_COMMAND;
         }
     }
 }

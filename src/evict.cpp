@@ -392,9 +392,16 @@ size_t freeMemoryGetNotCountedMemory(void) {
         while((ln = listNext(&li))) {
             client *replica = (client*)listNodeValue(ln);
             std::unique_lock<fastlock>(replica->lock);
-            overhead += getClientOutputBufferMemoryUsage(replica);
+            /* we don't wish to multiple count the replication backlog shared usage */
+            overhead += (getClientOutputBufferMemoryUsage(replica) - getClientReplicationBacklogSharedUsage(replica));
         }
     }
+
+    /* also don't count the replication backlog memory
+     * that's where the replication clients get their memory from */
+    overhead += (g_pserver->repl_backlog_size - g_pserver->repl_backlog_config_size);
+    
+
     if (g_pserver->aof_state != AOF_OFF) {
         overhead += sdsalloc(g_pserver->aof_buf)+aofRewriteBufferSize();
     }
@@ -516,6 +523,7 @@ int freeMemoryIfNeeded(bool fQuickCycle, bool fPreSnapshot) {
     if (g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
         goto cant_free; /* We need to free memory, but policy forbids. */
 
+    serverLog(LL_NOTICE, "evicting i guess lol, the overhead was %ld, the repl_backlog_size, %lld", freeMemoryGetNotCountedMemory(), g_pserver->repl_backlog_size);
     while (mem_freed < mem_tofree) {
         int j, k, i;
         static unsigned int next_db = 0;

@@ -4684,5 +4684,21 @@ void flushReplBacklogToClients()
         // This may be called multiple times per "frame" so update with our progress flushing to clients
         g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
         g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
+    } else if (getLowestOffsetAmongReplicas() != -1){
+        listIter li;
+        listNode *ln;
+        listRewind(g_pserver->slaves, &li);
+        while ((ln = listNext(&li))) {
+            client *replica = (client*)listNodeValue(ln);
+
+            std::unique_lock<fastlock> ul(replica->lock, std::defer_lock);
+            if (FCorrectThread(replica))
+                ul.lock();
+            
+            /* try to force prepare client to write i guess? */
+            if (replica->repl_curr_idx != -1){
+                if (prepareClientToWrite(replica) != C_OK) continue;
+            }
+        }
     }
 }

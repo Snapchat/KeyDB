@@ -6082,7 +6082,7 @@ void *timeThreadMain(void*) {
     delay.tv_nsec = 100;
     while (true) {
         updateCachedTime();
-        clock_nanosleep(CLOCK_REALTIME, 0, &delay, NULL);
+        clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, NULL);
     }
 } 
 

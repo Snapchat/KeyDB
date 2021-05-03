@@ -158,6 +158,7 @@ client *createClient(connection *conn, int iel) {
     c->reploff_cmd = 0;
     c->repl_ack_off = 0;
     c->repl_ack_time = 0;
+    c->repl_down_since = 0;
     c->slave_listening_port = 0;
     c->slave_ip[0] = '\0';
     c->slave_capa = SLAVE_CAPA_NONE;
@@ -1616,7 +1617,8 @@ void freeClientAsync(client *c) {
     AeLocker lock;
     lock.arm(c);
     if (c->flags & CLIENT_CLOSE_ASAP || c->flags & CLIENT_LUA) return;  // race condition after we acquire the lock
-    c->flags |= CLIENT_CLOSE_ASAP;    
+    c->flags |= CLIENT_CLOSE_ASAP;
+    c->repl_down_since = g_pserver->unixtime;
     std::unique_lock<fastlock> ul(lockasyncfree);
     listAddNodeTail(g_pserver->clients_to_close,c);
 }

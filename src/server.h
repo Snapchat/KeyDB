@@ -1507,6 +1507,7 @@ struct client {
     off_t repldboff;        /* Replication DB file offset. */
     off_t repldbsize;       /* Replication DB file size. */
     sds replpreamble;       /* Replication DB preamble. */
+    time_t repl_down_since; /* When client lost connection. */
     long long read_reploff; /* Read replication offset if this is a master. */
     long long reploff;      /* Applied replication offset if this is a master. */
     long long reploff_skipped;  /* Repl backlog we did not send to this client */

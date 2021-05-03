@@ -119,10 +119,11 @@
 #define RDB_MODULE_OPCODE_STRING 5  /* String. */
 
 /* rdbLoad...() functions flags. */
-#define RDB_LOAD_NONE   0
-#define RDB_LOAD_ENC    (1<<0)
-#define RDB_LOAD_PLAIN  (1<<1)
-#define RDB_LOAD_SDS    (1<<2)
+#define RDB_LOAD_NONE       0
+#define RDB_LOAD_ENC        (1<<0)
+#define RDB_LOAD_PLAIN      (1<<1)
+#define RDB_LOAD_SDS        (1<<2)
+#define RDB_LOAD_SDS_SHARED ((1 << 3) | RDB_LOAD_SDS)
 
 /* flags on the purpose of rdb save or load */
 #define RDBFLAGS_NONE 0                 /* No special RDB loading. */

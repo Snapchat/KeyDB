@@ -187,7 +187,7 @@ proc test {name code {okpattern undefined} {options undefined}} {
     }
 
     if {$::traceleaks} {
-        set output [exec leaks keydb-pro-server]
+        set output [exec leaks keydb-server]
         if {![string match {*0 leaks*} $output]} {
             send_data_packet $::test_server_fd err "Detected a memory leak in test '$name': $output"
         }

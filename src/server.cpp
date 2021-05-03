@@ -6148,7 +6148,7 @@ void *timeThreadMain(void*) {
             }
         }
         updateCachedTime();
-        clock_nanosleep(CLOCK_REALTIME, 0, &delay, NULL);
+        clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, NULL);
     }
 }
 

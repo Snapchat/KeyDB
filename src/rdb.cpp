@@ -2545,7 +2545,8 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         (r->keys_since_last_callback >= g_pserver->loading_process_events_interval_keys)))
     {
         rdbAsyncWorkThread *pwthread = reinterpret_cast<rdbAsyncWorkThread*>(r->chksum_arg);
-        pwthread->endWork();    // We can't have the work queue modifying the database while processEventsWhileBlocked does its thing
+        if (pwthread && g_pserver->fActiveReplica)
+            pwthread->endWork();    // We can't have the work queue modifying the database while processEventsWhileBlocked does its thing
         listIter li;
         listNode *ln;
         listRewind(g_pserver->masters, &li);
@@ -2564,7 +2565,8 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         ping_argv[0] = createStringObject("PING",4);
         replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb, ping_argv, 1);
         decrRefCount(ping_argv[0]);
-        pwthread->start();
+        if (pwthread && g_pserver->fActiveReplica)
+            pwthread->start();
 
         r->keys_since_last_callback = 0;
     }

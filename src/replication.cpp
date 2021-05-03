@@ -279,9 +279,10 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
         long long minimumsize = g_pserver->master_repl_offset + len - g_pserver->repl_batch_offStart+1;
         if (minimumsize > g_pserver->repl_backlog_size) {
             flushReplBacklogToClients();
+            serverAssert(g_pserver->master_repl_offset == g_pserver->repl_batch_offStart);
             minimumsize = g_pserver->master_repl_offset + len - g_pserver->repl_batch_offStart+1;
 
-            if (minimumsize > g_pserver->repl_backlog_size) {
+            if (minimumsize > g_pserver->repl_backlog_size && minimumsize < (long long)cserver.client_obuf_limits[CLIENT_TYPE_SLAVE].hard_limit_bytes) {
                 // This is an emergency overflow, we better resize to fit
                 long long newsize = std::max(g_pserver->repl_backlog_size*2, minimumsize);
                 serverLog(LL_WARNING, "Replication backlog is too small, resizing to: %lld", newsize);
@@ -4458,8 +4459,24 @@ void flushReplBacklogToClients()
     
     if (g_pserver->repl_batch_offStart != g_pserver->master_repl_offset) {
         bool fAsyncWrite = false;
-        // Ensure no overflow
+        
         serverAssert(g_pserver->repl_batch_offStart < g_pserver->master_repl_offset);
+        if (g_pserver->master_repl_offset - g_pserver->repl_batch_offStart > g_pserver->repl_backlog_size) {
+            // We overflowed
+            listIter li;
+            listNode *ln;
+            listRewind(g_pserver->slaves, &li);
+            while ((ln = listNext(&li))) {
+                client *c = (client*)listNodeValue(ln);
+                sds sdsClient = catClientInfoString(sdsempty(),c);
+                freeClientAsync(c);
+                serverLog(LL_WARNING,"Client %s scheduled to be closed ASAP for overcoming of output buffer limits.", sdsClient);
+                sdsfree(sdsClient);
+            }
+            goto LDone;
+        }
+
+        // Ensure no overflow if we get here
         serverAssert(g_pserver->master_repl_offset - g_pserver->repl_batch_offStart <= g_pserver->repl_backlog_size);
         serverAssert(g_pserver->repl_batch_idxStart != g_pserver->repl_backlog_idx);
 
@@ -4497,6 +4514,7 @@ void flushReplBacklogToClients()
         if (fAsyncWrite)
             ProcessPendingAsyncWrites();
 
+LDone:
         // This may be called multiple times per "frame" so update with our progress flushing to clients
         g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
         g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;

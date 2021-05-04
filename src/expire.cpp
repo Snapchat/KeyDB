@@ -68,7 +68,7 @@ void activeExpireCycleExpireFullKey(redisDb *db, const char *key) {
  *----------------------------------------------------------------------------*/
 
 
-int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, int &tried) {
+int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, size_t &tried) {
     if (!e.FFat())
     {
         activeExpireCycleExpireFullKey(db, e.key());
@@ -154,7 +154,7 @@ int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, int &tri
         pfat->popfrontExpireEntry();
         fTtlChanged = true;
         if ((tried % ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP) == 0) {
-            return deleted;
+            break;
         }
     }
 
@@ -382,8 +382,8 @@ void activeExpireCycleCore(int type) {
             continue;
         }
         
-        int expired = 0;
-        int tried = 0;
+        size_t expired = 0;
+        size_t tried = 0;
         long long check = ACTIVE_EXPIRE_CYCLE_FAST_DURATION;    // assume a check is roughly 1us.  It isn't but good enough
         db->expireitr = db->setexpire->enumerate(db->expireitr, now, [&](expireEntry &e) __attribute__((always_inline)) {
             if (e.when() < now)
@@ -497,7 +497,7 @@ void expireSlaveKeys(void) {
                 if (itr != db->setexpire->end())
                 {
                     if (itr->when() < start) {
-                        int tried = 0;
+                        size_t tried = 0;
                         expired = activeExpireCycleExpire(g_pserver->db+dbid,*itr,start,tried);
                     }
                 }

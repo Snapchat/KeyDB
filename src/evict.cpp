@@ -399,8 +399,8 @@ size_t freeMemoryGetNotCountedMemory(void) {
 
     /* also don't count the replication backlog memory
      * that's where the replication clients get their memory from */
-    overhead += (g_pserver->repl_backlog_size - g_pserver->repl_backlog_config_size);
-    
+    // overhead += (g_pserver->repl_backlog_size - g_pserver->repl_backlog_config_size);
+    overhead += g_pserver->repl_backlog_size;
 
     if (g_pserver->aof_state != AOF_OFF) {
         overhead += sdsalloc(g_pserver->aof_buf)+aofRewriteBufferSize();

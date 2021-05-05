@@ -1782,7 +1782,7 @@ int writeToClient(client *c, int handler_installed) {
         // }
 
 
-        if (nwritten == nrequested){
+        if (nwritten == nrequested && g_pserver->repl_backlog_idx == c->repl_curr_idx){
             c->repl_curr_idx = -1; /* -1 denotes no more replica writes */
         }
         else if (nwritten > 0)

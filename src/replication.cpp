@@ -90,7 +90,7 @@ void resizeReplicationBacklogForClients(long long newsize);
 void setReplIdx(client *c, long long idx, long long off){
     // serverLog(LL_NOTICE, "calling this garbage function w/ idx and off: %lld, %lld, %lld", idx, off, off-idx);
     // serverLog(LL_NOTICE, "Repl Index started at: %lld", c->repl_curr_idx);
-    if (c->repl_curr_idx == -1){
+    if (c->repl_curr_idx == -1 && off >= c->repl_curr_off){
         if (prepareClientToWrite(c) != C_OK) return;
         c->repl_curr_idx = idx;
         c->repl_curr_off = off;

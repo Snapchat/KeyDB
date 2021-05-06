@@ -2161,6 +2161,7 @@ struct redisServer {
     sds aof_child_diff;             /* AOF diff accumulator child side. */
     int aof_rewrite_pending = 0;    /* is a call to aofChildWriteDiffData already queued? */
     /* RDB persistence */
+    int allowRdbResizeOp;           /* Debug situations we may want rehash to be ocurring, so ignore resize */
     long long dirty;                /* Changes to DB from the last save */
     long long dirty_before_bgsave;  /* Used to restore dirty on failed BGSAVE */
     struct _rdbThreadVars

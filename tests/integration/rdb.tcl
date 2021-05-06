@@ -189,3 +189,15 @@ test {client freed during loading} {
         exec kill [srv 0 pid]
     }
 }
+
+test {repeated load} {
+    start_server [list overrides [list server-threads 3 allow-rdb-resize-op no]] {
+        r debug populate 500000 key 1000
+
+        set digest [r debug digest]
+        for {set j 0} {$j < 10} {incr j} {
+            r debug reload
+            assert_equal $digest [r debug digest]
+        }
+    }
+}

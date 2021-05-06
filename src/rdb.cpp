@@ -2699,9 +2699,11 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 goto eoferr;
             if ((expires_size = rdbLoadLen(rdb,NULL)) == RDB_LENERR)
                 goto eoferr;
-            wqueue.enqueue([dbCur, db_size]{
-                dbCur->expand(db_size);
-            });
+            if (g_pserver->allowRdbResizeOp) {
+                wqueue.enqueue([dbCur, db_size]{
+                    dbCur->expand(db_size);
+                });
+            }
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB

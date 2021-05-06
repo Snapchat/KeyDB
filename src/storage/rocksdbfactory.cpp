@@ -53,17 +53,6 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
     options.create_missing_column_families = true;
     rocksdb::DB *db = nullptr;
 
-    if (rgchConfig != nullptr)
-    {
-        std::string options_string(rgchConfig, cchConfig);
-        rocksdb::Status status;
-        if (!(status = rocksdb::GetDBOptionsFromString(options, options_string, &options)).ok())
-        {
-            fprintf(stderr, "Failed to parse FLASH options: %s\r\n", status.ToString().c_str());
-            exit(EXIT_FAILURE);
-        }
-    }
-
     options.max_background_compactions = 4;
     options.max_background_flushes = 2;
     options.bytes_per_sync = 1048576;
@@ -89,6 +78,17 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
         rocksdb::ColumnFamilyOptions cf_options(options);
         cf_options.level_compaction_dynamic_level_bytes = true;
         veccoldesc.push_back(rocksdb::ColumnFamilyDescriptor(std::to_string(idb), cf_options));
+    }
+
+    if (rgchConfig != nullptr)
+    {
+        std::string options_string(rgchConfig, cchConfig);
+        rocksdb::Status status;
+        if (!(status = rocksdb::GetDBOptionsFromString(options, options_string, &options)).ok())
+        {
+            fprintf(stderr, "Failed to parse FLASH options: %s\r\n", status.ToString().c_str());
+            exit(EXIT_FAILURE);
+        }
     }
     
     std::vector<rocksdb::ColumnFamilyHandle*> handles;

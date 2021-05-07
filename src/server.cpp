@@ -1771,18 +1771,11 @@ bool expireOwnKeys()
     return false;
 }
 
-int hash_spin_worker() {
-    auto ctl = serverTL->rehashCtl;
-    return dictRehashSomeAsync(ctl, 1);
-}
-
 /* This function handles 'background' operations we are required to do
  * incrementally in Redis databases, such as active key expiring, resizing,
  * rehashing. */
 void databasesCron(bool fMainThread) {
     serverAssert(GlobalLocksAcquired());
-    static int rehashes_per_ms = 0;
-    static int async_rehashes = 0;
     if (fMainThread) {
         /* Expire keys by random sampling. Not required for slaves
         * as master will synthesize DELs for us. */
@@ -1824,57 +1817,11 @@ void databasesCron(bool fMainThread) {
         /* Rehash */
         if (g_pserver->activerehashing) {
             for (j = 0; j < dbs_per_call; j++) {
-                if (serverTL->rehashCtl != nullptr) {
-                    if (dictRehashSomeAsync(serverTL->rehashCtl, 5)) {
-                        break;
-                    } else {
-                        dictCompleteRehashAsync(serverTL->rehashCtl, true /*fFree*/);
-                        serverTL->rehashCtl = nullptr;
-                    }
-                }
-
-                serverAssert(serverTL->rehashCtl == nullptr);
-                /* Are we async rehashing? And if so is it time to re-calibrate? */
-                /* The recalibration limit is a prime number to ensure balancing across threads */
-                if (rehashes_per_ms > 0 && async_rehashes < 131 && !cserver.active_defrag_enabled) {
-                    serverTL->rehashCtl = dictRehashAsyncStart(g_pserver->db[rehash_db].dict, rehashes_per_ms);
-                    ++async_rehashes;
-                }
-                if (serverTL->rehashCtl)
-                    break;
-                
-                // Before starting anything new, can we end the rehash of a blocked thread?
-                if (g_pserver->db[rehash_db].dict->asyncdata != nullptr) {
-                    auto asyncdata = g_pserver->db[rehash_db].dict->asyncdata;
-                    if (asyncdata->done) {
-                        dictCompleteRehashAsync(asyncdata, false /*fFree*/);    // Don't free because we don't own the pointer
-                        serverAssert(g_pserver->db[rehash_db].dict->asyncdata != asyncdata);
-                        break;  // completion can be expensive, don't do anything else
-                    }
-                }
-
-                rehashes_per_ms = incrementallyRehash(rehash_db);
-                async_rehashes = 0;
-                if (rehashes_per_ms > 0) {
-                    /* If the function did some work, stop here, we'll do
-                    * more at the next cron loop. */
-                    if (!cserver.active_defrag_enabled) {
-                        serverLog(LL_VERBOSE, "Calibrated rehashes per ms: %d", rehashes_per_ms);
-                    }
-                    break;
-                } else if (g_pserver->db[rehash_db].dict->asyncdata == nullptr) {
-                    /* If this db didn't need rehash and we have none in flight, we'll try the next one. */
-                    rehash_db++;
-                    rehash_db %= cserver.dbnum;
-                }
+                incrementallyRehash(rehash_db);
+                rehash_db++;
+                rehash_db %= cserver.dbnum;
             }
         }
-    }
-
-    if (serverTL->rehashCtl) {
-        setAeLockSetThreadSpinWorker(hash_spin_worker);
-    } else {
-        setAeLockSetThreadSpinWorker(nullptr);
     }
 }
 

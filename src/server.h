@@ -1390,7 +1390,6 @@ struct redisServerThreadVars {
     bool modulesEnabledThisAeLoop = false; /* In this loop of aeMain, were modules enabled before 
                                               the thread went to sleep? */
     std::vector<client*> vecclientsProcess;
-    dictAsyncRehashCtl *rehashCtl = nullptr;
 };
 
 struct redisMaster {

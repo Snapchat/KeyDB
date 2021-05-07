@@ -153,7 +153,7 @@ int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, size_t &
         
         pfat->popfrontExpireEntry();
         fTtlChanged = true;
-        if ((tried % ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP) == 0) {
+        if ((tried % ACTIVE_EXPIRE_CYCLE_SUBKEY_LOOKUPS_PER_LOOP) == 0) {
             break;
         }
     }

@@ -2218,8 +2218,8 @@ static int isValidActiveDefrag(int val, const char **err) {
 #ifndef HAVE_DEFRAG
     if (val) {
         *err = "Active defragmentation cannot be enabled: it "
-               "requires a Redis server compiled with a modified Jemalloc "
-               "like the one shipped by default with the Redis source "
+               "requires a KeyDB server compiled with a modified Jemalloc "
+               "like the one shipped by default with the KeyDB source "
                "distribution";
         return 0;
     }
@@ -2335,7 +2335,7 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
             if (aeResizeSetSize(aeGetCurrentEventLoop(),
                 g_pserver->maxclients + CONFIG_FDSET_INCR) == AE_ERR)
             {
-                *err = "The event loop API used by Redis is not able to handle the specified number of clients";
+                *err = "The event loop API used by KeyDB is not able to handle the specified number of clients";
                 return 0;
             }
             serverLog(LL_DEBUG,"Successfully changed the setsize for current thread %d", ielFromEventLoop(aeGetCurrentEventLoop()));

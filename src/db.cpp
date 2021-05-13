@@ -46,7 +46,7 @@ struct dbBackup {
  * C-level DB API
  *----------------------------------------------------------------------------*/
 
-int keyIsExpired(redisDb *db, robj *key);
+int keyIsExpired(redisDb *db, robj *key, robj *subkey = nullptr);
 int expireIfNeeded(redisDb *db, robj *key, robj *o);
 void dbOverwriteCore(redisDb *db, dictEntry *de, robj *key, robj *val, bool fUpdateMvcc, bool fRemoveExpire);
 
@@ -1417,23 +1417,15 @@ int removeSubkeyExpire(redisDb *db, robj *key, robj *subkey) {
     if (!itr->FFat())
         return 0;
 
-    int found = 0;
-    for (auto subitr : *itr)
-    {
-        if (subitr.subkey() == nullptr)
-            continue;
-        if (sdscmp((sds)subitr.subkey(), szFromObj(subkey)) == 0)
-        {
-            itr->erase(subitr);
-            found = 1;
-            break;
-        }
+    auto subItr = itr->pfatentry()->find((sds)subkey);
+    if (subItr != itr->pfatentry()->end()) {
+        itr->pfatentry()->erase(subItr);
     }
 
     if (itr->pfatentry()->size() == 0)
         removeExpireCore(db, key, de);
 
-    return found;
+    return subItr != itr->pfatentry()->end();
 }
 
 /* Set an expire to the specified key. If the expire is set in the context
@@ -1617,7 +1609,7 @@ void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey)
 }
 
 /* Check if the key is expired. Note, this does not check subexpires */
-int keyIsExpired(redisDb *db, robj *key) {
+int keyIsExpired(redisDb *db, robj *key, robj *subkey) {
     expireEntry *pexpire = getExpire(db,key);
     mstime_t now;
 
@@ -1626,7 +1618,11 @@ int keyIsExpired(redisDb *db, robj *key) {
     /* Don't expire anything while loading. It will be done later. */
     if (g_pserver->loading) return 0;
 
-    long long when = pexpire->whenFull();
+    long long when = INVALID_EXPIRE;
+    auto itr = pexpire->find((sds)subkey);
+    if (itr != pexpire->end()) {
+        when = itr.when(); 
+    }
 
     if (when == INVALID_EXPIRE)
         return 0;

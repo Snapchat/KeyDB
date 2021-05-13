@@ -1486,24 +1486,45 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                 serverPanic("Unknown object type");
             }
             /* Save the expire time */
-            if (pexpire != nullptr) {
-                for (auto &subExpire : *pexpire) {
-                    if (subExpire.subkey() == nullptr)
-                    {
-                        char cmd[]="*3\r\n$9\r\nPEXPIREAT\r\n";
-                        if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) goto werr;
-                        if (rioWriteBulkObject(aof,&key) == 0) goto werr;
-                    }
-                    else
-                    {
-                        char cmd[]="*4\r\n$12\r\nPEXPIREMEMBERAT\r\n";
-                        if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) goto werr;
-                        if (rioWriteBulkObject(aof,&key) == 0) goto werr;
-                        if (rioWrite(aof,subExpire.subkey(),sdslen(subExpire.subkey())) == 0) goto werr;
-                    }
-                    if (rioWriteBulkLongLong(aof,subExpire.when()) == 0) goto werr; // common
-                }
-            }
+            long long check = LLONG_MAX;
+            if (pexpire)
+                pexpire->enumerate(pexpire->end().setiter(), LLONG_MAX, [&](expireEntryFat::subexpireEntry &subExpire) __attribute__((always_inline)) {
+                        if (sdscmp(subExpire.spsubkey.get(),sdsnew(MAINKEYSTRING)) == 0)
+                        {
+                            char cmd[]="*3\r\n$9\r\nPEXPIREAT\r\n";
+                            if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) {
+                                check = LLONG_MIN;
+                                return false;
+                            }
+                            if (rioWriteBulkObject(aof,&key) == 0) {
+                                check = LLONG_MIN;
+                                return false;
+                            }
+                        }
+                        else
+                        {
+                            char cmd[]="*4\r\n$12\r\nPEXPIREMEMBERAT\r\n";
+                            if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) {
+                                check = LLONG_MIN;
+                                return false;
+                            }
+                            if (rioWriteBulkObject(aof,&key) == 0) {
+                                check = LLONG_MIN;
+                                return false;
+                            }
+                            if (rioWrite(aof,subExpire.spsubkey.get(),sdslen(subExpire.spsubkey.get())) == 0) {
+                                check = LLONG_MIN;
+                                return false;
+                            }
+                        }
+                        if (rioWriteBulkLongLong(aof,subExpire.when) == 0) {
+                                check = LLONG_MIN;
+                                return false;
+                        } // common
+                        check = LLONG_MAX;
+                        return true;
+                    }, &check);
+            if (check == LLONG_MIN) goto werr;
             /* Read some diff from the parent process from time to time. */
             if (aof->processed_bytes > processed+AOF_READ_DIFF_INTERVAL_BYTES) {
                 processed = aof->processed_bytes;

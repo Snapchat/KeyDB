@@ -1144,17 +1144,17 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, expireEntry *pexpire) {
 
     /* Save expire entry after as it will apply to the previously loaded key */
     /*  This is because we update the expire datastructure directly without buffering */
-    if (pexpire != nullptr)
-    {
-        for (auto itr : *pexpire)
-        {
-            if (itr.subkey() == nullptr)
-                continue;   // already saved
-            snprintf(szT, 32, "%lld", itr.when());
-            rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-key",itr.subkey());
-            rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-when",szT);
-        }
-    }
+    long long check = LLONG_MAX;
+    if (pexpire)
+        pexpire->enumerate(pexpire->end().setiter(), LLONG_MAX, [&](expireEntryFat::subexpireEntry &subExpire) __attribute__((always_inline)) {
+                if (sdscmp(subExpire.spsubkey.get(),sdsnew(MAINKEYSTRING)) != 0) {
+                    snprintf(szT, 32, "%lld", subExpire.when);
+                    rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-key",subExpire.spsubkey.get());
+                    rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-when",szT);
+                }
+                check = LLONG_MAX;
+                return true;
+            }, &check);
 
     return 1;
 }

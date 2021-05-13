@@ -1,6 +1,7 @@
 #pragma once
 
 #define INVALID_EXPIRE LLONG_MIN
+#define MAINKEYSTRING ""
 
 class expireEntryFat
 {
@@ -17,12 +18,24 @@ public:
         {}
 
         bool operator<(long long when) const noexcept { return this->when < when; }
-        bool operator<(const subexpireEntry &se) { return this->when < se.when; }
+        bool operator<(const subexpireEntry &se) const noexcept { return this->when < se.when; }
+        bool operator==(sdsview subkey) const noexcept { return sdsview((sds)spsubkey.get()) == subkey; }
+
+        explicit operator sdsview() const noexcept { return sdsview((sds)spsubkey.get()); }
+        explicit operator long long() const noexcept { return when; }
     };
+    class subexpiresethashobj {
+    public:
+        size_t operator()(const sdsview &key)
+        {
+            return (size_t)dictGenHashFunction(key.get(), sdslen(key.get()));;
+        }
+    };
+    typedef semiorderedset<subexpireEntry, sdsview, true /*subexpireEntry can be memmoved*/, subexpiresethashobj> subexpireset;
 
 private:
     sds m_keyPrimary;
-    std::vector<subexpireEntry> m_vecexpireEntries;  // Note a NULL for the sds portion means the expire is for the primary key
+    subexpireset m_subexpireEntries;  // Note a NULL for the sds portion means the expire is for the primary key
     dict *m_dictIndex = nullptr;
 
     void createIndex();
@@ -32,26 +45,25 @@ public:
         {}
     ~expireEntryFat();
 
-    long long when() const noexcept { return m_vecexpireEntries.front().when; }
-    long long whenFull() const noexcept {
-        for (size_t i = 0; i < size(); ++i) {
-            if (m_vecexpireEntries[i].spsubkey == nullptr) {
-                return m_vecexpireEntries[i].when;
-            }
-        }
-        return INVALID_EXPIRE;
-    }
+    //long long when() const noexcept { return m_subexpireEntries.random_value().when; }
     const char *key() const noexcept { return m_keyPrimary; }
 
-    bool operator<(long long when) const noexcept { return this->when() <  when; }
+    //bool operator<(long long when) const noexcept { return this->when() <  when; }
 
     void expireSubKey(const char *szSubkey, long long when);
 
-    bool FEmpty() const noexcept { return m_vecexpireEntries.empty(); }
-    const subexpireEntry &nextExpireEntry() const noexcept { return m_vecexpireEntries.front(); }
-    void popfrontExpireEntry();
-    const subexpireEntry &operator[](size_t idx) { return m_vecexpireEntries[idx]; }
-    size_t size() const noexcept { return m_vecexpireEntries.size(); }
+    bool FEmpty() const noexcept { return m_subexpireEntries.empty(); }
+    const subexpireEntry &nextExpireEntry() const noexcept { return m_subexpireEntries.random_value(); }
+    void popExpireEntry(const char *szSubkey);
+    size_t size() const noexcept { return m_subexpireEntries.size(); }
+    subexpireset::setiter find(const char *szSubkey) { sdsview subkey(szSubkey ? szSubkey : sdsnew(MAINKEYSTRING)); return m_subexpireEntries.find(subkey); }
+    subexpireset::setiter end() { return m_subexpireEntries.end(); }
+    void erase(subexpireset::setiter itr) { m_subexpireEntries.erase(itr); }
+    template<typename T_VISITOR, typename T_MAX>
+    subexpireset::setiter enumerate(const subexpireset::setiter &itrStart, const T_MAX &max, T_VISITOR fn, long long *pccheck) 
+    {
+        return m_subexpireEntries.enumerate(itrStart, max, fn, pccheck);
+    }
 };
 
 class expireEntry {
@@ -61,40 +73,39 @@ class expireEntry {
         expireEntryFat *m_pfatentry;
     } u;
     long long m_when;   // LLONG_MIN means this is a fat entry and we should use the pointer
-    long long m_whenFull;
+
 public:
-    class iter
-    {
+    class iter {
         friend class expireEntry;
         expireEntry *m_pentry = nullptr;
-        size_t m_idx = 0;
+        expireEntryFat::subexpireset::setiter m_iter;
 
     public:
-        iter(expireEntry *pentry, size_t idx)
-            : m_pentry(pentry), m_idx(idx)
+        iter(expireEntry *pentry, expireEntryFat::subexpireset::setiter iter) 
+            : m_pentry(pentry), m_iter(iter)
         {}
 
-        iter &operator++() { ++m_idx; return *this; }
-        
         const char *subkey() const
         {
             if (m_pentry->FFat())
-                return (*m_pentry->pfatentry())[m_idx].spsubkey.get();
+                return m_iter->spsubkey.get();
             return nullptr;
         }
         long long when() const
         {
             if (m_pentry->FFat())
-                return (*m_pentry->pfatentry())[m_idx].when;
+                return m_iter->when;
             return m_pentry->when();
         }
 
         bool operator!=(const iter &other)
         {
-            return m_idx != other.m_idx;
+            return m_iter != other.m_iter;
         }
 
         const iter &operator*() const { return *this; }
+
+        const expireEntryFat::subexpireset::setiter &setiter() { return m_iter; }
     };
 
     expireEntry(sds key, const char *subkey, long long when)
@@ -102,7 +113,6 @@ public:
         if (subkey != nullptr)
         {
             m_when = INVALID_EXPIRE;
-            m_whenFull = INVALID_EXPIRE;
             u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(key);
             u.m_pfatentry->expireSubKey(subkey, when);
         }
@@ -110,7 +120,6 @@ public:
         {
             u.m_key = key;
             m_when = when;
-            m_whenFull = when;
         }
     }
 
@@ -118,14 +127,12 @@ public:
     {
         u.m_pfatentry = pfatentry;
         m_when = INVALID_EXPIRE;
-        m_whenFull = pfatentry->whenFull();
     }
 
     expireEntry(expireEntry &&e)
     {
         u.m_key = e.u.m_key;
         m_when = e.m_when;
-        m_whenFull = e.m_whenFull;
         e.u.m_key = (char*)key();  // we do this so it can still be found in the set
         e.m_when = 0;
     }
@@ -170,21 +177,11 @@ public:
     }
     long long when() const noexcept
     { 
-        if (FFat())
-            return u.m_pfatentry->when();
         return m_when; 
-    }
-    long long whenFull() const noexcept
-    { 
-        return m_whenFull; 
     }
 
     void update(const char *subkey, long long when)
     {
-        if (subkey == nullptr)
-        {
-            m_whenFull = when;
-        }
         if (!FFat())
         {
             if (subkey == nullptr)
@@ -205,35 +202,51 @@ public:
         }
         u.m_pfatentry->expireSubKey(subkey, when);
     }
-    
-    iter begin() { return iter(this, 0); }
-    iter end()
-    {
-        if (FFat())
-            return iter(this, u.m_pfatentry->size());
-        return iter(this, 1);
-    }
-    
-    void erase(iter &itr)
-    {
-        if (!FFat())
-            throw -1;   // assert
-        pfatentry()->m_vecexpireEntries.erase(
-            pfatentry()->m_vecexpireEntries.begin() + itr.m_idx);
-    }
 
     bool FGetPrimaryExpire(long long *pwhen)
     {
         *pwhen = -1;
-        for (auto itr : *this)
-        {
-            if (itr.subkey() == nullptr)
-            {
-                *pwhen = itr.when();
+        if (FFat()) {
+            auto itr = u.m_pfatentry->find(nullptr);
+            if (itr != u.m_pfatentry->end()) {
+                *pwhen = itr->when;
                 return true;
             }
+            else {
+                return false;
+            }
         }
-        return false;
+        else {
+            *pwhen = m_when;
+            return true;
+        }
+    }
+
+    iter find(const char *subkey) {
+        if (FFat())
+            return iter(this,u.m_pfatentry->find(subkey));
+        else if (subkey == nullptr) {
+            return iter(this,expireEntryFat::subexpireset::setiter(nullptr));
+        }
+        return end();
+    }
+
+    iter end() {
+        if (FFat())
+            return iter(this,u.m_pfatentry->end());
+        expireEntryFat::subexpireset::setiter enditer(nullptr);
+        enditer.idxPrimary = 1;
+        return iter(this,enditer);
+    }
+
+    template<typename T_VISITOR, typename T_MAX>
+    expireEntryFat::subexpireset::setiter enumerate(const expireEntryFat::subexpireset::setiter &itrStart, const T_MAX &max, T_VISITOR fn, long long *pccheck) 
+    {
+        if (FFat())
+            return u.m_pfatentry->enumerate(itrStart, max, fn, pccheck);
+        expireEntryFat::subexpireEntry se(m_when, sdsnew(MAINKEYSTRING));
+        fn(se);
+        return end().setiter();
     }
 
     explicit operator const char*() const noexcept { return key(); }

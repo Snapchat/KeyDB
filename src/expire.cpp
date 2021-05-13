@@ -88,71 +88,71 @@ int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, size_t &
     while (!pfat->FEmpty())
     {
         ++tried;
-        if (pfat->nextExpireEntry().when > now)
-            break;
-
-        // Is it the full key expiration?
-        if (pfat->nextExpireEntry().spsubkey == nullptr)
-        {
-            activeExpireCycleExpireFullKey(db, e.key());
-            return ++deleted;
-        }
-
-        switch (val->type)
-        {
-        case OBJ_SET:
-            if (setTypeRemove(val,pfat->nextExpireEntry().spsubkey.get())) {
-                deleted++;
-                if (setTypeSize(val) == 0) {
-                    activeExpireCycleExpireFullKey(db, e.key());
-                    return deleted;
-                }
+        auto& next = pfat->nextExpireEntry();
+        if (next.when <= now) {
+            // Is it the full key expiration?
+            if (next.spsubkey == nullptr)
+            {
+                activeExpireCycleExpireFullKey(db, e.key());
+                return ++deleted;
             }
-            break;
 
-        case OBJ_HASH:
-            if (hashTypeDelete(val,(sds)pfat->nextExpireEntry().spsubkey.get())) {
-                deleted++;
-                if (hashTypeLength(val) == 0) {
-                    activeExpireCycleExpireFullKey(db, e.key());
-                    return deleted;
+            switch (val->type)
+            {
+            case OBJ_SET:
+                if (setTypeRemove(val,next.spsubkey.get())) {
+                    deleted++;
+                    if (setTypeSize(val) == 0) {
+                        activeExpireCycleExpireFullKey(db, e.key());
+                        return deleted;
+                    }
                 }
-            }
-            break;
+                break;
 
-        case OBJ_ZSET:
-            if (zsetDel(val,(sds)pfat->nextExpireEntry().spsubkey.get())) {
-                deleted++;
-                if (zsetLength(val) == 0) {
-                    activeExpireCycleExpireFullKey(db, e.key());
-                    return deleted;
+            case OBJ_HASH:
+                if (hashTypeDelete(val,(sds)next.spsubkey.get())) {
+                    deleted++;
+                    if (hashTypeLength(val) == 0) {
+                        activeExpireCycleExpireFullKey(db, e.key());
+                        return deleted;
+                    }
                 }
+                break;
+
+            case OBJ_ZSET:
+                if (zsetDel(val,(sds)next.spsubkey.get())) {
+                    deleted++;
+                    if (zsetLength(val) == 0) {
+                        activeExpireCycleExpireFullKey(db, e.key());
+                        return deleted;
+                    }
+                }
+                break;
+
+            case OBJ_CRON:
+            {
+                sds keyCopy = sdsdup(e.key());
+                incrRefCount(val);
+                aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [keyCopy, val]{
+                    executeCronJobExpireHook(keyCopy, val);
+                    sdsfree(keyCopy);
+                    decrRefCount(val);
+                }, true /*fLock*/, true /*fForceQueue*/);
             }
-            break;
+                return deleted;
 
-        case OBJ_CRON:
-        {
-            sds keyCopy = sdsdup(e.key());
-            incrRefCount(val);
-            aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [keyCopy, val]{
-                executeCronJobExpireHook(keyCopy, val);
-                sdsfree(keyCopy);
-                decrRefCount(val);
-            }, true /*fLock*/, true /*fForceQueue*/);
+            case OBJ_LIST:
+            default:
+                serverAssert(false);
+            }
+            
+            redisObjectStack objSubkey;
+            initStaticStringObject(objSubkey, (char*)next.spsubkey.get());
+            propagateSubkeyExpire(db, val->type, &objKey, &objSubkey);
+            
+            pfat->erase(pfat->find((sds)next.spsubkey.get()));
+            fTtlChanged = true;
         }
-            return deleted;
-
-        case OBJ_LIST:
-        default:
-            serverAssert(false);
-        }
-        
-        redisObjectStack objSubkey;
-        initStaticStringObject(objSubkey, (char*)pfat->nextExpireEntry().spsubkey.get());
-        propagateSubkeyExpire(db, val->type, &objKey, &objSubkey);
-        
-        pfat->popfrontExpireEntry();
-        fTtlChanged = true;
         if ((tried % ACTIVE_EXPIRE_CYCLE_SUBKEY_LOOKUPS_PER_LOOP) == 0) {
             break;
         }
@@ -687,13 +687,9 @@ void ttlGenericCommand(client *c, int output_ms) {
     } else if (c->argc == 3) {
         // We want a subkey expire
         if (pexpire && pexpire->FFat()) {
-            for (auto itr : *pexpire) {
-                if (itr.subkey() == nullptr)
-                    continue;
-                if (sdscmp((sds)itr.subkey(), szFromObj(c->argv[2])) == 0) {
-                    expire = itr.when();
-                    break;
-                }
+            auto itr = pexpire->find((sds)szFromObj(c->argv[2]));
+            if (itr != pexpire->end()) {
+                expire = itr.when();
             }
         }
     } else {
@@ -771,79 +767,54 @@ void expireEntryFat::createIndex()
     serverAssert(m_dictIndex == nullptr);
     m_dictIndex = dictCreate(&keyptrDictType, nullptr);
 
-    for (auto &entry : m_vecexpireEntries)
-    {
-        if (entry.spsubkey != nullptr)
-        {
-            dictEntry *de = dictAddRaw(m_dictIndex, (void*)entry.spsubkey.get(), nullptr);
-            de->v.s64 = entry.when;
-        }
-    }
+    long long check = LLONG_MAX;
+    m_subexpireEntries.enumerate(m_subexpireEntries.end(), LLONG_MAX, [&](subexpireEntry &entry) __attribute__((always_inline)) {
+            if (sdscmp(entry.spsubkey.get(),sdsnew(MAINKEYSTRING)) != 0)
+            {
+                dictEntry *de = dictAddRaw(m_dictIndex, (void*)entry.spsubkey.get(), nullptr);
+                de->v.s64 = entry.when;
+            }
+            check = LLONG_MAX;
+            return true;
+        }, &check);
 }
 
 void expireEntryFat::expireSubKey(const char *szSubkey, long long when)
 {
-    if (m_vecexpireEntries.size() >= INDEX_THRESHOLD && m_dictIndex == nullptr)
+    if (m_subexpireEntries.size() >= INDEX_THRESHOLD && m_dictIndex == nullptr)
         createIndex();
 
     // First check if the subkey already has an expiration
-    if (m_dictIndex != nullptr && szSubkey != nullptr)
-    {
-        dictEntry *de = dictFind(m_dictIndex, szSubkey);
-        if (de != nullptr)
+    auto itr = find(szSubkey);
+    if (itr != m_subexpireEntries.end()) {
+        if (m_dictIndex != nullptr && szSubkey != nullptr)
         {
-            auto itr = std::lower_bound(m_vecexpireEntries.begin(), m_vecexpireEntries.end(), de->v.u64);
-            while (itr != m_vecexpireEntries.end() && itr->when == de->v.s64)
+            dictEntry *de = dictFind(m_dictIndex, szSubkey);
+            if (de != nullptr)
             {
-                bool fFound = false;
-                if (szSubkey == nullptr && itr->spsubkey == nullptr) {
-                    fFound = true;
-                } else if (szSubkey != nullptr && itr->spsubkey != nullptr && sdscmp((sds)itr->spsubkey.get(), (sds)szSubkey) == 0) {
-                    fFound = true;
-                }
-                if (fFound) {
-                    m_vecexpireEntries.erase(itr);
-                    dictDelete(m_dictIndex, szSubkey);
-                    break;
-                }
-                ++itr;
+                dictDelete(m_dictIndex, szSubkey);
             }
         }
+        m_subexpireEntries.erase(itr);
     }
-    else
-    {
-        for (auto &entry : m_vecexpireEntries)
-        {
-            if (szSubkey != nullptr)
-            {
-                // if this is a subkey expiry then its not a match if the expireEntry is either for the
-                //  primary key or a different subkey
-                if (entry.spsubkey == nullptr || sdscmp((sds)entry.spsubkey.get(), (sds)szSubkey) != 0)
-                    continue;
-            }
-            else
-            {
-                if (entry.spsubkey != nullptr)
-                    continue;
-            }
-            m_vecexpireEntries.erase(m_vecexpireEntries.begin() + (&entry - m_vecexpireEntries.data()));
-            break;
-        }
-    }
-    auto itrInsert = std::lower_bound(m_vecexpireEntries.begin(), m_vecexpireEntries.end(), when);
-    const char *subkey = (szSubkey) ? sdsdup(szSubkey) : nullptr;
-    auto itr = m_vecexpireEntries.emplace(itrInsert, when, subkey);
-    if (m_dictIndex && subkey) {
-        dictEntry *de = dictAddRaw(m_dictIndex, (void*)itr->spsubkey.get(), nullptr);
+    const char *subkey = (szSubkey) ? sdsdup(szSubkey) : sdsnew(MAINKEYSTRING);
+    subexpireEntry se(when, subkey);
+    m_subexpireEntries.insert(se);
+    if (m_dictIndex != nullptr && szSubkey != nullptr) {
+        dictEntry *de = dictAddRaw(m_dictIndex, (void*)subkey, nullptr);
         de->v.s64 = when;
     }
 }
 
-void expireEntryFat::popfrontExpireEntry()
-{ 
-    if (m_dictIndex != nullptr && m_vecexpireEntries.begin()->spsubkey) {
-        int res = dictDelete(m_dictIndex, (void*)m_vecexpireEntries.begin()->spsubkey.get());
-        serverAssert(res == DICT_OK);
+void expireEntryFat::popExpireEntry(const char *szSubkey)
+{
+    sdsview subkey(szSubkey ? szSubkey : sdsnew(MAINKEYSTRING));
+    auto itr = m_subexpireEntries.find(subkey);
+    if (itr != m_subexpireEntries.end()) {
+        if (m_dictIndex != nullptr && itr->spsubkey != nullptr) {
+            int res = dictDelete(m_dictIndex, (void*)itr->spsubkey.get());
+            serverAssert(res == DICT_OK);
+        }
+        m_subexpireEntries.erase(itr);
     }
-    m_vecexpireEntries.erase(m_vecexpireEntries.begin());
 }

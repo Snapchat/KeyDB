@@ -1674,8 +1674,8 @@ int keyIsExpired(redisDb *db, robj *key, robj *subkey) {
  *
  * The return value of the function is 0 if the key is still valid,
  * otherwise the function returns 1 if the key is expired. */
-int expireIfNeeded(redisDb *db, robj *key) {
-    if (!keyIsExpired(db,key)) return 0;
+int expireIfNeeded(redisDb *db, robj *key, robj *subkey) {
+    if (!keyIsExpired(db,key,subkey)) return 0;
 
     /* If we are running in the context of a replica, instead of
      * evicting the expired key from the database, we return ASAP:
@@ -1689,13 +1689,24 @@ int expireIfNeeded(redisDb *db, robj *key) {
 
     /* Delete the key */
     g_pserver->stat_expiredkeys++;
-    propagateExpire(db,key,g_pserver->lazyfree_lazy_expire);
-    notifyKeyspaceEvent(NOTIFY_EXPIRED,
-        "expired",key,db->id);
-    int retval = g_pserver->lazyfree_lazy_expire ? dbAsyncDelete(db,key) :
-                                               dbSyncDelete(db,key);
-    if (retval) signalModifiedKey(NULL,db,key);
-    return retval;
+    if (subkey == nullptr) {
+        propagateExpire(db,key,g_pserver->lazyfree_lazy_expire);
+        
+        notifyKeyspaceEvent(NOTIFY_EXPIRED,
+            "expired",key,db->id);
+        int retval = g_pserver->lazyfree_lazy_expire ? dbAsyncDelete(db,key) :
+                                                dbSyncDelete(db,key);
+        if (retval) signalModifiedKey(NULL,db,key);
+        return retval;
+    }
+    else {
+        dictEntry *de = dictFind(db->dict,key);
+        robj *val = (robj*)dictGetVal(de);
+        propagateSubkeyExpire(db,val->type,key,subkey);
+        auto pexpire = getExpire(db,key);
+        pexpire->pfatentry()->erase(pexpire->pfatentry()->find((sds)szFromObj(subkey)));
+        return 1;
+    }
 }
 
 /* -----------------------------------------------------------------------------

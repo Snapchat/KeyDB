@@ -2520,7 +2520,7 @@ int removeExpireCore(redisDb *db, robj *key, dictEntry *de);
 int removeSubkeyExpire(redisDb *db, robj *key, robj *subkey);
 void propagateExpire(redisDb *db, robj *key, int lazy);
 void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey);
-int expireIfNeeded(redisDb *db, robj *key);
+int expireIfNeeded(redisDb *db, robj *key, robj *subkey = nullptr);
 expireEntry *getExpire(redisDb *db, robj_roptr key);
 void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when);
 void setExpire(client *c, redisDb *db, robj *key, expireEntry &&entry);

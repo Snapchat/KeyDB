@@ -193,6 +193,18 @@ public:
         }
     }
 
+    const T& random_value_finite() const
+    {
+        size_t basePrimary = rand() % m_data.size();
+        for (size_t idxPrimaryCount = 0; idxPrimaryCount < m_data.size(); ++idxPrimaryCount)
+        {
+            size_t idxPrimary = (basePrimary + idxPrimaryCount) % m_data.size();
+            if (m_data[idxPrimary].empty())
+                continue;
+            return m_data[idxPrimary][rand() % m_data[idxPrimary].size()];
+        }
+    }
+
     void erase(const setiter &itr)
     {
         auto &vecRow = m_data[itr.idxPrimary];

@@ -51,7 +51,7 @@ public:
     void expireSubKey(const char *szSubkey, long long when);
 
     bool FEmpty() const noexcept { return m_subexpireEntries.empty(); }
-    const subexpireEntry &nextExpireEntry() const noexcept { return m_subexpireEntries.random_value(); }
+    const subexpireEntry &nextExpireEntry() const noexcept { return m_subexpireEntries.random_value_finite(); }
     void popExpireEntry(const char *szSubkey);
     size_t size() const noexcept { return m_subexpireEntries.size(); }
     subexpireset::setiter find(const char *szSubkey) { sdsview subkey(szSubkey ? szSubkey : sdsnew(MAINKEYSTRING)); return m_subexpireEntries.find(subkey); }

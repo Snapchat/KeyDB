@@ -756,54 +756,14 @@ void touchCommand(client *c) {
     addReplyLongLong(c,touched);
 }
 
-expireEntryFat::~expireEntryFat()
-{
-    if (m_dictIndex != nullptr)
-        dictRelease(m_dictIndex);
-}
-
-void expireEntryFat::createIndex()
-{
-    serverAssert(m_dictIndex == nullptr);
-    m_dictIndex = dictCreate(&keyptrDictType, nullptr);
-
-    long long check = LLONG_MAX;
-    m_subexpireEntries.enumerate(m_subexpireEntries.end(), LLONG_MAX, [&](subexpireEntry &entry) __attribute__((always_inline)) {
-            if (sdscmp(entry.spsubkey.get(),sdsnew(MAINKEYSTRING)) != 0)
-            {
-                dictEntry *de = dictAddRaw(m_dictIndex, (void*)entry.spsubkey.get(), nullptr);
-                de->v.s64 = entry.when;
-            }
-            check = LLONG_MAX;
-            return true;
-        }, &check);
-}
-
 void expireEntryFat::expireSubKey(const char *szSubkey, long long when)
 {
-    if (m_subexpireEntries.size() >= INDEX_THRESHOLD && m_dictIndex == nullptr)
-        createIndex();
-
     // First check if the subkey already has an expiration
-    auto itr = find(szSubkey);
-    if (itr != m_subexpireEntries.end()) {
-        if (m_dictIndex != nullptr && szSubkey != nullptr)
-        {
-            dictEntry *de = dictFind(m_dictIndex, szSubkey);
-            if (de != nullptr)
-            {
-                dictDelete(m_dictIndex, szSubkey);
-            }
-        }
-        m_subexpireEntries.erase(itr);
-    }
+    
     const char *subkey = (szSubkey) ? sdsdup(szSubkey) : sdsnew(MAINKEYSTRING);
+    popExpireEntry(subkey);
     subexpireEntry se(when, subkey);
     m_subexpireEntries.insert(se);
-    if (m_dictIndex != nullptr && szSubkey != nullptr) {
-        dictEntry *de = dictAddRaw(m_dictIndex, (void*)subkey, nullptr);
-        de->v.s64 = when;
-    }
 }
 
 void expireEntryFat::popExpireEntry(const char *szSubkey)
@@ -811,10 +771,6 @@ void expireEntryFat::popExpireEntry(const char *szSubkey)
     sdsview subkey(szSubkey ? szSubkey : sdsnew(MAINKEYSTRING));
     auto itr = m_subexpireEntries.find(subkey);
     if (itr != m_subexpireEntries.end()) {
-        if (m_dictIndex != nullptr && itr->spsubkey != nullptr) {
-            int res = dictDelete(m_dictIndex, (void*)itr->spsubkey.get());
-            serverAssert(res == DICT_OK);
-        }
         m_subexpireEntries.erase(itr);
     }
 }

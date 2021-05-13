@@ -36,14 +36,12 @@ public:
 private:
     sds m_keyPrimary;
     subexpireset m_subexpireEntries;  // Note a NULL for the sds portion means the expire is for the primary key
-    dict *m_dictIndex = nullptr;
 
-    void createIndex();
 public:
     expireEntryFat(sds keyPrimary)
         : m_keyPrimary(keyPrimary)
         {}
-    ~expireEntryFat();
+    ~expireEntryFat() {}
 
     //long long when() const noexcept { return m_subexpireEntries.random_value().when; }
     const char *key() const noexcept { return m_keyPrimary; }
@@ -64,6 +62,8 @@ public:
     {
         return m_subexpireEntries.enumerate(itrStart, max, fn, pccheck);
     }
+    template<typename T_VISITOR>
+    size_t random_visit(T_VISITOR fn) { return m_subexpireEntries.random_visit(fn); }
 };
 
 class expireEntry {

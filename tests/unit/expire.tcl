@@ -314,7 +314,7 @@ start_server {tags {"expire"}} {
             }
         }
         $rd2 exec
-        after 3000
+        after 8000
         assert_equal [r dbsize] 0
     }
 
@@ -327,4 +327,5 @@ start_server {tags {"expire"}} {
         set ttl [r ttl foo]
         assert {$ttl <= 98 && $ttl > 90}
     }
+    #add more expire tests
 }

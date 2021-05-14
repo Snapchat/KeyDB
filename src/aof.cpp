@@ -1486,10 +1486,11 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                 serverPanic("Unknown object type");
             }
             /* Save the expire time */
+            sds mainkey = sdsnew(MAINKEYSTRING);
             long long check = LLONG_MAX;
             if (pexpire)
                 pexpire->enumerate(pexpire->end().setiter(), LLONG_MAX, [&](expireEntryFat::subexpireEntry &subExpire) __attribute__((always_inline)) {
-                        if (sdscmp(subExpire.spsubkey.get(),sdsnew(MAINKEYSTRING)) == 0)
+                        if (sdscmp(subExpire.spsubkey.get(),mainkey) == 0)
                         {
                             char cmd[]="*3\r\n$9\r\nPEXPIREAT\r\n";
                             if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) {
@@ -1524,6 +1525,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                         check = LLONG_MAX;
                         return true;
                     }, &check);
+            sdsfree(mainkey);
             if (check == LLONG_MIN) goto werr;
             /* Read some diff from the parent process from time to time. */
             if (aof->processed_bytes > processed+AOF_READ_DIFF_INTERVAL_BYTES) {

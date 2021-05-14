@@ -768,7 +768,7 @@ void expireEntryFat::expireSubKey(const char *szSubkey, long long when)
 
 void expireEntryFat::popExpireEntry(const char *szSubkey)
 {
-    sdsview subkey(szSubkey ? szSubkey : sdsnew(MAINKEYSTRING));
+    sdsview subkey(szSubkey ? szSubkey : MAINKEYSTRING);
     auto itr = m_subexpireEntries.find(subkey);
     if (itr != m_subexpireEntries.end()) {
         m_subexpireEntries.erase(itr);

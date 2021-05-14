@@ -43,10 +43,7 @@ public:
         {}
     ~expireEntryFat() {}
 
-    //long long when() const noexcept { return m_subexpireEntries.random_value().when; }
     const char *key() const noexcept { return m_keyPrimary; }
-
-    //bool operator<(long long when) const noexcept { return this->when() <  when; }
 
     void expireSubKey(const char *szSubkey, long long when);
 
@@ -54,7 +51,7 @@ public:
     const subexpireEntry &nextExpireEntry() const noexcept { return m_subexpireEntries.random_value_finite(); }
     void popExpireEntry(const char *szSubkey);
     size_t size() const noexcept { return m_subexpireEntries.size(); }
-    subexpireset::setiter find(const char *szSubkey) { sdsview subkey(szSubkey ? szSubkey : sdsnew(MAINKEYSTRING)); return m_subexpireEntries.find(subkey); }
+    subexpireset::setiter find(const char *szSubkey) { sds mainkey = sdsnew(MAINKEYSTRING); sdsview subkey(szSubkey ? szSubkey : mainkey); return m_subexpireEntries.find(subkey); sdsfree(mainkey); }
     subexpireset::setiter end() { return m_subexpireEntries.end(); }
     void erase(subexpireset::setiter itr) { m_subexpireEntries.erase(itr); }
     template<typename T_VISITOR, typename T_MAX>
@@ -73,6 +70,10 @@ class expireEntry {
         expireEntryFat *m_pfatentry;
     } u;
     long long m_when;   // LLONG_MIN means this is a fat entry and we should use the pointer
+
+    long long FFatMask() const noexcept {
+        return (1LL) << (sizeof(long long)*CHAR_BIT - 1);
+    }
 
 public:
     class iter {
@@ -112,7 +113,7 @@ public:
     {
         if (subkey != nullptr)
         {
-            m_when = INVALID_EXPIRE;
+            m_when = when | FFatMask();
             u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(key);
             u.m_pfatentry->expireSubKey(subkey, when);
         }
@@ -126,7 +127,7 @@ public:
     expireEntry(expireEntryFat *pfatentry)
     {
         u.m_pfatentry = pfatentry;
-        m_when = INVALID_EXPIRE;
+        m_when = FFatMask();
     }
 
     expireEntry(expireEntry &&e)
@@ -151,7 +152,7 @@ public:
             u.m_key = key;
     }
 
-    inline bool FFat() const noexcept { return m_when == INVALID_EXPIRE; }
+    inline bool FFat() const noexcept { return m_when & FFatMask(); }
     expireEntryFat *pfatentry() { assert(FFat()); return u.m_pfatentry; }
 
 
@@ -177,7 +178,7 @@ public:
     }
     long long when() const noexcept
     { 
-        return m_when; 
+        return m_when & (~FFatMask()); 
     }
 
     void update(const char *subkey, long long when)
@@ -192,13 +193,16 @@ public:
             else
             {
                 // we have to upgrade to a fat entry
-                long long whenT = m_when;
+                long long whenT = this->when();
                 sds keyPrimary = u.m_key;
-                m_when = INVALID_EXPIRE;
+                m_when |= FFatMask();
                 u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(keyPrimary);
                 u.m_pfatentry->expireSubKey(nullptr, whenT);
                 // at this point we're fat so fall through
             }
+        }
+        if (this->when() > when) {
+            m_when = when | FFatMask();
         }
         u.m_pfatentry->expireSubKey(subkey, when);
     }

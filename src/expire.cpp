@@ -681,11 +681,13 @@ void ttlGenericCommand(client *c, int output_ms) {
     expireEntry *pexpire = getExpire(c->db,c->argv[1]);
 
     if (c->argc == 2) {
-        // primary expire    
+        // primary expire
+        expireIfNeeded(c->db,c->argv[1]);
         if (pexpire != nullptr)
             pexpire->FGetPrimaryExpire(&expire);
     } else if (c->argc == 3) {
         // We want a subkey expire
+        expireIfNeeded(c->db,c->argv[1],c->argv[2]);
         if (pexpire && pexpire->FFat()) {
             auto itr = pexpire->find((sds)szFromObj(c->argv[2]));
             if (itr != pexpire->end()) {

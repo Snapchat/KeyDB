@@ -323,6 +323,7 @@ void sremCommand(client *c) {
 void smoveCommand(client *c) {
     robj *srcset, *dstset, *ele;
     srcset = lookupKeyWrite(c->db,c->argv[1]);
+    expireIfNeeded(c->db,c->argv[1],c->argv[3]);
     dstset = lookupKeyWrite(c->db,c->argv[2]);
     ele = c->argv[3];
 
@@ -381,6 +382,7 @@ void sismemberCommand(client *c) {
     if ((set = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == nullptr ||
         checkType(c,set,OBJ_SET)) return;
 
+    expireIfNeeded(c->db,c->argv[1],c->argv[2]);
     if (setTypeIsMember(set,szFromObj(c->argv[2])))
         addReply(c,shared.cone);
     else

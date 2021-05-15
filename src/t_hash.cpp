@@ -682,7 +682,8 @@ void hgetCommand(client *c) {
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == nullptr ||
         checkType(c,o,OBJ_HASH)) return;
 
-    addHashFieldToReply(c, o, szFromObj(c->argv[2]));
+    if (expireIfNeeded(c->db,c->argv[1],c->argv[2]) == 0)
+        addHashFieldToReply(c, o, szFromObj(c->argv[2]));
 }
 
 void hmgetCommand(client *c) {
@@ -699,7 +700,8 @@ void hmgetCommand(client *c) {
 
     addReplyArrayLen(c, c->argc-2);
     for (i = 2; i < c->argc; i++) {
-        addHashFieldToReply(c, o, szFromObj(c->argv[i]));
+        if (expireIfNeeded(c->db,c->argv[1],c->argv[i]) == 0)
+            addHashFieldToReply(c, o, szFromObj(c->argv[i]));
     }
 }
 
@@ -822,6 +824,7 @@ void hexistsCommand(client *c) {
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == nullptr ||
         checkType(c,o,OBJ_HASH)) return;
 
+    expireIfNeeded(c->db,c->argv[1],c->argv[2]);
     addReply(c, hashTypeExists(o,szFromObj(c->argv[2])) ? shared.cone : shared.czero);
 }
 

@@ -1114,20 +1114,20 @@ void clientAcceptHandler(connection *conn) {
 
         if (strcmp(cip,"127.0.0.1") && strcmp(cip,"::1")) {
             const char *err =
-                "-DENIED Redis is running in protected mode because protected "
+                "-DENIED KeyDB is running in protected mode because protected "
                 "mode is enabled, no bind address was specified, no "
                 "authentication password is requested to clients. In this mode "
                 "connections are only accepted from the loopback interface. "
-                "If you want to connect from external computers to Redis you "
+                "If you want to connect from external computers to KeyDB you "
                 "may adopt one of the following solutions: "
                 "1) Just disable protected mode sending the command "
                 "'CONFIG SET protected-mode no' from the loopback interface "
-                "by connecting to Redis from the same host the server is "
-                "running, however MAKE SURE Redis is not publicly accessible "
+                "by connecting to KeyDB from the same host the server is "
+                "running, however MAKE SURE KeyDB is not publicly accessible "
                 "from internet if you do so. Use CONFIG REWRITE to make this "
                 "change permanent. "
                 "2) Alternatively you can just disable the protected mode by "
-                "editing the Redis configuration file, and setting the protected "
+                "editing the KeyDB configuration file, and setting the protected "
                 "mode option to 'no', and then restarting the server "
                 "3) If you started the server manually just for testing, restart "
                 "it with the '--protected-mode no' option. "
@@ -3111,7 +3111,7 @@ void securityWarningCommand(client *c) {
     time_t now = time(NULL);
 
     if (labs(now-logged_time) > 60) {
-        serverLog(LL_WARNING,"Possible SECURITY ATTACK detected. It looks like somebody is sending POST or Host: commands to Redis. This is likely due to an attacker attempting to use Cross Protocol Scripting to compromise your Redis instance. Connection aborted.");
+        serverLog(LL_WARNING,"Possible SECURITY ATTACK detected. It looks like somebody is sending POST or Host: commands to KeyDB. This is likely due to an attacker attempting to use Cross Protocol Scripting to compromise your KeyDB instance. Connection aborted.");
         logged_time = now;
     }
     freeClientAsync(c);
@@ -3490,16 +3490,6 @@ void processEventsWhileBlocked(int iel) {
     AeLocker locker;
     locker.arm(nullptr);
     locker.release();
-
-    // Try to complete any async rehashes (this would normally happen in dbCron, but that won't run here)
-    for (int idb = 0; idb < cserver.dbnum; ++idb) {
-        redisDb *db = &g_pserver->db[idb];
-        while (db->dict->asyncdata != nullptr) {
-            if (!db->dict->asyncdata->done)
-                break;
-            dictCompleteRehashAsync(db->dict->asyncdata, false /*fFree*/);
-        }
-    }
 
     // Restore it so the calling code is not confused
     if (fReplBacklog) {

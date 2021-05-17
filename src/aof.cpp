@@ -273,7 +273,7 @@ int startAppendOnly(void) {
         char *cwdp = getcwd(cwd,MAXPATHLEN);
 
         serverLog(LL_WARNING,
-            "Redis needs to enable the AOF but can't open the "
+            "KeyDB needs to enable the AOF but can't open the "
             "append only file %s (in server root dir %s): %s",
             g_pserver->aof_filename,
             cwdp ? cwdp : "unknown",
@@ -293,7 +293,7 @@ int startAppendOnly(void) {
         }
         if (rewriteAppendOnlyFileBackground() == C_ERR) {
             close(newfd);
-            serverLog(LL_WARNING,"Redis needs to enable the AOF but can't trigger a background AOF rewrite operation. Check the above logs for more info about the error.");
+            serverLog(LL_WARNING,"KeyDB needs to enable the AOF but can't trigger a background AOF rewrite operation. Check the above logs for more info about the error.");
             return C_ERR;
         }
     }
@@ -395,7 +395,7 @@ void flushAppendOnlyFile(int force) {
             /* Otherwise fall trough, and go write since we can't wait
              * over two seconds. */
             g_pserver->aof_delayed_fsync++;
-            serverLog(LL_NOTICE,"Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer without waiting for fsync to complete, this may slow down Redis.");
+            serverLog(LL_NOTICE,"Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer without waiting for fsync to complete, this may slow down KeyDB.");
         }
     }
     /* We want to perform a single write. This should be guaranteed atomic
@@ -457,7 +457,7 @@ void flushAppendOnlyFile(int force) {
             if (ftruncate(g_pserver->aof_fd, g_pserver->aof_current_size) == -1) {
                 if (can_log) {
                     serverLog(LL_WARNING, "Could not remove short write "
-                             "from the append-only file.  Redis may refuse "
+                             "from the append-only file.  KeyDB may refuse "
                              "to load the AOF the next time it starts.  "
                              "ftruncate: %s", strerror(errno));
                 }
@@ -496,7 +496,7 @@ void flushAppendOnlyFile(int force) {
          * OK state and log the event. */
         if (g_pserver->aof_last_write_status == C_ERR) {
             serverLog(LL_WARNING,
-                "AOF write error looks solved, Redis can write again.");
+                "AOF write error looks solved, KeyDB can write again.");
             g_pserver->aof_last_write_status = C_OK;
         }
     }

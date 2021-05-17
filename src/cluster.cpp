@@ -225,7 +225,7 @@ int clusterLoadConfig(char *filename) {
             } else if (!strcasecmp(s,"noflags")) {
                 /* nothing to do */
             } else {
-                serverPanic("Unknown flag in redis cluster config file");
+                serverPanic("Unknown flag in KeyDB cluster config file");
             }
             if (p) s = p+1;
         }
@@ -427,7 +427,7 @@ int clusterLockConfig(char *filename) {
         if (errno == EWOULDBLOCK) {
             serverLog(LL_WARNING,
                  "Sorry, the cluster configuration file %s is already used "
-                 "by a different Redis Cluster node. Please make sure that "
+                 "by a different KeyDB Cluster node. Please make sure that "
                  "different nodes use different cluster configuration "
                  "files.", filename);
         } else {
@@ -526,10 +526,10 @@ void clusterInit(void) {
      * us from trying to use a too-high cluster port number. */
     int port = g_pserver->tls_cluster ? g_pserver->tls_port : g_pserver->port;
     if (port > (65535-CLUSTER_PORT_INCR)) {
-        serverLog(LL_WARNING, "Redis port number too high. "
+        serverLog(LL_WARNING, "KeyDB port number too high. "
                    "Cluster communication port is 10,000 port "
-                   "numbers higher than your Redis port. "
-                   "Your Redis port number must be "
+                   "numbers higher than your KeyDB port. "
+                   "Your KeyDB port number must be "
                    "lower than 55535.");
         exit(1);
     }

@@ -1,6 +1,7 @@
 #pragma once
 
-#define INVALID_EXPIRE LLONG_MIN
+// eventually this number might actually end up being a valid expire time, this could cause bugs so at that time it might be a good idea to use a larger data type.
+#define INVALID_EXPIRE (LLONG_MIN & ~((1LL) << (sizeof(long long)*CHAR_BIT - 1)))
 
 class expireEntryFat
 {
@@ -60,11 +61,12 @@ class expireEntry {
         sds m_key;
         expireEntryFat *m_pfatentry;
     } u;
-    long long m_when;   // LLONG_MIN means this is a fat entry and we should use the pointer
+    long long m_when;   // bit wise and with FFatMask means this is a fat entry and we should use the pointer
 
     long long FFatMask() const noexcept {
-        return (1LL) << (sizeof(long long)*CHAR_BIT-1);
+        return (1LL) << (sizeof(long long)*CHAR_BIT - 1);
     }
+
 public:
     class iter
     {
@@ -175,7 +177,7 @@ public:
     }
     long long whenFull() const noexcept
     { 
-        return (m_when & (~FFatMask())) != 0; 
+        return m_when & (~FFatMask()); 
     }
 
     void update(const char *subkey, long long when)

@@ -126,7 +126,7 @@ int _dictInit(dict *d, dictType *type,
     d->type = type;
     d->privdata = privDataPtr;
     d->rehashidx = -1;
-    d->iterators = 0;
+    d->pauserehash = 0;
     return DICT_OK;
 }
 
@@ -143,9 +143,13 @@ int dictResize(dict *d)
     return dictExpand(d, minimal);
 }
 
-/* Expand or create the hash table */
-int dictExpand(dict *d, unsigned long size)
+/* Expand or create the hash table,
+ * when malloc_failed is non-NULL, it'll avoid panic if malloc fails (in which case it'll be set to 1).
+ * Returns DICT_OK if expand was performed, and DICT_ERR if skipped. */
+int _dictExpand(dict *d, unsigned long size, int* malloc_failed)
 {
+    if (malloc_failed) *malloc_failed = 0;
+
     /* the size is invalid if it is smaller than the number of
      * elements already inside the hash table */
     if (dictIsRehashing(d) || d->ht[0].used > size)
@@ -160,7 +164,15 @@ int dictExpand(dict *d, unsigned long size)
     /* Allocate the new hash table and initialize all pointers to NULL */
     n.size = realsize;
     n.sizemask = realsize-1;
-    n.table = (dictEntry**)zcalloc(realsize*sizeof(dictEntry*), MALLOC_SHARED);
+    if (malloc_failed) {
+        n.table = (dictEntry**)ztrycalloc(realsize*sizeof(dictEntry*));
+        *malloc_failed = n.table == NULL;
+        if (*malloc_failed)
+            return DICT_ERR;
+    } else {
+        n.table = (dictEntry**)zcalloc(realsize*sizeof(dictEntry*));
+    }
+
     n.used = 0;
 
     /* Is this the first initialization? If so it's not really a rehashing
@@ -174,6 +186,18 @@ int dictExpand(dict *d, unsigned long size)
     d->ht[1] = n;
     d->rehashidx = 0;
     return DICT_OK;
+}
+
+/* return DICT_ERR if expand was not performed */
+int dictExpand(dict *d, unsigned long size) {
+    return _dictExpand(d, size, NULL);
+}
+
+/* return DICT_ERR if expand failed due to memory allocation failure */
+int dictTryExpand(dict *d, unsigned long size) {
+    int malloc_failed;
+    _dictExpand(d, size, &malloc_failed);
+    return malloc_failed? DICT_ERR : DICT_OK;
 }
 
 /* Performs N steps of incremental rehashing. Returns 1 if there are still
@@ -240,6 +264,8 @@ long long timeInMilliseconds(void) {
  * than 0, and is smaller than 1 in most cases. The exact upper bound 
  * depends on the running time of dictRehash(d,100).*/
 int dictRehashMilliseconds(dict *d, int ms) {
+    if (d->pauserehash > 0) return 0;
+
     long long start = timeInMilliseconds();
     int rehashes = 0;
 
@@ -250,8 +276,8 @@ int dictRehashMilliseconds(dict *d, int ms) {
     return rehashes;
 }
 
-/* This function performs just a step of rehashing, and only if there are
- * no safe iterators bound to our hash table. When we have iterators in the
+/* This function performs just a step of rehashing, and only if hashing has
+ * not been paused for our hash table. When we have iterators in the
  * middle of a rehashing we can't mess with the two hash tables otherwise
  * some element can be missed or duplicated.
  *
@@ -259,7 +285,7 @@ int dictRehashMilliseconds(dict *d, int ms) {
  * dictionary so that the hash table automatically migrates from H1 to H2
  * while it is actively used. */
 static void _dictRehashStep(dict *d) {
-    if (d->iterators == 0) dictRehash(d,1);
+    if (d->pauserehash == 0) dictRehash(d,1);
 }
 
 /* Add an element to the target hash table */
@@ -275,7 +301,7 @@ int dictAdd(dict *d, void *key, void *val)
 /* Low level add or find:
  * This function adds the entry but instead of setting a value returns the
  * dictEntry structure to the user, that will make sure to fill the value
- * field as he wishes.
+ * field as they wish.
  *
  * This function is also directly exposed to the user API to be called
  * mainly in order to store non-pointers inside the hash value, example:
@@ -568,7 +594,7 @@ dictEntry *dictNext(dictIterator *iter)
             dictht *ht = &iter->d->ht[iter->table];
             if (iter->index == -1 && iter->table == 0) {
                 if (iter->safe)
-                    iter->d->iterators++;
+                    dictPauseRehashing(iter->d);
                 else
                     iter->fingerprint = dictFingerprint(iter->d);
             }
@@ -600,7 +626,7 @@ void dictReleaseIterator(dictIterator *iter)
 {
     if (!(iter->index == -1 && iter->table == 0)) {
         if (iter->safe)
-            iter->d->iterators--;
+            dictResumeRehashing(iter->d);
         else
             assert(iter->fingerprint == dictFingerprint(iter->d));
     }
@@ -621,15 +647,13 @@ dictEntry *dictGetRandomKey(dict *d)
         do {
             /* We are sure there are no elements in indexes from 0
              * to rehashidx-1 */
-            h = d->rehashidx + (random() % (d->ht[0].size +
-                                            d->ht[1].size -
-                                            d->rehashidx));
+            h = d->rehashidx + (randomULong() % (dictSlots(d) - d->rehashidx));
             he = (h >= d->ht[0].size) ? d->ht[1].table[h - d->ht[0].size] :
                                       d->ht[0].table[h];
         } while(he == NULL);
     } else {
         do {
-            h = random() & d->ht[0].sizemask;
+            h = randomULong() & d->ht[0].sizemask;
             he = d->ht[0].table[h];
         } while(he == NULL);
     }
@@ -695,7 +719,7 @@ unsigned int dictGetSomeKeys(dict *d, dictEntry **des, unsigned int count) {
         maxsizemask = d->ht[1].sizemask;
 
     /* Pick a random point inside the larger table. */
-    unsigned long i = random() & maxsizemask;
+    unsigned long i = randomULong() & maxsizemask;
     unsigned long emptylen = 0; /* Continuous empty entries so far. */
     while(stored < count && maxsteps--) {
         for (j = 0; j < tables; j++) {
@@ -720,7 +744,7 @@ unsigned int dictGetSomeKeys(dict *d, dictEntry **des, unsigned int count) {
             if (he == NULL) {
                 emptylen++;
                 if (emptylen >= 5 && emptylen > count) {
-                    i = random() & maxsizemask;
+                    i = randomULong() & maxsizemask;
                     emptylen = 0;
                 }
             } else {
@@ -759,7 +783,7 @@ dictEntry *dictGetFairRandomKey(dict *d) {
     /* Note that dictGetSomeKeys() may return zero elements in an unlucky
      * run() even if there are actually elements inside the hash table. So
      * when we get zero, we call the true dictGetRandomKey() that will always
-     * yeld the element if the hash table has at least one. */
+     * yield the element if the hash table has at least one. */
     if (count == 0) return dictGetRandomKey(d);
     unsigned int idx = rand() % count;
     return entries[idx];
@@ -873,9 +897,8 @@ unsigned long dictScan(dict *d,
 
     if (dictSize(d) == 0) return 0;
 
-    /* Having a safe iterator means no rehashing can happen, see _dictRehashStep.
-     * This is needed in case the scan callback tries to do dictFind or alike. */
-    d->iterators++;
+    /* This is needed in case the scan callback tries to do dictFind or alike. */
+    dictPauseRehashing(d);
 
     if (!dictIsRehashing(d)) {
         t0 = &(d->ht[0]);
@@ -943,13 +966,22 @@ unsigned long dictScan(dict *d,
         } while (v & (m0 ^ m1));
     }
 
-    /* undo the ++ at the top */
-    d->iterators--;
+    dictResumeRehashing(d);
 
     return v;
 }
 
 /* ------------------------- private functions ------------------------------ */
+
+/* Because we may need to allocate huge memory chunk at once when dict
+ * expands, we will check this allocation is allowed or not if the dict
+ * type has expandAllowed member function. */
+static int dictTypeExpandAllowed(dict *d) {
+    if (d->type->expandAllowed == NULL) return 1;
+    return d->type->expandAllowed(
+                    _dictNextPower(d->ht[0].used + 1) * sizeof(dictEntry*),
+                    (double)d->ht[0].used / d->ht[0].size);
+}
 
 /* Expand the hash table if needed */
 static int _dictExpandIfNeeded(dict *d)
@@ -966,9 +998,10 @@ static int _dictExpandIfNeeded(dict *d)
      * the number of buckets. */
     if (d->ht[0].used >= d->ht[0].size &&
         (dict_can_resize ||
-         d->ht[0].used/d->ht[0].size > dict_force_resize_ratio))
+         d->ht[0].used/d->ht[0].size > dict_force_resize_ratio) &&
+        dictTypeExpandAllowed(d))
     {
-        return dictExpand(d, d->ht[0].used*2);
+        return dictExpand(d, d->ht[0].used + 1);
     }
     return DICT_OK;
 }
@@ -1022,7 +1055,7 @@ void dictEmpty(dict *d, void(callback)(void*)) {
     _dictClear(d,&d->ht[0],callback);
     _dictClear(d,&d->ht[1],callback);
     d->rehashidx = -1;
-    d->iterators = 0;
+    d->pauserehash = 0;
 }
 
 void dictEnableResize(void) {
@@ -1101,10 +1134,10 @@ size_t _dictGetStatsHt(char *buf, size_t bufsize, dictht *ht, int tableid) {
     /* Generate human readable stats. */
     l += snprintf(buf+l,bufsize-l,
         "Hash table %d stats (%s):\n"
-        " table size: %ld\n"
-        " number of elements: %ld\n"
-        " different slots: %ld\n"
-        " max chain length: %ld\n"
+        " table size: %lu\n"
+        " number of elements: %lu\n"
+        " different slots: %lu\n"
+        " max chain length: %lu\n"
         " avg chain length (counted): %.02f\n"
         " avg chain length (computed): %.02f\n"
         " Chain length distribution:\n",
@@ -1173,6 +1206,7 @@ dictType BenchmarkDictType = {
     NULL,
     compareCallback,
     freeCallback,
+    NULL,
     NULL
 };
 
@@ -1180,7 +1214,7 @@ dictType BenchmarkDictType = {
 #define end_benchmark(msg) do { \
     elapsed = timeInMilliseconds()-start; \
     printf(msg ": %ld items in %lld ms\n", count, elapsed); \
-} while(0);
+} while(0)
 
 /* dict-benchmark [count] */
 int main(int argc, char **argv) {
@@ -1234,6 +1268,13 @@ int main(int argc, char **argv) {
         sdsfree(key);
     }
     end_benchmark("Random access of existing elements");
+
+    start_benchmark();
+    for (j = 0; j < count; j++) {
+        dictEntry *de = dictGetRandomKey(dict);
+        assert(de != NULL);
+    }
+    end_benchmark("Accessing random keys");
 
     start_benchmark();
     for (j = 0; j < count; j++) {

@@ -118,6 +118,13 @@ installed):
     % ./runtest --tls
 
 
+If TLS is built, running the tests with TLS enabled (you will need `tcl-tls`
+installed):
+
+    % ./utils/gen-test-certs.sh
+    % ./runtest --tls
+
+
 Fixing build problems with dependencies or cached build options
 ---------
 
@@ -168,6 +175,18 @@ To force compiling against libc malloc, use:
 To compile against jemalloc on Mac OS X systems, use:
 
     % make MALLOC=jemalloc
+
+Monotonic clock
+---------------
+
+By default, Redis will build using the POSIX clock_gettime function as the
+monotonic clock source.  On most modern systems, the internal processor clock
+can be used to improve performance.  Cautions can be found here: 
+    http://oliveryang.net/2015/09/pitfalls-of-TSC-usage/
+
+To build with support for the processor's internal instruction clock, use:
+
+    % make CFLAGS="-DUSE_PROCESSOR_CLOCK"
 
 Verbose build
 -------------

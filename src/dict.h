@@ -33,8 +33,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <stdint.h>
-
 #ifdef __cplusplus
 #include <vector>
 #include <atomic>
@@ -47,6 +45,11 @@ extern "C" {
 
 #ifndef __DICT_H
 #define __DICT_H
+
+#include "mt19937-64.h"
+#include <limits.h>
+#include <stdint.h>
+#include <stdlib.h>
 
 #define DICT_OK 0
 #define DICT_ERR 1
@@ -72,6 +75,7 @@ typedef struct dictType {
     int (*keyCompare)(void *privdata, const void *key1, const void *key2);
     void (*keyDestructor)(void *privdata, void *key);
     void (*valDestructor)(void *privdata, void *obj);
+    int (*expandAllowed)(size_t moreMem, double usedRatio);
 } dictType;
 
 /* This is our hash table structure. Every dictionary has two of this as we
@@ -115,7 +119,7 @@ typedef struct dict {
     void *privdata;
     dictht ht[2];
     long rehashidx; /* rehashing not in progress if rehashidx == -1 */
-    unsigned long iterators; /* number of iterators currently running */
+    int16_t pauserehash; /* If >0 rehashing is paused (<0 indicates coding error) */
 } dict;
 
 /* If safe is set to 1 this is a safe iterator, that means, you can call
@@ -183,10 +187,20 @@ typedef void (dictScanBucketFunction)(void *privdata, dictEntry **bucketref);
 #define dictSlots(d) ((d)->ht[0].size+(d)->ht[1].size)
 #define dictSize(d) ((d)->ht[0].used+(d)->ht[1].used)
 #define dictIsRehashing(d) ((d)->rehashidx != -1)
+#define dictPauseRehashing(d) (d)->pauserehash++
+#define dictResumeRehashing(d) (d)->pauserehash--
+
+/* If our unsigned long type can store a 64 bit number, use a 64 bit PRNG. */
+#if ULONG_MAX >= 0xffffffffffffffff
+#define randomULong() ((unsigned long) genrand64_int64())
+#else
+#define randomULong() random()
+#endif
 
 /* API */
 dict *dictCreate(dictType *type, void *privDataPtr);
 int dictExpand(dict *d, unsigned long size);
+int dictTryExpand(dict *d, unsigned long size);
 int dictAdd(dict *d, void *key, void *val);
 dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing);
 dictEntry *dictAddOrFind(dict *d, void *key);

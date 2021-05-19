@@ -1,4 +1,7 @@
 #pragma once
+#include "cli_common.h"
+#include <sdscompat.h> /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
+#include <sds.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -122,6 +125,9 @@ typedef struct clusterManagerCommand {
     int pipeline;
     float threshold;
     char *backup_dir;
+    char *from_user;
+    char *from_pass;
+    int from_askpass;
 } clusterManagerCommand;
 
 void createClusterManagerCommand(char *cmdname, int argc, char **argv);
@@ -132,6 +138,7 @@ extern struct config {
     int hostport;
     char *hostsocket;
     int tls;
+    cliSSLconfig sslconfig;
     char *sni;
     char *cacert;
     char *cacertdir;
@@ -170,6 +177,7 @@ extern struct config {
     int askpass;
     char *user;
     int output; /* output mode, see OUTPUT_* defines */
+    int push_output; /* Should we display spontaneous PUSH replies */
     sds mb_delim;
     sds cmd_delim;
     char prompt[128];
@@ -180,10 +188,13 @@ extern struct config {
     int enable_ldb_on_eval; /* Handle manual SCRIPT DEBUG + EVAL commands. */
     int last_cmd_type;
     int verbose;
+    int set_errcode;
     clusterManagerCommand cluster_manager_command;
     int no_auth_warning;
     int resp3;
     int disable_motd;
+    int in_multi;
+    int pre_multi_dbnum;
 } config;
 
 struct clusterManager {

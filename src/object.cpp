@@ -418,26 +418,10 @@ void decrRefCountVoid(const void *o) {
     decrRefCount((robj*)o);
 }
 
-/* This function set the ref count to zero without freeing the object.
- * It is useful in order to pass a new object to functions incrementing
- * the ref count of the received object. Example:
- *
- *    functionThatWillIncrementRefCount(resetRefCount(CreateObject(...)));
- *
- * Otherwise you need to resort to the less elegant pattern:
- *
- *    *obj = createObject(...);
- *    functionThatWillIncrementRefCount(obj);
- *    decrRefCount(obj);
- */
-robj *resetRefCount(robj *obj) {
-    obj->setrefcount(0);
-    return obj;
-}
-
 int checkType(client *c, robj_roptr o, int type) {
-    if (o->type != type) {
-        addReply(c,shared.wrongtypeerr);
+    /* A NULL is considered an empty key */
+    if (o && o->type != type) {
+        addReplyErrorObject(c,shared.wrongtypeerr);
         return 1;
     }
     return 0;
@@ -795,6 +779,33 @@ int getLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg) 
     return C_OK;
 }
 
+int getRangeLongFromObjectOrReply(client *c, robj *o, long min, long max, long *target, const char *msg) {
+    if (getLongFromObjectOrReply(c, o, target, msg) != C_OK) return C_ERR;
+    if (*target < min || *target > max) {
+        if (msg != NULL) {
+            addReplyError(c,(char*)msg);
+        } else {
+            addReplyErrorFormat(c,"value is out of range, value must between %ld and %ld", min, max);
+        }
+        return C_ERR;
+    }
+    return C_OK;
+}
+
+int getPositiveLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg) {
+    return getRangeLongFromObjectOrReply(c, o, 0, LONG_MAX, target, msg);
+}
+
+int getIntFromObjectOrReply(client *c, robj *o, int *target, const char *msg) {
+    long value;
+
+    if (getRangeLongFromObjectOrReply(c, o, INT_MIN, INT_MAX, &value, msg) != C_OK)
+        return C_ERR;
+
+    *target = value;
+    return C_OK;
+}
+
 const char *strEncoding(int encoding) {
     switch(encoding) {
     case OBJ_ENCODING_RAW: return "raw";
@@ -933,14 +944,14 @@ size_t objectComputeSize(robj *o, size_t sample_size) {
     } else if (o->type == OBJ_STREAM) {
         stream *s = (stream*)ptrFromObj(o);
         asize = sizeof(*o);
-        asize += streamRadixTreeMemoryUsage(s->prax);
+        asize += streamRadixTreeMemoryUsage(s->rax);
 
         /* Now we have to add the listpacks. The last listpack is often non
          * complete, so we estimate the size of the first N listpacks, and
          * use the average to compute the size of the first N-1 listpacks, and
          * finally add the real size of the last node. */
         raxIterator ri;
-        raxStart(&ri,s->prax);
+        raxStart(&ri,s->rax);
         raxSeek(&ri,"^",NULL,0);
         size_t lpsize = 0, samples = 0;
         while(samples < sample_size && raxNext(&ri)) {
@@ -948,11 +959,11 @@ size_t objectComputeSize(robj *o, size_t sample_size) {
             lpsize += lpBytes(lp);
             samples++;
         }
-        if (s->prax->numele <= samples) {
+        if (s->rax->numele <= samples) {
             asize += lpsize;
         } else {
             if (samples) lpsize /= samples; /* Compute the average. */
-            asize += lpsize * (s->prax->numele-1);
+            asize += lpsize * (s->rax->numele-1);
             /* No need to check if seek succeeded, we enter this branch only
              * if there are a few elements in the radix tree. */
             raxSeek(&ri,"$",NULL,0);
@@ -1295,10 +1306,18 @@ void objectCommand(client *c) {
 
     if (c->argc == 2 && !strcasecmp(szFromObj(c->argv[1]),"help")) {
         const char *help[] = {
-"ENCODING <key> -- Return the kind of internal representation used in order to store the value associated with a key.",
-"FREQ <key> -- Return the access frequency index of the key. The returned integer is proportional to the logarithm of the recent access frequency of the key.",
-"IDLETIME <key> -- Return the idle time of the key, that is the approximated number of seconds elapsed since the last access to the key.",
-"REFCOUNT <key> -- Return the number of references of the value associated with the specified key.",
+"ENCODING <key>",
+"    Return the kind of internal representation used in order to store the value",
+"    associated with a <key>.",
+"FREQ <key>",
+"    Return the access frequency index of the <key>. The returned integer is",
+"    proportional to the logarithm of the recent access frequency of the key.",
+"IDLETIME <key>",
+"    Return the idle time of the <key>, that is the approximated number of",
+"    seconds elapsed since the last access to the key.",
+"REFCOUNT <key>",
+"    Return the number of references of the value associated with the specified",
+"    <key>.",
 NULL
         };
         addReplyHelp(c, help);
@@ -1347,12 +1366,18 @@ NULL
 void memoryCommand(client *c) {
     if (!strcasecmp(szFromObj(c->argv[1]),"help") && c->argc == 2) {
         const char *help[] = {
-"DOCTOR - Return memory problems reports.",
-"MALLOC-STATS -- Return internal statistics report from the memory allocator.",
-"PURGE -- Attempt to purge dirty pages for reclamation by the allocator.",
-"STATS -- Return information about the memory usage of the g_pserver->",
-"USAGE <key> [SAMPLES <count>] -- Return memory in bytes used by <key> and its value. Nested values are sampled up to <count> times (default: 5).",
-NULL
+            "DOCTOR",
+            "    Return memory problems reports.",
+            "MALLOC-STATS"
+            "    Return internal statistics report from the memory allocator.",
+            "PURGE",
+            "    Attempt to purge dirty pages for reclamation by the allocator.",
+            "STATS",
+            "    Return information about the memory usage of the server.",
+            "USAGE <key> [SAMPLES <count>]",
+            "    Return memory in bytes used by <key> and its value. Nested values are",
+            "    sampled up to <count> times (default: 5).",
+            NULL
         };
         addReplyHelp(c, help);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"usage") && c->argc >= 3) {
@@ -1365,13 +1390,13 @@ NULL
                 if (getLongLongFromObjectOrReply(c,c->argv[j+1],&samples,NULL)
                      == C_ERR) return;
                 if (samples < 0) {
-                    addReply(c,shared.syntaxerr);
+                    addReplyErrorObject(c,shared.syntaxerr);
                     return;
                 }
-                if (samples == 0) samples = LLONG_MAX;;
+                if (samples == 0) samples = LLONG_MAX;
                 j++; /* skip option argument. */
             } else {
-                addReply(c,shared.syntaxerr);
+                addReplyErrorObject(c,shared.syntaxerr);
                 return;
             }
         }
@@ -1496,7 +1521,7 @@ NULL
         else
             addReplyError(c, "Error purging dirty pages");
     } else {
-        addReplyErrorFormat(c, "Unknown subcommand or wrong number of arguments for '%s'. Try MEMORY HELP", (char*)ptrFromObj(c->argv[1]));
+        addReplySubcommandSyntaxError(c);
     }
 }
 

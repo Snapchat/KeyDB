@@ -53,12 +53,14 @@ dictType latencyTimeSeriesDictType = {
     NULL,                       /* val dup */
     dictStringKeyCompare,       /* key compare */
     dictVanillaFree,            /* key destructor */
-    dictVanillaFree             /* val destructor */
+    dictVanillaFree,            /* val destructor */
+    NULL                        /* allow to expand */
 };
 
 /* ------------------------- Utility functions ------------------------------ */
 
 #ifdef __linux__
+#include <sys/prctl.h>
 /* Returns 1 if Transparent Huge Pages support is enabled in the kernel.
  * Otherwise (or if we are unable to check) 0 is returned. */
 int THPIsEnabled(void) {
@@ -72,6 +74,21 @@ int THPIsEnabled(void) {
     }
     fclose(fp);
     return (strstr(buf,"[always]") != NULL) ? 1 : 0;
+}
+
+/* since linux-3.5, kernel supports to set the state of the "THP disable" flag
+ * for the calling thread. PR_SET_THP_DISABLE is defined in linux/prctl.h */
+int THPDisable(void) {
+    int ret = -EINVAL;
+
+    if (!g_pserver->disable_thp)
+        return ret;
+
+#ifdef PR_SET_THP_DISABLE
+    ret = prctl(PR_SET_THP_DISABLE, 1, 0, 0, 0);
+#endif
+
+    return ret;
 }
 #endif
 
@@ -567,16 +584,6 @@ sds latencyCommandGenSparkeline(char *event, struct latencyTimeSeries *ts) {
  * LATENCY RESET: reset data of a specified event or all the data if no event provided.
  */
 void latencyCommand(client *c) {
-    const char *help[] = {
-"DOCTOR              -- Returns a human readable latency analysis report.",
-"GRAPH   <event>     -- Returns an ASCII latency graph for the event class.",
-"HISTORY <event>     -- Returns time-latency samples for the event class.",
-"LATEST              -- Returns the latest latency samples for all events.",
-"RESET   [event ...] -- Resets latency data of one or more event classes.",
-"                       (default: reset all data for all event classes)",
-"HELP                -- Prints this help.",
-NULL
-    };
     struct latencyTimeSeries *ts;
 
     if (!strcasecmp(szFromObj(c->argv[1]),"history") && c->argc == 3) {
@@ -622,6 +629,20 @@ NULL
             addReplyLongLong(c,resets);
         }
     } else if (!strcasecmp(szFromObj(c->argv[1]),"help") && c->argc == 2) {
+        const char *help[] = {
+"DOCTOR",
+"    Return a human readable latency analysis report.",
+"GRAPH <event>",
+"    Return an ASCII latency graph for the <event> class.",
+"HISTORY <event>",
+"    Return time-latency samples for the <event> class.",
+"LATEST",
+"    Return the latest latency samples for all events.",
+"RESET [<event> ...]",
+"    Reset latency data of one or more <event> classes.",
+"    (default: reset all data for all event classes)",
+NULL
+        };
         addReplyHelp(c, help);
     } else {
         addReplySubcommandSyntaxError(c);

@@ -73,7 +73,7 @@ public:
                 m_max = m_max + 4;
             
             m_data = (T*)zrealloc(m_data, sizeof(T) * m_max, MALLOC_LOCAL);
-            m_max = zmalloc_usable(m_data) / sizeof(T);
+            m_max = zmalloc_usable_size(m_data) / sizeof(T);
         }
         assert(idx < m_max);
         where = m_data + idx;

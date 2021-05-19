@@ -83,6 +83,7 @@ typedef struct clusterLink {
 #define CLUSTER_TODO_UPDATE_STATE (1<<1)
 #define CLUSTER_TODO_SAVE_CONFIG (1<<2)
 #define CLUSTER_TODO_FSYNC_CONFIG (1<<3)
+#define CLUSTER_TODO_HANDLE_MANUALFAILOVER (1<<4)
 
 /* Message types.
  *
@@ -121,6 +122,7 @@ typedef struct clusterNode {
     int flags;      /* CLUSTER_NODE_... */
     uint64_t configEpoch; /* Last configEpoch observed for this node */
     unsigned char slots[CLUSTER_SLOTS/8]; /* slots handled by this node */
+    sds slots_info; /* Slots info represented by string. */
     int numslots;   /* Number of slots handled by this node */
     int numslaves;  /* Number of slave nodes, if this is a master */
     struct clusterNode **slaves; /* pointers to slave nodes */

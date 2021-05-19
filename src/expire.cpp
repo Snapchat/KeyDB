@@ -46,12 +46,16 @@
  * to the function to avoid too many gettimeofday() syscalls. */
 void activeExpireCycleExpireFullKey(redisDb *db, const char *key) {
     robj *keyobj = createStringObject(key,sdslen(key));
+    mstime_t expire_latency;
 
     propagateExpire(db,keyobj,g_pserver->lazyfree_lazy_expire);
+    latencyStartMonitor(expire_latency);
     if (g_pserver->lazyfree_lazy_expire)
         dbAsyncDelete(db,keyobj);
     else
         dbSyncDelete(db,keyobj);
+    latencyEndMonitor(expire_latency);
+    latencyAddSampleIfNeeded("expire-del",expire_latency);
     notifyKeyspaceEvent(NOTIFY_EXPIRED,
         "expired",keyobj,db->id);
     signalModifiedKey(NULL, db, keyobj);
@@ -287,8 +291,14 @@ void pexpireMemberAtCommand(client *c)
  * it will get more aggressive to avoid that too much memory is used by
  * keys that can be removed from the keyspace.
  *
- * No more than CRON_DBS_PER_CALL databases are tested at every
- * iteration.
+ * Every expire cycle tests multiple databases: the next call will start
+ * again from the next db. No more than CRON_DBS_PER_CALL databases are
+ * tested at every iteration.
+ *
+ * The function can perform more or less work, depending on the "type"
+ * argument. It can execute a "fast cycle" or a "slow cycle". The slow
+ * cycle is the main way we collect expired cycles: this happens with
+ * the "server.hz" frequency (usually 10 hertz).
  *
  * This kind of call is used when Redis detects that timelimit_exit is
  * true, so there is more work to do, and we do it more incrementally from
@@ -307,7 +317,7 @@ void pexpireMemberAtCommand(client *c)
 void activeExpireCycleCore(int type) {
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
-    static unsigned int current_db = 0; /* Last DB tested. */
+    static unsigned int current_db = 0; /* Next DB to test. */
     static int timelimit_exit = 0;      /* Time limit hit in previous call? */
     static long long last_fast_cycle = 0; /* When last fast cycle ran. */
 
@@ -318,7 +328,7 @@ void activeExpireCycleCore(int type) {
     /* When clients are paused the dataset should be static not just from the
      * POV of clients not being able to write, but also from the POV of
      * expires and evictions of keys not being performed. */
-    if (clientsArePaused()) return;
+    if (checkClientPauseTimeoutAndReturnIfPaused()) return;
 
     if (type == ACTIVE_EXPIRE_CYCLE_FAST) {
         /* Don't start a fast cycle if the previous cycle did not exit
@@ -538,7 +548,8 @@ void rememberSlaveKeyWithExpire(redisDb *db, robj *key) {
             NULL,                       /* val dup */
             dictSdsKeyCompare,          /* key compare */
             dictSdsDestructor,          /* key destructor */
-            NULL                        /* val destructor */
+            NULL,                       /* val destructor */
+            NULL                        /* allow to expand */
         };
         slaveKeysWithExpire = dictCreate(&dt,NULL);
     }
@@ -607,10 +618,15 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
 
     if (getLongLongFromObjectOrReply(c, param, &when, NULL) != C_OK)
         return;
-
+    int negative_when = when < 0;
     if (unit == UNIT_SECONDS) when *= 1000;
     when += basetime;
-
+    if (((when < 0) && !negative_when) || ((when-basetime > 0) && negative_when)) {
+        /* EXPIRE allows negative numbers, but we can at least detect an
+         * overflow by either unit conversion or basetime addition. */
+        addReplyErrorFormat(c, "invalid expire time in %s", c->cmd->name);
+        return;
+    }
     /* No key, return zero. */
     if (lookupKeyWrite(c->db,key) == NULL) {
         addReply(c,shared.czero);
@@ -756,6 +772,13 @@ void touchCommand(client *c) {
     addReplyLongLong(c,touched);
 }
 
+expireEntryFat::expireEntryFat(const expireEntryFat &src)
+{
+    m_keyPrimary = sdsdupshared(src.m_keyPrimary);
+    m_vecexpireEntries = src.m_vecexpireEntries;
+    m_dictIndex = nullptr;
+}
+
 expireEntryFat::~expireEntryFat()
 {
     if (m_dictIndex != nullptr)
@@ -765,7 +788,7 @@ expireEntryFat::~expireEntryFat()
 void expireEntryFat::createIndex()
 {
     serverAssert(m_dictIndex == nullptr);
-    m_dictIndex = dictCreate(&keyptrDictType, nullptr);
+    m_dictIndex = dictCreate(&dbExpiresDictType, nullptr);
 
     for (auto &entry : m_vecexpireEntries)
     {

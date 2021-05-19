@@ -12,7 +12,7 @@ jobs:
       run: |
           sudo apt-get update
           sudo apt-get -y install uuid-dev libcurl4-openssl-dev
-          make BUILD_TLS=yes -j2
+          make REDIS_CFLAGS='-Werror' BUILD_TLS=yes -j2
     - name: gen-cert
       run: ./utils/gen-test-certs.sh
     - name: test-tls
@@ -44,7 +44,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: make
-      run: make -j2
+      run: make REDIS_CFLAGS='-Werror' -j2
 
   build-libc-malloc:
     runs-on: ubuntu-latest
@@ -54,5 +54,5 @@ jobs:
       run: |
           sudo apt-get update
           sudo apt-get -y install uuid-dev libcurl4-openssl-dev
-          make MALLOC=libc -j2
+          make REDIS_CFLAGS='-Werror' MALLOC=libc -j2
 

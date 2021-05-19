@@ -5,7 +5,6 @@
  * We do that by scanning the keyspace and for each pointer we have, we can try to
  * ask the allocator if moving it to a new address will help reduce fragmentation.
  *
- * Copyright (c) 2020, Oran Agra
  * Copyright (c) 2020, Redis Labs, Inc
  * All rights reserved.
  *
@@ -61,7 +60,6 @@ TPTR* activeDefragAlloc(TPTR *ptr) {
     void *newptr;
     if(!je_get_defrag_hint(ptr)) {
         g_pserver->stat_active_defrag_misses++;
-        size = zmalloc_size(ptr);
         return NULL;
     }
     /* move this allocation to a new allocation.
@@ -79,6 +77,23 @@ robj* activeDefragAlloc(robj *o) {
     void *pvSrc = allocPtrFromObj(o);
     void *pvDst = activeDefragAlloc(pvSrc);
     return objFromAllocPtr(pvDst);
+}
+
+void* activeDefragAlloc(void *ptr) {
+    size_t size;
+    void *newptr;
+    if(!je_get_defrag_hint(ptr)) {
+        g_pserver->stat_active_defrag_misses++;
+        return NULL;
+    }
+    /* move this allocation to a new allocation.
+     * make sure not to use the thread cache. so that we don't get back the same
+     * pointers we try to free */
+    size = zmalloc_size(ptr);
+    newptr = zmalloc_no_tcache(size);
+    memcpy(newptr, ptr, size);
+    zfree_no_tcache(ptr);
+    return newptr;
 }
 
 /*Defrag helper for sds strings
@@ -376,7 +391,7 @@ long activeDefragSdsListAndDict(list *l, dict *d, int dict_val_type) {
         } else if (dict_val_type == DEFRAG_SDS_DICT_VAL_VOID_PTR) {
             void *newptr, *ptr = dictGetVal(de);
             if ((newptr = activeDefragAlloc(ptr)))
-                ln->value = newptr, defragged++;
+                de->v.val = newptr, defragged++;
         }
         defragged += dictIterDefragEntry(di);
     }
@@ -661,7 +676,7 @@ int defragRaxNode(raxNode **noderef) {
 }
 
 /* returns 0 if no more work needs to be been done, and 1 if time is up and more work is needed. */
-int scanLaterStraemListpacks(robj *ob, unsigned long *cursor, long long endtime, long long *defragged) {
+int scanLaterStreamListpacks(robj *ob, unsigned long *cursor, long long endtime, long long *defragged) {
     static unsigned char last[sizeof(streamID)];
     raxIterator ri;
     long iterations = 0;
@@ -671,10 +686,10 @@ int scanLaterStraemListpacks(robj *ob, unsigned long *cursor, long long endtime,
     }
 
     stream *s = (stream*)ptrFromObj(ob);
-    raxStart(&ri,s->prax);
+    raxStart(&ri,s->rax);
     if (*cursor == 0) {
         /* if cursor is 0, we start new iteration */
-        defragRaxNode(&s->prax->head);
+        defragRaxNode(&s->rax->head);
         /* assign the iterator node callback before the seek, so that the
          * initial nodes that are processed till the first item are covered */
         ri.node_cb = defragRaxNode;
@@ -803,16 +818,30 @@ long defragStream(redisDb *db, dictEntry *kde) {
     if ((news = (stream*)activeDefragAlloc(s)))
         defragged++, ob->m_ptr = s = news;
 
-    if (raxSize(s->prax) > cserver.active_defrag_max_scan_fields) {
-        rax *newrax = (rax*)activeDefragAlloc(s->prax);
+    if (raxSize(s->rax) > cserver.active_defrag_max_scan_fields) {
+        rax *newrax = (rax*)activeDefragAlloc(s->rax);
         if (newrax)
-            defragged++, s->prax = newrax;
+            defragged++, s->rax = newrax;
         defragLater(db, kde);
     } else
-        defragged += defragRadixTree(&s->prax, 1, NULL, NULL);
+        defragged += defragRadixTree(&s->rax, 1, NULL, NULL);
 
     if (s->cgroups)
         defragged += defragRadixTree(&s->cgroups, 1, defragStreamConsumerGroup, NULL);
+    return defragged;
+}
+
+/* Defrag a module key. This is either done immediately or scheduled
+ * for later. Returns then number of pointers defragged.
+ */
+long defragModule(redisDb *db, dictEntry *kde) {
+    robj *obj = (robj*)dictGetVal(kde);
+    serverAssert(obj->type == OBJ_MODULE);
+    long defragged = 0;
+
+    if (!moduleDefragValue((robj*)dictGetKey(kde), obj, &defragged))
+        defragLater(db, kde);
+
     return defragged;
 }
 
@@ -889,8 +918,7 @@ long defragKey(redisDb *db, dictEntry *de) {
     } else if (ob->type == OBJ_STREAM) {
         defragged += defragStream(db, de);
     } else if (ob->type == OBJ_MODULE) {
-        /* Currently defragmenting modules private data types
-         * is not supported. */
+        defragged += defragModule(db, de);
     } else {
         serverPanic("Unknown object type");
     }
@@ -953,6 +981,7 @@ long defragOtherGlobals() {
      * that remain static for a long time */
     defragged += activeDefragSdsDict(g_pserver->lua_scripts, DEFRAG_SDS_DICT_VAL_IS_STROB);
     defragged += activeDefragSdsListAndDict(g_pserver->repl_scriptcache_fifo, g_pserver->repl_scriptcache_dict, DEFRAG_SDS_DICT_NO_VAL);
+    defragged += moduleDefragGlobals();
     return defragged;
 }
 
@@ -970,7 +999,9 @@ int defragLaterItem(dictEntry *de, unsigned long *cursor, long long endtime) {
         } else if (ob->type == OBJ_HASH) {
             g_pserver->stat_active_defrag_hits += scanLaterHash(ob, cursor);
         } else if (ob->type == OBJ_STREAM) {
-            return scanLaterStraemListpacks(ob, cursor, endtime, &g_pserver->stat_active_defrag_hits);
+            return scanLaterStreamListpacks(ob, cursor, endtime, &g_pserver->stat_active_defrag_hits);
+        } else if (ob->type == OBJ_MODULE) {
+            return moduleLateDefrag((robj*)dictGetKey(de), ob, cursor, endtime, &g_pserver->stat_active_defrag_hits);
         } else {
             *cursor = 0; /* object type may have changed since we schedule it for later */
         }
@@ -1207,6 +1238,17 @@ void activeDefragCycle(void) {
 
 void activeDefragCycle(void) {
     /* Not implemented yet. */
+}
+
+void *activeDefragAlloc(void *ptr) {
+    UNUSED(ptr);
+    return NULL;
+}
+
+robj *activeDefragStringOb(robj *ob, long *defragged) {
+    UNUSED(ob);
+    UNUSED(defragged);
+    return NULL;
 }
 
 #endif

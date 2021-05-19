@@ -2,7 +2,12 @@
 
 void _serverAssertWithInfo(const struct client *c, class robj_roptr o, const char *estr, const char *file, int line);
 extern "C" void _serverAssert(const char *estr, const char *file, int line);
+#ifdef __GNUC__
+extern "C" void _serverPanic(const char *file, int line, const char *msg, ...)
+    __attribute__ ((format (printf, 3, 4)));
+#else
 extern "C" void _serverPanic(const char *file, int line, const char *msg, ...);
+#endif
 
 /* We can print the stacktrace, so our assert is defined this way: */
 #define serverAssertWithInfo(_c,_o,_e) ((_e)?(void)0 : (_serverAssertWithInfo(_c,_o,#_e,__FILE__,__LINE__),_exit(1)))

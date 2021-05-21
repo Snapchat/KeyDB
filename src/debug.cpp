@@ -259,7 +259,7 @@ void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj
         }
         streamIteratorStop(&si);
     } else if (o->type == OBJ_MODULE) {
-        RedisModuleDigest md;
+        RedisModuleDigest md = {{0},{0}};
         moduleValue *mv = (moduleValue*)ptrFromObj(o);
         moduleType *mt = mv->type;
         moduleInitDigestContext(md);
@@ -455,7 +455,7 @@ void debugCommand(client *c) {
 "      conflicting keys will generate an exception and kill the server."
 "    * NOSAVE: the database will be loaded from an existing RDB file.",
 "    Examples:",
-"    * DEBUG RELOAD: verify that the server is able to persist, flsuh and reload",
+"    * DEBUG RELOAD: verify that the server is able to persist, flush and reload",
 "      the database.",
 "    * DEBUG RELOAD NOSAVE: replace the current database with the contents of an",
 "      existing RDB file.",
@@ -487,7 +487,7 @@ NULL
     } else if (!strcasecmp(szFromObj(c->argv[1]),"segfault")) {
         *((char*)-1) = 'x';
     } else if (!strcasecmp(szFromObj(c->argv[1]),"panic")) {
-        serverPanic("DEBUG PANIC called at Unix time %ld", time(NULL));
+        serverPanic("DEBUG PANIC called at Unix time %lld", (long long)time(NULL));
     } else if (!strcasecmp(szFromObj(c->argv[1]),"restart") ||
                !strcasecmp(szFromObj(c->argv[1]),"crash-and-recover"))
     {
@@ -941,6 +941,7 @@ NULL
 /* =========================== Crash handling  ============================== */
 
 void _serverAssert(const char *estr, const char *file, int line) {
+    g_fInCrash = true;
     bugReportStart();
     serverLog(LL_WARNING,"=== ASSERTION FAILED ===");
     serverLog(LL_WARNING,"==> %s:%d '%s' is not true",file,line,estr);
@@ -1030,12 +1031,14 @@ void _serverAssertWithInfo(const client *c, robj_roptr o, const char *estr, cons
 }
 
 void _serverPanic(const char *file, int line, const char *msg, ...) {
+    g_fInCrash = true;
     va_list ap;
     va_start(ap,msg);
     char fmtmsg[256];
     vsnprintf(fmtmsg,sizeof(fmtmsg),msg,ap);
     va_end(ap);
 
+    g_fInCrash = true;
     bugReportStart();
     serverLog(LL_WARNING,"------------------------------------------------");
     serverLog(LL_WARNING,"!!! Software Failure. Press left mouse button to continue");
@@ -1916,7 +1919,7 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
         serverLog(LL_WARNING,
         "Accessing address: %p", (void*)info->si_addr);
     }
-    if (info->si_pid != -1) {
+    if (info->si_code <= SI_USER && info->si_pid != -1) {
         serverLog(LL_WARNING, "Killed by PID: %ld, UID: %d", (long) info->si_pid, info->si_uid);
     }
 
@@ -1944,6 +1947,8 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 }
 
 void printCrashReport(void) {
+    g_fInCrash = true;
+
     /* Log INFO and CLIENT LIST */
     logServerInfo();
 

@@ -70,7 +70,7 @@ long getTimeZone(void);
 int pathIsBaseName(char *path);
 
 #ifdef REDIS_TEST
-int utilTest(int argc, char **argv);
+int utilTest(int argc, char **argv, int accurate);
 #endif
 
 #ifdef __cplusplus

@@ -618,9 +618,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
 
     /* Check the ACLs. */
     int acl_errpos;
-    int acl_retval = ACLCheckCommandPerm(c,&acl_errpos);
-    if (acl_retval == ACL_OK && c->cmd->proc == publishCommand)
-        acl_retval = ACLCheckPubsubPerm(c,1,1,0,&acl_errpos);
+    int acl_retval = ACLCheckAllPerm(c,&acl_errpos);
     if (acl_retval != ACL_OK) {
         addACLLogEntry(c,acl_retval,acl_errpos,NULL);
         switch (acl_retval) {
@@ -1463,6 +1461,14 @@ void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
     if (g_pserver->lua_timedout) processEventsWhileBlocked(serverTL - g_pserver->rgthreadvar);
     if (g_pserver->lua_kill) {
         serverLog(LL_WARNING,"Lua script killed by user with SCRIPT KILL.");
+
+        /*
+         * Set the hook to invoke all the time so the user
+         * will not be able to catch the error with pcall and invoke
+         * pcall again which will prevent the script from ever been killed
+         */
+        lua_sethook(lua, luaMaskCountHook, LUA_MASKLINE, 0);
+
         lua_pushstring(lua,"Script killed by user with SCRIPT KILL...");
         lua_error(lua);
     }
@@ -1508,7 +1514,6 @@ void evalGenericCommand(client *c, int evalsha) {
     g_pserver->lua_replicate_commands = g_pserver->lua_always_replicate_commands;
     g_pserver->lua_multi_emitted = 0;
     g_pserver->lua_repl = PROPAGATE_AOF|PROPAGATE_REPL;
-    serverTL->in_eval = 1;
 
     /* Get the number of arguments that are keys */
     if (getLongLongFromObjectOrReply(c,c->argv[2],&numkeys,NULL) != C_OK)
@@ -1580,6 +1585,7 @@ void evalGenericCommand(client *c, int evalsha) {
      *
      * If we are debugging, we set instead a "line" hook so that the
      * debugger is call-back at every line executed by the script. */
+    serverTL->in_eval = 1;
     g_pserver->lua_caller = c;
     g_pserver->lua_cur_script = funcname + 2;
     g_pserver->lua_time_start = mstime();
@@ -1619,6 +1625,7 @@ void evalGenericCommand(client *c, int evalsha) {
                 queueClientForReprocessing(mi->master);
         }
     }
+    serverTL->in_eval = 0;
     g_pserver->lua_caller = NULL;
     g_pserver->lua_cur_script = NULL;
 
@@ -1695,8 +1702,6 @@ void evalGenericCommand(client *c, int evalsha) {
             forceCommandPropagation(c,PROPAGATE_REPL|PROPAGATE_AOF);
         }
     }
-
-    serverTL->in_eval = 0;
 }
 
 void evalCommand(client *c) {

@@ -52,10 +52,7 @@ set ::all_tests {
     integration/replication-multimaster-connect
     integration/aof
     integration/rdb
-    integration/corrupt-dump
-    integration/corrupt-dump-fuzzer
     integration/convert-zipmap-hash-on-load
-    integration/logging
     integration/psync2
     integration/psync2-reg
     integration/psync2-pingoff
@@ -84,6 +81,9 @@ set ::all_tests {
     unit/shutdown
     unit/networking
     unit/loadsave
+    integration/logging
+    integration/corrupt-dump
+    integration/corrupt-dump-fuzzer
 }
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0

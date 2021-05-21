@@ -57,26 +57,19 @@ extern "C" {
 #define FD_TO_PEER_NAME 0
 #define FD_TO_SOCK_NAME 1
 
-int anetTcpConnect(char *err, const char *addr, int port);
 int anetTcpNonBlockConnect(char *err, const char *addr, int port);
-int anetTcpNonBlockBindConnect(char *err, const char *addr, int port, const char *source_addr);
 int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr);
-int anetUnixConnect(char *err, const char *path);
-int anetUnixNonBlockConnect(char *err, const char *path);
-int anetRead(int fd, char *buf, int count);
 int anetResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len, int flags);
 int anetTcpServer(char *err, int port, const char *bindaddr, int backlog, int fReusePort, int fFirstListen);
 int anetTcp6Server(char *err, int port, const char *bindaddr, int backlog, int fReusePort, int fFirstListen);
 int anetUnixServer(char *err, char *path, mode_t perm, int backlog);
 int anetTcpAccept(char *err, int serversock, char *ip, size_t ip_len, int *port);
 int anetUnixAccept(char *err, int serversock);
-int anetWrite(int fd, char *buf, int count);
 int anetNonBlock(char *err, int fd);
 int anetBlock(char *err, int fd);
 int anetCloexec(int fd);
 int anetEnableTcpNoDelay(char *err, int fd);
 int anetDisableTcpNoDelay(char *err, int fd);
-int anetTcpKeepAlive(char *err, int fd);
 int anetSendTimeout(char *err, int fd, long long ms);
 int anetRecvTimeout(char *err, int fd, long long ms);
 int anetFdToString(int fd, char *ip, size_t ip_len, int *port, int fd_to_str_type);

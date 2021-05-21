@@ -166,7 +166,7 @@ extern struct config {
     int scan_mode;
     int intrinsic_latency_mode;
     int intrinsic_latency_duration;
-    char *pattern;
+    sds pattern;
     char *rdb_filename;
     int bigkeys;
     int memkeys;
@@ -195,6 +195,7 @@ extern struct config {
     int disable_motd;
     int in_multi;
     int pre_multi_dbnum;
+    int quoted_input;   /* Force input args to be treated as quoted strings */
 } config;
 
 struct clusterManager {

@@ -1191,15 +1191,32 @@ LError:
 /* REPLCONF <option> <value> <option> <value> ...
  * This command is used by a replica in order to configure the replication
  * process before starting it with the SYNC command.
+ * This command is also used by a master in order to get the replication
+ * offset from a replica.
  *
- * Currently the only use of this command is to communicate to the master
- * what is the listening port of the Slave redis instance, so that the
- * master can accurately list slaves and their listening ports in
- * the INFO output.
+ * Currently we support these options:
  *
- * In the future the same command can be used in order to configure
- * the replication to initiate an incremental replication instead of a
- * full resync. */
+ * - listening-port <port>
+ * - ip-address <ip>
+ * What is the listening ip and port of the Replica redis instance, so that
+ * the master can accurately lists replicas and their listening ports in the
+ * INFO output.
+ *
+ * - capa <eof|psync2>
+ * What is the capabilities of this instance.
+ * eof: supports EOF-style RDB transfer for diskless replication.
+ * psync2: supports PSYNC v2, so understands +CONTINUE <new repl ID>.
+ *
+ * - ack <offset>
+ * Replica informs the master the amount of replication stream that it
+ * processed so far.
+ *
+ * - getack
+ * Unlike other subcommands, this is used by master to get the replication
+ * offset from a replica.
+ *
+ * - rdb-only
+ * Only wants RDB snapshot without replication buffer. */
 void replconfCommand(client *c) {
     int j;
     bool fCapaCommand = false;
@@ -1483,6 +1500,8 @@ void rdbPipeWriteHandlerConnRemoved(struct connection *conn) {
     if (!connHasWriteHandler(conn))
         return;
     connSetWriteHandler(conn, NULL);
+    client *slave = (client*)connGetPrivateData(conn);
+    slave->repl_last_partial_write = 0;
     g_pserver->rdb_pipe_numconns_writing--;
     /* if there are no more writes for now for this conn, or write error: */
     if (g_pserver->rdb_pipe_numconns_writing == 0) {
@@ -1513,8 +1532,10 @@ void rdbPipeWriteHandler(struct connection *conn) {
     } else {
         slave->repldboff += nwritten;
         g_pserver->stat_net_output_bytes += nwritten;
-        if (slave->repldboff < g_pserver->rdb_pipe_bufflen)
+        if (slave->repldboff < g_pserver->rdb_pipe_bufflen) {
+            slave->repl_last_partial_write = g_pserver->unixtime;
             return; /* more data to write.. */
+        }
     }
     rdbPipeWriteHandlerConnRemoved(conn);
 }
@@ -1602,6 +1623,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
              * setup write handler (and disable pipe read handler, below) */
             if (nwritten != g_pserver->rdb_pipe_bufflen) {
                 g_pserver->rdb_pipe_numconns_writing++;
+                slave->repl_last_partial_write = g_pserver->unixtime;
                 slave->postFunction([conn](client *) {
                     connSetWriteHandler(conn, rdbPipeWriteHandler);
                 });
@@ -1946,6 +1968,7 @@ void readSyncBulkPayload(connection *conn) {
     redisMaster *mi = (redisMaster*)connGetPrivateData(conn);
 
     serverAssert(GlobalLocksAcquired());
+    serverAssert(mi->master == nullptr);
 
     /* Static vars used to hold the EOF mark, and the last bytes received
      * from the server: when they match, we reached the end of the transfer. */
@@ -2324,8 +2347,7 @@ void readSyncBulkPayload(connection *conn) {
     serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Finished with success");
 
     if (cserver.supervised_mode == SUPERVISED_SYSTEMD) {
-        redisCommunicateSystemd("STATUS=MASTER <-> REPLICA sync: Finished with success. Ready to accept connections.\n");
-        redisCommunicateSystemd("READY=1\n");
+        redisCommunicateSystemd("STATUS=MASTER <-> REPLICA sync: Finished with success. Ready to accept connections in read-write mode.\n");
     }
 
     /* Send the initial ACK immediately to put this replica in online state. */
@@ -2943,8 +2965,7 @@ void syncWithMaster(connection *conn) {
     if (psync_result == PSYNC_CONTINUE) {
         serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Master accepted a Partial Resynchronization.");
         if (cserver.supervised_mode == SUPERVISED_SYSTEMD) {
-            redisCommunicateSystemd("STATUS=MASTER <-> REPLICA sync: Partial Resynchronization accepted. Ready to accept connections.\n");
-            redisCommunicateSystemd("READY=1\n");
+            redisCommunicateSystemd("STATUS=MASTER <-> REPLICA sync: Partial Resynchronization accepted. Ready to accept connections in read-write mode.\n");
         }
         return;
     }
@@ -3002,6 +3023,7 @@ void syncWithMaster(connection *conn) {
     }
 
     /* Setup the non blocking download of the bulk file. */
+    serverAssert(mi->master == nullptr);
     if (connSetReadHandler(conn, readSyncBulkPayload)
             == C_ERR)
     {
@@ -3042,6 +3064,7 @@ write_error: /* Handle sendCommand() errors. */
 }
 
 int connectWithMaster(redisMaster *mi) {
+    serverAssert(mi->master == nullptr);
     mi->repl_transfer_s = g_pserver->tls_replication ? connCreateTLS() : connCreateSocket();
     connSetPrivateData(mi->repl_transfer_s, mi);
     if (connConnect(mi->repl_transfer_s, mi->masterhost, mi->masterport,
@@ -3148,10 +3171,8 @@ struct redisMaster *replicationAddMaster(char *ip, int port) {
     sdsfree(mi->masterhost);
     mi->masterhost = nullptr;
     if (mi->master) {
-        if (FCorrectThread(mi->master))
-            freeClient(mi->master);
-        else
-            freeClientAsync(mi->master);
+        freeClientAsync(mi->master);
+        mi->master = nullptr;
     }
     if (!g_pserver->fActiveReplica)
         disconnectAllBlockedClients(); /* Clients blocked in master, now replica. */
@@ -3262,6 +3283,9 @@ void replicationUnsetMaster(redisMaster *mi) {
      * starting from now. Otherwise the backlog will be freed after a
      * failover if slaves do not connect immediately. */
     g_pserver->repl_no_slaves_since = g_pserver->unixtime;
+
+    /* Reset down time so it'll be ready for when we turn into replica again. */
+    mi->repl_down_since = 0;
 
     listNode *ln = listSearchKey(g_pserver->masters, mi);
     serverAssert(ln != nullptr);
@@ -3512,6 +3536,7 @@ void replicationSendAck(redisMaster *mi)
  * handshake in order to reactivate the cached master.
  */
 void replicationCacheMaster(redisMaster *mi, client *c) {
+    serverAssert(mi->master == c);
     serverAssert(mi->master != NULL && mi->cached_master == NULL);
     serverLog(LL_NOTICE,"Caching the disconnected master state.");
     AssertCorrectThread(c);
@@ -3554,6 +3579,7 @@ void replicationCacheMaster(redisMaster *mi, client *c) {
      * so make sure to adjust the replication state. This function will
      * also set g_pserver->master to NULL. */
     replicationHandleMasterDisconnection(mi);
+    serverAssert(mi->master == nullptr);
 }
 
 /* This function is called when a master is turend into a slave, in order to
@@ -3640,6 +3666,7 @@ void replicationResurrectCachedMaster(redisMaster *mi, connection *conn) {
     /* Re-add to the list of clients. */
     linkClient(mi->master);
     serverAssert(connGetPrivateData(mi->master->conn) == mi->master);
+    serverAssert(mi->master->iel == ielFromEventLoop(serverTL->el));
     if (connSetReadHandler(mi->master->conn, readQueryFromClient, true)) {
         serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the readable handler: %s", strerror(errno));
         freeClientAsync(mi->master); /* Close ASAP. */
@@ -3874,7 +3901,7 @@ void processClientsWaitingReplicas(void) {
     listRewind(g_pserver->clients_waiting_acks,&li);
     while((ln = listNext(&li))) {
         client *c = (client*)ln->value;
-        fastlock_lock(&c->lock);
+        std::unique_lock<fastlock> ul(c->lock);
 
         /* Every time we find a client that is satisfied for a given
          * offset and number of replicas, we remember it so the next client
@@ -3895,7 +3922,6 @@ void processClientsWaitingReplicas(void) {
                 addReplyLongLong(c,numreplicas);
             }
         }
-        fastlock_unlock(&c->lock);
     }
 }
 
@@ -4071,21 +4097,27 @@ void replicationCron(void) {
             client *replica = (client*)ln->value;
             std::unique_lock<fastlock> ul(replica->lock);
 
-            if (replica->replstate != SLAVE_STATE_ONLINE) continue;
-            if (replica->flags & CLIENT_PRE_PSYNC) continue;
-            if ((g_pserver->unixtime - replica->repl_ack_time) > g_pserver->repl_timeout)
-            {
-                serverLog(LL_WARNING, "Disconnecting timedout replica: %s",
-                    replicationGetSlaveName(replica));
-                if (FCorrectThread(replica))
-                {
-                    ul.release();
-                    if (!freeClient(replica))
-                        replica->lock.unlock(); // we didn't free so we have undo the lock we just released
-                }
-                else
-                {
+            if (replica->replstate == SLAVE_STATE_ONLINE) {
+                if (replica->flags & CLIENT_PRE_PSYNC)
+                    continue;
+                if ((g_pserver->unixtime - replica->repl_ack_time) > g_pserver->repl_timeout) {
+                    serverLog(LL_WARNING, "Disconnecting timedout replica (streaming sync): %s",
+                          replicationGetSlaveName(replica));
                     freeClientAsync(replica);
+                    continue;
+                }
+            }
+            /* We consider disconnecting only diskless replicas because disk-based replicas aren't fed
+             * by the fork child so if a disk-based replica is stuck it doesn't prevent the fork child
+             * from terminating. */
+            if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_END && g_pserver->rdb_child_type == RDB_CHILD_TYPE_SOCKET) {
+                if (replica->repl_last_partial_write != 0 &&
+                    (g_pserver->unixtime - replica->repl_last_partial_write) > g_pserver->repl_timeout)
+                {
+                    serverLog(LL_WARNING, "Disconnecting timedout replica (full sync): %s",
+                          replicationGetSlaveName(replica));
+                    freeClientAsync(replica);
+                    continue;
                 }
             }
         }
@@ -4253,7 +4285,7 @@ void abortFailover(redisMaster *mi, const char *err) {
 }
 
 /* 
- * FAILOVER [TO <HOST> <IP> [FORCE]] [ABORT] [TIMEOUT <timeout>] 
+ * FAILOVER [TO <HOST> <PORT> [FORCE]] [ABORT] [TIMEOUT <timeout>]
  * 
  * This command will coordinate a failover between the master and one
  * of its replicas. The happy path contains the following steps:
@@ -4362,7 +4394,7 @@ void failoverCommand(client *c) {
         client *replica = findReplica(host, port);
 
         if (replica == NULL) {
-            addReplyError(c,"FAILOVER target HOST and IP is not "
+            addReplyError(c,"FAILOVER target HOST and PORT is not "
                             "a replica.");
             return;
         }

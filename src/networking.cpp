@@ -169,6 +169,7 @@ client *createClient(connection *conn, int iel) {
     c->read_reploff = 0;
     c->repl_ack_off = 0;
     c->repl_ack_time = 0;
+    c->repl_last_partial_write = 0;
     c->slave_listening_port = 0;
     c->slave_addr = NULL;
     c->slave_capa = SLAVE_CAPA_NONE;
@@ -404,8 +405,9 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
         memcpy(tail->buf(), s, len);
         listAddNodeTail(c->reply, tail);
         c->reply_bytes += tail->size;
+
+        asyncCloseClientOnOutputBufferLimitReached(c);
     }
-    asyncCloseClientOnOutputBufferLimitReached(c);
 }
 
 /* -----------------------------------------------------------------------------
@@ -684,7 +686,7 @@ void *addReplyDeferredLen(client *c) {
 
 void setDeferredReply(client *c, void *node, const char *s, size_t length) {
     listNode *ln = (listNode*)node;
-    clientReplyBlock *next;
+    clientReplyBlock *next, *prev;
 
     /* Abort when *node is NULL: when the client should not accept writes
      * we return NULL in addReplyDeferredLen() */
@@ -693,14 +695,31 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
 
     /* Normally we fill this dummy NULL node, added by addReplyDeferredLen(),
      * with a new buffer structure containing the protocol needed to specify
-     * the length of the array following. However sometimes when there is
-     * little memory to move, we may instead remove this NULL node, and prefix
-     * our protocol in the node immediately after to it, in order to save a
-     * write(2) syscall later. Conditions needed to do it:
+     * the length of the array following. However sometimes there might be room
+     * in the previous/next node so we can instead remove this NULL node, and
+     * suffix/prefix our data in the node immediately before/after it, in order
+     * to save a write(2) syscall later. Conditions needed to do it:
      *
+     * - The prev node is non-NULL and has space in it or
      * - The next node is non-NULL,
      * - It has enough room already allocated
      * - And not too large (avoid large memmove) */
+    if (ln->prev != NULL && (prev = (clientReplyBlock*)listNodeValue(ln->prev)) &&
+        prev->size - prev->used > 0)
+    {
+        size_t len_to_copy = prev->size - prev->used;
+        if (len_to_copy > length)
+            len_to_copy = length;
+        memcpy(prev->buf() + prev->used, s, len_to_copy);
+        prev->used += len_to_copy;
+        length -= len_to_copy;
+        if (length == 0) {
+            listDelNode(c->reply, ln);
+            return;
+        }
+        s += len_to_copy;
+    }
+
     if (ln->next != NULL && (next = (clientReplyBlock*)listNodeValue(ln->next)) &&
         next->size - next->used >= length &&
         next->used < PROTO_REPLY_CHUNK_BYTES * 4)
@@ -718,8 +737,9 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         memcpy(buf->buf(), s, length);
         listNodeValue(ln) = buf;
         c->reply_bytes += buf->size;
+
+        asyncCloseClientOnOutputBufferLimitReached(c);
     }
-    asyncCloseClientOnOutputBufferLimitReached(c);
 }
 
 /* Populate the length object and try gluing it to the next chunk. */
@@ -1795,9 +1815,7 @@ int writeToClient(client *c, int handler_installed) {
     
     g_pserver->stat_net_output_bytes += totwritten;
     if (nwritten == -1) {
-        if (connGetState(c->conn) == CONN_STATE_CONNECTED) {
-            nwritten = 0;
-        } else {
+        if (connGetState(c->conn) != CONN_STATE_CONNECTED) {
             serverLog(LL_VERBOSE,
                 "Error writing to client: %s", connGetLastError(c->conn));
             freeClientAsync(c);
@@ -2022,6 +2040,9 @@ void resetClient(client *c) {
         c->flags |= CLIENT_REPLY_SKIP;
         c->flags &= ~CLIENT_REPLY_SKIP_NEXT;
     }
+
+    /* Always clear the prevent logging field. */
+    c->flags &= ~CLIENT_PREVENT_LOGGING;
 }
 
 /* This function is used when we want to re-enter the event loop but there
@@ -2333,13 +2354,10 @@ void commandProcessed(client *c, int flags) {
         c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
     }
 
-    /* Don't reset the client structure for clients blocked in a
-     * module blocking command, so that the reply callback will
-     * still be able to access the client argv and argc field.
-     * The client will be reset in unblockClientFromModule(). */
-    if (!(c->flags & CLIENT_BLOCKED) ||
-        (c->btype != BLOCKED_MODULE && c->btype != BLOCKED_PAUSE))
-    {
+    /* Don't reset the client structure for blocked clients, so that the reply
+     * callback will still be able to access the client argv and argc fields.
+     * The client will be reset in unblockClient(). */
+    if (!(c->flags & CLIENT_BLOCKED)) {
         resetClient(c);
     }
 
@@ -2373,6 +2391,7 @@ void commandProcessed(client *c, int flags) {
  * of processing the command, otherwise C_OK is returned. */
 int processCommandAndResetClient(client *c, int flags) {
     int deadclient = 0;
+    client *old_client = serverTL->current_client;
     serverTL->current_client = c;
     serverAssert(GlobalLocksAcquired());
     
@@ -2380,7 +2399,14 @@ int processCommandAndResetClient(client *c, int flags) {
         commandProcessed(c, flags);
     }
     if (serverTL->current_client == NULL) deadclient = 1;
-    serverTL->current_client = NULL;
+    /*
+     * Restore the old client, this is needed because when a script
+     * times out, we will get into this code from processEventsWhileBlocked.
+     * Which will cause to set the server.current_client. If not restored
+     * we will return 1 to our caller which will falsely indicate the client
+     * is dead and will stop reading from its buffer.
+     */
+    serverTL->current_client = old_client;
     /* performEvictions may flush slave output buffers. This may
      * result in a replica, that may be the active client, to be
      * freed. */
@@ -3389,6 +3415,7 @@ void helloCommand(client *c) {
         int moreargs = (c->argc-1) - j;
         const char *opt = (const char*)ptrFromObj(c->argv[j]);
         if (!strcasecmp(opt,"AUTH") && moreargs >= 2) {
+            preventCommandLogging(c);
             if (ACLAuthenticateUser(c, c->argv[j+1], c->argv[j+2]) == C_ERR) {
                 addReplyError(c,"-WRONGPASS invalid username-password pair or user is disabled.");
                 return;
@@ -3457,7 +3484,7 @@ void securityWarningCommand(client *c) {
     static time_t logged_time;
     time_t now = time(NULL);
 
-    if (labs(now-logged_time) > 60) {
+    if (llabs(now-logged_time) > 60) {
         serverLog(LL_WARNING,"Possible SECURITY ATTACK detected. It looks like somebody is sending POST or Host: commands to KeyDB. This is likely due to an attacker attempting to use Cross Protocol Scripting to compromise your KeyDB instance. Connection aborted.");
         logged_time = now;
     }
@@ -3749,6 +3776,7 @@ void unpauseClients(void) {
     listRewind(g_pserver->paused_clients,&li);
     while ((ln = listNext(&li)) != NULL) {
         c = (client*)listNodeValue(ln);
+        std::unique_lock<fastlock> ul(c->lock);
         unblockClient(c);
     }
 }
@@ -3762,6 +3790,8 @@ int areClientsPaused(void) {
  * if it has. Also returns true if clients are now paused and false 
  * otherwise. */
 int checkClientPauseTimeoutAndReturnIfPaused(void) {
+    if (!areClientsPaused())
+        return 0;
     if (g_pserver->client_pause_end_time < g_pserver->mstime) {
         unpauseClients();
     }
@@ -3813,6 +3843,7 @@ void processEventsWhileBlocked(int iel) {
         g_pserver->repl_batch_offStart = -1;
     }
 
+    long long eventsCount = 0;
     aeReleaseLock();
     serverAssert(!GlobalLocksAcquired());
     try
@@ -3825,8 +3856,8 @@ void processEventsWhileBlocked(int iel) {
                 AE_CALL_BEFORE_SLEEP|AE_CALL_AFTER_SLEEP);
             /* Note that g_pserver->events_processed_while_blocked will also get
             * incremeted by callbacks called by the event loop handlers. */
-            g_pserver->events_processed_while_blocked += ae_events;
-            long long events = g_pserver->events_processed_while_blocked - startval;
+            eventsCount += ae_events;
+            long long events = eventsCount - startval;
             if (!events) break;
         }
         ProcessingEventsWhileBlocked = 0;
@@ -3846,6 +3877,8 @@ void processEventsWhileBlocked(int iel) {
     AeLocker locker;
     locker.arm(nullptr);
     locker.release();
+
+    g_pserver->events_processed_while_blocked += eventsCount;
 
     whileBlockedCron();
 

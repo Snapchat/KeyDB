@@ -233,7 +233,7 @@ void killAppendOnlyChild(void) {
     serverLog(LL_NOTICE,"Killing running AOF rewrite child: %ld",
         (long) g_pserver->child_pid);
     if (kill(g_pserver->child_pid,SIGUSR1) != -1) {
-        while(wait3(&statloc,0,NULL) != g_pserver->child_pid);
+        while(waitpid(-1, &statloc, 0) != g_pserver->child_pid);
     }
     /* Reset the buffer accumulating changes while the child saves. */
     aofRewriteBufferReset();
@@ -249,9 +249,12 @@ void killAppendOnlyChild(void) {
 void stopAppendOnly(void) {
     serverAssert(g_pserver->aof_state != AOF_OFF);
     flushAppendOnlyFile(1);
-    redis_fsync(g_pserver->aof_fd);
-    g_pserver->aof_fsync_offset = g_pserver->aof_current_size;
-    g_pserver->aof_last_fsync = g_pserver->unixtime;
+    if (redis_fsync(g_pserver->aof_fd) == -1) {
+        serverLog(LL_WARNING,"Fail to fsync the AOF file: %s",strerror(errno));
+    } else {
+        g_pserver->aof_fsync_offset = g_pserver->aof_current_size;
+        g_pserver->aof_last_fsync = g_pserver->unixtime;
+    }
     close(g_pserver->aof_fd);
 
     g_pserver->aof_fd = -1;
@@ -304,6 +307,15 @@ int startAppendOnly(void) {
     g_pserver->aof_state = AOF_WAIT_REWRITE;
     g_pserver->aof_last_fsync = g_pserver->unixtime;
     g_pserver->aof_fd = newfd;
+
+    /* If AOF fsync error in bio job, we just ignore it and log the event. */
+    int aof_bio_fsync_status;
+    atomicGet(g_pserver->aof_bio_fsync_status, aof_bio_fsync_status);
+    if (aof_bio_fsync_status == C_ERR) {
+        serverLog(LL_WARNING,
+            "AOF reopen, just ignore the AOF fsync error in bio job");
+        atomicSet(g_pserver->aof_bio_fsync_status,C_OK);
+    }
 
     /* If AOF was in error state, we just ignore it and log the event. */
     if (g_pserver->aof_last_write_status == C_ERR) {
@@ -1695,7 +1707,7 @@ int rewriteAppendOnlyFile(char *filename) {
     if (write(g_pserver->aof_pipe_write_ack_to_parent,"!",1) != 1) goto werr;
     if (anetNonBlock(NULL,g_pserver->aof_pipe_read_ack_from_parent) != ANET_OK)
         goto werr;
-    /* We read the ACK from the server using a 10 seconds timeout. Normally
+    /* We read the ACK from the server using a 5 seconds timeout. Normally
      * it should reply ASAP, but just in case we lose its reply, we are sure
      * the child will eventually get terminated. */
     if (syncRead(g_pserver->aof_pipe_read_ack_from_parent,&byte,1,5000) != 1 ||

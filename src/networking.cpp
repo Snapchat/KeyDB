@@ -1676,8 +1676,7 @@ int writeToClient(client *c, int handler_installed) {
 
     std::unique_lock<decltype(c->lock)> lock(c->lock);
    
-    /* if this is a write to a replica, it's coming straight from the replication backlog */        
-    long long repl_backlog_idx = g_pserver->repl_backlog_idx;
+
 
     while(clientHasPendingReplies(c)) {
         if (c->bufpos > 0) {
@@ -1742,6 +1741,9 @@ int writeToClient(client *c, int handler_installed) {
         c->transmittedRDB = true;
     }
 
+    /* if this is a write to a replica, it's coming straight from the replication backlog */        
+    long long repl_backlog_idx = g_pserver->repl_backlog_idx;
+
     /* For replicas, we don't store all the information in the client buffer
      * Most of the time (aside from immediately after synchronizing), we read
      * from the replication backlog directly */
@@ -1782,7 +1784,7 @@ int writeToClient(client *c, int handler_installed) {
         // }
 
 
-        if (nwritten == nrequested && g_pserver->repl_backlog_idx == c->repl_curr_idx){
+        if (nwritten == nrequested && g_pserver->repl_backlog_idx == repl_backlog_idx){
             c->repl_curr_idx = -1; /* -1 denotes no more replica writes */
         }
         else if (nwritten > 0)

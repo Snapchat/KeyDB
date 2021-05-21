@@ -71,7 +71,7 @@ void ziplistRandomPairs(unsigned char *zl, unsigned int count, ziplistEntry *key
 unsigned int ziplistRandomPairsUnique(unsigned char *zl, unsigned int count, ziplistEntry *keys, ziplistEntry *vals);
 
 #ifdef REDIS_TEST
-int ziplistTest(int argc, char *argv[]);
+int ziplistTest(int argc, char *argv[], int accurate);
 #endif
 
 #ifdef __cplusplus

@@ -231,8 +231,6 @@ typedef union typeData {
 typedef struct typeInterface {
     /* Called on server start, to init the server with default value */
     void (*init)(typeData data);
-    /* Called on server start, should return 1 on success, 0 on error and should set err */
-    int (*load)(typeData data, sds *argc, int argv, const char **err);
     /* Called on server startup and CONFIG SET, returns 1 on success, 0 on error
      * and can set a verbose err string, update is true when called from CONFIG SET */
     int (*set)(typeData data, sds value, int update, const char **err);
@@ -245,10 +243,15 @@ typedef struct typeInterface {
 typedef struct standardConfig {
     const char *name; /* The user visible name of this config */
     const char *alias; /* An alias that can also be used for this config */
-    const int modifiable; /* Can this value be updated by CONFIG SET? */
+    const unsigned int flags; /* Flags for this specific config */
     typeInterface interface; /* The function pointers that define the type interface */
     typeData data; /* The type specific data exposed used by the interface */
 } standardConfig;
+
+#define MODIFIABLE_CONFIG 0 /* This is the implied default for a standard 
+                             * config, which is mutable. */
+#define IMMUTABLE_CONFIG (1ULL<<0) /* Can this value only be set at startup? */
+#define SENSITIVE_CONFIG (1ULL<<1) /* Does this value contain sensitive information */
 
 extern standardConfig configs[];
 
@@ -692,6 +695,10 @@ void loadServerConfigFromString(char *config) {
         goto loaderr;
     }
 
+    /* To ensure backward compatibility and work while hz is out of range */
+    if (g_pserver->config_hz < CONFIG_MIN_HZ) g_pserver->config_hz = CONFIG_MIN_HZ;
+    if (g_pserver->config_hz > CONFIG_MAX_HZ) g_pserver->config_hz = CONFIG_MAX_HZ;
+
     sdsfreesplitres(lines,totlines);
     return;
 
@@ -788,9 +795,13 @@ void configSetCommand(client *c) {
 
     /* Iterate the configs that are standard */
     for (standardConfig *config = configs; config->name != NULL; config++) {
-        if(config->modifiable && (!strcasecmp(szFromObj(c->argv[2]),config->name) ||
+        if (!(config->flags & IMMUTABLE_CONFIG) && 
+            (!strcasecmp(szFromObj(c->argv[2]),config->name) ||
             (config->alias && !strcasecmp(szFromObj(c->argv[2]),config->alias))))
         {
+            if (config->flags & SENSITIVE_CONFIG) {
+                preventCommandLogging(c);
+            }
             if (!config->interface.set(config->data,szFromObj(o),1,&errstr)) {
                 goto badfmt;
             }
@@ -1482,15 +1493,20 @@ void rewriteConfigSaveOption(struct rewriteConfigState *state) {
         return;
     }
 
-    /* Note that if there are no save parameters at all, all the current
-     * config line with "save" will be detected as orphaned and deleted,
-     * resulting into no RDB persistence as expected. */
-    for (j = 0; j < g_pserver->saveparamslen; j++) {
-        line = sdscatprintf(sdsempty(),"save %ld %d",
-            (long) g_pserver->saveparams[j].seconds, g_pserver->saveparams[j].changes);
-        rewriteConfigRewriteLine(state,"save",line,1);
+    /* Rewrite save parameters, or an empty 'save ""' line to avoid the
+     * defaults from being used.
+     */
+    if (!g_pserver->saveparamslen) {
+        rewriteConfigRewriteLine(state,"save",sdsnew("save \"\""),1);
+    } else {
+        for (j = 0; j < g_pserver->saveparamslen; j++) {
+            line = sdscatprintf(sdsempty(),"save %ld %d",
+                (long) g_pserver->saveparams[j].seconds, g_pserver->saveparams[j].changes);
+            rewriteConfigRewriteLine(state,"save",line,1);
+        }
     }
-    /* Mark "save" as processed in case g_pserver->saveparamslen is zero. */
+
+    /* Mark "save" as processed in case server.saveparamslen is zero. */
     rewriteConfigMarkAsProcessed(state,"save");
 }
 
@@ -1833,14 +1849,11 @@ int rewriteConfig(char *path, int force_all) {
 #define LOADBUF_SIZE 256
 static char loadbuf[LOADBUF_SIZE];
 
-#define MODIFIABLE_CONFIG 1
-#define IMMUTABLE_CONFIG 0
-
-#define embedCommonConfig(config_name, config_alias, is_modifiable) \
-    config_name, config_alias, is_modifiable,
+#define embedCommonConfig(config_name, config_alias, config_flags) \
+    config_name, config_alias, config_flags,
 
 #define embedConfigInterface(initfn, setfn, getfn, rewritefn) { \
-    initfn, nullptr, setfn, getfn, rewritefn, \
+    initfn, setfn, getfn, rewritefn, \
 },
 
 /* What follows is the generic config types that are supported. To add a new
@@ -1887,11 +1900,11 @@ static void boolConfigRewrite(typeData data, const char *name, struct rewriteCon
     rewriteConfigYesNoOption(state, name,*(data.yesno.config), data.yesno.default_value);
 }
 
-constexpr standardConfig createBoolConfig(const char *name, const char *alias, int modifiable, int &config_addr, int defaultValue, int (*is_valid)(int val, const char **err), int (*update)(int val, int prev, const char **err))
+constexpr standardConfig createBoolConfig(const char *name, const char *alias, unsigned flags, int &config_addr, int defaultValue, int (*is_valid)(int val, const char **err), int (*update)(int val, int prev, const char **err))
 {
     standardConfig conf = {
-        embedCommonConfig(name, alias, modifiable)
-        { boolConfigInit, nullptr, boolConfigSet, boolConfigGet, boolConfigRewrite }
+        embedCommonConfig(name, alias, flags)
+        { boolConfigInit, boolConfigSet, boolConfigGet, boolConfigRewrite }
     };
     conf.data.yesno.config = &config_addr;
     conf.data.yesno.default_value = defaultValue;
@@ -1962,9 +1975,9 @@ static void sdsConfigRewrite(typeData data, const char *name, struct rewriteConf
 #define ALLOW_EMPTY_STRING 0
 #define EMPTY_STRING_IS_NULL 1
 
-constexpr standardConfig createStringConfig(const char *name, const char *alias, int modifiable, int empty_to_null, char *&config_addr, const char *defaultValue, int (*is_valid)(char*,const char**), int (*update)(char*,char*,const char**)) {
+constexpr standardConfig createStringConfig(const char *name, const char *alias, unsigned flags, int empty_to_null, char *&config_addr, const char *defaultValue, int (*is_valid)(char*,const char**), int (*update)(char*,char*,const char**)) {
     standardConfig conf = {
-        embedCommonConfig(name, alias, modifiable)
+        embedCommonConfig(name, alias, flags)
         embedConfigInterface(stringConfigInit, stringConfigSet, stringConfigGet, stringConfigRewrite)
     };
     conf.data.string = {
@@ -1977,9 +1990,9 @@ constexpr standardConfig createStringConfig(const char *name, const char *alias,
     return conf;
 }
 
-constexpr standardConfig createSDSConfig(const char *name, const char *alias, int modifiable, int empty_to_null, sds &config_addr, const char *defaultValue, int (*is_valid)(char*,const char**), int (*update)(char*,char*,const char**)) {
+constexpr standardConfig createSDSConfig(const char *name, const char *alias, unsigned flags, int empty_to_null, sds &config_addr, const char *defaultValue, int (*is_valid)(char*,const char**), int (*update)(char*,char*,const char**)) {
     standardConfig conf = {
-        embedCommonConfig(name, alias, modifiable)
+        embedCommonConfig(name, alias, flags)
         embedConfigInterface(sdsConfigInit, sdsConfigSet, sdsConfigGet, sdsConfigRewrite)
     };
     conf.data.sds = {
@@ -2036,9 +2049,9 @@ static void enumConfigRewrite(typeData data, const char *name, struct rewriteCon
     rewriteConfigEnumOption(state, name,*(data.enumd.config), data.enumd.enum_value, data.enumd.default_value);
 }
 
-constexpr standardConfig createEnumConfig(const char *name, const char *alias, int modifiable, configEnum *enumVal, int &config_addr, int defaultValue, int (*is_valid)(int,const char**), int (*update)(int,int,const char**)) {
+constexpr standardConfig createEnumConfig(const char *name, const char *alias, unsigned flags, configEnum *enumVal, int &config_addr, int defaultValue, int (*is_valid)(int,const char**), int (*update)(int,int,const char**)) {
     standardConfig c = {
-        embedCommonConfig(name, alias, modifiable)
+        embedCommonConfig(name, alias, flags)
         embedConfigInterface(enumConfigInit, enumConfigSet, enumConfigGet, enumConfigRewrite)
     };
     c.data.enumd = {
@@ -2194,9 +2207,9 @@ static void numericConfigRewrite(typeData data, const char *name, struct rewrite
 #define INTEGER_CONFIG 0
 #define MEMORY_CONFIG 1
 
-constexpr standardConfig embedCommonNumericalConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+constexpr standardConfig embedCommonNumericalConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
     standardConfig conf = {
-        embedCommonConfig(name, alias, modifiable)
+        embedCommonConfig(name, alias, flags)
         embedConfigInterface(numericConfigInit, numericConfigSet, numericConfigGet, numericConfigRewrite)
     };
     conf.data.numeric.is_memory = (memory);
@@ -2208,73 +2221,73 @@ constexpr standardConfig embedCommonNumericalConfig(const char *name, const char
     return conf;
 }
 
-constexpr standardConfig createIntConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, int &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**))
+constexpr standardConfig createIntConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, int &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**))
 {
-    standardConfig conf =  embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+    standardConfig conf =  embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_INT;
     conf.data.numeric.config.i = &config_addr;
     return conf;
 }
 
-constexpr standardConfig createUIntConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, unsigned int &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**))
+constexpr standardConfig createUIntConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, unsigned int &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**))
 {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_UINT;
     conf.data.numeric.config.ui = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createLongConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createLongConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_LONG;
     conf.data.numeric.config.l = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createULongConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, unsigned long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createULongConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, unsigned long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_ULONG;
     conf.data.numeric.config.ul = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createLongLongConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, long long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createLongLongConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, long long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_LONG_LONG;
     conf.data.numeric.config.ll = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createULongLongConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, unsigned long long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createULongLongConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, unsigned long long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_ULONG_LONG;
     conf.data.numeric.config.ull = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createSizeTConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, size_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createSizeTConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, size_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_SIZE_T;
     conf.data.numeric.config.st = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createSSizeTConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, ssize_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createSSizeTConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, ssize_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_SSIZE_T;
     conf.data.numeric.config.sst = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createTimeTConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, time_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createTimeTConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, time_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_TIME_T;
     conf.data.numeric.config.tt = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createOffTConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, off_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createOffTConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, off_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_OFF_T;
     conf.data.numeric.config.ot = &(config_addr);
     return conf;
@@ -2614,13 +2627,15 @@ standardConfig configs[] = {
     createBoolConfig("crash-memcheck-enabled", NULL, MODIFIABLE_CONFIG, g_pserver->memcheck_enabled, 1, NULL, NULL),
     createBoolConfig("use-exit-on-panic", NULL, MODIFIABLE_CONFIG, g_pserver->use_exit_on_panic, 0, NULL, NULL),
     createBoolConfig("disable-thp", NULL, MODIFIABLE_CONFIG, g_pserver->disable_thp, 1, NULL, NULL),
+    createBoolConfig("cluster-allow-replica-migration", NULL, MODIFIABLE_CONFIG, g_pserver->cluster_allow_replica_migration, 1, NULL, NULL),
+    createBoolConfig("replica-announced", NULL, MODIFIABLE_CONFIG, g_pserver->replica_announced, 1, NULL, NULL),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->acl_filename, "", NULL, NULL),
     createStringConfig("unixsocket", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->unixsocket, NULL, NULL, NULL),
     createStringConfig("pidfile", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, cserver.pidfile, NULL, NULL, NULL),
     createStringConfig("replica-announce-ip", "slave-announce-ip", MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->slave_announce_ip, NULL, NULL, NULL),
-    createStringConfig("masteruser", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, cserver.default_masteruser, NULL, NULL, updateMasterAuthConfig),
+    createStringConfig("masteruser", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, cserver.default_masteruser, NULL, NULL, updateMasterAuthConfig),
     createStringConfig("cluster-announce-ip", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->cluster_announce_ip, NULL, NULL, NULL),
     createStringConfig("syslog-ident", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->syslog_ident, "redis", NULL, NULL),
     createStringConfig("dbfilename", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->rdb_filename, CONFIG_DEFAULT_RDB_FILENAME, isValidDBfilename, NULL),
@@ -2633,8 +2648,8 @@ standardConfig configs[] = {
     createStringConfig("proc-title-template", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, cserver.proc_title_template, CONFIG_DEFAULT_PROC_TITLE_TEMPLATE, isValidProcTitleTemplate, updateProcTitleTemplate),
 
     /* SDS Configs */
-    createSDSConfig("masterauth", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, cserver.default_masterauth, NULL, NULL, updateMasterAuthConfig),
-    createSDSConfig("requirepass", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->requirepass, NULL, NULL, updateRequirePass),
+    createSDSConfig("masterauth", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, cserver.default_masterauth, NULL, NULL, updateMasterAuthConfig),
+    createSDSConfig("requirepass", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->requirepass, NULL, NULL, updateRequirePass),
 
     /* Enum Configs */
     createEnumConfig("supervised", NULL, IMMUTABLE_CONFIG, supervised_mode_enum, cserver.supervised_mode, SUPERVISED_NONE, NULL, NULL),
@@ -2644,7 +2659,7 @@ standardConfig configs[] = {
     createEnumConfig("maxmemory-policy", NULL, MODIFIABLE_CONFIG, maxmemory_policy_enum, g_pserver->maxmemory_policy, MAXMEMORY_NO_EVICTION, NULL, NULL),
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, g_pserver->aof_fsync, AOF_FSYNC_EVERYSEC, NULL, NULL),
     createEnumConfig("oom-score-adj", NULL, MODIFIABLE_CONFIG, oom_score_adj_enum, g_pserver->oom_score_adj, OOM_SCORE_ADJ_NO, NULL, updateOOMScoreAdj),
-    createEnumConfig("acl-pubsub-default", NULL, MODIFIABLE_CONFIG, acl_pubsub_default_enum, g_pserver->acl_pubusub_default, USER_FLAG_ALLCHANNELS, NULL, NULL),
+    createEnumConfig("acl-pubsub-default", NULL, MODIFIABLE_CONFIG, acl_pubsub_default_enum, g_pserver->acl_pubsub_default, USER_FLAG_ALLCHANNELS, NULL, NULL),
     createEnumConfig("sanitize-dump-payload", NULL, MODIFIABLE_CONFIG, sanitize_dump_payload_enum, cserver.sanitize_dump_payload, SANITIZE_DUMP_NO, NULL, NULL),
 
     /* Integer configs */
@@ -2670,6 +2685,7 @@ standardConfig configs[] = {
     createIntConfig("tcp-backlog", NULL, IMMUTABLE_CONFIG, 0, INT_MAX, g_pserver->tcp_backlog, 511, INTEGER_CONFIG, NULL, NULL), /* TCP listen backlog. */
     createIntConfig("cluster-announce-bus-port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->cluster_announce_bus_port, 0, INTEGER_CONFIG, NULL, NULL), /* Default: Use +10000 offset. */
     createIntConfig("cluster-announce-port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->cluster_announce_port, 0, INTEGER_CONFIG, NULL, NULL), /* Use g_pserver->port */
+    createIntConfig("cluster-announce-tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->cluster_announce_tls_port, 0, INTEGER_CONFIG, NULL, NULL), /* Use server.tls_port */
     createIntConfig("repl-timeout", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, g_pserver->repl_timeout, 60, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("repl-ping-replica-period", "repl-ping-slave-period", MODIFIABLE_CONFIG, 1, INT_MAX, g_pserver->repl_ping_slave_period, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("list-compress-depth", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->list_compress_depth, 0, INTEGER_CONFIG, NULL, NULL),
@@ -2734,8 +2750,10 @@ standardConfig configs[] = {
     createBoolConfig("tls-session-caching", NULL, MODIFIABLE_CONFIG, server.tls_ctx_config.session_caching, 1, NULL, updateTlsCfgBool),
     createStringConfig("tls-cert-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.cert_file, NULL, NULL, updateTlsCfg),
     createStringConfig("tls-key-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.key_file, NULL, NULL, updateTlsCfg),
+    createStringConfig("tls-key-file-pass", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.key_file_pass, NULL, NULL, updateTlsCfg),
     createStringConfig("tls-client-cert-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.client_cert_file, NULL, NULL, updateTlsCfg),
     createStringConfig("tls-client-key-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.client_key_file, NULL, NULL, updateTlsCfg),
+    createStringConfig("tls-client-key-file-pass", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.client_key_file_pass, NULL, NULL, updateTlsCfg),
     createStringConfig("tls-dh-params-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.dh_params_file, NULL, NULL, updateTlsCfg),
     createStringConfig("tls-ca-cert-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.ca_cert_file, NULL, NULL, updateTlsCfg),
     createStringConfig("tls-ca-cert-dir", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.ca_cert_dir, NULL, NULL, updateTlsCfg),

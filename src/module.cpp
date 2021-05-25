@@ -568,6 +568,19 @@ int moduleDelKeyIfEmpty(RedisModuleKey *key) {
     }
 }
 
+/* This function is used to set the thread local variables (serverTL) for 
+ * arbitrary module threads. All incoming module threads share the same set of 
+ * thread local variables (modulethreadvar).
+ *
+ * This is needed as some KeyDB functions use thread local variables to do things,
+ * and we don't want to share the thread local variables of existing server threads */
+void moduleSetThreadVariablesIfNeeded(void) {
+    if (serverTL == nullptr) {
+        serverTL = &g_pserver->modulethreadvar; 
+        g_fModuleThread = true;
+    }
+}
+
 /* --------------------------------------------------------------------------
  * Service API exported to modules
  *
@@ -2113,6 +2126,7 @@ int RM_GetContextFlags(RedisModuleCtx *ctx) {
  * periodically in timer callbacks or other periodic callbacks.
  */
 int RM_AvoidReplicaTraffic() {
+    moduleSetThreadVariablesIfNeeded();
     return clientsArePaused();
 }
 
@@ -2181,9 +2195,11 @@ void *RM_OpenKey(RedisModuleCtx *ctx, robj *keyname, int mode) {
 /* Destroy a RedisModuleKey struct (freeing is the responsibility of the caller). */
 static void moduleCloseKey(RedisModuleKey *key) {
     int signal = SHOULD_SIGNAL_MODIFIED_KEYS(key->ctx);
+    moduleAcquireGIL(false);
     if ((key->mode & REDISMODULE_WRITE) && signal)
         signalModifiedKey(key->ctx->client,key->db,key->key);
     /* TODO: if (key->iter) RM_KeyIteratorStop(kp); */
+    moduleReleaseGIL(false);
     RM_ZsetRangeStop(key);
     decrRefCount(key->key);
 }
@@ -4773,10 +4789,7 @@ int moduleClientIsBlockedOnKeys(client *c) {
  * RedisModule_BlockClientOnKeys() is accessible from the timeout
  * callback via RM_GetBlockedClientPrivateData). */
 int RM_UnblockClient(RedisModuleBlockedClient *bc, void *privdata) {
-    if (serverTL == nullptr) {
-        serverTL = &g_pserver->modulethreadvar; 
-        g_fModuleThread = true;
-    }
+    moduleSetThreadVariablesIfNeeded();
     if (bc->blocked_on_keys) {
         /* In theory the user should always pass the timeout handler as an
          * argument, but better to be safe than sorry. */
@@ -5056,10 +5069,7 @@ void RM_FreeThreadSafeContext(RedisModuleCtx *ctx) {
  * a blocked client connected to the thread safe context. */
 void RM_ThreadSafeContextLock(RedisModuleCtx *ctx) {
     UNUSED(ctx);
-    if (serverTL == nullptr) {
-        serverTL = &g_pserver->modulethreadvar;
-        g_fModuleThread = true;
-    }
+    moduleSetThreadVariablesIfNeeded();
     moduleAcquireGIL(FALSE /*fServerThread*/, true /*fExclusive*/);
 }
 

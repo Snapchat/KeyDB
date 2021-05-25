@@ -81,7 +81,8 @@ struct bio_job {
     /* Job specific arguments.*/
     int fd; /* Fd for file based background jobs */
     lazy_free_fn *free_fn; /* Function that will free the provided arguments */
-    void *free_args[]; /* List of arguments to be passed to the free function */
+    void ** free_args() { return reinterpret_cast<void**>(this+1); } /* List of arguments to be passed to the free function */
+    void set_free_arg(int i, void *arg) { reinterpret_cast<void**>(this+1)[i] = arg; }
 };
 
 void *bioProcessBackgroundJobs(void *arg);
@@ -144,7 +145,7 @@ void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...) {
 
     va_start(valist, arg_count);
     for (int i = 0; i < arg_count; i++) {
-        job->free_args[i] = va_arg(valist, void *);
+        job->set_free_arg(i, va_arg(valist, void *));
     }
     va_end(valist);
     bioSubmitJob(BIO_LAZY_FREE, job);
@@ -238,7 +239,7 @@ void *bioProcessBackgroundJobs(void *arg) {
                 atomicSet(g_pserver->aof_bio_fsync_status,C_OK);
             }
         } else if (type == BIO_LAZY_FREE) {
-            job->free_fn(job->free_args);
+            job->free_fn(job->free_args());
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

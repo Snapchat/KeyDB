@@ -1895,6 +1895,31 @@ void replicationCreateMasterClient(redisMaster *mi, connection *conn, int dbid) 
     if (dbid != -1) selectDb(mi->master,dbid);
 }
 
+void replicationCreateCachedMasterClone(redisMaster *mi) {
+    serverAssert(mi->master != nullptr);
+    serverLog(LL_NOTICE, "Creating cache clone of our master");
+    client *c = createClient(nullptr, ielFromEventLoop(serverTL->el));
+
+    c->flags |= mi->master->flags;
+    c->authenticated = mi->master->authenticated;
+    c->reploff = mi->master->reploff;
+    c->read_reploff = mi->master->read_reploff;
+    c->user = mi->master->user;
+
+    memcpy(c->uuid, mi->master->uuid, UUID_BINARY_LEN);
+    memcpy(c->replid, mi->master->replid,
+        sizeof(mi->master->replid));
+    selectDb(c, mi->master->db->id);
+
+    // Free the old one
+    mi->master->flags &= ~CLIENT_MASTER;
+    freeClientAsync(mi->master);
+
+    // Now make this one the cache
+    mi->master = c;
+    replicationCacheMaster(mi, c);
+}
+
 /* This function will try to re-enable the AOF file after the
  * master-replica synchronization: if it fails after multiple attempts
  * the replica cannot be considered reliable and exists with an
@@ -2708,6 +2733,10 @@ void syncWithMaster(connection *conn) {
     int psync_result;
 
     redisMaster *mi = (redisMaster*)connGetPrivateData(conn);
+    if (mi == nullptr) {
+        // We're about to be closed, bail
+        return;
+    }
 
     /* If this event fired after the user turned the instance into a master
      * with SLAVEOF NO ONE we must just return ASAP. */
@@ -3066,6 +3095,7 @@ write_error: /* Handle sendCommand() errors. */
 int connectWithMaster(redisMaster *mi) {
     serverAssert(mi->master == nullptr);
     mi->repl_transfer_s = g_pserver->tls_replication ? connCreateTLS() : connCreateSocket();
+    mi->ielReplTransfer = serverTL - g_pserver->rgthreadvar;
     connSetPrivateData(mi->repl_transfer_s, mi);
     if (connConnect(mi->repl_transfer_s, mi->masterhost, mi->masterport,
                 NET_FIRST_BIND_ADDR, syncWithMaster) == C_ERR) {
@@ -3089,7 +3119,11 @@ int connectWithMaster(redisMaster *mi) {
  * Never call this function directly, use cancelReplicationHandshake() instead.
  */
 void undoConnectWithMaster(redisMaster *mi) {
-    connClose(mi->repl_transfer_s);
+    auto conn = mi->repl_transfer_s;
+    connSetPrivateData(conn, nullptr);
+    aePostFunction(g_pserver->rgthreadvar[mi->ielReplTransfer].el, [conn]{
+        connClose(conn);
+    });
     mi->repl_transfer_s = NULL;
 }
 
@@ -3171,9 +3205,17 @@ struct redisMaster *replicationAddMaster(char *ip, int port) {
     sdsfree(mi->masterhost);
     mi->masterhost = nullptr;
     if (mi->master) {
-        freeClientAsync(mi->master);
-        mi->master = nullptr;
+        if (FCorrectThread(mi->master)) {
+            // This will cache the master and do all that fancy stuff
+            if (!freeClient(mi->master) && mi->master)
+                replicationCreateCachedMasterClone(mi);
+        } else {
+            // We're not on the same thread so we can't use the freeClient method, instead we have to clone the master
+            //  and cache that clone
+            replicationCreateCachedMasterClone(mi);
+        }
     }
+    serverAssert(mi->master == nullptr);
     if (!g_pserver->fActiveReplica)
         disconnectAllBlockedClients(); /* Clients blocked in master, now replica. */
 
@@ -3248,10 +3290,15 @@ void replicationUnsetMaster(redisMaster *mi) {
     sdsfree(mi->masterhost);
     mi->masterhost = NULL;
     if (mi->master) {
-        if (FCorrectThread(mi->master))
-            freeClient(mi->master);
-        else
-            freeClientAsync(mi->master);
+        if (FCorrectThread(mi->master)) {
+            // This will cache the master and do all that fancy stuff
+            if (!freeClient(mi->master) && mi->master)
+                replicationCreateCachedMasterClone(mi);
+        } else {
+            // We're not on the same thread so we can't use the freeClient method, instead we have to clone the master
+            //  and cache that clone
+            replicationCreateCachedMasterClone(mi);
+        }
     }
     replicationDiscardCachedMaster(mi);
     cancelReplicationHandshake(mi,false);
@@ -3666,7 +3713,8 @@ void replicationResurrectCachedMaster(redisMaster *mi, connection *conn) {
     /* Re-add to the list of clients. */
     linkClient(mi->master);
     serverAssert(connGetPrivateData(mi->master->conn) == mi->master);
-    serverAssert(mi->master->iel == ielFromEventLoop(serverTL->el));
+    serverAssert(mi->master->conn == conn);
+    AssertCorrectThread(mi->master);
     if (connSetReadHandler(mi->master->conn, readQueryFromClient, true)) {
         serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the readable handler: %s", strerror(errno));
         freeClientAsync(mi->master); /* Close ASAP. */
@@ -4002,10 +4050,15 @@ void replicationCron(void) {
             (time(NULL)-mi->master->lastinteraction) > g_pserver->repl_timeout)
         {
             serverLog(LL_WARNING,"MASTER timeout: no data nor PING received...");
-            if (FCorrectThread(mi->master))
-                freeClient(mi->master);
-            else
-                freeClientAsync(mi->master);
+            if (FCorrectThread(mi->master)) {
+            // This will cache the master and do all that fancy stuff
+                if (!freeClient(mi->master) && mi->master)
+                    replicationCreateCachedMasterClone(mi);
+            } else {
+                // We're not on the same thread so we can't use the freeClient method, instead we have to clone the master
+                //  and cache that clone
+                replicationCreateCachedMasterClone(mi);
+            }
         }
 
         /* Check if we should connect to a MASTER */

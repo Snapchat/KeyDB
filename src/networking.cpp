@@ -295,9 +295,6 @@ int prepareClientToWrite(client *c) {
     /* If CLIENT_CLOSE_ASAP flag is set, we need not write anything. */
     if (c->flags & CLIENT_CLOSE_ASAP) return C_ERR;
 
-    /* If CLIENT_CLOSE_ASAP flag is set, we need not write anything. */
-    if (c->flags & CLIENT_CLOSE_ASAP) return C_ERR;
-
     /* CLIENT REPLY OFF / SKIP handling: don't send replies. */
     if (flags & (CLIENT_REPLY_OFF|CLIENT_REPLY_SKIP)) return C_ERR;
 
@@ -1980,9 +1977,6 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
         if (flags & CLIENT_PROTECTED) continue;
 
         std::unique_lock<decltype(c->lock)> lock(c->lock);
-
-        /* Don't write to clients that are going to be closed anyway. */
-        if (c->flags & CLIENT_CLOSE_ASAP) continue;
 
         /* Don't write to clients that are going to be closed anyway. */
         if (c->flags & CLIENT_CLOSE_ASAP) continue;

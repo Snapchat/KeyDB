@@ -1528,6 +1528,7 @@ struct redisMaster {
     uint64_t mvccLastSync;
     /* During a handshake the server may have stale keys, we track these here to share once a reciprocal connection is made */
     std::map<int, std::vector<robj_sharedptr>> *staleKeyMap;
+    int ielReplTransfer = -1;
 };
 
 // Const vars are not changed after worker threads are launched
@@ -2406,6 +2407,7 @@ void replicationCron(void);
 void replicationStartPendingFork(void);
 void replicationHandleMasterDisconnection(struct redisMaster *mi);
 void replicationCacheMaster(struct redisMaster *mi, client *c);
+void replicationCreateCachedMasterClone(redisMaster *mi);
 void resizeReplicationBacklog(long long newsize);
 struct redisMaster *replicationAddMaster(char *ip, int port);
 void replicationUnsetMaster(struct redisMaster *mi);

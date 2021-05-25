@@ -743,11 +743,10 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
 void setDeferredAggregateLen(client *c, void *node, long length, char prefix) {
     serverAssert(length >= 0);
 
-    /* Abort when *node is NULL: when the client should not accept writes
-     * we return NULL in addReplyDeferredLen() */
-    if (node == NULL) return;
-
     if (FCorrectThread(c)) {
+        /* Abort when *node is NULL: when the client should not accept writes
+         * we return NULL in addReplyDeferredLen() */
+        if (node == NULL) return;
         char lenstr[128];
         size_t lenstr_len = sprintf(lenstr, "%c%ld\r\n", prefix, length);
         setDeferredReply(c, node, lenstr, lenstr_len);

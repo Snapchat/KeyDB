@@ -2590,7 +2590,7 @@ static int updateTLSPort(long long val, long long prev, const char **err) {
         if  (ithread == serverTL - g_pserver->rgthreadvar)
             continue;   // we already did our thread
         aePostFunction(g_pserver->rgthreadvar[ithread].el, [val]{
-            const char **err;
+            const char **err = nullptr;
             if (!updateTLSPortThread(val, false /*fFirstCall*/, err)) {
                 serverLog(LL_WARNING, "Failed to update TLS port for a thread: %s", *err);
                 serverLog(LL_WARNING, "\tKeyDB will still be listening on the old port for some threads.");

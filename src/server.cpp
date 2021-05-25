@@ -2614,11 +2614,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * visit processCommand() at all). */
     handleClientsBlockedOnKeys();
 
-    /* Try to process blocked clients every once in while. Example: A module
-     * calls RM_SignalKeyAsReady from within a timer callback (So we don't
-     * visit processCommand() at all). */
-    handleClientsBlockedOnKeys();
-
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. Redis main thread will not touch anything at this
      * time. */

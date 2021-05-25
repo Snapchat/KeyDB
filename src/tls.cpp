@@ -233,7 +233,7 @@ void tlsCleanup(void) {
 static int tlsPasswordCallback(char *buf, int size, int rwflag, void *u) {
     UNUSED(rwflag);
 
-    const char *pass = u;
+    const char *pass = (const char*)u;
     size_t pass_len;
 
     if (!pass) return -1;
@@ -253,7 +253,6 @@ static SSL_CTX *createSSLContext(redisTLSContextConfig *ctx_config, int protocol
     const char *key_file_pass = client ? ctx_config->client_key_file_pass : ctx_config->key_file_pass;
     char errbuf[256];
     SSL_CTX *ctx = NULL;
-    int protocols;
 
     ctx = SSL_CTX_new(SSLv23_method());
 
@@ -331,6 +330,7 @@ int tlsConfigure(redisTLSContextConfig *ctx_config) {
     char errbuf[256];
     SSL_CTX *ctx = NULL;
     SSL_CTX *client_ctx = NULL;
+    int protocols;
 
     if (!ctx_config->cert_file) {
         serverLog(LL_WARNING, "No tls-cert-file configured!");
@@ -342,13 +342,13 @@ int tlsConfigure(redisTLSContextConfig *ctx_config) {
         goto error;
     }
 
-    if (((server.tls_auth_clients != TLS_CLIENT_AUTH_NO) || server.tls_cluster || server.tls_replication) &&
+    if (((g_pserver->tls_auth_clients != TLS_CLIENT_AUTH_NO) || g_pserver->tls_cluster || g_pserver->tls_replication) &&
             !ctx_config->ca_cert_file && !ctx_config->ca_cert_dir) {
         serverLog(LL_WARNING, "Either tls-ca-cert-file or tls-ca-cert-dir must be specified when tls-cluster, tls-replication or tls-auth-clients are enabled!");
         goto error;
     }
 
-    int protocols = parseProtocolsConfig(ctx_config->protocols);
+    protocols = parseProtocolsConfig(ctx_config->protocols);
     if (protocols == -1) goto error;
 
     /* Create server side/generla context */
@@ -359,7 +359,7 @@ int tlsConfigure(redisTLSContextConfig *ctx_config) {
         SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_SERVER);
         SSL_CTX_sess_set_cache_size(ctx, ctx_config->session_cache_size);
         SSL_CTX_set_timeout(ctx, ctx_config->session_cache_timeout);
-        SSL_CTX_set_session_id_context(ctx, (void *) "redis", 5);
+        SSL_CTX_set_session_id_context(ctx, (const unsigned char *) "KeyDB", 5);
     } else {
         SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
     }
@@ -413,6 +413,7 @@ int tlsConfigure(redisTLSContextConfig *ctx_config) {
     SSL_CTX_free(redis_tls_client_ctx);
     redis_tls_ctx = ctx;
     redis_tls_client_ctx = client_ctx;
+    }
 
     return C_OK;
 
@@ -494,14 +495,6 @@ static void updateTLSError(tls_connection *conn) {
 
 connection *connCreateTLS(void) {
     return createTLSConnection(1);
-}
-
-/* Fetch the latest OpenSSL error and store it in the connection */
-static void updateTLSError(tls_connection *conn) {
-    conn->c.last_errno = 0;
-    if (conn->ssl_error) zfree(conn->ssl_error);
-    conn->ssl_error = zmalloc(512);
-    ERR_error_string_n(ERR_get_error(), conn->ssl_error, 512);
 }
 
 /* Create a new TLS connection that is already associated with

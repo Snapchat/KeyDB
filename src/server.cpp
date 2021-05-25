@@ -2511,9 +2511,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * events to handle. */
     if (ProcessingEventsWhileBlocked) {
         uint64_t processed = 0;
-        processed += tlsProcessPendingData();
         int aof_state = g_pserver->aof_state;
         locker.disarm();
+        processed += tlsProcessPendingData();
         processed += handleClientsWithPendingWrites(iel, aof_state);
         locker.arm();
         processed += freeClientsInAsyncFreeQueue(iel);

@@ -441,6 +441,8 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
 
     g_pserver->master_repl_offset += len;
 
+    
+
     /* This is a circular buffer, so write as much data we can at every
      * iteration and rewind the "idx" index if we reach the limit. */
     while(len) {
@@ -4659,11 +4661,14 @@ void flushReplBacklogToClients()
             
 
 #ifdef BYPASS_BUFFER
-            /* If we are online and the RDB has been sent, there is no need to feed the client buffer
-             * We will send our replies directly from the replication backlog instead */
-            if (replica->replstate == SLAVE_STATE_ONLINE && replica->transmittedRDB){
-                setReplIdx(replica, g_pserver->repl_batch_idxStart, g_pserver->repl_batch_offStart);
-                continue;
+            {
+                /* If we are online and the RDB has been sent, there is no need to feed the client buffer
+                * We will send our replies directly from the replication backlog instead */
+                std::unique_lock<fastlock> tRDBLock (replica->transmittedRDBLock);
+                if (replica->replstate == SLAVE_STATE_ONLINE && replica->transmittedRDB){
+                    setReplIdx(replica, g_pserver->repl_batch_idxStart, g_pserver->repl_batch_offStart);
+                    continue;
+                }
             }
 #endif
             if (g_pserver->repl_backlog_idx >= g_pserver->repl_batch_idxStart) {

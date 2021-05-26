@@ -2740,6 +2740,7 @@ sds getAllClientsInfoString(int type) {
     while ((ln = listNext(&li)) != NULL) {
         client = reinterpret_cast<struct client*>(listNodeValue(ln));
         std::unique_lock<decltype(client->lock)> lock(client->lock);
+        if (client->flags & CLIENT_CLOSE_ASAP) continue;
         if (type != -1 && getClientType(client) != type) continue;
         o = catClientInfoString(o,client);
         o = sdscatlen(o,"\n",1);

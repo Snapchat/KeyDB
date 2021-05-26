@@ -319,6 +319,7 @@ void _clientAsyncReplyBufferReserve(client *c, size_t len) {
     clientReplyBlock *replyNew = (clientReplyBlock*)zmalloc(sizeof(clientReplyBlock) + newsize);
     replyNew->size = zmalloc_usable(replyNew) - sizeof(clientReplyBlock);
     replyNew->used = 0;
+    std::unique_lock<fastlock> tRDBLock (c->transmittedRDBLock);
     c->replyAsync = replyNew;
 }
 
@@ -332,6 +333,7 @@ int _addReplyToBuffer(client *c, const char *s, size_t len) {
     if (fAsync)
     {
         serverAssert(GlobalLocksAcquired());
+        std::unique_lock<fastlock> tRDBLock (c->transmittedRDBLock);
         if (c->replyAsync == nullptr || (c->replyAsync->size - c->replyAsync->used) < len)
         {
             if (c->replyAsync == nullptr) {
@@ -1737,9 +1739,14 @@ int writeToClient(client *c, int handler_installed) {
     /* If there are no more pending replies, then we have transmitted the RDB.
      * This means further replication commands will be taken straight from the
      * replication backlog from now on. */
+
+    std::unique_lock<fastlock> tRDBLock (c->transmittedRDBLock);
+
     if (c->flags & CLIENT_SLAVE && c->replstate == SLAVE_STATE_ONLINE && !clientHasPendingReplies(c) && c->replyAsync == nullptr){
         c->transmittedRDB = true;
     }
+    bool transmittedRDB = c->transmittedRDB;
+    tRDBLock.unlock();
 
     /* if this is a write to a replica, it's coming straight from the replication backlog */        
     long long repl_backlog_idx = g_pserver->repl_backlog_idx;
@@ -1747,7 +1754,7 @@ int writeToClient(client *c, int handler_installed) {
     /* For replicas, we don't store all the information in the client buffer
      * Most of the time (aside from immediately after synchronizing), we read
      * from the replication backlog directly */
-    if (c->flags & CLIENT_SLAVE && c->repl_curr_idx != -1 && c->transmittedRDB){
+    if (c->flags & CLIENT_SLAVE && c->repl_curr_idx != -1 && transmittedRDB){
         /* copy global variables into local scope so if they change in between we don't care */
         long long repl_backlog_size = g_pserver->repl_backlog_size;
         long long nwrittenPart2 = 0;
@@ -1874,6 +1881,7 @@ void ProcessPendingAsyncWrites()
         serverAssert(c->fPendingAsyncWrite);
         if (c->flags & (CLIENT_CLOSE_ASAP | CLIENT_CLOSE_AFTER_REPLY))
         {
+            std::unique_lock<fastlock> tRDBLock (c->transmittedRDBLock);
             if (c->replyAsync != nullptr){
                 zfree(c->replyAsync);
                 c->replyAsync = nullptr;
@@ -1885,6 +1893,7 @@ void ProcessPendingAsyncWrites()
         /* since writes from master to replica can come directly from the replication backlog,
          * writes may have been signalled without having been copied to the replyAsync buffer,
          * thus causing the buffer to be NULL */ 
+        std::unique_lock<fastlock> tRDBLock (c->transmittedRDBLock);
         if (c->replyAsync != nullptr){
             int size = c->replyAsync->used;
 
@@ -1905,7 +1914,7 @@ void ProcessPendingAsyncWrites()
         }
 
         c->fPendingAsyncWrite = FALSE;
-
+        tRDBLock.unlock();
         // Now install the write event handler
         int ae_flags = AE_WRITABLE|AE_WRITE_THREADSAFE;
         /* For the fsync=always policy, we want that a given FD is never

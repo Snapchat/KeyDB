@@ -834,10 +834,7 @@ int masterTryPartialResynchronization(client *c) {
         buflen = snprintf(buf,sizeof(buf),"+CONTINUE\r\n");
     }
     if (connWrite(c->conn,buf,buflen) != buflen) {
-        if (FCorrectThread(c))
-            freeClient(c);
-        else
-            freeClientAsync(c);
+        freeClientAsync(c);
         return C_OK;
     }
     psync_len = addReplyReplicationBacklog(c,psync_offset);
@@ -1674,10 +1671,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
 
             if (bgsaveerr != C_OK) {
                 ul.unlock();
-                if (FCorrectThread(replica))
-                    freeClient(replica);
-                else
-                    freeClientAsync(replica);
+                freeClientAsync(replica);
                 serverLog(LL_WARNING,"SYNC failed. BGSAVE child returned an error");
                 continue;
             }
@@ -1723,10 +1717,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
                 if ((replica->repldbfd = open(g_pserver->rdb_filename,O_RDONLY)) == -1 ||
                     redis_fstat(replica->repldbfd,&buf) == -1) {
                     ul.unlock();
-                    if (FCorrectThread(replica))
-                        freeClient(replica);
-                    else
-                        freeClientAsync(replica);
+                    freeClientAsync(replica);
                     serverLog(LL_WARNING,"SYNC failed. Can't open/stat DB after BGSAVE: %s", strerror(errno));
                     continue;
                 }
@@ -3677,10 +3668,7 @@ void replicationDiscardCachedMaster(redisMaster *mi) {
 
     serverLog(LL_NOTICE,"Discarding previously cached master state.");
     mi->cached_master->flags &= ~CLIENT_MASTER;
-    if (FCorrectThread(mi->cached_master))
-        freeClient(mi->cached_master);
-    else
-        freeClientAsync(mi->cached_master);
+    freeClientAsync(mi->cached_master);
     mi->cached_master = NULL;
 }
 

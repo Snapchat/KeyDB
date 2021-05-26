@@ -1582,6 +1582,7 @@ struct client {
 
     // post a function from a non-client thread to run on its client thread
     bool postFunction(std::function<void(client *)> fn, bool fLock = true);
+    fastlock transmittedRDBLock {"transmittedRDB"};
     size_t argv_len_sum() const;
 };
 
@@ -2228,6 +2229,7 @@ struct redisServer {
                                        that is the next byte will'll write to.*/
     long long repl_backlog_off;     /* Replication "master offset" of first
                                        byte in the replication backlog buffer.*/
+    fastlock repl_backlog_lock {"replication backlog"};
     time_t repl_backlog_time_limit; /* Time without slaves after the backlog
                                        gets released. */
     time_t repl_no_slaves_since;    /* We have no slaves since that time.

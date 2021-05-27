@@ -56,9 +56,11 @@ void putSlaveOnline(client *replica);
 int cancelReplicationHandshake(redisMaster *mi);
 static void propagateMasterStaleKeys();
 
-/* gets the lowest offset amongst all of the replicas */
-long long getLowestOffsetAmongReplicas(){
+/* gets the lowest offset amongst all of the replicas and stores it globally*/
+void updateLowestOffsetAmongReplicas(){
     serverAssert(GlobalLocksAcquired());
+    serverAssert(!g_pserver->repl_backlog_lock.fOwnLock());
+    // serverLog(LL_NOTICE, "off- have repl");
     long long min_offset = LONG_LONG_MAX;
     listIter li;
     listNode *ln;
@@ -69,16 +71,15 @@ long long getLowestOffsetAmongReplicas(){
 
         if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
         if (replica->flags & CLIENT_CLOSE_ASAP) continue;
-        if (replica->repl_curr_idx == -1) continue;
 
-        std::unique_lock<fastlock> ul(replica->lock, std::defer_lock);
-        if (FCorrectThread(replica))
-            ul.lock();
+        std::unique_lock<fastlock> ul(replica->lock);
+        // serverLog(LL_NOTICE, "off- acq client");
 
-        min_offset = std::min(min_offset, replica->repl_curr_off);        
+        min_offset = std::min(min_offset, replica->repl_curr_off);  
+        // serverLog(LL_NOTICE, "off- rel client");      
     }
     /* return -1 if no other minimum was found */
-    return min_offset == LONG_LONG_MAX ? -1 : min_offset;
+    g_pserver->repl_lowest_off.store(min_offset == LONG_LONG_MAX ? -1 : min_offset, std::memory_order_seq_cst);
 }
 /* We take a global flag to remember if this instance generated an RDB
  * because of replication, so that we can remove the RDB file in case
@@ -412,11 +413,12 @@ void freeReplicationBacklog(void) {
  * the backlog without incrementing the offset. */
 void feedReplicationBacklog(const void *ptr, size_t len) {
     serverAssert(GlobalLocksAcquired());
+    serverAssert(g_pserver->repl_backlog_lock.fOwnLock());
     const unsigned char *p = (const unsigned char*)ptr;
 
     if (g_pserver->repl_batch_idxStart >= 0) {
         /* we are lower bounded by the lower client offset or the offStart if all the clients are up to date */
-        long long lower_bound = getLowestOffsetAmongReplicas();
+        long long lower_bound = g_pserver->repl_lowest_off.load(std::memory_order_seq_cst);
         if (lower_bound == -1)
             lower_bound = g_pserver->repl_batch_offStart;
         long long minimumsize = g_pserver->master_repl_offset + len - lower_bound + 1;
@@ -441,10 +443,9 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
 
     g_pserver->master_repl_offset += len;
 
-    
-
     /* This is a circular buffer, so write as much data we can at every
      * iteration and rewind the "idx" index if we reach the limit. */
+    
     while(len) {
         size_t thislen = g_pserver->repl_backlog_size - g_pserver->repl_backlog_idx;
         if (thislen > len) thislen = len;
@@ -598,6 +599,8 @@ void replicationFeedSlavesCore(list *slaves, int dictid, robj **argv, int argc) 
     serverAssert(!(listLength(slaves) != 0 && g_pserver->repl_backlog == NULL));
 
     bool fSendRaw = !g_pserver->fActiveReplica;
+    updateLowestOffsetAmongReplicas();
+    std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
 
     /* Send SELECT command to every replica if needed. */
     if (g_pserver->replicaseldb != dictid) {
@@ -619,7 +622,9 @@ void replicationFeedSlavesCore(list *slaves, int dictid, robj **argv, int argc) 
 
         /* Add the SELECT command into the backlog. */
         /* We don't do this for advanced replication because this will be done later when it adds the whole RREPLAY command */
-        if (g_pserver->repl_backlog && fSendRaw) feedReplicationBacklogWithObject(selectcmd);
+        if (g_pserver->repl_backlog && fSendRaw) {
+            feedReplicationBacklogWithObject(selectcmd);
+        }
 
         if (dictid < 0 || dictid >= PROTO_SHARED_SELECT_CMDS)
             decrRefCount(selectcmd);
@@ -632,7 +637,6 @@ void replicationFeedSlavesCore(list *slaves, int dictid, robj **argv, int argc) 
         if (fSendRaw)
         {
             char aux[LONG_STR_SIZE+3];
-
             /* Add the multi bulk reply length. */
             aux[0] = '*';
             int multilen = ll2string(aux+1,sizeof(aux)-1,argc);
@@ -759,7 +763,11 @@ void replicationFeedSlavesFromMasterStream(char *buf, size_t buflen) {
         printf("\n");
     }
 
-    if (g_pserver->repl_backlog) feedReplicationBacklog(buf,buflen);
+    if (g_pserver->repl_backlog){
+        updateLowestOffsetAmongReplicas();
+        std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);   
+        feedReplicationBacklog(buf,buflen);
+    }
 }
 
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc) {
@@ -4662,6 +4670,9 @@ void flushReplBacklogToClients()
 
 #ifdef BYPASS_BUFFER
             {
+                std::unique_lock<fastlock> asyncUl(replica->lock, std::defer_lock);
+                if (!FCorrectThread(replica))
+                    asyncUl.lock();
                 /* If we are online and the RDB has been sent, there is no need to feed the client buffer
                 * We will send our replies directly from the replication backlog instead */
                 std::unique_lock<fastlock> tRDBLock (replica->transmittedRDBLock);
@@ -4694,21 +4705,5 @@ void flushReplBacklogToClients()
         // This may be called multiple times per "frame" so update with our progress flushing to clients
         g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
         g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
-    } else if (getLowestOffsetAmongReplicas() != -1){
-        listIter li;
-        listNode *ln;
-        listRewind(g_pserver->slaves, &li);
-        while ((ln = listNext(&li))) {
-            client *replica = (client*)listNodeValue(ln);
-
-            std::unique_lock<fastlock> ul(replica->lock, std::defer_lock);
-            if (FCorrectThread(replica))
-                ul.lock();
-            
-            /* try to force prepare client to write i guess? */
-            if (replica->repl_curr_idx != -1){
-                if (prepareClientToWrite(replica) != C_OK) continue;
-            }
-        }
-    }
+    } 
 }

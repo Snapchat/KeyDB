@@ -2924,6 +2924,7 @@ void initServerConfig(void) {
     g_pserver->enable_multimaster = CONFIG_DEFAULT_ENABLE_MULTIMASTER;
     g_pserver->repl_syncio_timeout = CONFIG_REPL_SYNCIO_TIMEOUT;
     g_pserver->master_repl_offset = 0;
+    g_pserver->repl_lowest_off.store(-1, std::memory_order_seq_cst);
 
     /* Replication partial resync backlog */
     g_pserver->repl_backlog = NULL;

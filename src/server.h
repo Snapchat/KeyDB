@@ -2241,6 +2241,8 @@ struct redisServer {
     int repl_diskless_load;         /* Slave parse RDB directly from the socket.
                                      * see REPL_DISKLESS_LOAD_* enum */
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
+    std::atomic <long long> repl_lowest_off; /* The lowest offset amongst all clients 
+                                               Updated before calls to feed the replication backlog */
     /* Replication (replica) */
     list *masters;
     int enable_multimaster; 
@@ -2838,6 +2840,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
 void rdbPipeWriteHandlerConnRemoved(struct connection *conn);
 void replicationNotifyLoadedKey(redisDb *db, robj_roptr key, robj_roptr val, long long expire);
 void replicateSubkeyExpire(redisDb *db, robj_roptr key, robj_roptr subkey, long long expire);
+void updateLowestOffsetAmongReplicas(void);
 
 /* Generic persistence functions */
 void startLoadingFile(FILE* fp, const char * filename, int rdbflags);

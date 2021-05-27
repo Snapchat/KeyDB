@@ -125,6 +125,7 @@ client *createClient(connection *conn, int iel) {
     client_id = g_pserver->next_client_id.fetch_add(1);
     c->iel = iel;
     c->id = client_id;
+    sprintf(c->lock.szName, "client %lu", client_id);
     c->resp = 2;
     c->conn = conn;
     c->name = NULL;
@@ -1677,8 +1678,7 @@ int writeToClient(client *c, int handler_installed) {
     serverAssertDebug(FCorrectThread(c));
 
     std::unique_lock<decltype(c->lock)> lock(c->lock);
-   
-
+    // serverLog(LL_NOTICE, "acq client");
 
     while(clientHasPendingReplies(c)) {
         if (c->bufpos > 0) {
@@ -1736,82 +1736,87 @@ int writeToClient(client *c, int handler_installed) {
             !(c->flags & CLIENT_SLAVE)) break;
     }
 
-    /* If there are no more pending replies, then we have transmitted the RDB.
-     * This means further replication commands will be taken straight from the
-     * replication backlog from now on. */
+    /* We can only directly read from the replication backlog if the client 
+       is a replica, so only attempt to do so if that's the case. */
+    if (c->flags & CLIENT_SLAVE) {
+        /* If there are no more pending replies, then we have transmitted the RDB.
+        * This means further replication commands will be taken straight from the
+        * replication backlog from now on. */
+        std::unique_lock<fastlock> tRDBLock (c->transmittedRDBLock);
 
-    std::unique_lock<fastlock> tRDBLock (c->transmittedRDBLock);
+        if (c->replstate == SLAVE_STATE_ONLINE && !clientHasPendingReplies(c) && c->replyAsync == nullptr){
+            c->transmittedRDB = true;
+        }
+        bool transmittedRDB = c->transmittedRDB;
+        tRDBLock.unlock();
 
-    if (c->flags & CLIENT_SLAVE && c->replstate == SLAVE_STATE_ONLINE && !clientHasPendingReplies(c) && c->replyAsync == nullptr){
-        c->transmittedRDB = true;
+        /* For replicas, we don't store all the information in the client buffer
+        * Most of the time (aside from immediately after synchronizing), we read
+        * from the replication backlog directly */
+        if (c->repl_curr_idx != -1 && transmittedRDB){
+            std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
+
+            /* copy global variables into local scope so if they change in between we don't care */
+            long long repl_backlog_idx = g_pserver->repl_backlog_idx;
+            long long repl_backlog_size = g_pserver->repl_backlog_size;
+            long long nwrittenPart2 = 0;
+
+            ssize_t nrequested; /* The number of bytes requested to write */
+            /* normal case with no wrap around */
+            if (repl_backlog_idx >= c->repl_curr_idx){
+                nrequested = repl_backlog_idx - c->repl_curr_idx;
+                nwritten = connWrite(c->conn, g_pserver->repl_backlog + c->repl_curr_idx, repl_backlog_idx - c->repl_curr_idx);
+            /* wrap around case, v. rare */
+            /* also v. buggy so there's that */
+            } else {
+                nrequested = repl_backlog_size + repl_backlog_idx - c->repl_curr_idx;
+                nwritten = connWrite(c->conn, g_pserver->repl_backlog + c->repl_curr_idx, repl_backlog_size - c->repl_curr_idx);
+                /* only attempt wrapping if we write the correct number of bytes */
+                if (nwritten == repl_backlog_size - c->repl_curr_idx){
+                    long long nwrittenPart2 = connWrite(c->conn, g_pserver->repl_backlog, repl_backlog_idx);
+                    if (nwrittenPart2 != -1)
+                        nwritten += nwrittenPart2;
+
+                }                
+            }
+
+            /* only update the replica's current index if bytes were sent */
+
+            // if (nrequested != nwritten){
+                // serverLog(LL_NOTICE, "-----------------------------------------");
+                // serverLog(LL_NOTICE, "AFTER THE FACT");
+                // serverLog(LL_NOTICE, "requested to write: %ld", nrequested);
+                // serverLog(LL_NOTICE, "actually written: %ld", nwritten);
+                // serverLog(LL_NOTICE, "repl_backlog_idx: %lld, repl_curr_idx: %lld, repl_backlog_size: %lld", repl_backlog_idx, c->repl_curr_idx, g_pserver->repl_backlog_size);
+                // serverLog(LL_NOTICE, "repl_curr_off: %lld, master_repl_offset: %lld", c->repl_curr_off, g_pserver->master_repl_offset);
+                // serverLog(LL_NOTICE, "-----------------------------------------");
+            // }
+
+
+            if (nwritten == nrequested && g_pserver->repl_backlog_idx == repl_backlog_idx){
+                c->repl_curr_idx = -1; /* -1 denotes no more replica writes */
+            }
+            else if (nwritten > 0)
+                c->repl_curr_idx = (c->repl_curr_idx + nwritten) % repl_backlog_size;
+
+            serverAssert(c->repl_curr_idx < repl_backlog_size);
+
+            /* only increment bytes if an error didn't occur */
+            if (nwritten > 0){
+                totwritten += nwritten;
+                c->repl_curr_off += nwritten;
+            }
+
+            /* If the second part of a write didn't go through, we still need to register that */
+            if (nwrittenPart2 == -1) nwritten = -1;
+        }
+
+        if (c->flags & CLIENT_SLAVE && handler_installed)
+            serverLog(LL_NOTICE, "Total bytes written, %ld, write handler installed?: %d", totwritten, handler_installed);
+
     }
-    bool transmittedRDB = c->transmittedRDB;
-    tRDBLock.unlock();
 
-    /* if this is a write to a replica, it's coming straight from the replication backlog */        
-    long long repl_backlog_idx = g_pserver->repl_backlog_idx;
-
-    /* For replicas, we don't store all the information in the client buffer
-     * Most of the time (aside from immediately after synchronizing), we read
-     * from the replication backlog directly */
-    if (c->flags & CLIENT_SLAVE && c->repl_curr_idx != -1 && transmittedRDB){
-        /* copy global variables into local scope so if they change in between we don't care */
-        long long repl_backlog_size = g_pserver->repl_backlog_size;
-        long long nwrittenPart2 = 0;
-
-        ssize_t nrequested; /* The number of bytes requested to write */
-        /* normal case with no wrap around */
-        if (repl_backlog_idx >= c->repl_curr_idx){
-            nrequested = repl_backlog_idx - c->repl_curr_idx;
-            nwritten = connWrite(c->conn, g_pserver->repl_backlog + c->repl_curr_idx, repl_backlog_idx - c->repl_curr_idx);
-        /* wrap around case, v. rare */
-        /* also v. buggy so there's that */
-        } else {
-            nrequested = repl_backlog_size + repl_backlog_idx - c->repl_curr_idx;
-            nwritten = connWrite(c->conn, g_pserver->repl_backlog + c->repl_curr_idx, repl_backlog_size - c->repl_curr_idx);
-            /* only attempt wrapping if we write the correct number of bytes */
-            if (nwritten == repl_backlog_size - c->repl_curr_idx){
-                long long nwrittenPart2 = connWrite(c->conn, g_pserver->repl_backlog, repl_backlog_idx);
-                if (nwrittenPart2 != -1)
-                    nwritten += nwrittenPart2;
-
-            }                
-        }
-
-        /* only update the replica's current index if bytes were sent */
-
-        // if (nrequested != nwritten){
-            // serverLog(LL_NOTICE, "-----------------------------------------");
-            // serverLog(LL_NOTICE, "AFTER THE FACT");
-            // serverLog(LL_NOTICE, "requested to write: %ld", nrequested);
-            // serverLog(LL_NOTICE, "actually written: %ld", nwritten);
-            // serverLog(LL_NOTICE, "repl_backlog_idx: %lld, repl_curr_idx: %lld, repl_backlog_size: %lld", repl_backlog_idx, c->repl_curr_idx, g_pserver->repl_backlog_size);
-            // serverLog(LL_NOTICE, "repl_curr_off: %lld, master_repl_offset: %lld", c->repl_curr_off, g_pserver->master_repl_offset);
-            // serverLog(LL_NOTICE, "-----------------------------------------");
-        // }
-
-
-        if (nwritten == nrequested && g_pserver->repl_backlog_idx == repl_backlog_idx){
-            c->repl_curr_idx = -1; /* -1 denotes no more replica writes */
-        }
-        else if (nwritten > 0)
-            c->repl_curr_idx = (c->repl_curr_idx + nwritten) % repl_backlog_size;
-
-        serverAssert(c->repl_curr_idx < repl_backlog_size);
-
-        /* only increment bytes if an error didn't occur */
-        if (nwritten > 0){
-            totwritten += nwritten;
-            c->repl_curr_off += nwritten;
-        }
-
-        /* If the second part of a write didn't go through, we still need to register that */
-        if (nwrittenPart2 == -1) nwritten = -1;
-    }
-
-    if (c->flags & CLIENT_SLAVE && handler_installed)
-        serverLog(LL_NOTICE, "Total bytes written, %ld, write handler installed?: %d", totwritten, handler_installed);
-
+    // serverLog(LL_NOTICE, "rel client");
     g_pserver->stat_net_output_bytes += totwritten;
     if (nwritten == -1) {
         if (connGetState(c->conn) == CONN_STATE_CONNECTED) {
@@ -1834,7 +1839,7 @@ int writeToClient(client *c, int handler_installed) {
     if (!clientHasPendingReplies(c) && c->repl_curr_idx == -1) {
         if(c->flags & CLIENT_SLAVE && handler_installed){
             serverLog(LL_NOTICE, "Uninstalling handler");
-            serverLog(LL_NOTICE, "handler repl_backlog_idx: %lld, repl_curr_idx: %lld, repl_backlog_size: %lld", repl_backlog_idx, c->repl_curr_idx, g_pserver->repl_backlog_size);
+            serverLog(LL_NOTICE, "handler repl_curr_idx: %lld, repl_backlog_size: %lld", c->repl_curr_idx, g_pserver->repl_backlog_size);
             serverLog(LL_NOTICE, "handler repl_curr_off: %lld, master_repl_offset: %lld", c->repl_curr_off, g_pserver->master_repl_offset);
         }
         c->sentlen = 0;

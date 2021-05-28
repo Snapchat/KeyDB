@@ -37,10 +37,9 @@ start_server {tags {"memefficiency"}} {
 }
 
 run_solo {defrag} {
-start_server {tags {"defrag"} overrides {server-threads 1} } {
-    if {[string match {*jemalloc*} [s mem_allocator]]} {
+start_server {tags {"defrag"} overrides {appendonly yes auto-aof-rewrite-percentage 0 save "" server-threads 1}} {
+    if {[string match {*jemalloc*} [s mem_allocator]] && [r debug mallctl arenas.page] <= 8192} {
         test "Active defrag" {
-            r config set save "" ;# prevent bgsave from interfereing with save below
             r config set hz 100
             r config set activedefrag no
             r config set active-defrag-threshold-lower 5
@@ -49,9 +48,9 @@ start_server {tags {"defrag"} overrides {server-threads 1} } {
             r config set active-defrag-ignore-bytes 2mb
             r config set maxmemory 100mb
             r config set maxmemory-policy allkeys-lru
-            r debug populate 700000 asdf1 150
-            r debug populate 170000 asdf2 300
-            r ping ;# trigger eviction following the previous population
+
+            populate 700000 asdf1 150
+            populate 170000 asdf2 300
             after 120 ;# serverCron only updates the info once in 100ms
             set frag [s allocator_frag_ratio]
             if {$::verbose} {
@@ -64,7 +63,7 @@ start_server {tags {"defrag"} overrides {server-threads 1} } {
             r config set maxmemory 110mb ;# prevent further eviction (not to fail the digest test)
             set digest [r debug digest]
             catch {r config set activedefrag yes} e
-            if {![string match {DISABLED*} $e]} {
+            if {[r config get activedefrag] eq "activedefrag yes"} {
                 # Wait for the active defrag to start working (decision once a
                 # second).
                 wait_for_condition 50 100 {
@@ -109,19 +108,59 @@ start_server {tags {"defrag"} overrides {server-threads 1} } {
                 if {!$::no_latency} {
                     assert {$max_latency <= 30}
                 }
-            } else {
-                set _ ""
             }
             # verify the data isn't corrupted or changed
             set newdigest [r debug digest]
             assert {$digest eq $newdigest}
             r save ;# saving an rdb iterates over all the data / pointers
-        } {OK}
+
+            # if defrag is supported, test AOF loading too
+            if {[r config get activedefrag] eq "activedefrag yes"} {
+                # reset stats and load the AOF file
+                r config resetstat
+                r config set key-load-delay -50 ;# sleep on average 1/50 usec
+                r debug loadaof
+                r config set activedefrag no
+                # measure hits and misses right after aof loading
+                set misses [s active_defrag_misses]
+                set hits [s active_defrag_hits]
+
+                after 120 ;# serverCron only updates the info once in 100ms
+                set frag [s allocator_frag_ratio]
+                set max_latency 0
+                foreach event [r latency latest] {
+                    lassign $event eventname time latency max
+                    if {$eventname == "loading-cron"} {
+                        set max_latency $max
+                    }
+                }
+                if {$::verbose} {
+                    puts "AOF loading:"
+                    puts "frag $frag"
+                    puts "hits: $hits"
+                    puts "misses: $misses"
+                    puts "max latency $max_latency"
+                    puts [r latency latest]
+                    puts [r latency history loading-cron]
+                }
+                # make sure we had defrag hits during AOF loading
+                assert {$hits > 100000}
+                # make sure the defragger did enough work to keep the fragmentation low during loading.
+                # we cannot check that it went all the way down, since we don't wait for full defrag cycle to complete.
+                assert {$frag < 1.4}
+                # since the AOF contains simple (fast) SET commands (and the cron during loading runs every 1000 commands),
+                # it'll still not block the loading for long periods of time.
+                if {!$::no_latency} {
+                    assert {$max_latency <= 30}
+                }
+            }
+        }
+        r config set appendonly no
+        r config set key-load-delay 0
 
         test "Active defrag big keys" {
             r flushdb
             r config resetstat
-            r config set save "" ;# prevent bgsave from interfereing with save below
             r config set hz 100
             r config set activedefrag no
             r config set active-defrag-max-scan-fields 1000
@@ -197,7 +236,7 @@ start_server {tags {"defrag"} overrides {server-threads 1} } {
 
             set digest [r debug digest]
             catch {r config set activedefrag yes} e
-            if {![string match {DISABLED*} $e]} {
+            if {[r config get activedefrag] eq "activedefrag yes"} {
                 # wait for the active defrag to start working (decision once a second)
                 wait_for_condition 50 100 {
                     [s active_defrag_running] ne 0
@@ -251,7 +290,6 @@ start_server {tags {"defrag"} overrides {server-threads 1} } {
         test "Active defrag big list" {
             r flushdb
             r config resetstat
-            r config set save "" ;# prevent bgsave from interfereing with save below
             r config set hz 100
             r config set activedefrag no
             r config set active-defrag-max-scan-fields 1000
@@ -294,7 +332,7 @@ start_server {tags {"defrag"} overrides {server-threads 1} } {
 
             set digest [r debug digest]
             catch {r config set activedefrag yes} e
-            if {![string match {DISABLED*} $e]} {
+            if {[r config get activedefrag] eq "activedefrag yes"} {
                 # wait for the active defrag to start working (decision once a second)
                 wait_for_condition 50 100 {
                     [s active_defrag_running] ne 0
@@ -357,10 +395,9 @@ start_server {tags {"defrag"} overrides {server-threads 1} } {
             # if the current slab is lower in utilization the defragger would have ended up in stagnation,
             # keept running and not move any allocation.
             # this test is more consistent on a fresh server with no history
-            start_server {tags {"defrag"} overrides {server-threads 1}} {
+            start_server {tags {"defrag"} overrides {save ""}} {
                 r flushdb
                 r config resetstat
-                r config set save "" ;# prevent bgsave from interfereing with save below
                 r config set hz 100
                 r config set activedefrag no
                 r config set active-defrag-max-scan-fields 1000
@@ -415,7 +452,7 @@ start_server {tags {"defrag"} overrides {server-threads 1} } {
 
                 set digest [r debug digest]
                 catch {r config set activedefrag yes} e
-                if {![string match {DISABLED*} $e]} {
+                if {[r config get activedefrag] eq "activedefrag yes"} {
                     # wait for the active defrag to start working (decision once a second)
                     wait_for_condition 50 100 {
                         [s active_defrag_running] ne 0
@@ -456,8 +493,9 @@ start_server {tags {"defrag"} overrides {server-threads 1} } {
         }
     }
 }
+
 start_server {tags {"defrag"} overrides {server-threads 1 active-replica yes} } { ;#test defrag with active-replica enabled
-    if {[string match {*jemalloc*} [s mem_allocator]]} {
+    if {[string match {*jemalloc*} [s mem_allocator]] && [r debug mallctl arenas.page] <= 8192} {
 
         test "Active defrag with active replica" {
             r config set save "" ;# prevent bgsave from interfereing with save below
@@ -469,8 +507,8 @@ start_server {tags {"defrag"} overrides {server-threads 1 active-replica yes} } 
             r config set active-defrag-ignore-bytes 2mb
             r config set maxmemory 100mb
             r config set maxmemory-policy allkeys-lru
-            r debug populate 700000 asdf1 150
-            r debug populate 170000 asdf2 300
+            populate 700000 asdf1 150
+            populate 170000 asdf2 300
             r ping ;# trigger eviction following the previous population
             after 120 ;# serverCron only updates the info once in 100ms
             set frag [s allocator_frag_ratio]

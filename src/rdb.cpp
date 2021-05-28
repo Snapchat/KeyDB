@@ -48,8 +48,8 @@
 #include <future>
 #include "aelocker.h"
 
-/* This macro is called when the internal RDB stracture is corrupt */
-#define rdbExitReportCorruptRDB(...) rdbReportError(1, __LINE__,__VA_ARGS__)
+/* This macro is called when the internal RDB structure is corrupt */
+#define rdbReportCorruptRDB(...) rdbReportError(1, __LINE__,__VA_ARGS__)
 /* This macro is called when RDB read failed (possibly a short read) */
 #define rdbReportReadError(...) rdbReportError(0, __LINE__,__VA_ARGS__)
 
@@ -73,17 +73,27 @@ void rdbReportError(int corruption_error, int linenum, const char *reason, ...) 
     vsnprintf(msg+len,sizeof(msg)-len,reason,ap);
     va_end(ap);
 
-    if (!rdbCheckMode) {
-        if (rdbFileBeingLoaded || corruption_error) {
-            serverLog(LL_WARNING, "%s", msg);
-            const char *argv[2] = {"",rdbFileBeingLoaded};
-            redis_check_rdb_main(2,argv,NULL);
-        } else {
-            serverLog(LL_WARNING, "%s. Failure loading rdb format from socket, assuming connection error, resuming operation.", msg);
-            return;
-        }
-    } else {
+    if (!g_pserver->loading) {
+        /* If we're in the context of a RESTORE command, just propagate the error. */
+        /* log in VERBOSE, and return (don't exit). */
+        serverLog(LL_VERBOSE, "%s", msg);
+        return;
+    } else if (rdbCheckMode) {
+        /* If we're inside the rdb checker, let it handle the error. */
         rdbCheckError("%s",msg);
+    } else if (rdbFileBeingLoaded) {
+        /* If we're loading an rdb file form disk, run rdb check (and exit) */
+        serverLog(LL_WARNING, "%s", msg);
+        const char *argv[2] = {"",rdbFileBeingLoaded};
+        redis_check_rdb_main(2,argv,NULL);
+    } else if (corruption_error) {
+        /* In diskless loading, in case of corrupt file, log and exit. */
+        serverLog(LL_WARNING, "%s. Failure loading rdb format", msg);
+    } else {
+        /* In diskless loading, in case of a short read (not a corrupt
+         * file), log and proceed (don't exit). */
+        serverLog(LL_WARNING, "%s. Failure loading rdb format from socket, assuming connection error, resuming operation.", msg);
+        return;
     }
     serverLog(LL_WARNING, "Terminating server after rdb file reading failure.");
     exit(1);
@@ -223,7 +233,7 @@ int rdbLoadLenByRef(rio *rdb, int *isencoded, uint64_t *lenptr) {
         if (rioRead(rdb,&len,8) == 0) return -1;
         *lenptr = ntohu64(len);
     } else {
-        rdbExitReportCorruptRDB(
+        rdbReportCorruptRDB(
             "Unknown length encoding %d in rdbLoadLen()",type);
         return -1; /* Never reached. */
     }
@@ -291,8 +301,8 @@ void *rdbLoadIntegerObject(rio *rdb, int enctype, int flags, size_t *lenptr) {
         v = enc[0]|(enc[1]<<8)|(enc[2]<<16)|(enc[3]<<24);
         val = (int32_t)v;
     } else {
-        rdbExitReportCorruptRDB("Unknown RDB integer encoding type %d",enctype);
-        return nullptr; /* Never reached. */
+        rdbReportCorruptRDB("Unknown RDB integer encoding type %d",enctype);
+        return NULL; /* Never reached. */
     }
     if (plain || sds) {
         char buf[LONG_STR_SIZE], *p;
@@ -386,20 +396,29 @@ void *rdbLoadLzfStringObject(rio *rdb, int flags, size_t *lenptr) {
 
     if ((clen = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
     if ((len = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
-    if ((c = (unsigned char*)zmalloc(clen, MALLOC_SHARED)) == NULL) goto err;
+    if ((c = (unsigned char*)ztrymalloc(clen)) == NULL) {
+        serverLog(g_pserver->loading? LL_WARNING: LL_VERBOSE, "rdbLoadLzfStringObject failed allocating %llu bytes", (unsigned long long)clen);
+        goto err;
+    }
 
     /* Allocate our target according to the uncompressed size. */
     if (plain) {
-        val = (char*)zmalloc(len, MALLOC_SHARED);
+        val = (char*)ztrymalloc(len);
     } else {
-        val = sdsnewlen(SDS_NOINIT,len);
+        val = sdstrynewlen(SDS_NOINIT,len);
     }
+    if (!val) {
+        serverLog(g_pserver->loading? LL_WARNING: LL_VERBOSE, "rdbLoadLzfStringObject failed allocating %llu bytes", (unsigned long long)len);
+        goto err;
+    }
+
     if (lenptr) *lenptr = len;
 
     /* Load the compressed representation and uncompress it to target. */
     if (rioRead(rdb,c,clen) == 0) goto err;
-    if (lzf_decompress(c,clen,val,len) == 0) {
-        rdbExitReportCorruptRDB("Invalid LZF compressed string");
+    if (lzf_decompress(c,clen,val,len) != len) {
+        rdbReportCorruptRDB("Invalid LZF compressed string");
+        goto err;
     }
     zfree(c);
 
@@ -503,6 +522,8 @@ void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
     unsigned long long len;
 
     len = rdbLoadLen(rdb,&isencoded);
+    if (len == RDB_LENERR) return NULL;
+
     if (isencoded) {
         switch(len) {
         case RDB_ENC_INT8:
@@ -512,14 +533,17 @@ void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
         case RDB_ENC_LZF:
             return rdbLoadLzfStringObject(rdb,flags,lenptr);
         default:
-            rdbExitReportCorruptRDB("Unknown RDB string encoding type %llu",len);
-            return nullptr;
+            rdbReportCorruptRDB("Unknown RDB string encoding type %llu",len);
+            return NULL;
         }
     }
 
-    if (len == RDB_LENERR) return NULL;
     if (plain || sds) {
-        void *buf = plain ? zmalloc(len, MALLOC_SHARED) : sdsnewlen(SDS_NOINIT,len);
+        void *buf = plain ? ztrymalloc(len) : sdstrynewlen(SDS_NOINIT,len);
+        if (!buf) {
+            serverLog(g_pserver->loading? LL_WARNING: LL_VERBOSE, "rdbGenericLoadStringObject failed allocating %llu bytes", len);
+            return NULL;
+        }
         if (lenptr) *lenptr = len;
         if (len && rioRead(rdb,buf,len) == 0) {
             if (plain)
@@ -608,7 +632,7 @@ int rdbLoadDoubleValue(rio *rdb, double *val) {
     default:
         if (rioRead(rdb,buf,len) == 0) return -1;
         buf[len] = '\0';
-        sscanf(buf, "%lg", val);
+        if (sscanf(buf, "%lg", val)!=1) return -1;
         return 0;
     }
 }
@@ -934,7 +958,7 @@ ssize_t rdbSaveObject(rio *rdb, robj_roptr o, robj_roptr key) {
     } else if (o->type == OBJ_STREAM) {
         /* Store how many listpacks we have inside the radix tree. */
         stream *s = (stream*)ptrFromObj(o);
-        rax *rax = s->prax;
+        rax *rax = s->rax;
         if ((n = rdbSaveLen(rdb,raxSize(rax))) == -1) return -1;
         nwritten += n;
 
@@ -1031,10 +1055,10 @@ ssize_t rdbSaveObject(rio *rdb, robj_roptr o, robj_roptr key) {
          * to call the right module during loading. */
         int retval = rdbSaveLen(rdb,mt->id);
         if (retval == -1) return -1;
+        moduleInitIOContext(io,mt,rdb,key.unsafe_robjcast());
         io.bytes += retval;
 
         /* Then write the module-specific representation + EOF marker. */
-        moduleInitIOContext(io,mt,rdb,key.unsafe_robjcast());
         mt->rdb_save(&io,mv->value);
         retval = rdbSaveLen(rdb,RDB_MODULE_OPCODE_EOF);
         if (retval == -1)
@@ -1101,8 +1125,7 @@ size_t rdbSavedObjectLen(robj *o, robj *key) {
 
 /* Save a key-value pair, with expire time, type, key, value.
  * On error -1 is returned.
- * On success if the key was actually saved 1 is returned, otherwise 0
- * is returned (the key was already expired). */
+ * On success if the key was actually saved 1 is returned. */
 int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEntry *pexpire) {
     int savelru = g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LRU;
     int savelfu = g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU;
@@ -1150,7 +1173,7 @@ int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEn
         int sleepTime = serverTL->getRdbKeySaveDelay();
         while (!g_pserver->rdbThreadVars.fRdbThreadCancel && sleepTime > 0) {
             int sleepThisTime = std::min(100, sleepTime);
-            usleep(sleepThisTime);
+            debugDelay(sleepThisTime);
             sleepTime -= sleepThisTime;
         }
     }
@@ -1230,6 +1253,7 @@ ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt) {
     RedisModuleIO io;
     int retval = rdbSaveType(rdb, RDB_OPCODE_MODULE_AUX);
     if (retval == -1) return -1;
+    moduleInitIOContext(io,mt,rdb,NULL);
     io.bytes += retval;
 
     /* Write the "module" identifier as prefix, so that we'll be able
@@ -1249,7 +1273,6 @@ ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt) {
     io.bytes += retval;
 
     /* Then write the module-specific representation + EOF marker. */
-    moduleInitIOContext(io,mt,rdb,NULL);
     mt->aux_save(&io,when);
     retval = rdbSaveLen(rdb,RDB_MODULE_OPCODE_EOF);
     if (retval == -1)
@@ -1278,9 +1301,12 @@ int rdbSaveRio(rio *rdb, const redisDbPersistentDataSnapshot **rgpdb, int *error
     dictEntry *de;
     dictIterator *di = NULL;
     char magic[10];
-    int j;
     uint64_t cksum;
     size_t processed = 0;
+    int j;
+    long key_count = 0;
+    long long info_updated_time = 0;
+    const char *pname = (rdbflags & RDBFLAGS_AOF_PREAMBLE) ? "AOF rewrite" :  "RDB";
 
     if (g_pserver->rdb_checksum)
         rdb->update_cksum = rioGenericUpdateChecksum;
@@ -1313,6 +1339,18 @@ int rdbSaveRio(rio *rdb, const redisDbPersistentDataSnapshot **rgpdb, int *error
             
             if (!saveKey(rdb, db, rdbflags, &processed, keystr, o))
                 return false;
+
+            /* Update child info every 1 second (approximately).
+             * in order to avoid calling mstime() on each iteration, we will
+             * check the diff every 1024 keys */
+            if ((key_count++ & 1023) == 0) {
+                long long now = mstime();
+                if (now - info_updated_time >= 1000) {
+                    sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, key_count, pname);
+                    info_updated_time = now;
+                }
+            }
+
             return !g_pserver->rdbThreadVars.fRdbThreadCancel;
         });
         if (!fSavedAll)
@@ -1518,7 +1556,7 @@ void *rdbSaveThread(void *vargs)
 
     int retval = rdbSave(args->rgpdb, &args->rsi);    
     if (retval == C_OK)
-        sendChildCOWInfo(CHILD_TYPE_RDB, "RDB");
+        sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
 
     // If we were told to cancel the requesting thread holds the lock for us
     ssize_t cbStart = zmalloc_used_memory();
@@ -1546,7 +1584,6 @@ int rdbSaveBackgroundFork(rdbSaveInfo *rsi) {
 
     g_pserver->dirty_before_bgsave = g_pserver->dirty;
     g_pserver->lastbgsave_try = time(NULL);
-    openChildInfoPipe();
 
     if ((childpid = redisFork(CHILD_TYPE_RDB)) == 0) {
         int retval;
@@ -1557,13 +1594,12 @@ int rdbSaveBackgroundFork(rdbSaveInfo *rsi) {
         redisSetCpuAffinity(g_pserver->bgsave_cpulist);
         retval = rdbSave(nullptr, rsi);
         if (retval == C_OK) {
-            sendChildCOWInfo(CHILD_TYPE_RDB, "RDB");
+            sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
         }
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
         /* Parent */
         if (childpid == -1) {
-            closeChildInfoPipe();
             g_pserver->lastbgsave_status = C_ERR;
             serverLog(LL_WARNING,"Can't save in background: fork: %s",
                 strerror(errno));
@@ -1571,7 +1607,6 @@ int rdbSaveBackgroundFork(rdbSaveInfo *rsi) {
         }
         serverLog(LL_NOTICE,"Background saving started by pid %d",childpid);
         g_pserver->rdb_save_time_start = time(NULL);
-        g_pserver->rdb_child_pid = childpid;
         g_pserver->rdb_child_type = RDB_CHILD_TYPE_DISK;
         updateDictResizePolicy();
         return C_OK;
@@ -1604,6 +1639,7 @@ int launchRdbSaveThread(pthread_t &child, rdbSaveInfo *rsi)
             zfree(args);
             return C_ERR;
         }
+        g_pserver->child_type = CHILD_TYPE_RDB;
     }
     return C_OK;
 }
@@ -1689,26 +1725,26 @@ robj *rdbLoadCheckModuleValue(rio *rdb, char *modulename) {
         {
             uint64_t len;
             if (rdbLoadLenByRef(rdb,NULL,&len) == -1) {
-                rdbExitReportCorruptRDB(
+                rdbReportCorruptRDB(
                     "Error reading integer from module %s value", modulename);
             }
         } else if (opcode == RDB_MODULE_OPCODE_STRING) {
             robj *o = (robj*)rdbGenericLoadStringObject(rdb,RDB_LOAD_NONE,NULL);
             if (o == NULL) {
-                rdbExitReportCorruptRDB(
+                rdbReportCorruptRDB(
                     "Error reading string from module %s value", modulename);
             }
             decrRefCount(o);
         } else if (opcode == RDB_MODULE_OPCODE_FLOAT) {
             float val;
             if (rdbLoadBinaryFloatValue(rdb,&val) == -1) {
-                rdbExitReportCorruptRDB(
+                rdbReportCorruptRDB(
                     "Error reading float from module %s value", modulename);
             }
         } else if (opcode == RDB_MODULE_OPCODE_DOUBLE) {
             double val;
             if (rdbLoadBinaryDoubleValue(rdb,&val) == -1) {
-                rdbExitReportCorruptRDB(
+                rdbReportCorruptRDB(
                     "Error reading double from module %s value", modulename);
             }
         }
@@ -1722,6 +1758,17 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
     robj *o = NULL, *ele, *dec;
     uint64_t len;
     unsigned int i;
+
+    int deep_integrity_validation = cserver.sanitize_dump_payload == SANITIZE_DUMP_YES;
+    if (cserver.sanitize_dump_payload == SANITIZE_DUMP_CLIENTS) {
+        /* Skip sanitization when loading (an RDB), or getting a RESTORE command
+         * from either the master or a client using an ACL user with the skip-sanitize-payload flag. */
+        int skip = g_pserver->loading ||
+            (serverTL->current_client && (serverTL->current_client->flags & CLIENT_MASTER));
+        if (!skip && serverTL->current_client && serverTL->current_client->user)
+            skip = !!(serverTL->current_client->user->flags & USER_FLAG_SANITIZE_PAYLOAD_SKIP);
+        deep_integrity_validation = !skip;
+    }
 
     if (rdbtype == RDB_TYPE_STRING) {
         /* Read string value */
@@ -1756,8 +1803,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
             o = createSetObject();
             /* It's faster to expand the dict to the right size asap in order
              * to avoid rehashing */
-            if (len > DICT_HT_INITIAL_SIZE)
-                dictExpand((dict*)ptrFromObj(o),len);
+            if (len > DICT_HT_INITIAL_SIZE && dictTryExpand((dict*)ptrFromObj(o),len,false) != DICT_OK) {
+                rdbReportCorruptRDB("OOM in dictTryExpand %llu", (unsigned long long)len);
+                decrRefCount(o);
+                return NULL;
+            }
         } else {
             o = createIntsetObject();
         }
@@ -1775,17 +1825,34 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
             if (o->encoding == OBJ_ENCODING_INTSET) {
                 /* Fetch integer value from element. */
                 if (isSdsRepresentableAsLongLong(sdsele,&llval) == C_OK) {
-                    o->m_ptr = intsetAdd((intset*)ptrFromObj(o),llval,NULL);
+                    uint8_t success;
+                    o->m_ptr = intsetAdd((intset*)ptrFromObj(o),llval,&success);
+                    if (!success) {
+                        rdbReportCorruptRDB("Duplicate set members detected");
+                        decrRefCount(o);
+                        sdsfree(sdsele);
+                        return NULL;
+                    }
                 } else {
                     setTypeConvert(o,OBJ_ENCODING_HT);
-                    dictExpand((dict*)ptrFromObj(o),len);
+                    if (dictTryExpand((dict*)ptrFromObj(o),len,false) != DICT_OK) {
+                        rdbReportCorruptRDB("OOM in dictTryExpand %llu", (unsigned long long)len);
+                        sdsfree(sdsele);
+                        decrRefCount(o);
+                        return NULL;
+                    }
                 }
             }
 
             /* This will also be called when the set was just converted
              * to a regular hash table encoded set. */
             if (o->encoding == OBJ_ENCODING_HT) {
-                dictAdd((dict*)ptrFromObj(o),sdsele,NULL);
+                if (dictAdd((dict*)ptrFromObj(o),sdsele,NULL) != DICT_OK) {
+                    rdbReportCorruptRDB("Duplicate set members detected");
+                    decrRefCount(o);
+                    sdsfree(sdsele);
+                    return NULL;
+                }
             } else {
                 sdsfree(sdsele);
             }
@@ -1800,8 +1867,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
         o = createZsetObject();
         zs = (zset*)ptrFromObj(o);
 
-        if (zsetlen > DICT_HT_INITIAL_SIZE)
-            dictExpand(zs->dict,zsetlen);
+        if (zsetlen > DICT_HT_INITIAL_SIZE && dictTryExpand(zs->dict,zsetlen,false) != DICT_OK) {
+            rdbReportCorruptRDB("OOM in dictTryExpand %llu", (unsigned long long)zsetlen);
+            decrRefCount(o);
+            return NULL;
+        }
 
         /* Load every single element of the sorted set. */
         while(zsetlen--) {
@@ -1832,7 +1902,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
             if (sdslen(sdsele) > maxelelen) maxelelen = sdslen(sdsele);
 
             znode = zslInsert(zs->zsl,score,sdsele);
-            dictAdd(zs->dict,sdsele,&znode->score);
+            if (dictAdd(zs->dict,sdsele,&znode->score) != DICT_OK) {
+                rdbReportCorruptRDB("Duplicate zset fields detected");
+                decrRefCount(o);
+                /* no need to free 'sdsele', will be released by zslFree together with 'o' */
+                return NULL;
+            }
         }
 
         /* Convert *after* loading, since sorted sets are not stored ordered. */
@@ -1843,6 +1918,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
         uint64_t len;
         int ret;
         sds field, value;
+        dict *dupSearchDict = NULL;
 
         len = rdbLoadLen(rdb, NULL);
         if (len == RDB_LENERR) return NULL;
@@ -1852,6 +1928,14 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
         /* Too many entries? Use a hash table. */
         if (len > g_pserver->hash_max_ziplist_entries)
             hashTypeConvert(o, OBJ_ENCODING_HT);
+        else if (deep_integrity_validation) {
+            /* In this mode, we need to guarantee that the server won't crash
+             * later when the ziplist is converted to a dict.
+             * Create a set (dict with no values) to for a dup search.
+             * We can dismiss it as soon as we convert the ziplist to a hash. */
+            dupSearchDict = dictCreate(&hashDictType, NULL);
+        }
+
 
         /* Load every field and value into the ziplist */
         while (o->encoding == OBJ_ENCODING_ZIPLIST && len > 0) {
@@ -1859,12 +1943,27 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
             /* Load raw strings */
             if ((field = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
                 decrRefCount(o);
+                if (dupSearchDict) dictRelease(dupSearchDict);
                 return NULL;
             }
             if ((value = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL) {
                 sdsfree(field);
                 decrRefCount(o);
+                if (dupSearchDict) dictRelease(dupSearchDict);
                 return NULL;
+            }
+
+            if (dupSearchDict) {
+                sds field_dup = sdsdup(field);
+                if (dictAdd(dupSearchDict, field_dup, NULL) != DICT_OK) {
+                    rdbReportCorruptRDB("Hash with dup elements");
+                    dictRelease(dupSearchDict);
+                    decrRefCount(o);
+                    sdsfree(field_dup);
+                    sdsfree(field);
+                    sdsfree(value);
+                    return NULL;
+                }
             }
 
             /* Add pair to ziplist */
@@ -1886,8 +1985,20 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
             sdsfree(value);
         }
 
-        if (o->encoding == OBJ_ENCODING_HT && len > DICT_HT_INITIAL_SIZE)
-            dictExpand((dict*)ptrFromObj(o),len);
+        if (dupSearchDict) {
+            /* We no longer need this, from now on the entries are added
+             * to a dict so the check is performed implicitly. */
+            dictRelease(dupSearchDict);
+            dupSearchDict = NULL;
+        }
+
+        if (o->encoding == OBJ_ENCODING_HT && len > DICT_HT_INITIAL_SIZE) {
+            if (dictTryExpand((dict*)ptrFromObj(o),len,false) != DICT_OK) {
+                rdbReportCorruptRDB("OOM in dictTryExpand %llu", (unsigned long long)len);
+                decrRefCount(o);
+                return NULL;
+            }
+        }
 
         /* Load remaining fields and values into the hash table */
         while (o->encoding == OBJ_ENCODING_HT && len > 0) {
@@ -1906,7 +2017,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
             /* Add pair to hash table */
             ret = dictAdd((dict*)ptrFromObj(o), field, value);
             if (ret == DICT_ERR) {
-                rdbExitReportCorruptRDB("Duplicate keys detected");
+                rdbReportCorruptRDB("Duplicate hash fields detected");
+                sdsfree(value);
+                sdsfree(field);
+                decrRefCount(o);
+                return NULL;
             }
         }
 
@@ -1919,10 +2034,18 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                             g_pserver->list_compress_depth);
 
         while (len--) {
+            size_t encoded_len;
             unsigned char *zl = (unsigned char*)
-                rdbGenericLoadStringObject(rdb,RDB_LOAD_PLAIN,NULL);
+                rdbGenericLoadStringObject(rdb,RDB_LOAD_PLAIN,&encoded_len);
             if (zl == NULL) {
                 decrRefCount(o);
+                return NULL;
+            }
+            if (deep_integrity_validation) g_pserver->stat_dump_payload_sanitizations++;
+            if (!ziplistValidateIntegrity(zl, encoded_len, deep_integrity_validation, NULL, NULL)) {
+                rdbReportCorruptRDB("Ziplist integrity check failed.");
+                decrRefCount(o);
+                zfree(zl);
                 return NULL;
             }
             quicklistAppendZiplist((quicklist*)ptrFromObj(o), zl);
@@ -1933,9 +2056,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                rdbtype == RDB_TYPE_ZSET_ZIPLIST ||
                rdbtype == RDB_TYPE_HASH_ZIPLIST)
     {
+        size_t encoded_len;
         unsigned char *encoded = (unsigned char*)
-            rdbGenericLoadStringObject(rdb,RDB_LOAD_PLAIN,NULL);
+            rdbGenericLoadStringObject(rdb,RDB_LOAD_PLAIN,&encoded_len);
         if (encoded == NULL) return NULL;
+
         o = createObject(OBJ_STRING,encoded); /* Obj type fixed below. */
 
         /* Fix the object encoding, and make sure to convert the encoded
@@ -1946,6 +2071,15 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
          * converted. */
         switch(rdbtype) {
             case RDB_TYPE_HASH_ZIPMAP:
+                /* Since we don't keep zipmaps anymore, the rdb loading for these
+                 * is O(n) anyway, use `deep` validation. */
+                if (!zipmapValidateIntegrity(encoded, encoded_len, 1)) {
+                    rdbReportCorruptRDB("Zipmap integrity check failed.");
+                    zfree(encoded);
+                    o->m_ptr = NULL;
+                    decrRefCount(o);
+                    return NULL;
+                }
                 /* Convert to ziplist encoded hash. This must be deprecated
                  * when loading dumps created by Redis 2.4 gets deprecated. */
                 {
@@ -1954,14 +2088,28 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                     unsigned char *fstr, *vstr;
                     unsigned int flen, vlen;
                     unsigned int maxlen = 0;
+                    dict *dupSearchDict = dictCreate(&hashDictType, NULL);
 
                     while ((zi = zipmapNext(zi, &fstr, &flen, &vstr, &vlen)) != NULL) {
                         if (flen > maxlen) maxlen = flen;
                         if (vlen > maxlen) maxlen = vlen;
                         zl = ziplistPush(zl, fstr, flen, ZIPLIST_TAIL);
                         zl = ziplistPush(zl, vstr, vlen, ZIPLIST_TAIL);
+
+                        /* search for duplicate records */
+                        sds field = sdstrynewlen(fstr, flen);
+                        if (!field || dictAdd(dupSearchDict, field, NULL) != DICT_OK) {
+                            rdbReportCorruptRDB("Hash zipmap with dup elements, or big length (%u)", flen);
+                            dictRelease(dupSearchDict);
+                            sdsfree(field);
+                            zfree(encoded);
+                            o->m_ptr = NULL;
+                            decrRefCount(o);
+                            return NULL;
+                        }
                     }
 
+                    dictRelease(dupSearchDict);
                     zfree(ptrFromObj(o));
                     o->m_ptr = zl;
                     o->type = OBJ_HASH;
@@ -1975,23 +2123,55 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                 }
                 break;
             case RDB_TYPE_LIST_ZIPLIST:
+                if (deep_integrity_validation) g_pserver->stat_dump_payload_sanitizations++;
+                if (!ziplistValidateIntegrity(encoded, encoded_len, deep_integrity_validation, NULL, NULL)) {
+                    rdbReportCorruptRDB("List ziplist integrity check failed.");
+                    zfree(encoded);
+                    o->m_ptr = NULL;
+                    decrRefCount(o);
+                    return NULL;
+                }
                 o->type = OBJ_LIST;
                 o->encoding = OBJ_ENCODING_ZIPLIST;
                 listTypeConvert(o,OBJ_ENCODING_QUICKLIST);
                 break;
             case RDB_TYPE_SET_INTSET:
+                if (deep_integrity_validation) g_pserver->stat_dump_payload_sanitizations++;
+                if (!intsetValidateIntegrity(encoded, encoded_len, deep_integrity_validation)) {
+                    rdbReportCorruptRDB("Intset integrity check failed.");
+                    zfree(encoded);
+                    o->m_ptr = NULL;
+                    decrRefCount(o);
+                    return NULL;
+                }
                 o->type = OBJ_SET;
                 o->encoding = OBJ_ENCODING_INTSET;
                 if (intsetLen((intset*)ptrFromObj(o)) > g_pserver->set_max_intset_entries)
                     setTypeConvert(o,OBJ_ENCODING_HT);
                 break;
             case RDB_TYPE_ZSET_ZIPLIST:
+                if (deep_integrity_validation) g_pserver->stat_dump_payload_sanitizations++;
+                if (!zsetZiplistValidateIntegrity(encoded, encoded_len, deep_integrity_validation)) {
+                    rdbReportCorruptRDB("Zset ziplist integrity check failed.");
+                    zfree(encoded);
+                    o->m_ptr = NULL;
+                    decrRefCount(o);
+                    return NULL;
+                }
                 o->type = OBJ_ZSET;
                 o->encoding = OBJ_ENCODING_ZIPLIST;
                 if (zsetLength(o) > g_pserver->zset_max_ziplist_entries)
                     zsetConvert(o,OBJ_ENCODING_SKIPLIST);
                 break;
             case RDB_TYPE_HASH_ZIPLIST:
+                if (deep_integrity_validation) g_pserver->stat_dump_payload_sanitizations++;
+                if (!hashZiplistValidateIntegrity(encoded, encoded_len, deep_integrity_validation)) {
+                    rdbReportCorruptRDB("Hash ziplist integrity check failed.");
+                    zfree(encoded);
+                    o->m_ptr = NULL;
+                    decrRefCount(o);
+                    return NULL;
+                }
                 o->type = OBJ_HASH;
                 o->encoding = OBJ_ENCODING_ZIPLIST;
                 if (hashTypeLength(o) > g_pserver->hash_max_ziplist_entries)
@@ -1999,7 +2179,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                 break;
             default:
                 /* totally unreachable */
-                rdbExitReportCorruptRDB("Unknown RDB encoding type %d",rdbtype);
+                rdbReportCorruptRDB("Unknown RDB encoding type %d",rdbtype);
                 break;
         }
     } else if (rdbtype == RDB_TYPE_STREAM_LISTPACKS) {
@@ -2023,33 +2203,54 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                 return NULL;
             }
             if (sdslen(nodekey) != sizeof(streamID)) {
-                rdbExitReportCorruptRDB("Stream node key entry is not the "
+                rdbReportCorruptRDB("Stream node key entry is not the "
                                         "size of a stream ID");
+                sdsfree(nodekey);
+                decrRefCount(o);
+                return NULL;
             }
 
             /* Load the listpack. */
+            size_t lp_size;
             unsigned char *lp = (unsigned char*)
-                rdbGenericLoadStringObject(rdb,RDB_LOAD_PLAIN,NULL);
+                rdbGenericLoadStringObject(rdb,RDB_LOAD_PLAIN,&lp_size);
             if (lp == NULL) {
                 rdbReportReadError("Stream listpacks loading failed.");
                 sdsfree(nodekey);
                 decrRefCount(o);
                 return NULL;
             }
+            if (deep_integrity_validation) g_pserver->stat_dump_payload_sanitizations++;
+            if (!streamValidateListpackIntegrity(lp, lp_size, deep_integrity_validation)) {
+                rdbReportCorruptRDB("Stream listpack integrity check failed.");
+                sdsfree(nodekey);
+                decrRefCount(o);
+                zfree(lp);
+                return NULL;
+            }
+
             unsigned char *first = lpFirst(lp);
             if (first == NULL) {
                 /* Serialized listpacks should never be empty, since on
                  * deletion we should remove the radix tree key if the
                  * resulting listpack is empty. */
-                rdbExitReportCorruptRDB("Empty listpack inside stream");
+                rdbReportCorruptRDB("Empty listpack inside stream");
+                sdsfree(nodekey);
+                decrRefCount(o);
+                zfree(lp);
+                return NULL;
             }
 
             /* Insert the key in the radix tree. */
-            int retval = raxInsert(s->prax,
+            int retval = raxInsert(s->rax,
                 (unsigned char*)nodekey,sizeof(streamID),lp,NULL);
             sdsfree(nodekey);
-            if (!retval)
-                rdbExitReportCorruptRDB("Listpack re-added with existing key");
+            if (!retval) {
+                rdbReportCorruptRDB("Listpack re-added with existing key");
+                decrRefCount(o);
+                zfree(lp);
+                return NULL;
+            }
         }
         /* Load total number of items inside the stream. */
         s->length = rdbLoadLen(rdb,NULL);
@@ -2094,9 +2295,13 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
             }
 
             streamCG *cgroup = streamCreateCG(s,cgname,sdslen(cgname),&cg_id);
-            if (cgroup == NULL)
-                rdbExitReportCorruptRDB("Duplicated consumer group name %s",
+            if (cgroup == NULL) {
+                rdbReportCorruptRDB("Duplicated consumer group name %s",
                                          cgname);
+                decrRefCount(o);
+                sdsfree(cgname);
+                return NULL;
+            }
             sdsfree(cgname);
 
             /* Load the global PEL for this consumer group, however we'll
@@ -2126,9 +2331,13 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                     streamFreeNACK(nack);
                     return NULL;
                 }
-                if (!raxInsert(cgroup->pel,rawid,sizeof(rawid),nack,NULL))
-                    rdbExitReportCorruptRDB("Duplicated gobal PEL entry "
+                if (!raxInsert(cgroup->pel,rawid,sizeof(rawid),nack,NULL)) {
+                    rdbReportCorruptRDB("Duplicated global PEL entry "
                                             "loading stream consumer group");
+                    decrRefCount(o);
+                    streamFreeNACK(nack);
+                    return NULL;
+                }
             }
 
             /* Now that we loaded our global PEL, we need to load the
@@ -2148,7 +2357,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                     return NULL;
                 }
                 streamConsumer *consumer =
-                    streamLookupConsumer(cgroup,cname,SLC_NONE);
+                    streamLookupConsumer(cgroup,cname,SLC_NONE,NULL);
                 sdsfree(cname);
                 consumer->seen_time = rdbLoadMillisecondTime(rdb,RDB_VERSION);
                 if (rioGetReadError(rdb)) {
@@ -2175,18 +2384,24 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                         return NULL;
                     }
                     streamNACK *nack = (streamNACK*)raxFind(cgroup->pel,rawid,sizeof(rawid));
-                    if (nack == raxNotFound)
-                        rdbExitReportCorruptRDB("Consumer entry not found in "
+                    if (nack == raxNotFound) {
+                        rdbReportCorruptRDB("Consumer entry not found in "
                                                 "group global PEL");
+                        decrRefCount(o);
+                        return NULL;
+                    }
 
                     /* Set the NACK consumer, that was left to NULL when
                      * loading the global PEL. Then set the same shared
                      * NACK structure also in the consumer-specific PEL. */
                     nack->consumer = consumer;
-                    if (!raxInsert(consumer->pel,rawid,sizeof(rawid),nack,NULL))
-                        rdbExitReportCorruptRDB("Duplicated consumer PEL entry "
+                    if (!raxInsert(consumer->pel,rawid,sizeof(rawid),nack,NULL)) {
+                        rdbReportCorruptRDB("Duplicated consumer PEL entry "
                                                 " loading a stream consumer "
                                                 "group");
+                        decrRefCount(o);
+                        return NULL;
+                    }
                 }
             }
         }
@@ -2197,17 +2412,18 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
             return NULL;
         }
         moduleType *mt = moduleTypeLookupModuleByID(moduleid);
-        char name[10];
 
         if (rdbCheckMode && rdbtype == RDB_TYPE_MODULE_2) {
+            char name[10];
             moduleTypeNameByID(name,moduleid);
             return rdbLoadCheckModuleValue(rdb,name);
         }
 
         if (mt == NULL) {
+            char name[10];
             moduleTypeNameByID(name,moduleid);
-            serverLog(LL_WARNING,"The RDB file contains module data I can't load: no matching module '%s'", name);
-            exit(1);
+            rdbReportCorruptRDB("The RDB file contains module data I can't load: no matching module type '%s'", name);
+            return NULL;
         }
         RedisModuleIO io;
         redisObjectStack keyobj;
@@ -2226,20 +2442,28 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
         if (io.ver == 2) {
             uint64_t eof = rdbLoadLen(rdb,NULL);
             if (eof == RDB_LENERR) {
-                o = createModuleObject(mt,ptr); /* creating just in order to easily destroy */
-                decrRefCount(o);
+                if (ptr) {
+                    o = createModuleObject(mt,ptr); /* creating just in order to easily destroy */
+                    decrRefCount(o);
+                }
                 return NULL;
             }
             if (eof != RDB_MODULE_OPCODE_EOF) {
-                serverLog(LL_WARNING,"The RDB file contains module data for the module '%s' that is not terminated by the proper module value EOF marker", name);
-                exit(1);
+                rdbReportCorruptRDB("The RDB file contains module data for the module '%s' that is not terminated by "
+                                    "the proper module value EOF marker", moduleTypeModuleName(mt));
+                if (ptr) {
+                    o = createModuleObject(mt,ptr); /* creating just in order to easily destroy */
+                    decrRefCount(o);
+                }
+                return NULL;
             }
         }
 
         if (ptr == NULL) {
-            moduleTypeNameByID(name,moduleid);
-            serverLog(LL_WARNING,"The RDB file contains module data for the module type '%s', that the responsible module is not able to load. Check for modules log above for additional clues.", name);
-            exit(1);
+            rdbReportCorruptRDB("The RDB file contains module data for the module type '%s', that the responsible "
+                                "module is not able to load. Check for modules log above for additional clues.",
+                                moduleTypeModuleName(mt));
+            return NULL;
         }
         o = createModuleObject(mt,ptr);
     } else if (rdbtype == RDB_TYPE_CRON) {
@@ -2272,6 +2496,8 @@ void startLoading(size_t size, int rdbflags) {
     g_pserver->loading_start_time = time(NULL);
     g_pserver->loading_loaded_bytes = 0;
     g_pserver->loading_total_bytes = size;
+    g_pserver->loading_rdb_used_mem = 0;
+    blockingOperationStarts();
 
     /* Fire the loading modules start event. */
     int subevent;
@@ -2305,6 +2531,7 @@ void loadingProgress(off_t pos) {
 /* Loading finished */
 void stopLoading(int success) {
     g_pserver->loading = 0;
+    blockingOperationEnds();
     rdbFileBeingLoaded = NULL;
 
     /* Fire the loading modules end event. */
@@ -2353,7 +2580,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         while ((ln = listNext(&li)))
         {
             struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
-            if (mi->repl_state == REPL_STATE_TRANSFER)
+            if (mi->masterhost && mi->repl_state == REPL_STATE_TRANSFER)
                 replicationSendNewlineToMaster(mi);
         }
         loadingProgress(r->processed_bytes);
@@ -2451,7 +2678,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             if ((dbid = rdbLoadLen(rdb,NULL)) == RDB_LENERR) goto eoferr;
             if (dbid >= (unsigned)cserver.dbnum) {
                 serverLog(LL_WARNING,
-                    "FATAL: Data file was created with a Redis "
+                    "FATAL: Data file was created with a KeyDB "
                     "server configured to handle more than %d "
                     "databases. Exiting\n", cserver.dbnum);
                 exit(1);
@@ -2497,7 +2724,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             } else if (!strcasecmp(szFromObj(auxkey),"lua")) {
                 /* Load the script back in memory. */
                 if (luaCreateFunction(NULL,g_pserver->lua,auxval) == NULL) {
-                    rdbExitReportCorruptRDB(
+                    rdbReportCorruptRDB(
                         "Can't load Lua script from RDB file! "
                         "BODY: %s", (char*)ptrFromObj(auxval));
                 }
@@ -2513,6 +2740,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 long long usedmem = strtoll(szFromObj(auxval),NULL,10);
                 serverLog(LL_NOTICE,"RDB memory usage when created %.2f Mb",
                     (double) usedmem / (1024*1024));
+                g_pserver->loading_rdb_used_mem = usedmem;
             } else if (!strcasecmp(szFromObj(auxkey),"aof-preamble")) {
                 long long haspreamble = strtoll(szFromObj(auxval),NULL,10);
                 if (haspreamble) serverLog(LL_NOTICE,"RDB has an AOF tail");
@@ -2632,7 +2860,10 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
          * an RDB file from disk, either at startup, or when an RDB was
          * received from the master. In the latter case, the master is
          * responsible for key expiry. If we would expire keys here, the
-         * snapshot taken by the master may not be reflected on the replica. */
+         * snapshot taken by the master may not be reflected on the replica.
+         * Similarly if the RDB is the preamble of an AOF file, we want to
+         * load all the keys as they are, since the log of operations later
+         * assume to work in an exact keyspace state. */
         redisObjectStack keyobj;
         initStaticStringObject(keyobj,key);
         bool fExpiredKey = iAmMaster() && !(rdbflags&RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now;
@@ -2667,12 +2898,15 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                         g_pserver->db[idb]->trackChanges(false, 1024);
                     }
                     if (fHighMemory)
-                        freeMemoryIfNeeded(false /*fQuickCycle*/, false /* fPreSnapshot*/);
+                        performEvictions(false /* fPreSnapshot*/);
                 }
             }
             
+            redisObjectStack keyobj;
+            initStaticStringObject(keyobj,key);
+
             /* Add the new object in the hash table */
-            int fInserted = dbMerge(db, &keyobj, val, (rsi && rsi->fForceSetKey) || (rdbflags & RDBFLAGS_ALLOW_DUP));   // Note: dbMerge will incrRef
+            int fInserted = dbMerge(db, key, val, (rsi && rsi->fForceSetKey) || (rdbflags & RDBFLAGS_ALLOW_DUP));   // Note: dbMerge will incrRef
             fLastKeyExpired = false;
 
             if (fInserted)
@@ -2701,7 +2935,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         }
 
         if (g_pserver->key_load_delay)
-            usleep(g_pserver->key_load_delay);
+            debugDelay(g_pserver->key_load_delay);
 
         rdb->keys_since_last_callback++;
 
@@ -2730,7 +2964,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         uint64_t cksum, expected = rdb->cksum;
 
         if (rioRead(rdb,&cksum,8) == 0) goto eoferr;
-        if (g_pserver->rdb_checksum) {
+        if (g_pserver->rdb_checksum && !cserver.skip_checksum_validation) {
             memrev64ifbe(&cksum);
             if (cksum == 0) {
                 serverLog(LL_WARNING,"RDB file was saved with checksum disabled: no check performed.");
@@ -2739,7 +2973,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                     "got (%llx). Aborting now.",
                         (unsigned long long)expected,
                         (unsigned long long)cksum);
-                rdbExitReportCorruptRDB("RDB CRC error");
+                rdbReportCorruptRDB("RDB CRC error");
             }
         }
     }
@@ -2845,6 +3079,18 @@ static void backgroundSaveDoneHandlerSocket(int exitcode, bool fCancelled) {
         serverLog(LL_WARNING,
             "Background transfer terminated cancelled");
     }
+    if (g_pserver->rdb_child_exit_pipe!=-1)
+        close(g_pserver->rdb_child_exit_pipe);
+    close(g_pserver->rdb_pipe_read);
+    g_pserver->rdb_child_exit_pipe = -1;
+    g_pserver->rdb_pipe_read = -1;
+    zfree(g_pserver->rdb_pipe_conns);
+    g_pserver->rdb_pipe_conns = NULL;
+    g_pserver->rdb_pipe_numconns = 0;
+    g_pserver->rdb_pipe_numconns_writing = 0;
+    zfree(g_pserver->rdb_pipe_buff);
+    g_pserver->rdb_pipe_buff = NULL;
+    g_pserver->rdb_pipe_bufflen = 0;
 }
 
 /* When a background RDB saving/transfer terminates, call the right handler. */
@@ -2871,6 +3117,17 @@ void backgroundSaveDoneHandler(int exitcode, bool fCancelled) {
     updateSlavesWaitingBgsave((!fCancelled && exitcode == 0) ? C_OK : C_ERR, type);
 }
 
+void unblockChildThreadIfNecessary()
+{
+    if (g_pserver->rdbThreadVars.fRdbThreadActive && g_pserver->rdbThreadVars.fRdbThreadCancel) {
+        char buffer[1024];
+        if (g_pserver->rdb_pipe_read >= 0) {
+            while (read(g_pserver->rdb_pipe_read, buffer, sizeof(buffer)) > 0);
+        }
+        receiveChildInfo();
+    }
+}
+
 /* Kill the RDB saving child using SIGUSR1 (so that the parent will know
  * the child did not exit for sn error, but because we wanted), and performs
  * the cleanup needed. */
@@ -2879,14 +3136,15 @@ void killRDBChild(bool fSynchronous) {
 
     if (cserver.fForkBgSave) {
         kill(g_pserver->rdb_child_pid,SIGUSR1);
-        rdbRemoveTempFile(g_pserver->rdb_child_pid, 0);
-        closeChildInfoPipe();
-        updateDictResizePolicy();
     } else { 
         g_pserver->rdbThreadVars.fRdbThreadCancel = true;
-        rdbRemoveTempFile(g_pserver->rdbThreadVars.tmpfileNum, 0);
-        closeChildInfoPipe();
-        updateDictResizePolicy();
+        if (g_pserver->rdb_child_type == RDB_CHILD_TYPE_SOCKET) {
+            // Wake up the thread so it can exit
+            auto t = write(g_pserver->rdb_child_exit_pipe, &cserver.fForkBgSave, 1);
+            UNUSED(t);
+            // Flush out the rdb pipe in case the writer thread is blocked
+            unblockChildThreadIfNecessary();
+        }
         if (fSynchronous)
         {
             aeReleaseLock();
@@ -2905,6 +3163,8 @@ void killRDBChild(bool fSynchronous) {
 struct rdbSaveSocketThreadArgs
 {
     rdbSaveInfo rsi;
+    int rdb_pipe_write;
+    int safe_to_exit_pipe;
     const redisDbPersistentDataSnapshot *rgpdb[1];
 };
 void *rdbSaveToSlavesSocketsThread(void *vargs)
@@ -2920,26 +3180,35 @@ void *rdbSaveToSlavesSocketsThread(void *vargs)
     serverTL = &vars;
     vars.gcEpoch = g_pserver->garbageCollector.startEpoch();
 
-    rioInitWithFd(&rdb,g_pserver->rdb_pipe_write);
+    rioInitWithFd(&rdb,args->rdb_pipe_write);
 
     retval = rdbSaveRioWithEOFMark(&rdb,args->rgpdb,NULL,&args->rsi);
     if (retval == C_OK && rioFlush(&rdb) == 0)
         retval = C_ERR;
 
     if (retval == C_OK) {
-        sendChildCOWInfo(CHILD_TYPE_RDB, "RDB");
+        sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
     }
 
     rioFreeFd(&rdb);
-    close(g_pserver->rdb_pipe_write); /* wake up the reader, tell it we're done. */
+    close(args->rdb_pipe_write); /* wake up the reader, tell it we're done. */
+    /* hold exit until the parent tells us it's safe. we're not expecting
+     * to read anything, just get the error when the pipe is closed. */
+    if (!g_pserver->rdbThreadVars.fRdbThreadCancel) {
+        char dummyBuffer;
+        auto dummy = read(args->safe_to_exit_pipe, &dummyBuffer, 1);
+        UNUSED(dummy);
+    }
 
     // If we were told to cancel the requesting thread is holding the lock for us
     for (int idb = 0; idb < cserver.dbnum; ++idb)
         g_pserver->db[idb]->endSnapshotAsync(args->rgpdb[idb]);
-    zfree(args);
 
     g_pserver->garbageCollector.endEpoch(vars.gcEpoch);
 
+
+    close(args->safe_to_exit_pipe);
+    zfree(args);
     return (retval == C_OK) ? (void*)0 : (void*)1;
 }
 
@@ -2964,15 +3233,26 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
      * of TLS we must let the parent handle a continuous TLS state when the
      * child terminates and parent takes over. */
     if (pipe(pipefds) == -1) return C_ERR;
-    g_pserver->rdb_pipe_read = pipefds[0];
-    g_pserver->rdb_pipe_write = pipefds[1];
-    anetNonBlock(NULL, g_pserver->rdb_pipe_read);
 
     args = (rdbSaveSocketThreadArgs*)zmalloc(sizeof(rdbSaveSocketThreadArgs) + sizeof(redisDbPersistentDataSnapshot*)*(cserver.dbnum-1), MALLOC_LOCAL);
+    g_pserver->rdb_pipe_read = pipefds[0]; /* read end */
+    args->rdb_pipe_write = pipefds[1]; /* write end */
+    anetNonBlock(NULL, g_pserver->rdb_pipe_read);
 
     memcpy(&args->rsi, rsi, sizeof(rdbSaveInfo));
     memcpy(&args->rsi.repl_id, g_pserver->replid, sizeof(g_pserver->replid));
     args->rsi.master_repl_offset = g_pserver->master_repl_offset;
+
+    /* create another pipe that is used by the parent to signal to the child
+     * that it can exit. */
+    if (pipe(pipefds) == -1) {
+        close(args->rdb_pipe_write);
+        close(g_pserver->rdb_pipe_read);
+        zfree(args);
+        return C_ERR;
+    }
+    args->safe_to_exit_pipe = pipefds[0]; /* read end */
+    g_pserver->rdb_child_exit_pipe = pipefds[1]; /* write end */
 
     /* Collect the connections of the replicas we want to transfer
      * the RDB to, which are i WAIT_BGSAVE_START state. */
@@ -3010,15 +3290,18 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
                 replica->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
             }
         }
-        close(g_pserver->rdb_pipe_write);
+        close(args->rdb_pipe_write);
         close(g_pserver->rdb_pipe_read);
         zfree(g_pserver->rdb_pipe_conns);
+        close(args->safe_to_exit_pipe);
         g_pserver->rdb_pipe_conns = NULL;
         g_pserver->rdb_pipe_numconns = 0;
         g_pserver->rdb_pipe_numconns_writing = 0;
+        zfree(args);
         closeChildInfoPipe();
         return C_ERR;
     }
+    g_pserver->child_type = CHILD_TYPE_RDB;
 
     serverLog(LL_NOTICE,"Background RDB transfer started");
     g_pserver->rdb_save_time_start = time(NULL);
@@ -3045,7 +3328,7 @@ void saveCommand(client *c) {
     if (rdbSave(nullptr, rsiptr) == C_OK) {
         addReply(c,shared.ok);
     } else {
-        addReply(c,shared.err);
+        addReplyErrorObject(c,shared.err);
     }
 }
 
@@ -3059,7 +3342,7 @@ void bgsaveCommand(client *c) {
         if (c->argc == 2 && !strcasecmp(szFromObj(c->argv[1]),"schedule")) {
             schedule = 1;
         } else {
-            addReply(c,shared.syntaxerr);
+            addReplyErrorObject(c,shared.syntaxerr);
             return;
         }
     }
@@ -3082,7 +3365,7 @@ void bgsaveCommand(client *c) {
     } else if (rdbSaveBackground(rsiptr) == C_OK) {
         addReplyStatus(c,"Background saving started");
     } else {
-        addReply(c,shared.err);
+        addReplyErrorObject(c,shared.err);
     }
 }
 

@@ -70,7 +70,9 @@
 
 #ifdef HAVE_BACKTRACE
 #include <ucontext.h>
-__attribute__((weak)) void logStackTrace(ucontext_t *) {}
+__attribute__((weak)) void logStackTrace(void *, int) {
+    printf("\tFailed to generate stack trace\n");
+}
 #endif
 
 extern int g_fInCrash;
@@ -188,9 +190,7 @@ void printTrace()
 {
 #ifdef HAVE_BACKTRACE
     serverLog(3 /*LL_WARNING*/, "printing backtrace for thread %d", gettid());
-    ucontext_t ctxt;
-    getcontext(&ctxt);
-    logStackTrace(&ctxt);
+    logStackTrace(nullptr, 1);
 #endif
 }
 

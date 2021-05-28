@@ -42,4 +42,5 @@
 #define lp_malloc(size) zmalloc(size, MALLOC_SHARED)
 #define lp_realloc(ptr, size) zrealloc(ptr, size, MALLOC_SHARED)
 #define lp_free zfree
+#define lp_malloc_size zmalloc_usable_size
 #endif

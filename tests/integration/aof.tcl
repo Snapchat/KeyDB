@@ -296,4 +296,15 @@ tags {"aof"} {
             assert_equal 3 [$client scard testkey]
         }
     }
+
+    start_server {overrides {appendonly {yes} appendfilename {appendonly.aof}}} {
+        test {GETEX should not append to AOF} {
+            set aof [file join [lindex [r config get dir] 1] appendonly.aof]
+            r set foo bar
+            set before [file size $aof]
+            r getex foo
+            set after [file size $aof]
+            assert_equal $before $after
+        }
+    }
 }

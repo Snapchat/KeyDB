@@ -2471,7 +2471,7 @@ void whileBlockedCron() {
     latencyAddSampleIfNeeded("while-blocked-cron",latency);
 }
 
-extern std::atomic<int> ProcessingEventsWhileBlocked;
+extern __thread int ProcessingEventsWhileBlocked;
 
 /* This function gets called every time Redis is entering the
  * main loop of the event driven library, that is, before to sleep

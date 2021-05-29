@@ -304,6 +304,10 @@ uint64_t fastlock_getlongwaitcount()
 
 extern "C" void fastlock_sleep(fastlock *lock, pid_t pid, unsigned wake, unsigned myticket)
 {
+    UNUSED(lock);
+    UNUSED(pid);
+    UNUSED(wake);
+    UNUSED(myticket);
 #ifdef __linux__
     g_dlock.registerwait(lock, pid);
     unsigned mask = (1U << (myticket % 32));

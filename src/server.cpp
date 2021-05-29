@@ -2592,12 +2592,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * the operation even if completely idle. */
     if (g_pserver->tracking_clients) trackingLimitUsedSlots();
 
-    /* Resize tracking keys table if needed. This is also done at every
-     * command execution, but we want to be sure that if the last command
-     * executed changes the value via CONFIG SET, the server will perform
-     * the operation even if completely idle. */
-    if (g_pserver->tracking_clients) trackingLimitUsedSlots();
-
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
      * useful when we are forced to postpone a BGSAVE because an AOF
      * rewrite is in progress.
@@ -2875,7 +2869,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* We may have recieved updates from clients about their current offset. NOTE:
      * this can't be done where the ACK is recieved since failover will disconnect 
      * our clients. */
-    updateFailoverStatus();
+    if (iel == IDX_EVENT_LOOP_MAIN)
+        updateFailoverStatus();
 
     /* Send the invalidation messages to clients participating to the
      * client side caching protocol in broadcasting (BCAST) mode. */
@@ -3268,10 +3263,6 @@ void initServerConfig(void) {
     /* Client output buffer limits */
     for (j = 0; j < CLIENT_TYPE_OBUF_COUNT; j++)
         cserver.client_obuf_limits[j] = clientBufferLimitsDefaults[j];
-
-    /* Linux OOM Score config */
-    for (j = 0; j < CONFIG_OOM_COUNT; j++)
-        g_pserver->oom_score_adj_values[j] = configOOMScoreAdjValuesDefaults[j];
 
     /* Linux OOM Score config */
     for (j = 0; j < CONFIG_OOM_COUNT; j++)
@@ -3786,7 +3777,6 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     pvar->cclients = 0;
     pvar->in_eval = 0;
     pvar->in_exec = 0;
-    pvar->client_pause_type = CLIENT_PAUSE_OFF;
     pvar->el = aeCreateEventLoop(g_pserver->maxclients+CONFIG_FDSET_INCR);
     aeSetBeforeSleepProc(pvar->el, beforeSleep, AE_SLEEP_THREADSAFE);
     aeSetAfterSleepProc(pvar->el, afterSleep, AE_SLEEP_THREADSAFE);
@@ -3877,6 +3867,7 @@ void initServer(void) {
     g_pserver->replication_allowed = 1;
     g_pserver->blocking_op_nesting = 0;
     g_pserver->rdb_pipe_read = -1;
+    g_pserver->client_pause_type = CLIENT_PAUSE_OFF;
 
 
     if ((g_pserver->tls_port || g_pserver->tls_replication || g_pserver->tls_cluster)
@@ -4903,8 +4894,8 @@ int processCommand(client *c, int callFlags) {
     /* If the server is paused, block the client until
      * the pause has ended. Replicas are never paused. */
     if (!(c->flags & CLIENT_SLAVE) && 
-        ((serverTL->client_pause_type == CLIENT_PAUSE_ALL) ||
-        (serverTL->client_pause_type == CLIENT_PAUSE_WRITE && is_may_replicate_command)))
+        ((g_pserver->client_pause_type == CLIENT_PAUSE_ALL) ||
+        (g_pserver->client_pause_type == CLIENT_PAUSE_WRITE && is_may_replicate_command)))
     {
         c->bpop.timeout = 0;
         blockClient(c,BLOCKED_PAUSE);

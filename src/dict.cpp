@@ -350,6 +350,7 @@ int dictTryExpand(dict *d, unsigned long size, bool fShrink) {
 int dictRehash(dict *d, int n) {
     int empty_visits = n*10; /* Max number of empty buckets to visit. */
     if (!dictIsRehashing(d)) return 0;
+    if (d->asyncdata) return 0;
 
     while(n-- && d->ht[0].used != 0) {
         dictEntry *de, *nextde;
@@ -694,7 +695,7 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
                 if (!nofree) {
                     if (table == 0 && d->asyncdata != nullptr && (ssize_t)idx < d->rehashidx) {
                         he->next = d->asyncdata->deGCList;
-                        d->asyncdata->deGCList = he->next;
+                        d->asyncdata->deGCList = he;
                     } else {
                         dictFreeKey(d, he);
                         dictFreeVal(d, he);
@@ -750,9 +751,14 @@ dictEntry *dictUnlink(dict *ht, const void *key) {
 void dictFreeUnlinkedEntry(dict *d, dictEntry *he) {
     if (he == NULL) return;
 
-    dictFreeKey(d, he);
-    dictFreeVal(d, he);
-    zfree(he);
+    if (d->asyncdata) {
+        he->next = d->asyncdata->deGCList;
+        d->asyncdata->deGCList = he;
+    } else { 
+        dictFreeKey(d, he);
+        dictFreeVal(d, he);
+        zfree(he);
+    }
 }
 
 /* Destroy an entire dictionary */

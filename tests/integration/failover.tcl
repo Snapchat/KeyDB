@@ -279,6 +279,7 @@ start_server {} {
         assert_match *slave* [$node_2 role]
 
         # We will cycle all of our replicas here and force a psync.
+        after 100
         assert_equal [expr [s 0 sync_partial_ok] - $initial_psyncs] 2
         assert_equal [expr [s 0 sync_full] - $initial_syncs] 0
 

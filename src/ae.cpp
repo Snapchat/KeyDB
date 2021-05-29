@@ -814,7 +814,9 @@ int aeThreadOwnsLock()
 
 int aeLockContested(int threshold)
 {
-    return g_lock.m_ticket.m_active < static_cast<uint16_t>(g_lock.m_ticket.m_avail - threshold);
+    ticket ticketT;
+    __atomic_load(&g_lock.m_ticket.u, &ticketT.u, __ATOMIC_RELAXED);
+    return ticketT.m_active < static_cast<uint16_t>(ticketT.m_avail - threshold);
 }
 
 int aeLockContention()

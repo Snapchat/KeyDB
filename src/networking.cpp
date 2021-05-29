@@ -40,7 +40,7 @@
 #include "aelocker.h"
 
 static void setProtocolError(const char *errstr, client *c);
-std::atomic<int> ProcessingEventsWhileBlocked {0}; /* See processEventsWhileBlocked(). */
+__thread int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 
 /* Return the size consumed from the allocator, for the specified SDS string,
  * including internal fragmentation. This function is used in order to compute

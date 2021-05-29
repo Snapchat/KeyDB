@@ -2573,7 +2573,9 @@ void processClients()
 {
     serverAssert(GlobalLocksAcquired());
 
-    for (client *c : serverTL->vecclientsProcess) {
+    while (!serverTL->vecclientsProcess.empty()) {
+        client *c = serverTL->vecclientsProcess.front();
+        serverTL->vecclientsProcess.erase(serverTL->vecclientsProcess.begin());
         /* There is more data in the client input buffer, continue parsing it
         * in case to check if there is a full command to execute. */
         std::unique_lock<fastlock> ul(c->lock);

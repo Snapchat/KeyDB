@@ -2341,12 +2341,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * the operation even if completely idle. */
     if (g_pserver->tracking_clients) trackingLimitUsedSlots();
 
-    /* Resize tracking keys table if needed. This is also done at every
-     * command execution, but we want to be sure that if the last command
-     * executed changes the value via CONFIG SET, the server will perform
-     * the operation even if completely idle. */
-    if (g_pserver->tracking_clients) trackingLimitUsedSlots();
-
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
      * useful when we are forced to postpone a BGSAVE because an AOF
      * rewrite is in progress.
@@ -2923,10 +2917,6 @@ void initServerConfig(void) {
     /* Client output buffer limits */
     for (j = 0; j < CLIENT_TYPE_OBUF_COUNT; j++)
         cserver.client_obuf_limits[j] = clientBufferLimitsDefaults[j];
-
-    /* Linux OOM Score config */
-    for (j = 0; j < CONFIG_OOM_COUNT; j++)
-        g_pserver->oom_score_adj_values[j] = configOOMScoreAdjValuesDefaults[j];
 
     /* Linux OOM Score config */
     for (j = 0; j < CONFIG_OOM_COUNT; j++)

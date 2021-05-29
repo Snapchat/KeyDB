@@ -3815,8 +3815,8 @@ void flushSlavesOutputBuffers(void) {
  * In such a case, the duration is set to the maximum and new end time and the
  * type is set to the more restrictive type of pause. */
 void pauseClients(mstime_t end, pause_type type) {
-    if (type > serverTL->client_pause_type) {
-        serverTL->client_pause_type = type;
+    if (type > g_pserver->client_pause_type) {
+        g_pserver->client_pause_type = type;
     }
 
     if (end > g_pserver->client_pause_end_time) {
@@ -3839,7 +3839,7 @@ void unpauseClients(void) {
     listIter li;
     client *c;
     
-    serverTL->client_pause_type = CLIENT_PAUSE_OFF;
+    g_pserver->client_pause_type = CLIENT_PAUSE_OFF;
 
     /* Unblock all of the clients so they are reprocessed. */
     listRewind(g_pserver->paused_clients,&li);
@@ -3852,7 +3852,7 @@ void unpauseClients(void) {
 
 /* Returns true if clients are paused and false otherwise. */ 
 int areClientsPaused(void) {
-    return serverTL->client_pause_type != CLIENT_PAUSE_OFF;
+    return g_pserver->client_pause_type != CLIENT_PAUSE_OFF;
 }
 
 /* Checks if the current client pause has elapsed and unpause clients

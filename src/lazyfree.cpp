@@ -152,6 +152,13 @@ int dbAsyncDelete(redisDb *db, robj *key) {
     if (de) {
         robj *val = (robj*)dictGetVal(de);
 
+        if (val->FExpires())
+        {
+            /* Deleting an entry from the expires dict will not free the sds of
+             * the key, because it is shared with the main dictionary. */
+            removeExpireCore(db,key,de);
+        }
+
         /* Tells the module that the key has been unlinked from the database. */
         moduleNotifyKeyUnlink(key,val);
 

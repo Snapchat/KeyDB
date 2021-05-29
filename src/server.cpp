@@ -2059,6 +2059,11 @@ bool expireOwnKeys()
     return false;
 }
 
+int hash_spin_worker() {
+    auto ctl = serverTL->rehashCtl;
+    return dictRehashSomeAsync(ctl, 1);
+}
+
 /* This function handles 'background' operations we are required to do
  * incrementally in Redis databases, such as active key expiring, resizing,
  * rehashing. */
@@ -2153,6 +2158,12 @@ void databasesCron(bool fMainThread) {
                 }
             }
         }
+    }
+
+    if (serverTL->rehashCtl) {
+        setAeLockSetThreadSpinWorker(hash_spin_worker);
+    } else {
+        setAeLockSetThreadSpinWorker(nullptr);
     }
 }
 

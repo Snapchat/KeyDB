@@ -1527,6 +1527,8 @@ void unlinkClient(client *c) {
         c->fPendingAsyncWrite = FALSE;
     }
 
+    serverTL->vecclientsProcess.erase(std::remove(serverTL->vecclientsProcess.begin(), serverTL->vecclientsProcess.end(), c), serverTL->vecclientsProcess.end());
+
     /* Clear the tracking status. */
     if (c->flags & CLIENT_TRACKING) disableTracking(c);
 }

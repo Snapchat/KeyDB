@@ -688,6 +688,7 @@ void freeClusterLink(clusterLink *link) {
 }
 
 static void clusterConnAcceptHandler(connection *conn) {
+    serverAssert(ielFromEventLoop(serverTL->el) == IDX_EVENT_LOOP_MAIN);
     clusterLink *link;
 
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
@@ -1791,6 +1792,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
  * processing lead to some inconsistency error (for instance a PONG
  * received from the wrong sender ID). */
 int clusterProcessPacket(clusterLink *link) {
+    serverAssert(ielFromEventLoop(serverTL->el) == IDX_EVENT_LOOP_MAIN);
+
     clusterMsg *hdr = (clusterMsg*) link->rcvbuf;
     uint32_t totlen = ntohl(hdr->totlen);
     uint16_t type = ntohs(hdr->type);
@@ -3546,6 +3549,7 @@ void clusterHandleManualFailover(void) {
 
 /* This is executed 10 times every second */
 void clusterCron(void) {
+    serverAssert(ielFromEventLoop(serverTL->el) == IDX_EVENT_LOOP_MAIN);
     dictIterator *di;
     dictEntry *de;
     int update_state = 0;

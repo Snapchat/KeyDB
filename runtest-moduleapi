@@ -31,7 +31,6 @@ $TCLSH tests/test_helper.tcl \
 --single unit/moduleapi/blockedclient \
 --single unit/moduleapi/moduleloadsave \
 --single unit/moduleapi/getkeys \
---single unit/moduleapi/timers \
 --single unit/moduleapi/test_lazyfree \
 --single unit/moduleapi/defrag \
 --single unit/moduleapi/hash \

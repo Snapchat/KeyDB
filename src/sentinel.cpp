@@ -878,6 +878,10 @@ void sentinelRunPendingScripts(void) {
         } else if (pid == 0) {
             /* Child */
             tlsCleanup();
+            for (int iel = 0; iel < cserver.cthreads; ++iel) {
+                aeClosePipesForForkChild(g_pserver->rgthreadvar[iel].el);
+            }
+            aeClosePipesForForkChild(g_pserver->modulethreadvar.el);
             execve(sj->argv[0],sj->argv,environ);
             /* If we are here an error occurred. */
             _exit(2); /* Don't retry execution. */

@@ -1993,6 +1993,10 @@ void readSyncBulkPayload(connection *conn) {
     // Should we update our database, or create from scratch?
     int fUpdate = g_pserver->fActiveReplica || g_pserver->enable_multimaster;
     redisMaster *mi = (redisMaster*)connGetPrivateData(conn);
+    if (mi == nullptr) {
+        // We're about to be free'd so bail out
+        return;
+    }
 
     serverAssert(GlobalLocksAcquired());
     serverAssert(mi->master == nullptr);

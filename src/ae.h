@@ -161,6 +161,7 @@ int aeGetSetSize(aeEventLoop *eventLoop);
 aeEventLoop *aeGetCurrentEventLoop();
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
 void aeSetDontWait(aeEventLoop *eventLoop, int noWait);
+void aeClosePipesForForkChild(aeEventLoop *eventLoop);
 
 void setAeLockSetThreadSpinWorker(spin_worker worker);
 void aeAcquireLock();

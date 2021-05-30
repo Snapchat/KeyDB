@@ -808,3 +808,11 @@ int aeThreadOwnsLock()
 {
     return g_lock.fOwnLock();
 }
+
+void aeClosePipesForForkChild(aeEventLoop *el)
+{
+    close(el->fdCmdRead);
+    el->fdCmdRead = -1;
+    close(el->fdCmdWrite);
+    el->fdCmdWrite = -1;
+}

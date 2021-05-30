@@ -3081,7 +3081,11 @@ static void backgroundSaveDoneHandlerSocket(int exitcode, bool fCancelled) {
     }
     if (g_pserver->rdb_child_exit_pipe!=-1)
         close(g_pserver->rdb_child_exit_pipe);
-    close(g_pserver->rdb_pipe_read);
+    auto pipeT = g_pserver->rdb_pipe_read;
+    aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [pipeT]{
+        aeDeleteFileEvent(serverTL->el, pipeT, AE_READABLE);
+        close(pipeT);
+    });
     g_pserver->rdb_child_exit_pipe = -1;
     g_pserver->rdb_pipe_read = -1;
     zfree(g_pserver->rdb_pipe_conns);

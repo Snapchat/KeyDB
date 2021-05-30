@@ -6192,6 +6192,11 @@ void closeChildUnusedResourceAfterFork() {
     if (g_pserver->cluster_enabled && g_pserver->cluster_config_file_lock_fd != -1)
         close(g_pserver->cluster_config_file_lock_fd);  /* don't care if this fails */
 
+    for (int iel = 0; iel < cserver.cthreads; ++iel) {
+        aeClosePipesForForkChild(g_pserver->rgthreadvar[iel].el);
+    }
+    aeClosePipesForForkChild(g_pserver->modulethreadvar.el);
+
     /* Clear cserver.pidfile, this is the parent pidfile which should not
      * be touched (or deleted) by the child (on exit / crash) */
     zfree(cserver.pidfile);

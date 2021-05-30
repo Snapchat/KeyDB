@@ -1896,7 +1896,7 @@ void replicationCreateCachedMasterClone(redisMaster *mi) {
     }
     client *c = createClient(nullptr, ielFromEventLoop(serverTL->el));
 
-    c->flags |= mi->master->flags;
+    c->flags |= mi->master->flags & ~(CLIENT_PENDING_WRITE | CLIENT_UNBLOCKED | CLIENT_CLOSE_ASAP);
     c->authenticated = mi->master->authenticated;
     c->reploff = mi->master->reploff;
     c->read_reploff = mi->master->read_reploff;

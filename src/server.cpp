@@ -61,6 +61,7 @@
 #include <algorithm>
 #include <uuid/uuid.h>
 #include <mutex>
+#include <condition_variable>
 #include "aelocker.h"
 #include "keycheck.h"
 #include "motd.h"
@@ -71,7 +72,7 @@
 
 int g_fTestMode = false;
 const char *motd_url = "http://api.keydb.dev/motd/motd_server_pro.txt";
-const char *motd_cache_file = "/.keydb-pro-server-motd";
+const char *motd_cache_file = "/.keydb-enterprise-server-motd";
 
 #ifdef __linux__
 #include <sys/mman.h>
@@ -97,6 +98,10 @@ redisServer *g_pserver = &GlobalHidden::server;
 struct redisServerConst cserver;
 thread_local struct redisServerThreadVars *serverTL = NULL;   // thread local server vars
 volatile unsigned long lru_clock; /* Server global current LRU time. */
+std::mutex time_thread_mutex;
+std::condition_variable time_thread_cv;
+int sleeping_threads = cserver.cthreads;
+void wakeTimeThread();
 
 /* Our command table.
  *
@@ -2440,6 +2445,14 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* CRON functions may trigger async writes, so do this last */
     ProcessPendingAsyncWrites();
 
+    // Measure lock contention from a different thread to be more accurate
+    g_pserver->asyncworkqueue->AddWorkFunction([]{
+        g_pserver->rglockSamples[g_pserver->ilockRingHead] = (uint16_t)aeLockContention();
+        ++g_pserver->ilockRingHead;
+        if (g_pserver->ilockRingHead >= redisServer::s_lockContentionSamples)
+            g_pserver->ilockRingHead = 0;
+    });
+
     run_with_period(10) {
         if (!g_pserver->garbageCollector.empty()) {
             // Server threads don't free the GC, but if we don't have a
@@ -2451,14 +2464,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             });
         }
     }
-
-    // Measure lock contention from a different thread to be more accurate
-    g_pserver->asyncworkqueue->AddWorkFunction([]{
-        g_pserver->rglockSamples[g_pserver->ilockRingHead] = (uint16_t)aeLockContention();
-        ++g_pserver->ilockRingHead;
-        if (g_pserver->ilockRingHead >= redisServer::s_lockContentionSamples)
-            g_pserver->ilockRingHead = 0;
-    });
 
     g_pserver->cronloops++;
     return 1000/g_pserver->hz;
@@ -2675,6 +2680,13 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     locker.disarm();
     if (!fSentReplies)
         handleClientsWithPendingWrites(iel, aof_state);
+
+    {
+        std::lock_guard<std::mutex> lock(time_thread_mutex);
+        sleeping_threads++;
+        serverAssert(sleeping_threads <= cserver.cthreads);
+    }
+
     if (moduleCount()) moduleReleaseGIL(TRUE /*fServerThread*/);
 
     /* Do NOT add anything below moduleReleaseGIL !!! */
@@ -2689,6 +2701,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
 
     /* Aquire the modules GIL so that their threads won't touch anything. */
     if (moduleCount()) moduleAcquireGIL(TRUE /*fServerThread*/);
+
+    wakeTimeThread();
 
     serverAssert(serverTL->gcEpoch.isReset());
     serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
@@ -5463,7 +5477,7 @@ sds genRedisInfoString(const char *section) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, 
             "# KeyDB\r\n"
-            "variant:pro\r\n"
+            "variant:enterprise\r\n"
             "license_status:%s\r\n"
             "mvcc_depth:%d\r\n",
             cserver.license_key ? "OK" : "Trial",
@@ -5697,19 +5711,19 @@ void version(void) {
 }
 
 void usage(void) {
-    fprintf(stderr,"Usage: ./keydb-pro-server [/path/to/keydb.conf] [options]\n");
-    fprintf(stderr,"       ./keydb-pro-server - (read config from stdin)\n");
-    fprintf(stderr,"       ./keydb-pro-server -v or --version\n");
-    fprintf(stderr,"       ./keydb-pro-server -h or --help\n");
-    fprintf(stderr,"       ./keydb-pro-server --test-memory <megabytes>\n\n");
+    fprintf(stderr,"Usage: ./keydb-server [/path/to/keydb.conf] [options]\n");
+    fprintf(stderr,"       ./keydb-server - (read config from stdin)\n");
+    fprintf(stderr,"       ./keydb-server -v or --version\n");
+    fprintf(stderr,"       ./keydb-server -h or --help\n");
+    fprintf(stderr,"       ./keydb-server --test-memory <megabytes>\n\n");
     fprintf(stderr,"Examples:\n");
-    fprintf(stderr,"       ./keydb-pro-server (run the server with default conf)\n");
-    fprintf(stderr,"       ./keydb-pro-server /etc/redis/6379.conf\n");
-    fprintf(stderr,"       ./keydb-pro-server --port 7777\n");
-    fprintf(stderr,"       ./keydb-pro-server --port 7777 --replicaof 127.0.0.1 8888\n");
-    fprintf(stderr,"       ./keydb-pro-server /etc/mykeydb.conf --loglevel verbose\n\n");
+    fprintf(stderr,"       ./keydb-server (run the server with default conf)\n");
+    fprintf(stderr,"       ./keydb-server /etc/redis/6379.conf\n");
+    fprintf(stderr,"       ./keydb-server --port 7777\n");
+    fprintf(stderr,"       ./keydb-server --port 7777 --replicaof 127.0.0.1 8888\n");
+    fprintf(stderr,"       ./keydb-server /etc/mykeydb.conf --loglevel verbose\n\n");
     fprintf(stderr,"Sentinel mode:\n");
-    fprintf(stderr,"       ./keydb-pro-server /etc/sentinel.conf --sentinel\n");
+    fprintf(stderr,"       ./keydb-server /etc/sentinel.conf --sentinel\n");
     exit(1);
 }
 
@@ -5754,7 +5768,7 @@ void redisAsciiArt(void) {
     if (cserver.license_key == nullptr && !g_pserver->sentinel_mode)
     {
 #ifndef NO_LICENSE_CHECK
-        serverLog(LL_WARNING, "!!!! KeyDB Pro is being run in trial mode  !!!!");
+        serverLog(LL_WARNING, "!!!! KeyDB Enterprise is being run in trial mode  !!!!");
         serverLog(LL_WARNING, "!!!! Execution will terminate in %d minutes !!!!", cserver.trial_timeout);
 #endif
     }
@@ -6120,15 +6134,29 @@ void OnTerminate()
     serverPanic("std::teminate() called");
 }
 
+void wakeTimeThread() {
+    updateCachedTime();
+    std::lock_guard<std::mutex> lock(time_thread_mutex);
+    sleeping_threads--;
+    serverAssert(sleeping_threads >= 0);
+    time_thread_cv.notify_one();
+}
+
 void *timeThreadMain(void*) {
     timespec delay;
     delay.tv_sec = 0;
     delay.tv_nsec = 100;
     while (true) {
+        {
+            std::unique_lock<std::mutex> lock(time_thread_mutex);
+            if (sleeping_threads >= cserver.cthreads) {
+                time_thread_cv.wait(lock);
+            }
+        }
         updateCachedTime();
-        clock_nanosleep(CLOCK_REALTIME, 0, &delay, NULL);
+        clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, NULL);
     }
-} 
+}
 
 void *workerThreadMain(void *parg)
 {
@@ -6297,7 +6325,7 @@ int main(int argc, char **argv) {
                 exit(0);
             } else {
                 fprintf(stderr,"Please specify the amount of memory to test in megabytes.\n");
-                fprintf(stderr,"Example: ./keydb-pro-server --test-memory 4096\n\n");
+                fprintf(stderr,"Example: ./keydb-server --test-memory 4096\n\n");
                 exit(1);
             }
         }
@@ -6478,11 +6506,11 @@ int main(int argc, char **argv) {
     serverAssert(cserver.cthreads > 0 && cserver.cthreads <= MAX_EVENT_LOOPS);
 
     pthread_create(&cserver.time_thread_id, nullptr, timeThreadMain, nullptr);
-if (cserver.time_thread_priority) {
-    struct sched_param time_thread_priority;
-    time_thread_priority.sched_priority = sched_get_priority_max(SCHED_FIFO);
-    pthread_setschedparam(cserver.time_thread_id, SCHED_FIFO, &time_thread_priority);
-}
+    if (cserver.time_thread_priority) {
+        struct sched_param time_thread_priority;
+        time_thread_priority.sched_priority = sched_get_priority_max(SCHED_FIFO);
+        pthread_setschedparam(cserver.time_thread_id, SCHED_FIFO, &time_thread_priority);
+    }
 
     pthread_attr_t tattr;
     pthread_attr_init(&tattr);

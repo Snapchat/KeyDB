@@ -25,7 +25,8 @@ void AsyncWorkQueue::WorkerThreadMain()
     while (!m_fQuitting)
     {
         std::unique_lock<std::mutex> lock(m_mutex);
-        m_cvWakeup.wait(lock);
+        if (m_workqueue.empty())
+            m_cvWakeup.wait(lock);
 
         while (!m_workqueue.empty())
         {

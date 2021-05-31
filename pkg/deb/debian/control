@@ -1,4 +1,4 @@
-Source: keydb-pro
+Source: keydb-enterprise
 Section: database
 Priority: optional
 Maintainer: Ben Schermel <ben@eqalpha.com>
@@ -7,6 +7,7 @@ Build-Depends:
  dpkg-dev (>= 1.17.5),
  systemd,
  procps <!nocheck>,
+ pkg-config <!nocheck>,
  build-essential <!nocheck>,
  tcl <!nocheck>,
  tcl-dev <!nocheck>,
@@ -24,14 +25,14 @@ Build-Depends:
  libzstd-dev <!nocheck>
 Standards-Version: 4.2.1
 Homepage: https://docs.keydb.dev/
-Vcs-Git: https://github.com/JohnSully/KeyDB-Pro.git
-Vcs-Browser: https://github.com/JohnSully/KeyDB-Pro
+Vcs-Git: https://gitlab.eqalpha.com/keydb-dev/KeyDB-Pro.git
+Vcs-Browser: https://gitlab.eqalpha.com/keydb-dev/KeyDB-Pro
 
-Package: keydb-pro
+Package: keydb-enterprise
 Architecture: all
 Depends:
- keydb-pro-server (<< ${binary:Version}.1~),
- keydb-pro-server (>= ${binary:Version}),
+ keydb-enterprise-server (<< ${binary:Version}.1~),
+ keydb-enterprise-server (>= ${binary:Version}),
  ${misc:Depends},
 Description: Persistent key-value database with network interface (metapackage)
  keydb is a key-value database in a similar vein to memcache but the dataset
@@ -42,11 +43,11 @@ Description: Persistent key-value database with network interface (metapackage)
  .
  This package depends on the keydb-server package.
 
-Package: keydb-pro-sentinel
+Package: keydb-enterprise-sentinel
 Architecture: any
 Depends:
  lsb-base (>= 3.2-14),
- keydb-pro-tools (= ${binary:Version}),
+ keydb-enterprise-tools (= ${binary:Version}),
  ${misc:Depends},
 Description: Persistent key-value database with network interface (monitoring)
  keydb is a key-value database in a similar vein to memcache but the dataset
@@ -55,11 +56,11 @@ Description: Persistent key-value database with network interface (monitoring)
  .
  This package contains the keydb Sentinel monitoring software.
 
-Package: keydb-pro-server
+Package: keydb-enterprise-server
 Architecture: any
 Depends:
  lsb-base (>= 3.2-14),
- keydb-pro-tools (= ${binary:Version}),
+ keydb-enterprise-tools (= ${binary:Version}),
  ${misc:Depends},
 Description: Persistent key-value database with network interface
  keydb is a key-value database in a similar vein to memcache but the dataset
@@ -68,7 +69,7 @@ Description: Persistent key-value database with network interface
  .
  The dataset is stored entirely in memory and periodically flushed to disk.
 
-Package: keydb-pro-tools
+Package: keydb-enterprise-tools
 Architecture: any
 Depends:
  adduser,

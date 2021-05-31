@@ -88,9 +88,13 @@ KeyDB can be compiled and is tested for use on Linux.  KeyDB currently relies on
 
 More on CentOS/Archlinux/Alpine/Debian/Ubuntu dependencies and builds can be found here: https://docs.keydb.dev/docs/build/
 
+Init and clone submodule dependencies:
+
+    % git submodule init && git submodule update
+
 Install dependencies:
 
-    % sudo apt install build-essential nasm autotools-dev autoconf libjemalloc-dev tcl tcl-dev uuid-dev libcurl4-openssl-dev
+    % sudo apt install build-essential nasm autotools-dev autoconf libjemalloc-dev tcl tcl-dev uuid-dev libcurl4-openssl-dev libbz2-dev libzstd-dev liblz4-dev libsnappy-dev
 
 Compiling is as simple as:
 
@@ -185,19 +189,19 @@ Running KeyDB
 To run KeyDB with the default configuration, just type:
 
     % cd src
-    % ./keydb-pro-server
+    % ./keydb-server
 
 If you want to provide your keydb.conf, you have to run it using an additional
 parameter (the path of the configuration file):
 
     % cd src
-    % ./keydb-pro-server /path/to/keydb.conf
+    % ./keydb-server /path/to/keydb.conf
 
 It is possible to alter the KeyDB configuration by passing parameters directly
 as options using the command line. Examples:
 
-    % ./keydb-pro-server --port 9999 --replicaof 127.0.0.1 6379
-    % ./keydb-pro-server /etc/keydb/6379.conf --loglevel debug
+    % ./keydb-server --port 9999 --replicaof 127.0.0.1 6379
+    % ./keydb-server /etc/keydb/6379.conf --loglevel debug
 
 All the options in keydb.conf are also supported as options using the command
 line, with exactly the same name.
@@ -213,7 +217,7 @@ how to use Redis with TLS.
 Playing with KeyDB
 ------------------
 
-You can use keydb-cli to play with KeyDB. Start a keydb-pro-server instance,
+You can use keydb-cli to play with KeyDB. Start a keydb-server instance,
 then in another terminal try the following:
 
     % cd src
@@ -278,7 +282,7 @@ Simply make a directory you would like to have the latest binaries dumped in, th
 ```
 $ docker run -it --rm -v /path-to-dump-binaries:/keydb_bin eqalpha/keydb-build-bin
 ```
-You should receive the following files: keydb-benchmark,  keydb-check-aof,  keydb-check-rdb,  keydb-cli,  keydb-sentinel,  keydb-pro-server
+You should receive the following files: keydb-benchmark,  keydb-check-aof,  keydb-check-rdb,  keydb-cli,  keydb-sentinel,  keydb-server
 
 If you are looking to enable flash support with the build (make MALLOC=memkind) then use the following command:
 ```

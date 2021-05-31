@@ -279,9 +279,10 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
         long long minimumsize = g_pserver->master_repl_offset + len - g_pserver->repl_batch_offStart+1;
         if (minimumsize > g_pserver->repl_backlog_size) {
             flushReplBacklogToClients();
+            serverAssert(g_pserver->master_repl_offset == g_pserver->repl_batch_offStart);
             minimumsize = g_pserver->master_repl_offset + len - g_pserver->repl_batch_offStart+1;
 
-            if (minimumsize > g_pserver->repl_backlog_size) {
+            if (minimumsize > g_pserver->repl_backlog_size && minimumsize < (long long)cserver.client_obuf_limits[CLIENT_TYPE_SLAVE].hard_limit_bytes) {
                 // This is an emergency overflow, we better resize to fit
                 long long newsize = std::max(g_pserver->repl_backlog_size*2, minimumsize);
                 serverLog(LL_WARNING, "Replication backlog is too small, resizing to: %lld", newsize);
@@ -2747,8 +2748,8 @@ void syncWithMaster(connection *conn) {
         err = sendSynchronousCommand(mi, SYNC_CMD_READ,conn,NULL);
         if (err[0] == '-') {
             if (err[1] == 'E' && err[2] == 'R' && err[3] == 'R') {
-                // Replicating with non-pro
-                serverLog(LL_WARNING, "Replicating with non-pro server.");
+                // Replicating with non-enterprise
+                serverLog(LL_WARNING, "Replicating with non-enterprise server.");
             } else {
                 serverLog(LL_WARNING, "Recieved error from client: %s", err);
                 sdsfree(err);
@@ -3213,9 +3214,14 @@ void replicationHandleMasterDisconnection(redisMaster *mi) {
             moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
                                 REDISMODULE_SUBEVENT_MASTER_LINK_DOWN,
                                 NULL);
+        if (mi->master && mi->master->repl_down_since) {
+            mi->repl_down_since = mi->master->repl_down_since;
+        }
+        else {
+            mi->repl_down_since = g_pserver->unixtime;
+        }
         mi->master = NULL;
         mi->repl_state = REPL_STATE_CONNECT;
-        mi->repl_down_since = g_pserver->unixtime;
         /* We lost connection with our master, don't disconnect slaves yet,
         * maybe we'll be able to PSYNC with our master later. We'll disconnect
         * the slaves only if we'll have to do a full resync with our master. */
@@ -3534,6 +3540,7 @@ void replicationResurrectCachedMaster(redisMaster *mi, connection *conn) {
     mi->master->lastinteraction = g_pserver->unixtime;
     mi->repl_state = REPL_STATE_CONNECTED;
     mi->repl_down_since = 0;
+    mi->master->repl_down_since = 0;
 
     /* Normally changing the thread of a client is a BIG NONO,
         but this client was unlinked so its OK here */
@@ -4458,8 +4465,24 @@ void flushReplBacklogToClients()
     
     if (g_pserver->repl_batch_offStart != g_pserver->master_repl_offset) {
         bool fAsyncWrite = false;
-        // Ensure no overflow
+        
         serverAssert(g_pserver->repl_batch_offStart < g_pserver->master_repl_offset);
+        if (g_pserver->master_repl_offset - g_pserver->repl_batch_offStart > g_pserver->repl_backlog_size) {
+            // We overflowed
+            listIter li;
+            listNode *ln;
+            listRewind(g_pserver->slaves, &li);
+            while ((ln = listNext(&li))) {
+                client *c = (client*)listNodeValue(ln);
+                sds sdsClient = catClientInfoString(sdsempty(),c);
+                freeClientAsync(c);
+                serverLog(LL_WARNING,"Client %s scheduled to be closed ASAP for overcoming of output buffer limits.", sdsClient);
+                sdsfree(sdsClient);
+            }
+            goto LDone;
+        }
+
+        // Ensure no overflow if we get here
         serverAssert(g_pserver->master_repl_offset - g_pserver->repl_batch_offStart <= g_pserver->repl_backlog_size);
         serverAssert(g_pserver->repl_batch_idxStart != g_pserver->repl_backlog_idx);
 
@@ -4497,6 +4520,7 @@ void flushReplBacklogToClients()
         if (fAsyncWrite)
             ProcessPendingAsyncWrites();
 
+LDone:
         // This may be called multiple times per "frame" so update with our progress flushing to clients
         g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
         g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;

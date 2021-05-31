@@ -88,4 +88,4 @@ ENTRYPOINT ["docker-entrypoint.sh"]
 
 # Expose container port and start KeyDB by default on running container
 EXPOSE 6379
-CMD ["keydb-pro-server", "/etc/keydb/keydb.conf"]
+CMD ["keydb-server", "/etc/keydb/keydb.conf"]

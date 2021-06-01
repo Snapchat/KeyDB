@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include "sds.h"
 
 class IStorageFactory
 {
@@ -27,6 +28,14 @@ public:
     virtual size_t clear() = 0;
     virtual bool enumerate(callback fn) const = 0;
     virtual size_t count() const = 0;
+
+    virtual void bulkInsert(sds *rgkeys, sds *rgvals, size_t celem) {
+        beginWriteBatch();
+        for (size_t ielem = 0; ielem < celem; ++ielem) {
+            insert(rgkeys[ielem], sdslen(rgkeys[ielem]), rgvals[ielem], sdslen(rgvals[ielem]), false);
+        }
+        endWriteBatch();
+    }
 
     virtual void beginWriteBatch() {} // NOP
     virtual void endWriteBatch() {} // NOP

@@ -2765,6 +2765,34 @@ bool redisDbPersistentData::processChanges(bool fSnapshot)
     return (m_spstorage != nullptr);
 }
 
+void redisDbPersistentData::processChangesAsync(std::atomic<int> &pendingJobs)
+{
+    ++pendingJobs;
+    dictEmpty(m_dictChanged, nullptr);
+    dict *dictNew = dictCreate(&dbDictType, nullptr);
+    std::swap(dictNew, m_pdict);
+    m_cnewKeysPending = 0;
+    g_pserver->asyncworkqueue->AddWorkFunction([dictNew, this, &pendingJobs]{
+        dictIterator *di = dictGetIterator(dictNew);
+        dictEntry *de;
+        std::vector<sds> veckeys;
+        std::vector<sds> vecvals;
+        while ((de = dictNext(di)) != nullptr)
+        {
+            robj *o = (robj*)dictGetVal(de);
+            sds temp = serializeStoredObjectAndExpire(this, (const char*) dictGetKey(de), o);
+            veckeys.push_back((sds)dictGetKey(de));
+            vecvals.push_back(temp);
+        }
+        m_spstorage->bulkInsert(veckeys.data(), vecvals.data(), veckeys.size());
+        for (auto val : vecvals)
+            sdsfree(val);
+        dictReleaseIterator(di);
+        dictRelease(dictNew);
+        --pendingJobs;
+    });
+}
+
 void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **psnapshotFree)
 {
     if (m_pdbSnapshotStorageFlush)

@@ -140,5 +140,6 @@ size_t StorageCache::count() const
 
 void StorageCache::beginWriteBatch() { 
     serverAssert(GlobalLocksAcquired());    // Otherwise we deadlock
+    m_lock.lock();
     m_spstorage->beginWriteBatch(); 
 }

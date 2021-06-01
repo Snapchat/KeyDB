@@ -7,6 +7,7 @@ class StorageCache
     dict *m_pdict = nullptr;
     int m_collisionCount = 0;
     mutable fastlock m_lock {"StorageCache"};
+    std::atomic<int> bulkInsertsInProgress;
 
     StorageCache(IStorage *storage, bool fNoCache);
 
@@ -37,13 +38,14 @@ public:
 
     void clear();
     void insert(sds key, const void *data, size_t cbdata, bool fOverwrite);
+    void bulkInsert(sds *rgkeys, sds *rgvals, size_t celem);
     void retrieve(sds key, IStorage::callbackSingle fn) const;
     bool erase(sds key);
 
     bool enumerate(IStorage::callback fn) const { return m_spstorage->enumerate(fn); }
 
     void beginWriteBatch();
-    void endWriteBatch() { m_spstorage->endWriteBatch(); }
+    void endWriteBatch() { m_spstorage->endWriteBatch(); m_lock.unlock(); }
     void batch_lock() { return m_spstorage->batch_lock(); }
     void batch_unlock() { return m_spstorage->batch_unlock(); }
 

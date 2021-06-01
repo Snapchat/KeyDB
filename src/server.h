@@ -1114,6 +1114,7 @@ public:
     //  either release the global lock or keep the same global lock between the two functions as
     //  a second look is kept to ensure writes to secondary storage are ordered
     bool processChanges(bool fSnapshot);
+    void processChangesAsync(std::atomic<int> &pendingJobs);
     void commitChanges(const redisDbPersistentDataSnapshot **psnapshotFree = nullptr);
 
     // This should only be used if you look at the key, we do not fixup
@@ -1278,6 +1279,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::setExpire;
     using redisDbPersistentData::trackChanges;
     using redisDbPersistentData::processChanges;
+    using redisDbPersistentData::processChangesAsync;
     using redisDbPersistentData::commitChanges;
     using redisDbPersistentData::setexpireUnsafe;
     using redisDbPersistentData::setexpire;

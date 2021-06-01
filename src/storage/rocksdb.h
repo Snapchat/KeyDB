@@ -34,6 +34,8 @@ public:
     virtual void beginWriteBatch() override;
     virtual void endWriteBatch() override;
 
+    virtual void bulkInsert(sds *rgkeys, sds *rgvals, size_t celem) override;
+
     virtual void batch_lock() override;
     virtual void batch_unlock() override;
 

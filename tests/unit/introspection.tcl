@@ -3,6 +3,16 @@ start_server {tags {"introspection"}} {
         r client list
     } {*addr=*:* fd=* age=* idle=* flags=N db=9 sub=0 psub=0 multi=-1 qbuf=0 qbuf-free=* argv-mem=* obl=0 oll=0 omem=0 tot-mem=* events=r cmd=client*}
 
+    test {CLIENT LIST with IDs} {
+        set myid [r client id]
+        set cl [split [r client list id $myid] "\r\n"]
+        assert_match "id=$myid*" [lindex $cl 0]
+    }
+
+    test {CLIENT INFO} {
+        r client info
+    } {*addr=*:* fd=* age=* idle=* flags=N db=9 sub=0 psub=0 multi=-1 qbuf=0 qbuf-free=* argv-mem=* obl=0 oll=0 omem=0 tot-mem=* events=r cmd=client*}
+
     test {MONITOR can log executed commands} {
         set rd [redis_deferring_client]
         $rd monitor
@@ -58,6 +68,19 @@ start_server {tags {"introspection"}} {
         }
     }
 
+    test {CONFIG save params special case handled properly} {
+        # No "save" keyword - defaults should apply
+        start_server {config "minimal.conf"} {
+            assert_match [r config get save] {save {3600 1 300 100 60 10000}}
+        }
+
+        # First "save" keyword overrides defaults
+        start_server {config "minimal.conf" overrides {save {100 100}}} {
+            # Defaults
+            assert_match [r config get save] {save {100 100}}
+        }
+    }
+
     test {CONFIG sanity} {
         # Do CONFIG GET, CONFIG SET and then CONFIG GET again
         # Skip immutable configs, one with no get, and other complicated configs
@@ -78,15 +101,11 @@ start_server {tags {"introspection"}} {
             supervised
             syslog-facility
             databases
-            port
-            tls-port
             io-threads
             logfile
             unixsocketperm
             slaveof
-            bind
             requirepass
-            multi-master
             server_cpulist
             bio_cpulist
             aof_rewrite_cpulist
@@ -95,7 +114,10 @@ start_server {tags {"introspection"}} {
 	        storage-cache-mode
 	        storage-provider-options
 	        use-fork
+            multi-master
             active-replica
+            bind
+            set-proc-title
         }
 
         if {!$::tls} {
@@ -106,12 +128,15 @@ start_server {tags {"introspection"}} {
                 tls-session-caching
                 tls-cert-file
                 tls-key-file
+                tls-client-cert-file
+                tls-client-key-file
                 tls-dh-params-file
                 tls-ca-cert-file
                 tls-ca-cert-dir
                 tls-protocols
                 tls-ciphers
                 tls-ciphersuites
+                tls-port
             }
         }
 
@@ -154,12 +179,32 @@ start_server {tags {"introspection"}} {
         # Rewrite entire configuration, restart and confirm the
         # server is able to parse it and start.
         assert_equal [r debug config-rewrite-force-all] "OK"
-        restart_server 0 0
+        restart_server 0 true false
         assert_equal [r ping] "PONG"
 
         # Verify no changes were introduced
         dict for {k v} $configs {
-            assert_equal $v [lindex [r config get $k] 1] $k
+            assert_equal $v [lindex [r config get $k] 1]
+        }
+    }
+
+    test {CONFIG REWRITE handles save properly} {
+        r config set save "3600 1 300 100 60 10000"
+        r config rewrite
+        restart_server 0 true false
+        assert_equal [r config get save] {save {3600 1 300 100 60 10000}}
+
+        r config set save ""
+        r config rewrite
+        restart_server 0 true false
+        assert_equal [r config get save] {save {}}
+
+        start_server {config "minimal.conf"} {
+            assert_equal [r config get save] {save {3600 1 300 100 60 10000}}
+            r config set save ""
+            r config rewrite
+            restart_server 0 true false
+            assert_equal [r config get save] {save {}}
         }
     }
 

@@ -1516,8 +1516,11 @@ struct client {
     long long psync_initial_offset; /* FULLRESYNC reply offset other slaves
                                        copying this replica output buffer
                                        should use. */
+                                       
     long long repl_curr_idx = -1;  /* Replication index sent, if this is a replica */
     long long repl_curr_off = -1;
+    int fPendingReplicaWrite;
+
     char replid[CONFIG_RUN_ID_SIZE+1]; /* Master replication ID (if master). */
     int slave_listening_port; /* As configured with: REPLCONF listening-port */
     char slave_ip[NET_IP_STR_LEN]; /* Optionally given by REPLCONF ip-address */
@@ -1577,12 +1580,8 @@ struct client {
     robj **argv;
     size_t argv_len_sumActive = 0;
 
-    bool transmittedRDB = false; /* Have we finished transmitting the RDB to this replica? */
-                                 /* If so, we can read from the replication backlog instead of the client buffer */
-
     // post a function from a non-client thread to run on its client thread
     bool postFunction(std::function<void(client *)> fn, bool fLock = true);
-    fastlock transmittedRDBLock {"transmittedRDB"};
     size_t argv_len_sum() const;
 };
 
@@ -2229,6 +2228,8 @@ struct redisServer {
                                        that is the next byte will'll write to.*/
     long long repl_backlog_off;     /* Replication "master offset" of first
                                        byte in the replication backlog buffer.*/
+    long long repl_backlog_start;   /* Used to compute indicies from offsets
+                                       basically, index = (offset - start) % size */
     fastlock repl_backlog_lock {"replication backlog"};
     time_t repl_backlog_time_limit; /* Time without slaves after the backlog
                                        gets released. */

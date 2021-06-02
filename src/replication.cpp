@@ -88,18 +88,6 @@ int RDBGeneratedByReplication = 0;
 
 void resizeReplicationBacklogForClients(long long newsize);
 
-void setReplIdx(client *c, long long idx, long long off){
-    // serverLog(LL_NOTICE, "calling this garbage function w/ idx and off: %lld, %lld, %lld", idx, off, off-idx);
-    // serverLog(LL_NOTICE, "Repl Index started at: %lld", c->repl_curr_idx);
-    if (c->repl_curr_idx == -1 && off >= c->repl_curr_off){
-        if (prepareClientToWrite(c) != C_OK) return;
-        c->repl_curr_idx = idx;
-        c->repl_curr_off = off;
-    }
-    // serverLog(LL_NOTICE, "Repl Index has become: %lld", c->repl_curr_idx);
-
-}
-
 /* --------------------------- Utility functions ---------------------------- */
 
 /* Return the pointer to a string representing the replica ip:listening_port
@@ -232,6 +220,7 @@ void createReplicationBacklog(void) {
     g_pserver->repl_backlog = (char*)zmalloc(g_pserver->repl_backlog_size, MALLOC_LOCAL);
     g_pserver->repl_backlog_histlen = 0;
     g_pserver->repl_backlog_idx = 0;
+    g_pserver->repl_backlog_start = g_pserver->master_repl_offset;
 
     /* We don't have any data inside our buffer, but virtually the first
      * byte we have is the next byte that will be generated for the
@@ -284,6 +273,7 @@ void resizeReplicationBacklog(long long newsize) {
             g_pserver->repl_backlog = backlog;
             g_pserver->repl_backlog_idx = g_pserver->repl_backlog_histlen;
             g_pserver->repl_batch_idxStart = 0;
+            g_pserver->repl_backlog_start = g_pserver->master_repl_offset;
         } else {
             zfree(g_pserver->repl_backlog);
             g_pserver->repl_backlog = (char*)zmalloc(newsize);
@@ -296,6 +286,7 @@ void resizeReplicationBacklog(long long newsize) {
     g_pserver->repl_backlog_size = newsize;
 }
 
+long long getReplIndexFromOffset(long long offset);
 
 /* The above but for when clients need extra replication backlog because ??? */
 void resizeReplicationBacklogForClients(long long newsize) {
@@ -305,32 +296,8 @@ void resizeReplicationBacklogForClients(long long newsize) {
 
     serverLog(LL_NOTICE, "WE HAVE TO RESIZE from %lld to %lld", g_pserver->repl_backlog_size, newsize);
     /* get the critical client size, i.e. the size of the data unflushed to clients */
-    long long earliest_off = LONG_LONG_MAX;
-    long long earliest_idx = -1;
-    listIter li;
-    listNode *ln;
-    listRewind(g_pserver->slaves, &li);
-    while ((ln = listNext(&li))) {
-        client *replica = (client*)listNodeValue(ln);
-        if (replica->repl_curr_off != -1 && replica->repl_curr_off < earliest_off){
-            earliest_off = replica->repl_curr_off;
-            earliest_idx = replica->repl_curr_idx;
-        }
-        serverLog(LL_NOTICE, "repl_curr_idx: %lld, earlistidx: %lld", replica->repl_curr_idx, earliest_idx);
-    }
-    serverLog(LL_NOTICE, "We are starting with: master_repl_offset: %lld, repl_batch_offStart: %lld, earliest_off: %lld, " 
-                         "repl_backlog_idx: %lld, repl_batch_idxStart: %lld, earliest_idx: %lld, repl_backlog_size: %lld",
-            g_pserver->master_repl_offset, g_pserver->repl_batch_offStart, earliest_off,
-            g_pserver->repl_backlog_idx, g_pserver->repl_batch_idxStart, earliest_idx, g_pserver->repl_backlog_size
-        );
+    long long earliest_off = g_pserver->repl_lowest_off.load();
 
-    long long new_off = 0, new_idx = 0;
-
-    /* if no earliest offset is found amongst the clients, they are all up to date with the flushed index */
-    if (earliest_off == LONG_LONG_MAX && earliest_idx == -1){
-        earliest_idx = g_pserver->repl_batch_idxStart;
-        earliest_off = g_pserver->repl_batch_offStart;
-    }
 
     if (g_pserver->repl_backlog != NULL) {
         /* What we actually do is to flush the old buffer and realloc a new
@@ -339,17 +306,18 @@ void resizeReplicationBacklogForClients(long long newsize) {
          * worse often we need to alloc additional space before freeing the
          * old buffer. */
 
-        if (earliest_idx >= 0) {
+        if (earliest_off != -1) {
             // We need to keep critical data so we can't shrink less than the hot data in the buffer
             newsize = std::max(newsize, g_pserver->master_repl_offset - earliest_off);
             char *backlog = (char*)zmalloc(newsize);
             g_pserver->repl_backlog_histlen = g_pserver->master_repl_offset - earliest_off;
+            long long earliest_idx = getReplIndexFromOffset(earliest_off);
 
             if (g_pserver->repl_backlog_idx >= earliest_idx) {
                 auto cbActiveBacklog = g_pserver->repl_backlog_idx - earliest_idx;
                 memcpy(backlog, g_pserver->repl_backlog + earliest_idx, cbActiveBacklog);
-                serverLog(LL_NOTICE, "g_pserver->master_repl_offset: %lld, earliest_off: %lld, g_pserver->repl_backlog_idx: %lld, earliest_idx: %lld",
-                    g_pserver->master_repl_offset, earliest_off, g_pserver->repl_backlog_idx, earliest_idx);
+                serverLog(LL_NOTICE, "g_pserver->master_repl_offset: %lld, earliest_off: %lld, g_pserver->repl_backlog_idx: %lld, earliest_idx: %lld, repl_backlog_start: %lld",
+                    g_pserver->master_repl_offset, earliest_off, g_pserver->repl_backlog_idx, earliest_idx, g_pserver->repl_backlog_start);
                 serverAssert(g_pserver->repl_backlog_histlen == cbActiveBacklog);
             } else {
                 auto cbPhase1 = g_pserver->repl_backlog_size - earliest_idx;
@@ -361,20 +329,10 @@ void resizeReplicationBacklogForClients(long long newsize) {
             zfree(g_pserver->repl_backlog);
             g_pserver->repl_backlog = backlog;
             g_pserver->repl_backlog_idx = g_pserver->repl_backlog_histlen;
-            listRewind(g_pserver->slaves, &li);
-            /* Go through the clients and update their replication indicies */
-            while ((ln = listNext(&li))) {
-                client *replica = (client*)listNodeValue(ln);
-                if (replica->repl_curr_idx != -1){
-                    replica->repl_curr_idx -= earliest_idx;
-                    if (replica->repl_curr_idx < 0)
-                        replica->repl_curr_idx += g_pserver->repl_backlog_size;
-                }
-                new_idx = replica->repl_curr_idx;
-            }
             g_pserver->repl_batch_idxStart -= earliest_idx;
             if (g_pserver->repl_batch_idxStart < 0)
                 g_pserver->repl_batch_idxStart += g_pserver->repl_backlog_size;
+            g_pserver->repl_backlog_start = earliest_off;
         } else {
             zfree(g_pserver->repl_backlog);
             g_pserver->repl_backlog = (char*)zmalloc(newsize);
@@ -382,14 +340,15 @@ void resizeReplicationBacklogForClients(long long newsize) {
             g_pserver->repl_backlog_idx = 0;
             /* Next byte we have is... the next since the buffer is empty. */
             g_pserver->repl_backlog_off = g_pserver->master_repl_offset+1;
+            g_pserver->repl_backlog_start = g_pserver->master_repl_offset;
         }
     }
     g_pserver->repl_backlog_size = newsize;
 
     serverLog(LL_NOTICE, "We are ending with: master_repl_offset: %lld, repl_batch_offStart: %lld, new_off: %lld, " 
                          "repl_backlog_idx: %lld, repl_batch_idxStart: %lld, new_idx: %lld, repl_backlog_size: %lld",
-        g_pserver->master_repl_offset, g_pserver->repl_batch_offStart, new_off,
-        g_pserver->repl_backlog_idx, g_pserver->repl_batch_idxStart, new_idx, g_pserver->repl_backlog_size
+        g_pserver->master_repl_offset, g_pserver->repl_batch_offStart, 0LL,
+        g_pserver->repl_backlog_idx, g_pserver->repl_batch_idxStart, 0LL, g_pserver->repl_backlog_size
     );
 }
 
@@ -456,11 +415,6 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
         len -= thislen;
         p += thislen;
         g_pserver->repl_backlog_histlen += thislen;
-        // serverLog(LL_NOTICE, "Pt2 intermediate with: master_repl_offset: %lld, repl_batch_offStart: %lld, " 
-        //                      "repl_backlog_idx: %lld, repl_batch_idxStart: %lld, repl_backlog_size: %lld",
-        //         g_pserver->master_repl_offset, g_pserver->repl_batch_offStart,
-        //         g_pserver->repl_backlog_idx, g_pserver->repl_batch_idxStart, g_pserver->repl_backlog_size
-        // );
     }
     if (g_pserver->repl_backlog_histlen > g_pserver->repl_backlog_size)
         g_pserver->repl_backlog_histlen = g_pserver->repl_backlog_size;
@@ -722,7 +676,7 @@ void replicationFeedSlaves(list *replicas, int dictid, robj **argv, int argc) {
 void showLatestBacklog(void) {
     if (g_pserver->repl_backlog == NULL) return;
 
-    long long dumplen = 256;
+    long long dumplen = 1024;
     if (g_pserver->repl_backlog_histlen < dumplen)
         dumplen = g_pserver->repl_backlog_histlen;
 
@@ -813,7 +767,7 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
     }
     decrRefCount(cmdobj);
 }
-
+#define BYPASS_PSYNC
 /* Feed the replica 'c' with the replication backlog starting from the
  * specified 'offset' up to the end of the backlog. */
 long long addReplyReplicationBacklog(client *c, long long offset) {
@@ -854,7 +808,8 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
     len = g_pserver->repl_backlog_histlen - skip;
     serverLog(LL_DEBUG, "[PSYNC] Reply total length: %lld", len);
 #ifdef BYPASS_PSYNC
-    setReplIdx(c, j, offset);
+    c->repl_curr_off = offset - 1;
+    serverLog(LL_NOTICE, "This client %lu at addr %s synchronized to %lld", c->id, getClientPeerId(c), c->repl_curr_off);
 #else
     while(len) {
         long long thislen =
@@ -900,6 +855,11 @@ int replicationSetupSlaveForFullResync(client *replica, long long offset) {
 
     replica->psync_initial_offset = offset;
     replica->replstate = SLAVE_STATE_WAIT_BGSAVE_END;
+
+    replica->repl_curr_off = offset;
+
+    serverLog(LL_NOTICE, "This client %lu at addr %s synchronized to %lld", replica->id, getClientPeerId(replica), replica->repl_curr_off);
+
     /* We are going to accumulate the incremental changes for this
      * replica as well. Set replicaseldb to -1 in order to force to re-emit
      * a SELECT statement in the replication stream. */
@@ -2006,7 +1966,6 @@ void replicationCreateMasterClient(redisMaster *mi, connection *conn, int dbid) 
     mi->master->reploff_skipped = 0;
     mi->master->read_reploff = mi->master->reploff;
     mi->master->puser = NULL; /* This client can do everything. */
-    
     memcpy(mi->master->uuid, mi->master_uuid, UUID_BINARY_LEN);
     memset(mi->master_uuid, 0, UUID_BINARY_LEN); // make sure people don't use this temp storage buffer
 
@@ -4652,12 +4611,17 @@ void flushReplBacklogToClients()
         serverAssert(g_pserver->master_repl_offset - g_pserver->repl_batch_offStart <= g_pserver->repl_backlog_size);
         serverAssert(g_pserver->repl_batch_idxStart != g_pserver->repl_backlog_idx);
 
+        serverLog(LL_NOTICE, "the master repl offset is %lld", g_pserver->master_repl_offset);
+        showLatestBacklog();
         listIter li;
         listNode *ln;
         listRewind(g_pserver->slaves, &li);
         while ((ln = listNext(&li))) {
             client *replica = (client*)listNodeValue(ln);
 
+            // serverLog(LL_NOTICE, "client %lu is in the party", replica->id);
+
+            // serverLog(LL_NOTICE, "is there a write pending for %lu, %d", replica->id, replica->fPendingReplicaWrite);
             if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) continue;
             if (replica->flags & CLIENT_CLOSE_ASAP) continue;
 
@@ -4675,11 +4639,21 @@ void flushReplBacklogToClients()
                     asyncUl.lock();
                 /* If we are online and the RDB has been sent, there is no need to feed the client buffer
                 * We will send our replies directly from the replication backlog instead */
-                std::unique_lock<fastlock> tRDBLock (replica->transmittedRDBLock);
-                if (replica->replstate == SLAVE_STATE_ONLINE && replica->transmittedRDB){
-                    setReplIdx(replica, g_pserver->repl_batch_idxStart, g_pserver->repl_batch_offStart);
-                    continue;
+                if (replica->repl_curr_off == -1){
+                    replica->repl_curr_off = g_pserver->repl_batch_offStart;
+
+                    serverLog(LL_NOTICE, "This client %lu at addr %s synchronized to %lld", replica->id, getClientPeerId(replica), replica->repl_curr_off);
+
                 }
+
+                /* Only if the there isn't already a pending write do we prepare the client to write */
+                if (!replica->fPendingReplicaWrite){
+                    serverAssert(replica->repl_curr_off != g_pserver->master_repl_offset);
+                    prepareClientToWrite(replica);
+                    replica->fPendingReplicaWrite = true; 
+                }
+
+                continue;
             }
 #endif
             if (g_pserver->repl_backlog_idx >= g_pserver->repl_batch_idxStart) {

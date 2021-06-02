@@ -829,3 +829,11 @@ int aeLockContention()
         avail += 0x10000;
     return avail - active;
 }
+
+void aeClosePipesForForkChild(aeEventLoop *el)
+{
+    close(el->fdCmdRead);
+    el->fdCmdRead = -1;
+    close(el->fdCmdWrite);
+    el->fdCmdWrite = -1;
+}

@@ -5474,11 +5474,11 @@ sds genRedisInfoString(const char *section) {
             "variant:enterprise\r\n"
             "license_status:%s\r\n"
             "mvcc_depth:%d\r\n",
-            #ifdef NO_LICENSE_CHECK
+#ifdef NO_LICENSE_CHECK
             "OK",
-            #else
+#else
             cserver.license_key ? "OK" : "Trial",
-            #endif
+#endif
             mvcc_depth
         );
     }

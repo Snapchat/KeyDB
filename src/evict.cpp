@@ -777,11 +777,11 @@ cant_free:
     if (g_pserver->m_pstorageFactory)
     {
         if (mem_reported < g_pserver->maxmemory*1.2) {
-            return C_OK;    // Allow us to temporarily go over without OOMing
+            return EVICT_OK;    // Allow us to temporarily go over without OOMing
         }
     }
 
-    if (!cserver.delete_on_evict && result != C_OK)
+    if (!cserver.delete_on_evict && result == EVICT_FAIL)
     {
         for (int idb = 0; idb < cserver.dbnum; ++idb)
         {
@@ -791,7 +791,7 @@ cant_free:
                 serverLog(LL_WARNING, "Failed to evict keys, falling back to flushing entire cache.  Consider increasing maxmemory-samples.");
                 db->removeAllCachedValues();
                 if (((mem_reported - zmalloc_used_memory()) + mem_freed) >= mem_tofree)
-                    result = C_OK;
+                    result = EVICT_OK;
             }
         }
     }

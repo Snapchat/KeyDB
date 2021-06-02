@@ -1,4 +1,7 @@
-#include "sds.h"
+extern "C" {
+#include <sdscompat.h>
+#include <sds.h>
+}
 #include <cstring>
 #include <unistd.h>
 #include <sys/types.h>
@@ -11,6 +14,15 @@
  *--------------------------------------------------------------------------- */
 #ifdef MOTD
 #include <curl/curl.h> 
+
+extern "C" {
+__attribute__ ((weak)) hisds hi_sdscatlen(hisds s, const void *t, size_t len) {
+    return sdscatlen(s, t, len);
+}
+__attribute__ ((weak)) hisds hi_sdscat(hisds s, const char *t) {
+    return sdscat(s, t);
+}
+}
 
 static const char *szMotdCachePath()
 {
@@ -134,3 +146,7 @@ extern "C" char *fetchMOTD(int /* cache */, int /* enable_motd */)
 }
 
 #endif
+
+void freeMOTD(const char *sz) {
+    sdsfree((sds)sz);
+}

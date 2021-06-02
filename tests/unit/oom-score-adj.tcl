@@ -23,17 +23,17 @@ if {$system_name eq {linux}} {
             r config set oom-score-adj-values "10 20 30"
             r config set oom-score-adj yes
 
-            assert_equal [get_oom_score_adj] [expr $base + 10] case1
+            assert {[get_oom_score_adj] == [expr $base + 10]}
 
             # Modify current class
             r config set oom-score-adj-values "15 20 30"
-            assert_equal [get_oom_score_adj] [expr $base + 15] case2
+            assert {[get_oom_score_adj] == [expr $base + 15]}
 
             # Check replica class
             r replicaof localhost 1
-            assert_equal [get_oom_score_adj] [expr $base + 20] case3
+            assert {[get_oom_score_adj] == [expr $base + 20]}
             r replicaof no one
-            assert_equal [get_oom_score_adj] [expr $base + 15] case4
+            assert {[get_oom_score_adj] == [expr $base + 15]}
 
             # Check child process
             r set key-a value-a
@@ -41,7 +41,12 @@ if {$system_name eq {linux}} {
             r bgsave
 
             set child_pid [get_child_pid 0]
-            assert {[get_oom_score_adj $child_pid] == [expr $base + 30]}
+            # Wait until background child process to setOOMScoreAdj success.
+            wait_for_condition 100 10 {
+                [get_oom_score_adj $child_pid] == [expr $base + 30]
+            } else {
+                fail "Set oom-score-adj of background child process is not ok"
+            }
         } }
 
         # Failed oom-score-adj tests can only run unprivileged

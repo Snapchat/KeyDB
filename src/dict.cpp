@@ -673,7 +673,7 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
                 if (!nofree) {
                     if (table == 0 && d->asyncdata != nullptr && (ssize_t)idx < d->rehashidx) {
                         he->next = d->asyncdata->deGCList;
-                        d->asyncdata->deGCList = he->next;
+                        d->asyncdata->deGCList = he;
                     } else {
                         dictFreeKey(d, he);
                         dictFreeVal(d, he);

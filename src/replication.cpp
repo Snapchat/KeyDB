@@ -810,6 +810,10 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
 #ifdef BYPASS_PSYNC
     c->repl_curr_off = offset - 1;
     serverLog(LL_NOTICE, "This client %lu at addr %s synchronized to %lld", c->id, getClientPeerId(c), c->repl_curr_off);
+
+    /* Force the partial sync to be queued */
+    prepareClientToWrite(c);
+    c->fPendingReplicaWrite = true;
 #else
     while(len) {
         long long thislen =

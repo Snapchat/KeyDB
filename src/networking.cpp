@@ -3419,7 +3419,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
  * that writes to said replica are using data from the replication backlog
  * as opposed to it's own internal buffer, this number should keep track of that */
 unsigned long getClientReplicationBacklogSharedUsage(client *c) {
-    return (!(c->flags & CLIENT_SLAVE) || c->repl_curr_idx == -1) ? 0 : g_pserver->master_repl_offset - c->repl_curr_off;
+    return (!(c->flags & CLIENT_SLAVE) || !c->fPendingReplicaWrite ) ? 0 : g_pserver->master_repl_offset - c->repl_curr_off;
 }
 
 /* This function returns the number of bytes that Redis is

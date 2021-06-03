@@ -2797,6 +2797,19 @@ public:
         vars.clients_pending_asyncwrite = listCreate();
         serverTL = &vars;
         aeSetThreadOwnsLockOverride(true);
+
+        // We will inheret the server thread's affinity mask, clear it as we want to run on a different core.
+        cpu_set_t *cpuset = CPU_ALLOC(std::thread::hardware_concurrency());
+        if (cpuset != nullptr) {
+            size_t size = CPU_ALLOC_SIZE(std::thread::hardware_concurrency());
+            CPU_ZERO_S(size, cpuset);
+            for (unsigned i = 0; i < std::thread::hardware_concurrency(); ++i) {
+                CPU_SET_S(i, size, cpuset);
+            }
+            pthread_setaffinity_np(pthread_self(), size, cpuset);
+            CPU_FREE(cpuset);
+        }
+
         for (;;) {
             std::unique_lock<std::mutex> lock(queue.mutex);
             if (listLength(queue.listJobs) == 0 && queue.queuefn.empty()) {

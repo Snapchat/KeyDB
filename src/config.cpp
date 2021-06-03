@@ -2347,7 +2347,6 @@ static int updateReplBacklogSize(long long val, long long prev, const char **err
     UNUSED(err);
     g_pserver->repl_backlog_size = prev;
     resizeReplicationBacklog(val);
-    g_pserver->repl_backlog_config_size = g_pserver->repl_backlog_size;
     return 1;
 }
 

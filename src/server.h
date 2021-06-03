@@ -1517,8 +1517,7 @@ struct client {
                                        copying this replica output buffer
                                        should use. */
                                        
-    long long repl_curr_idx = -1;  /* Replication index sent, if this is a replica */
-    long long repl_curr_off = -1;
+    long long repl_curr_off = -1;  /* Replication offset of the client, only if it's a replica*/
     int fPendingReplicaWrite;
 
     char replid[CONFIG_RUN_ID_SIZE+1]; /* Master replication ID (if master). */
@@ -2415,9 +2414,6 @@ struct redisServer {
     static const size_t s_lockContentionSamples = 64;
     uint16_t rglockSamples[s_lockContentionSamples];
     unsigned ilockRingHead = 0;
-
-    long long repl_backlog_config_size = 1024*1024; /* This is a hack to ignore the resizing of the replication backlog
-                                                       when using it as a defacto for the client buffer */
 
     bool FRdbSaveInProgress() const { return rdbThreadVars.fRdbThreadActive; }
 };

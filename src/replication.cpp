@@ -1129,7 +1129,6 @@ void syncCommand(client *c) {
     if (!strcasecmp((const char*)ptrFromObj(c->argv[0]),"psync")) {
         if (masterTryPartialResynchronization(c) == C_OK) {
             g_pserver->stat_sync_partial_ok++;
-            // c->repl_curr_idx = g_pserver->repl_backlog_idx;
             return; /* No full resync needed, return. */
         } else {
             char *master_replid = (char*)ptrFromObj(c->argv[1]);
@@ -1157,7 +1156,6 @@ void syncCommand(client *c) {
         connDisableTcpNoDelay(c->conn); /* Non critical if it fails. */
     c->repldbfd = -1;
     c->flags |= CLIENT_SLAVE;
-    // c->repl_curr_idx = g_pserver->repl_backlog_idx;
     listAddNodeTail(g_pserver->slaves,c);
 
     /* Create the replication backlog if needed. */

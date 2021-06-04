@@ -382,7 +382,9 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
             lower_bound = g_pserver->repl_batch_offStart;
         long long minimumsize = g_pserver->master_repl_offset + len - lower_bound + 1;
         if (minimumsize > g_pserver->repl_backlog_size) {
+            g_pserver->repl_backlog_lock.unlock();
             flushReplBacklogToClients();
+            g_pserver->repl_backlog_lock.lock();
             minimumsize = g_pserver->master_repl_offset + len - lower_bound +1;
 
             if (minimumsize > g_pserver->repl_backlog_size) {
@@ -809,6 +811,7 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
     serverLog(LL_DEBUG, "[PSYNC] Reply total length: %lld", len);
 #ifdef BYPASS_PSYNC
     c->repl_curr_off = offset - 1;
+    c->repl_end_off = g_pserver->master_repl_offset;
     serverLog(LL_NOTICE, "This client %lu at addr %s synchronized to %lld", c->id, getClientPeerId(c), c->repl_curr_off);
 
     /* Force the partial sync to be queued */
@@ -861,6 +864,7 @@ int replicationSetupSlaveForFullResync(client *replica, long long offset) {
     replica->replstate = SLAVE_STATE_WAIT_BGSAVE_END;
 
     replica->repl_curr_off = offset;
+    replica->repl_end_off = g_pserver->master_repl_offset;
 
     serverLog(LL_NOTICE, "This client %lu at addr %s synchronized to %lld", replica->id, getClientPeerId(replica), replica->repl_curr_off);
 
@@ -4634,19 +4638,18 @@ void flushReplBacklogToClients()
                 fAsyncWrite = true;
             
 
+            /* If we are online and the RDB has been sent, there is no need to feed the client buffer
+             * We will send our replies directly from the replication backlog instead */
 #ifdef BYPASS_BUFFER
             {
                 std::unique_lock<fastlock> asyncUl(replica->lock, std::defer_lock);
                 if (!FCorrectThread(replica))
                     asyncUl.lock();
-                /* If we are online and the RDB has been sent, there is no need to feed the client buffer
-                * We will send our replies directly from the replication backlog instead */
-                if (replica->repl_curr_off == -1){
-                    replica->repl_curr_off = g_pserver->repl_batch_offStart;
 
-                    serverLog(LL_NOTICE, "This client %lu at addr %s synchronized to %lld", replica->id, getClientPeerId(replica), replica->repl_curr_off);
+                /* We should have set the repl_curr_off when synchronizing, so it shouldn't be -1 here */
+                serverAssert(replica->repl_curr_off != -1);
 
-                }
+                replica->repl_end_off = g_pserver->master_repl_offset;
 
                 /* Only if the there isn't already a pending write do we prepare the client to write */
                 if (!replica->fPendingReplicaWrite){

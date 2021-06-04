@@ -1518,6 +1518,7 @@ struct client {
                                        should use. */
                                        
     long long repl_curr_off = -1;  /* Replication offset of the client, only if it's a replica*/
+    long long repl_end_off = -1; /* Replication offset to write to */
     int fPendingReplicaWrite;
 
     char replid[CONFIG_RUN_ID_SIZE+1]; /* Master replication ID (if master). */

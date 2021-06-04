@@ -277,8 +277,9 @@ void clientInstallAsyncWriteHandler(client *c) {
 int prepareClientToWrite(client *c) {
     bool fAsync = !FCorrectThread(c);  // Not async if we're on the right thread
 
-    if (c->flags & CLIENT_SLAVE)
+    if (c->flags & CLIENT_SLAVE){
         serverLog(LL_NOTICE, "got into prepareClientToWrite");
+    }
 
 	if (!fAsync) {
 		serverAssert(c->conn == nullptr || c->lock.fOwnLock());
@@ -1758,7 +1759,7 @@ int writeToClient(client *c, int handler_installed) {
 
     /* We can only directly read from the replication backlog if the client 
        is a replica, so only attempt to do so if that's the case. */
-    if (c->flags & CLIENT_SLAVE) {
+    if (c->flags & CLIENT_SLAVE && !(c->flags & CLIENT_MONITOR)) {
         /* For replicas, we don't store all the information in the client buffer
         * We always read from the replication backlog directly */
         std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
@@ -1766,14 +1767,12 @@ int writeToClient(client *c, int handler_installed) {
         /* Right now, we're bringing in the offStart into the scope
          * If repl_batch_offStart is equal to -1, that means the mechanism is disabled
          * which implies there is no data to flush and that the global offset is accurate */
-        long long offStart = g_pserver->repl_batch_offStart == -1 ? g_pserver->master_repl_offset : g_pserver->repl_batch_offStart;
+        // long long offStart = g_pserver->repl_batch_offStart == -1 ? g_pserver->master_repl_offset : g_pserver->repl_batch_offStart;
+        long long offStart = c->repl_end_off;
         long long idxStart = getReplIndexFromOffset(offStart);
-        if (g_pserver->repl_batch_offStart != -1)
-            serverAssert(idxStart == g_pserver->repl_batch_idxStart);
-        else 
-            serverAssert(idxStart == g_pserver->repl_backlog_idx);
-
-        if (c->repl_curr_off != -1 && c->repl_curr_off != offStart){
+        
+        serverAssert(c->repl_curr_off != -1);
+        if (c->repl_curr_off != offStart){
             serverLog(LL_NOTICE, "printing the stats for client %lu: c->repl_curr_off: %lld, repl_batch_offStart: %lld, nwritten: %ld, offStart: %lld", 
                 c->id, c->repl_curr_off, g_pserver->repl_batch_offStart, nwritten, offStart);
 
@@ -1846,7 +1845,7 @@ int writeToClient(client *c, int handler_installed) {
     if (!clientHasPendingReplies(c) && !c->fPendingReplicaWrite) {
         // if(c->flags & CLIENT_SLAVE && handler_installed){
         //     serverLog(LL_NOTICE, "Uninstalling handler");
-        //     serverLog(LL_NOTICE, "handler repl_curr_idx: %lld, repl_backlog_size: %lld", c->repl_curr_idx, g_pserver->repl_backlog_size);
+        //     serverLog(LL_NOTICE, "repl_backlog_size: %lld", g_pserver->repl_backlog_size);
         //     serverLog(LL_NOTICE, "handler repl_curr_off: %lld, master_repl_offset: %lld", c->repl_curr_off, g_pserver->master_repl_offset);
         // }
         c->sentlen = 0;

@@ -1796,7 +1796,6 @@ int clientsCronTrackClientsMemUsage(client *c) {
     mem += zmalloc_size(c);
     mem += c->argv_len_sum();
     if (c->argv) mem += zmalloc_size(c->argv);
-    // serverLog(LL_NOTICE, "Mem here is : %lu", mem);
     /* Now that we have the memory used by the client, remove the old
      * value from the old category, and add it back. */
     g_pserver->stat_clients_type_memory[c->client_cron_last_memory_type] -=
@@ -1855,7 +1854,6 @@ void clientsCron(int iel) {
     while(listLength(g_pserver->clients) && iterations--) {
         client *c;
         listNode *head;
-        // serverLog(LL_NOTICE, "we are at iteration: %d", iterations);
         /* Rotate the list, take the current head, process.
          * This way if the client must be removed from the list it's the
          * first element and we don't incur into O(N) computation. */

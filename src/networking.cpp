@@ -223,9 +223,6 @@ void clientInstallWriteHandler(client *c) {
      * if not already done and, for slaves, if the replica can actually receive
      * writes at this stage. */
 
-    if (c->flags & CLIENT_SLAVE)
-        serverLog(LL_NOTICE, "installing write handler");
-
     if (!(c->flags & CLIENT_PENDING_WRITE) &&
         (c->replstate == REPL_STATE_NONE ||
          (c->replstate == SLAVE_STATE_ONLINE && !c->repl_put_online_on_ack)))
@@ -276,10 +273,6 @@ void clientInstallAsyncWriteHandler(client *c) {
  * data should be appended to the output buffers. */
 int prepareClientToWrite(client *c) {
     bool fAsync = !FCorrectThread(c);  // Not async if we're on the right thread
-
-    if (c->flags & CLIENT_SLAVE){
-        serverLog(LL_NOTICE, "got into prepareClientToWrite");
-    }
 
 	if (!fAsync) {
 		serverAssert(c->conn == nullptr || c->lock.fOwnLock());
@@ -1695,10 +1688,6 @@ int writeToClient(client *c, int handler_installed) {
     serverAssertDebug(FCorrectThread(c));
 
     std::unique_lock<decltype(c->lock)> lock(c->lock);
-    // serverLog(LL_NOTICE, "acq client");
-
-    if (c->flags & CLIENT_SLAVE)
-        serverLog(LL_NOTICE, "writeToClient has happened");
 
     while(clientHasPendingReplies(c)) {
         serverAssert(!(c->flags & CLIENT_SLAVE) || c->flags & CLIENT_MONITOR);
@@ -1710,7 +1699,6 @@ int writeToClient(client *c, int handler_installed) {
 
             /* If the buffer was sent, set bufpos to zero to continue with
             * the remainder of the reply. */
-            // serverLog(LL_NOTICE, "buf pos: %d, sentlen: %ld", c->bufpos, c->sentlen);
             if ((int)c->sentlen == c->bufpos) {
                 c->bufpos = 0;
                 c->sentlen = 0;
@@ -1764,33 +1752,24 @@ int writeToClient(client *c, int handler_installed) {
         * We always read from the replication backlog directly */
         std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
 
-        /* Right now, we're bringing in the offStart into the scope
-         * If repl_batch_offStart is equal to -1, that means the mechanism is disabled
-         * which implies there is no data to flush and that the global offset is accurate */
-        // long long offStart = g_pserver->repl_batch_offStart == -1 ? g_pserver->master_repl_offset : g_pserver->repl_batch_offStart;
-        long long offStart = c->repl_end_off;
-        long long idxStart = getReplIndexFromOffset(offStart);
+        long long repl_end_idx = getReplIndexFromOffset(c->repl_end_off);
         
         serverAssert(c->repl_curr_off != -1);
-        if (c->repl_curr_off != offStart){
-            serverLog(LL_NOTICE, "printing the stats for client %lu: c->repl_curr_off: %lld, repl_batch_offStart: %lld, nwritten: %ld, offStart: %lld", 
-                c->id, c->repl_curr_off, g_pserver->repl_batch_offStart, nwritten, offStart);
-
-            long long curr_idx = getReplIndexFromOffset(c->repl_curr_off); 
-            long long nwrittenPart2 = 0;
+        if (c->repl_curr_off != c->repl_end_off){
+            long long repl_curr_idx = getReplIndexFromOffset(c->repl_curr_off); 
+            long long nwritten2ndStage = 0; /* How much was written from the start of the replication backlog
+                                             * in the event of a wrap around write */
             /* normal case with no wrap around */
-            if (idxStart >= curr_idx){
-                nwritten = connWrite(c->conn, g_pserver->repl_backlog + curr_idx, idxStart - curr_idx);
-            /* wrap around case, v. rare */
-            /* also v. buggy so there's that */
+            if (repl_end_idx >= repl_curr_idx){
+                nwritten = connWrite(c->conn, g_pserver->repl_backlog + repl_curr_idx, repl_end_idx - repl_curr_idx);
+            /* wrap around case */
             } else {
-                serverLog(LL_NOTICE, "ROAD OF RESISTANCE");
-                nwritten = connWrite(c->conn, g_pserver->repl_backlog + curr_idx, g_pserver->repl_backlog_size - curr_idx);
+                nwritten = connWrite(c->conn, g_pserver->repl_backlog + repl_curr_idx, g_pserver->repl_backlog_size - repl_curr_idx);
                 /* only attempt wrapping if we write the correct number of bytes */
-                if (nwritten == g_pserver->repl_backlog_size - curr_idx){
-                    long long nwrittenPart2 = connWrite(c->conn, g_pserver->repl_backlog, idxStart);
-                    if (nwrittenPart2 != -1)
-                        nwritten += nwrittenPart2;
+                if (nwritten == g_pserver->repl_backlog_size - repl_curr_idx){
+                    nwritten2ndStage = connWrite(c->conn, g_pserver->repl_backlog, repl_end_idx);
+                    if (nwritten2ndStage != -1)
+                        nwritten += nwritten2ndStage;
                 }                
             }
 
@@ -1798,31 +1777,19 @@ int writeToClient(client *c, int handler_installed) {
             if (nwritten > 0){
                 totwritten += nwritten;
                 c->repl_curr_off += nwritten;
-                if (1){
-                    serverLog(LL_NOTICE, "printing the stats for client %lu: c->repl_curr_off: %lld, repl_batch_offStart: %lld, nwritten: %ld, offStart: %lld", 
-                        c->id, c->repl_curr_off, g_pserver->repl_batch_offStart, nwritten, offStart);
-                }
-                serverAssert(c->repl_curr_off <= offStart);
+                serverAssert(c->repl_curr_off <= c->repl_end_off);
                 /* If the client offset matches the global offset, we wrote all we needed to,
                  * in which case, there is no pending write */
-                if (c->repl_curr_off == offStart){
-                    serverLog(LL_NOTICE, "good, %lld", offStart);
+                if (c->repl_curr_off == c->repl_end_off){
                     c->fPendingReplicaWrite = false;
-                } else {
-                    serverLog(LL_NOTICE, "mismatch between repl_curr_off (%lld) and offStart (%lld)", c->repl_curr_off, offStart);
                 }
             }
 
             /* If the second part of a write didn't go through, we still need to register that */
-            if (nwrittenPart2 == -1) nwritten = -1;
+            if (nwritten2ndStage == -1) nwritten = -1;
         }
-
-        // if (c->flags & CLIENT_SLAVE && handler_installed)
-        //     serverLog(LL_NOTICE, "Total bytes written, %ld, write handler installed?: %d", totwritten, handler_installed);
-
     }
 
-    // serverLog(LL_NOTICE, "rel client");
     g_pserver->stat_net_output_bytes += totwritten;
     if (nwritten == -1) {
         if (connGetState(c->conn) == CONN_STATE_CONNECTED) {
@@ -1843,11 +1810,6 @@ int writeToClient(client *c, int handler_installed) {
         if (!(c->flags & CLIENT_MASTER)) c->lastinteraction = g_pserver->unixtime;
     }
     if (!clientHasPendingReplies(c) && !c->fPendingReplicaWrite) {
-        // if(c->flags & CLIENT_SLAVE && handler_installed){
-        //     serverLog(LL_NOTICE, "Uninstalling handler");
-        //     serverLog(LL_NOTICE, "repl_backlog_size: %lld", g_pserver->repl_backlog_size);
-        //     serverLog(LL_NOTICE, "handler repl_curr_off: %lld, master_repl_offset: %lld", c->repl_curr_off, g_pserver->master_repl_offset);
-        // }
         c->sentlen = 0;
         if (handler_installed) connSetWriteHandler(c->conn, NULL);
 
@@ -1863,7 +1825,6 @@ int writeToClient(client *c, int handler_installed) {
 /* Write event handler. Just send data to the client. */
 void sendReplyToClient(connection *conn) {
     client *c = (client*)connGetPrivateData(conn);
-    // serverLog(LL_NOTICE, "called the sendreplytoclient");
     if (writeToClient(c,1) == C_ERR)
     {
         AeLocker ae;
@@ -1997,7 +1958,6 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
 
     auto vec = std::move(g_pserver->rgthreadvar[iel].clients_pending_write);
     processed += (int)vec.size();
-    // serverLog(LL_NOTICE, "entered handleClientsWithPendingWrites");
 
     for (client *c : vec) {
         serverAssertDebug(FCorrectThread(c));
@@ -2012,12 +1972,6 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
 
         /* Don't write to clients that are going to be closed anyway. */
         if (c->flags & CLIENT_CLOSE_ASAP) continue;
-
-        // if (c->flags & CLIENT_SLAVE){
-        //     if(clientHasPendingReplies(c))
-        //         serverLog(LL_NOTICE, "somehow the client buffer has these values: %s", c->buf);
-        //     serverLog(LL_NOTICE, "LOL");
-        // }
 
         /* Try to write buffers to the client socket. */
         if (writeToClient(c,0) == C_ERR) 
@@ -2214,34 +2168,6 @@ static void setProtocolError(const char *errstr, client *c) {
         sdsfree(client);
     }
     c->flags |= (CLIENT_CLOSE_AFTER_REPLY|CLIENT_PROTOCOL_ERROR);
-}
-
-static void printQueryBuffer(client *c) {
-    if (cserver.verbosity <= LL_VERBOSE || c->flags & CLIENT_MASTER) {
-        sds client = catClientInfoString(sdsempty(),c);
-
-        /* Sample some protocol to given an idea about what was inside. */
-        char buf[PROTO_DUMP_LEN*2];
-        if (sdslen(c->querybuf)-c->qb_pos < PROTO_DUMP_LEN) {
-            snprintf(buf,sizeof(buf),"%s", c->querybuf+c->qb_pos);
-        } else {
-            snprintf(buf,sizeof(buf),"%.*s (... more %zu bytes ...) %.*s", PROTO_DUMP_LEN/2, c->querybuf+c->qb_pos, sdslen(c->querybuf)-c->qb_pos-PROTO_DUMP_LEN, PROTO_DUMP_LEN/2, c->querybuf+sdslen(c->querybuf)-PROTO_DUMP_LEN/2);
-        }
-
-        /* Remove non printable chars. */
-        char *p = buf;
-        while (*p != '\0') {
-            if (!isprint(*p)) *p = '.';
-            p++;
-        }
-
-        /* Log all the client and protocol info. */
-        int loglevel = (c->flags & CLIENT_MASTER) ? LL_WARNING :
-                                                    LL_VERBOSE;
-        serverLog(loglevel,
-            "Query buffer from client %lu: %s. %s", c->id, client, buf);
-        sdsfree(client);
-    }
 }
 
 /* Process the query buffer for client 'c', setting up the client argument
@@ -2498,8 +2424,6 @@ void parseClientCommandBuffer(client *c) {
         }
 
         size_t cqueriesStart = c->vecqueuedcmd.size();
-        // if (c->flags & CLIENT_MASTER)
-        //     printQueryBuffer(c);
         if (c->reqtype == PROTO_REQ_INLINE) {
             if (processInlineBuffer(c) != C_OK) break;
         } else if (c->reqtype == PROTO_REQ_MULTIBULK) {

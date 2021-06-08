@@ -3540,7 +3540,6 @@ void tlsInit(void);
 void tlsInitThread();
 int tlsConfigure(redisTLSContextConfig *ctx_config);
 
-int prepareClientToWrite(client *c);
 
 
 class ShutdownException

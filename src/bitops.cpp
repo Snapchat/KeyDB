@@ -36,7 +36,7 @@
 
 /* Count number of bits set in the binary array pointed by 's' and long
  * 'count' bytes. The implementation of this function is required to
- * work with an input string length up to 512 MB. */
+ * work with an input string length up to 512 MB or more (server.proto_max_bulk_len) */
 size_t redisPopcount(const void *s, long count) {
     size_t bits = 0;
     unsigned char *p = (unsigned char*)s;
@@ -407,7 +407,7 @@ void printBits(unsigned char *p, unsigned long count) {
 
 /* This helper function used by GETBIT / SETBIT parses the bit offset argument
  * making sure an error is returned if it is negative or if it overflows
- * Redis 512 MB limit for the string value.
+ * Redis 512 MB limit for the string value or more (server.proto_max_bulk_len).
  *
  * If the 'hash' argument is true, and 'bits is positive, then the command
  * will also parse bit offsets prefixed by "#". In such a case the offset
@@ -430,8 +430,8 @@ int getBitOffsetFromArgument(client *c, robj *o, size_t *offset, int hash, int b
     /* Adjust the offset by 'bits' for #<offset> form. */
     if (usehash) loffset *= bits;
 
-    /* Limit offset to 512MB in bytes */
-    if ((loffset < 0) || ((unsigned long long)loffset >> 3) >= (512*1024*1024))
+    /* Limit offset to server.proto_max_bulk_len (512MB in bytes by default) */
+    if ((loffset < 0) || (loffset >> 3) >= g_pserver->proto_max_bulk_len)
     {
         addReplyError(c,err);
         return C_ERR;
@@ -482,12 +482,12 @@ int getBitfieldTypeFromArgument(client *c, robj *o, int *sign, int *bits) {
 robj *lookupStringForBitCommand(client *c, size_t maxbit) {
     size_t byte = maxbit >> 3;
     robj *o = lookupKeyWrite(c->db,c->argv[1]);
+    if (checkType(c,o,OBJ_STRING)) return NULL;
 
     if (o == NULL) {
         o = createObject(OBJ_STRING,sdsnewlen(NULL, byte+1));
         dbAdd(c->db,c->argv[1],o);
     } else {
-        if (checkType(c,o,OBJ_STRING)) return NULL;
         o = dbUnshareStringValue(c->db,c->argv[1],o);
         o->m_ptr = sdsgrowzero(szFromObj(o),byte+1);
     }
@@ -619,7 +619,7 @@ void bitopCommand(client *c) {
     else if (!strcasecmp(opname, "rshift"))
         op = BITOP_RSHIFT;
     else {
-        addReply(c,shared.syntaxerr);
+        addReplyErrorObject(c,shared.syntaxerr);
         return;
     }
 
@@ -731,7 +731,6 @@ void bitopCommand(client *c) {
         /* Compute the bit operation, if at least one string is not empty. */
         if (maxlen) {
             res = (unsigned char*) sdsnewlen(NULL,maxlen);
-            unsigned char output, byte;
             unsigned long i;
 
             /* Fast path: as far as we have data for all the input bitmaps we
@@ -801,22 +800,33 @@ void bitopCommand(client *c) {
                     }
                 }
             }
-            #endif
+        }
+        #endif
 
-            /* j is set to the next byte to process by the previous loop. */
-            for (; j < maxlen; j++) {
-                output = (len[0] <= j) ? 0 : src[0][j];
-                if (op == BITOP_NOT) output = ~output;
-                for (i = 1; i < numkeys; i++) {
-                    byte = (len[i] <= j) ? 0 : src[i][j];
-                    switch(op) {
-                    case BITOP_AND: output &= byte; break;
-                    case BITOP_OR:  output |= byte; break;
-                    case BITOP_XOR: output ^= byte; break;
-                    }
+        /* j is set to the next byte to process by the previous loop. */
+        for (; j < maxlen; j++) {
+            auto output = (len[0] <= j) ? 0 : src[0][j];
+            if (op == BITOP_NOT) output = ~output;
+            for (unsigned long i = 1; i < numkeys; i++) {
+                int skip = 0;
+                auto byte = (len[i] <= j) ? 0 : src[i][j];
+                switch(op) {
+                case BITOP_AND:
+                    output &= byte;
+                    skip = (output == 0);
+                    break;
+                case BITOP_OR:
+                    output |= byte;
+                    skip = (output == 0xff);
+                    break;
+                case BITOP_XOR: output ^= byte; break;
                 }
-                res[j] = output;
+
+                if (skip) {
+                    break;
+                }
             }
+            res[j] = output;
         }
     }
     for (j = 0; j < numkeys; j++) {
@@ -876,7 +886,7 @@ void bitcountCommand(client *c) {
         end = strlen-1;
     } else {
         /* Syntax error. */
-        addReply(c,shared.syntaxerr);
+        addReplyErrorObject(c,shared.syntaxerr);
         return;
     }
 
@@ -941,7 +951,7 @@ void bitposCommand(client *c) {
         end = strlen-1;
     } else {
         /* Syntax error. */
-        addReply(c,shared.syntaxerr);
+        addReplyErrorObject(c,shared.syntaxerr);
         return;
     }
 
@@ -1033,7 +1043,7 @@ void bitfieldGeneric(client *c, int flags) {
             }
             continue;
         } else {
-            addReply(c,shared.syntaxerr);
+            addReplyErrorObject(c,shared.syntaxerr);
             zfree(ops);
             return;
         }

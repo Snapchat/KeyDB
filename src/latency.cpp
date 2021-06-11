@@ -426,7 +426,7 @@ sds createLatencyReport(void) {
         }
 
         if (advise_slowlog_inspect) {
-            report = sdscat(report,"- Check your Slow Log to understand what are the commands you are running which are too slow to execute. Please check https://redis.io/commands/slowlog for more information.\n");
+            report = sdscat(report,"- Check your Slow Log to understand what are the commands you are running which are too slow to execute. Please check https://docs.keydb.dev/docs/commands#slowlog for more information.\n");
         }
 
         /* Intrinsic latency. */

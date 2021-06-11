@@ -57,7 +57,6 @@
 #include <limits.h>
 #include <float.h>
 #include <math.h>
-#include <sys/resource.h>
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
@@ -67,7 +66,6 @@
 #include "aelocker.h"
 #include "motd.h"
 #include "t_nhash.h"
-#include <sys/resource.h>
 #ifdef __linux__
 #include <sys/prctl.h>
 #include <sys/mman.h>
@@ -4645,10 +4643,6 @@ int prepareForShutdown(int flags) {
        overwrite the synchronous saving did by SHUTDOWN. */
     if (g_pserver->child_type == CHILD_TYPE_RDB) {
         serverLog(LL_WARNING,"There is a child saving an .rdb. Killing it!");
-        /* Note that, in killRDBChild, we call rdbRemoveTempFile that will
-         * do close fd(in order to unlink file actully) in background thread.
-         * The temp rdb file fd may won't be closed when redis exits quickly,
-         * but OS will close this fd when process exits. */
         killRDBChild();
         /* Note that, in killRDBChild normally has backgroundSaveDoneHandler
          * doing it's cleanup, but in this case this code will not be reached,

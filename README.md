@@ -179,7 +179,7 @@ To compile against jemalloc on Mac OS X systems, use:
 Monotonic clock
 ---------------
 
-By default, Redis will build using the POSIX clock_gettime function as the
+By default, KeyDB will build using the POSIX clock_gettime function as the
 monotonic clock source.  On most modern systems, the internal processor clock
 can be used to improve performance.  Cautions can be found here: 
     http://oliveryang.net/2015/09/pitfalls-of-TSC-usage/

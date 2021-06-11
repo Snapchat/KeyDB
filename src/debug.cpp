@@ -1038,7 +1038,6 @@ void _serverPanic(const char *file, int line, const char *msg, ...) {
     vsnprintf(fmtmsg,sizeof(fmtmsg),msg,ap);
     va_end(ap);
 
-    g_fInCrash = true;
     bugReportStart();
     serverLog(LL_WARNING,"------------------------------------------------");
     serverLog(LL_WARNING,"!!! Software Failure. Press left mouse button to continue");

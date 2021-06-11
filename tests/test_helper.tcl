@@ -5,7 +5,7 @@
 package require Tcl 8.5
 
 set tcl_precision 17
-source tests/support/redis.tcl
+source tests/support/keydb.tcl
 source tests/support/server.tcl
 source tests/support/tmpfile.tcl
 source tests/support/test.tcl
@@ -57,8 +57,8 @@ set ::all_tests {
     integration/psync2-reg
     integration/psync2-pingoff
     integration/failover
-    integration/redis-cli
-    integration/redis-benchmark
+    integration/keydb-cli
+    integration/keydb-benchmark
     unit/pubsub
     unit/slowlog
     unit/scripting

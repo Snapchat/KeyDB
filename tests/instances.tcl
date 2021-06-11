@@ -10,7 +10,7 @@
 package require Tcl 8.5
 
 set tcl_precision 17
-source ../support/redis.tcl
+source ../support/keydb.tcl
 source ../support/util.tcl
 source ../support/server.tcl
 source ../support/test.tcl

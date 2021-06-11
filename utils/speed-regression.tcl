@@ -2,7 +2,7 @@
 # Copyright (C) 2011 Salvatore Sanfilippo
 # Released under the BSD license like Redis itself
 
-source ../tests/support/redis.tcl
+source ../tests/support/keydb.tcl
 set ::port 12123
 set ::tests {PING,SET,GET,INCR,LPUSH,LPOP,SADD,SPOP,LRANGE_100,LRANGE_600,MSET}
 set ::datasize 16

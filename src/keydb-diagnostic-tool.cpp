@@ -399,14 +399,6 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     /* Initialize request when nothing was written. */
     if (c->written == 0) {
-        /* Enforce upper bound to number of requests. */
-        int requests_issued = 0;
-        atomicGetIncr(config.requests_issued, requests_issued, 1);
-        if (requests_issued >= config.requests) {
-            freeClient(c);
-            return;
-        }
-
         /* Really initialize: randomize keys and set start time. */
         if (config.randomkeys) randomizeClientKey(c);
         atomicGet(config.slots_last_update, c->slots_last_update);
@@ -913,7 +905,7 @@ int main(int argc, const char **argv) {
     double cpu_usage;
 
     while (threads_used < config.max_threads) {
-        printf("Creating clients for thread %d...\n", threads_used);
+        printf("Creating %d clients for thread %d...\n", config.numclients, threads_used);
         for (int i = 0; i < config.numclients; i++) {
             sprintf(command, "SET %d %s\r\n", threads_used * config.numclients + i, set_value);
             createClient(command, strlen(command), NULL,threads_used);

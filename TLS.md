@@ -28,8 +28,8 @@ To manually run a Redis server with TLS mode (assuming `gen-test-certs.sh` was
 invoked so sample certificates/keys are available):
 
     ./src/keydb-server --tls-port 6379 --port 0 \
-        --tls-cert-file ./tests/tls/keydb.crt \
-        --tls-key-file ./tests/tls/keydb.key \
+        --tls-cert-file ./tests/tls/client.crt \
+        --tls-key-file ./tests/tls/client.key \
         --tls-ca-cert-file ./tests/tls/ca.crt
 
 To connect to this Redis server with `keydb-cli`:

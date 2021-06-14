@@ -45,7 +45,7 @@ public:
     bool enumerate(IStorage::callback fn) const { return m_spstorage->enumerate(fn); }
 
     void beginWriteBatch();
-    void endWriteBatch() { m_spstorage->endWriteBatch(); m_lock.unlock(); }
+    void endWriteBatch() { m_spstorage->endWriteBatch(); }
     void batch_lock() { return m_spstorage->batch_lock(); }
     void batch_unlock() { return m_spstorage->batch_unlock(); }
 

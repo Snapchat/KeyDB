@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2020, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2020, Redis Labs, Inc
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,10 +33,13 @@
 #include "sha1.h"   /* SHA1 is used for DEBUG DIGEST */
 #include "crc64.h"
 #include "cron.h"
+#include "bio.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #ifdef HAVE_BACKTRACE
 #include <execinfo.h>
@@ -44,9 +48,6 @@
 #else
 typedef ucontext_t sigcontext_t;
 #endif
-#include <fcntl.h>
-#include "bio.h"
-#include <unistd.h>
 #include <cxxabi.h>
 #endif /* HAVE_BACKTRACE */
 
@@ -58,6 +59,19 @@ typedef ucontext_t sigcontext_t;
 
 int g_fInCrash = false;
 
+#if defined(__APPLE__) && defined(__arm64__)
+#include <mach/mach.h>
+#endif
+
+/* Globals */
+static int bug_report_start = 0; /* True if bug report header was already logged. */
+static pthread_mutex_t bug_report_start_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* Forward declarations */
+void bugReportStart(void);
+void printCrashReport(void);
+void bugReportEnd(int killViaSignal, int sig);
+void logStackTrace(void *eip, int uplevel);
 void getTempFileName(char tmpfile[], int tmpfileNum);
 
 /* ================================= Debugging ============================== */
@@ -247,7 +261,7 @@ void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj
         }
         streamIteratorStop(&si);
     } else if (o->type == OBJ_MODULE) {
-        RedisModuleDigest md;
+        RedisModuleDigest md = {{0},{0}};
         moduleValue *mv = (moduleValue*)ptrFromObj(o);
         moduleType *mt = mv->type;
         moduleInitDigestContext(md);
@@ -381,45 +395,95 @@ void mallctl_string(client *c, robj **argv, int argc) {
 void debugCommand(client *c) {
     if (c->argc == 2 && !strcasecmp(szFromObj(c->argv[1]),"help")) {
         const char *help[] = {
-"ASSERT -- Crash by assertion failed.",
-"CHANGE-REPL-ID -- Change the replication IDs of the instance. Dangerous, should be used only for testing the replication subsystem.",
-"CRASH-AND-RECOVER <milliseconds> -- Hard crash and restart after <milliseconds> delay.",
-"DIGEST -- Output a hex signature representing the current DB content.",
-"DIGEST-VALUE <key-1> ... <key-N>-- Output a hex signature of the values of all the specified keys.",
-"DEBUG PROTOCOL [string|integer|double|bignum|null|array|set|map|attrib|push|verbatim|true|false]",
-"ERROR <string> -- Return a Redis protocol error with <string> as message. Useful for clients unit tests to simulate Redis errors.",
-"LOG <message> -- write message to the server log.",
-"LEAK <string> -- Create a memory leak of the input string.",
-"HTSTATS <dbid> -- Return hash table statistics of the specified Redis database.",
-"HTSTATS-KEY <key> -- Like htstats but for the hash table stored as key's value.",
-"LOADAOF -- Flush the AOF buffers on disk and reload the AOF in memory.",
-"LUA-ALWAYS-REPLICATE-COMMANDS <0|1> -- Setting it to 1 makes Lua replication defaulting to replicating single commands, without the script having to enable effects replication.",
-"OBJECT <key> -- Show low level info about key and associated value.",
-"OOM -- Crash the server simulating an out-of-memory error.",
-"PANIC -- Crash the server simulating a panic.",
-"POPULATE <count> [prefix] [size] -- Create <count> string keys named key:<num>. If a prefix is specified is used instead of the 'key' prefix.",
-"RELOAD [MERGE] [NOFLUSH] [NOSAVE] -- Save the RDB on disk and reload it back in memory. By default it will save the RDB file and load it back. With the NOFLUSH option the current database is not removed before loading the new one, but conflicts in keys will kill the server with an exception. When MERGE is used, conflicting keys will be loaded (the key in the loaded RDB file will win). When NOSAVE is used, the server will not save the current dataset in the RDB file before loading. Use DEBUG RELOAD NOSAVE when you want just to load the RDB file you placed in the Redis working directory in order to replace the current dataset in memory. Use DEBUG RELOAD NOSAVE NOFLUSH MERGE when you want to add what is in the current RDB file placed in the Redis current directory, with the current memory content. Use DEBUG RELOAD when you want to verify Redis is able to persist the current dataset in the RDB file, flush the memory content, and load it back.",
-"RESTART -- Graceful restart: save config, db, restart.",
-"SDSLEN <key> -- Show low level SDS string info representing key and value.",
-"SEGFAULT -- Crash the server with sigsegv.",
-"SET-ACTIVE-EXPIRE <0|1> -- Setting it to 0 disables expiring keys in background when they are not accessed (otherwise the Redis behavior). Setting it to 1 reenables back the default.",
-"AOF-FLUSH-SLEEP <microsec> -- Server will sleep before flushing the AOF, this is used for testing",
-"SLEEP <seconds> -- Stop the server for <seconds>. Decimals allowed.",
-"STRUCTSIZE -- Return the size of different Redis core C structures.",
-"ZIPLIST <key> -- Show low level info about the ziplist encoding.",
-"STRINGMATCH-TEST -- Run a fuzz tester against the stringmatchlen() function.",
-"CONFIG-REWRITE-FORCE-ALL -- Like CONFIG REWRITE but writes all configuration options, including keywords not listed in original configuration file or default values.",
+"AOF-FLUSH-SLEEP <microsec>",
+"    Server will sleep before flushing the AOF, this is used for testing.",
+"ASSERT",
+"    Crash by assertion failed.",
+"CHANGE-REPL-ID"
+"    Change the replication IDs of the instance.",
+"    Dangerous: should be used only for testing the replication subsystem.",
+"CONFIG-REWRITE-FORCE-ALL",
+"    Like CONFIG REWRITE but writes all configuration options, including",
+"    keywords not listed in original configuration file or default values.",
+"CRASH-AND-RECOVER <milliseconds>",
+"    Hard crash and restart after a <milliseconds> delay.",
+"DIGEST",
+"    Output a hex signature representing the current DB content.",
+"DIGEST-VALUE <key> [<key> ...]",
+"    Output a hex signature of the values of all the specified keys.",
+"ERROR <string>",
+"    Return a Redis protocol error with <string> as message. Useful for clients",
+"    unit tests to simulate Redis errors.",
+"LOG <message>",
+"    Write <message> to the server log.",
+"HTSTATS <dbid>",
+"    Return hash table statistics of the specified Redis database.",
+"HTSTATS-KEY <key>",
+"    Like HTSTATS but for the hash table stored at <key>'s value.",
+"LOADAOF",
+"    Flush the AOF buffers on disk and reload the AOF in memory.",
+"LUA-ALWAYS-REPLICATE-COMMANDS <0|1>",
+"    Setting it to 1 makes Lua replication defaulting to replicating single",
+"    commands, without the script having to enable effects replication.",
 #ifdef USE_JEMALLOC
-"MALLCTL <key> [<val>] -- Get or set a malloc tunning integer.",
-"MALLCTL-STR <key> [<val>] -- Get or set a malloc tunning string.",
+"MALLCTL <key> [<val>]",
+"    Get or set a malloc tuning integer.",
+"MALLCTL-STR <key> [<val>]",
+"    Get or set a malloc tuning string.",
 #endif
+"OBJECT <key>",
+"    Show low level info about `key` and associated value.",
+"OOM",
+"    Crash the server simulating an out-of-memory error.",
+"PANIC",
+"    Crash the server simulating a panic.",
+"POPULATE <count> [<prefix>] [<size>]",
+"    Create <count> string keys named key:<num>. If <prefix> is specified then",
+"    it is used instead of the 'key' prefix.",
+"DEBUG PROTOCOL <type>",
+"    Reply with a test value of the specified type. <type> can be: string,",
+"    integer, double, bignum, null, array, set, map, attrib, push, verbatim,",
+"    true, false.",
+"RELOAD [option ...]",
+"    Save the RDB on disk and reload it back to memory. Valid <option> values:",
+"    * MERGE: conflicting keys will be loaded from RDB.",
+"    * NOFLUSH: the existing database will not be removed before load, but",
+"      conflicting keys will generate an exception and kill the server."
+"    * NOSAVE: the database will be loaded from an existing RDB file.",
+"    Examples:",
+"    * DEBUG RELOAD: verify that the server is able to persist, flush and reload",
+"      the database.",
+"    * DEBUG RELOAD NOSAVE: replace the current database with the contents of an",
+"      existing RDB file.",
+"    * DEBUG RELOAD NOSAVE NOFLUSH MERGE: add the contents of an existing RDB",
+"      file to the database.",
+"RESTART",
+"    Graceful restart: save config, db, restart.",
+"SDSLEN <key>",
+"    Show low level SDS string info representing `key` and value.",
+"SEGFAULT",
+"    Crash the server with sigsegv.",
+"SET-ACTIVE-EXPIRE <0|1>",
+"    Setting it to 0 disables expiring keys in background when they are not",
+"    accessed (otherwise the Redis behavior). Setting it to 1 reenables back the",
+"    default.",
+"SET-SKIP-CHECKSUM-VALIDATION <0|1>",
+"    Enables or disables checksum checks for RDB files and RESTORE's payload.",
+"SLEEP <seconds>",
+"    Stop the server for <seconds>. Decimals allowed.",
+"STRINGMATCH-TEST",
+"    Run a fuzz tester against the stringmatchlen() function.",
+"STRUCTSIZE",
+"    Return the size of different Redis core C structures.",
+"ZIPLIST <key>",
+"    Show low level info about the ziplist encoding of <key>.",
 NULL
         };
         addReplyHelp(c, help);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"segfault")) {
         *((char*)-1) = 'x';
     } else if (!strcasecmp(szFromObj(c->argv[1]),"panic")) {
-        serverPanic("DEBUG PANIC called at Unix time %ld", time(NULL));
+        serverPanic("DEBUG PANIC called at Unix time %lld", (long long)time(NULL));
     } else if (!strcasecmp(szFromObj(c->argv[1]),"restart") ||
                !strcasecmp(szFromObj(c->argv[1]),"crash-and-recover"))
     {
@@ -499,7 +563,7 @@ NULL
         int ret = loadAppendOnlyFile(g_pserver->aof_filename);
         unprotectClient(c);
         if (ret != C_OK) {
-            addReply(c,shared.err);
+            addReplyErrorObject(c,shared.err);
             return;
         }
         g_pserver->dirty = 0; /* Prevent AOF / replication */
@@ -511,7 +575,7 @@ NULL
 
         val = c->db->find(c->argv[2]);
         if (val == NULL) {
-            addReply(c,shared.nokeyerr);
+            addReplyErrorObject(c,shared.nokeyerr);
             return;
         }
         strenc = strEncoding(val->encoding);
@@ -562,7 +626,7 @@ NULL
         const char *key = itr.key();
 
         if (val == NULL) {
-            addReply(c,shared.nokeyerr);
+            addReplyErrorObject(c,shared.nokeyerr);
             return;
         }
 
@@ -586,7 +650,7 @@ NULL
                 == nullptr) return;
 
         if (o->encoding != OBJ_ENCODING_ZIPLIST) {
-            addReplyError(c,"Not an sds encoded string.");
+            addReplyError(c,"Not a ziplist encoded object.");
         } else {
             ziplistRepr((unsigned char*)ptrFromObj(o));
             addReplyStatus(c,"Ziplist structure printed on stdout");
@@ -597,12 +661,14 @@ NULL
         robj *key, *val;
         char buf[128];
 
-        if (getLongFromObjectOrReply(c, c->argv[2], &keys, NULL) != C_OK)
+        if (getPositiveLongFromObjectOrReply(c, c->argv[2], &keys, NULL) != C_OK)
             return;
+        
         c->db->expand(keys);
         long valsize = 0;
-        if ( c->argc == 5 && getLongFromObjectOrReply(c, c->argv[4], &valsize, NULL) != C_OK ) 
+        if ( c->argc == 5 && getPositiveLongFromObjectOrReply(c, c->argv[4], &valsize, NULL) != C_OK ) 
             return;
+
         for (j = 0; j < keys; j++) {
             snprintf(buf,sizeof(buf),"%s:%lu",
                 (c->argc == 3) ? "key" : (char*)ptrFromObj(c->argv[3]), j);
@@ -716,6 +782,11 @@ NULL
                c->argc == 3)
     {
         g_pserver->active_expire_enabled = atoi(szFromObj(c->argv[2]));
+        addReply(c,shared.ok);
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"set-skip-checksum-validation") &&
+               c->argc == 3)
+    {
+        cserver.skip_checksum_validation = atoi(szFromObj(c->argv[2]));
         addReply(c,shared.ok);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"aof-flush-sleep") &&
                c->argc == 3)
@@ -844,6 +915,12 @@ NULL
             addReplyError(c, "CONFIG-REWRITE-FORCE-ALL failed");
         else
             addReply(c, shared.ok);
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"config-rewrite-force-all") && c->argc == 2)
+    {
+        if (rewriteConfig(cserver.configfile, 1) == -1)
+            addReplyError(c, "CONFIG-REWRITE-FORCE-ALL failed");
+        else
+            addReply(c, shared.ok);
 #ifdef USE_JEMALLOC
     } else if(!strcasecmp(szFromObj(c->argv[1]),"mallctl") && c->argc >= 3) {
         mallctl_int(c, c->argv+2, c->argc-2);
@@ -861,16 +938,21 @@ NULL
 /* =========================== Crash handling  ============================== */
 
 void _serverAssert(const char *estr, const char *file, int line) {
+    g_fInCrash = true;
     bugReportStart();
     serverLog(LL_WARNING,"=== ASSERTION FAILED ===");
     serverLog(LL_WARNING,"==> %s:%d '%s' is not true",file,line,estr);
+
+    if (g_pserver->crashlog_enabled) {
 #ifdef HAVE_BACKTRACE
-    g_pserver->assert_failed = estr;
-    g_pserver->assert_file = file;
-    g_pserver->assert_line = line;
-    serverLog(LL_WARNING,"(forcing SIGSEGV to print the bug report.)");
+        logStackTrace(NULL, 1);
 #endif
-    *((char*)-1) = 'x';
+        printCrashReport();
+    }
+
+    // remove the signal handler so on abort() we will output the crash report.
+    removeSignalHandlers();
+    bugReportEnd(0, 0);
 }
 
 void _serverAssertPrintClientInfo(const client *c) {
@@ -902,6 +984,14 @@ void serverLogObjectDebugInfo(robj_roptr o) {
     serverLog(LL_WARNING,"Object type: %d", o->type);
     serverLog(LL_WARNING,"Object encoding: %d", o->encoding);
     serverLog(LL_WARNING,"Object refcount: %d", static_cast<int>(o->getrefcount(std::memory_order_relaxed)));
+#if UNSAFE_CRASH_REPORT
+    /* This code is now disabled. o->ptr may be unreliable to print. in some
+     * cases a ziplist could have already been freed by realloc, but not yet
+     * updated to o->ptr. in other cases the call to ziplistLen may need to
+     * iterate on all the items in the list (and possibly crash again).
+     * For some cases it may be ok to crash here again, but these could cause
+     * invalid memory access which will bother valgrind and also possibly cause
+     * random memory portion to be "leaked" into the logfile. */
     if (o->type == OBJ_STRING && sdsEncodedObject(o)) {
         serverLog(LL_WARNING,"Object raw string len: %zu", sdslen(szFromObj(o)));
         if (sdslen(szFromObj(o)) < 4096) {
@@ -922,6 +1012,7 @@ void serverLogObjectDebugInfo(robj_roptr o) {
     } else if (o->type == OBJ_STREAM) {
         serverLog(LL_WARNING,"Stream size: %d", (int) streamLength(o));
     }
+#endif
 }
 
 void _serverAssertPrintObject(robj_roptr o) {
@@ -937,29 +1028,39 @@ void _serverAssertWithInfo(const client *c, robj_roptr o, const char *estr, cons
 }
 
 void _serverPanic(const char *file, int line, const char *msg, ...) {
+    g_fInCrash = true;
     va_list ap;
     va_start(ap,msg);
     char fmtmsg[256];
     vsnprintf(fmtmsg,sizeof(fmtmsg),msg,ap);
     va_end(ap);
 
+    g_fInCrash = true;
     bugReportStart();
     serverLog(LL_WARNING,"------------------------------------------------");
     serverLog(LL_WARNING,"!!! Software Failure. Press left mouse button to continue");
     serverLog(LL_WARNING,"Guru Meditation: %s #%s:%d",fmtmsg,file,line);
+
+    if (g_pserver->crashlog_enabled) {
 #ifdef HAVE_BACKTRACE
-    serverLog(LL_WARNING,"(forcing SIGSEGV in order to print the stack trace)");
+        logStackTrace(NULL, 1);
 #endif
-    serverLog(LL_WARNING,"------------------------------------------------");
-    *((char*)-1) = 'x';
+        printCrashReport();
+    }
+
+    // remove the signal handler so on abort() we will output the crash report.
+    removeSignalHandlers();
+    bugReportEnd(0, 0);
 }
 
 void bugReportStart(void) {
-    if (g_pserver->bug_report_start == 0) {
+    pthread_mutex_lock(&bug_report_start_mutex);
+    if (bug_report_start == 0) {
         serverLogRaw(LL_WARNING|LL_RAW,
         "\n\n=== KEYDB BUG REPORT START: Cut & paste starting from here ===\n");
-        g_pserver->bug_report_start = 1;
+        bug_report_start = 1;
     }
+    pthread_mutex_unlock(&bug_report_start_mutex);
 }
 
 #ifdef HAVE_BACKTRACE
@@ -1036,6 +1137,7 @@ void logStackContent(void **sp) {
     }
 }
 
+/* Log dump of processor registers */
 void logRegisters(ucontext_t *uc) {
     serverLog(LL_WARNING|LL_RAW, "\n------ REGISTERS ------\n");
 
@@ -1461,6 +1563,8 @@ void logRegisters(ucontext_t *uc) {
 #endif
 }
 
+#endif /* HAVE_BACKTRACE */
+
 /* Return a file descriptor to write directly to the Redis log with the
  * write(2) syscall, that can be used in critical sections of the code
  * where the rest of Redis can't be trusted (for example during the memory
@@ -1536,31 +1640,64 @@ void backtrace_symbols_demangle_fd(void **trace, size_t csym, int fd)
     free(syms);
 }
 
+#ifdef HAVE_BACKTRACE
+
 /* Logs the stack trace using the backtrace() call. This function is designed
- * to be called from signal handlers safely. */
-void logStackTrace(ucontext_t *uc) {
-    void *trace[101];
+ * to be called from signal handlers safely.
+ * The eip argument is optional (can take NULL).
+ * The uplevel argument indicates how many of the calling functions to skip.
+ */
+void logStackTrace(void *eip, int uplevel) {
+    void *trace[100];
     int trace_size = 0, fd = openDirectLogFiledes();
+    const char *msg;
+    uplevel++; /* skip this function */
 
     if (fd == -1) return; /* If we can't log there is anything to do. */
 
-    /* Generate the stack trace */
-    trace_size = backtrace(trace+1, 100);
+    /* Get the stack trace first! */
+    trace_size = backtrace(trace, 100);
 
-    if (getMcontextEip(uc) != NULL) {
-        const char *msg1 = "EIP:\n";
-        const char *msg2 = "\nBacktrace:\n";
-        if (write(fd,msg1,strlen(msg1)) == -1) {/* Avoid warning. */};
-        trace[0] = getMcontextEip(uc);
-        backtrace_symbols_demangle_fd(trace, 1, fd);
-        if (write(fd,msg2,strlen(msg2)) == -1) {/* Avoid warning. */};
+    msg = "\n------ STACK TRACE ------\n";
+    if (write(fd,msg,strlen(msg)) == -1) {/* Avoid warning. */};
+
+    if (eip) {
+        /* Write EIP to the log file*/
+        msg = "EIP:\n";
+        if (write(fd,msg,strlen(msg)) == -1) {/* Avoid warning. */};
+        backtrace_symbols_demangle_fd(&eip, 1, fd);
     }
 
     /* Write symbols to log file */
-    backtrace_symbols_demangle_fd(trace+1, trace_size, fd);
+    msg = "\nBacktrace:\n";
+    if (write(fd,msg,strlen(msg)) == -1) {/* Avoid warning. */};
+    backtrace_symbols_demangle_fd(trace+uplevel, trace_size-uplevel, fd);
 
     /* Cleanup */
     closeDirectLogFiledes(fd);
+}
+
+#endif /* HAVE_BACKTRACE */
+
+/* Log global server info */
+void logServerInfo(void) {
+    sds infostring, clients;
+    serverLogRaw(LL_WARNING|LL_RAW, "\n------ INFO OUTPUT ------\n");
+    infostring = genRedisInfoString("all");
+    serverLogRaw(LL_WARNING|LL_RAW, infostring);
+    serverLogRaw(LL_WARNING|LL_RAW, "\n------ CLIENT LIST OUTPUT ------\n");
+    clients = getAllClientsInfoString(-1);
+    serverLogRaw(LL_WARNING|LL_RAW, clients);
+    sdsfree(infostring);
+    sdsfree(clients);
+}
+
+/* Log modules info. Something we wanna do last since we fear it may crash. */
+void logModulesInfo(void) {
+    serverLogRaw(LL_WARNING|LL_RAW, "\n------ MODULES INFO OUTPUT ------\n");
+    sds infostring = modulesCollectInfo(sdsempty(), NULL, 1, 0);
+    serverLogRaw(LL_WARNING|LL_RAW, infostring);
+    sdsfree(infostring);
 }
 
 /* Log information about the "current" client, that is, the client that is
@@ -1692,6 +1829,23 @@ void killThreads(void) {
     bioKillThreads();
 }
 
+void doFastMemoryTest(void) {
+#if defined(HAVE_PROC_MAPS)
+    if (g_pserver->memcheck_enabled) {
+        /* Test memory */
+        serverLogRaw(LL_WARNING|LL_RAW, "\n------ FAST MEMORY TEST ------\n");
+        killThreads();
+        if (memtest_test_linux_anonymous_maps()) {
+            serverLogRaw(LL_WARNING|LL_RAW,
+                "!!! MEMORY ERROR DETECTED! Check your memory ASAP !!!\n");
+        } else {
+            serverLogRaw(LL_WARNING|LL_RAW,
+                "Fast memory test PASSED, however your memory can still be broken. Please run a memory test for several hours if possible.\n");
+        }
+    }
+#endif /* HAVE_PROC_MAPS */
+}
+
 /* Scans the (assumed) x86 code starting at addr, for a max of `len`
  * bytes, searching for E8 (callq) opcodes, and dumping the symbols
  * and the call offset if they appear to be valid. */
@@ -1718,100 +1872,93 @@ void dumpX86Calls(void *addr, size_t len) {
     }
 }
 
+void dumpCodeAroundEIP(void *eip) {
+    Dl_info info;
+    if (dladdr(eip, &info) != 0) {
+        serverLog(LL_WARNING|LL_RAW,
+            "\n------ DUMPING CODE AROUND EIP ------\n"
+            "Symbol: %s (base: %p)\n"
+            "Module: %s (base %p)\n"
+            "$ xxd -r -p /tmp/dump.hex /tmp/dump.bin\n"
+            "$ objdump --adjust-vma=%p -D -b binary -m i386:x86-64 /tmp/dump.bin\n"
+            "------\n",
+            info.dli_sname, info.dli_saddr, info.dli_fname, info.dli_fbase,
+            info.dli_saddr);
+        size_t len = (long)eip - (long)info.dli_saddr;
+        unsigned long sz = sysconf(_SC_PAGESIZE);
+        if (len < 1<<13) { /* we don't have functions over 8k (verified) */
+            /* Find the address of the next page, which is our "safety"
+             * limit when dumping. Then try to dump just 128 bytes more
+             * than EIP if there is room, or stop sooner. */
+            void *base = (void *)info.dli_saddr;
+            unsigned long next = ((unsigned long)eip + sz) & ~(sz-1);
+            unsigned long end = (unsigned long)eip + 128;
+            if (end > next) end = next;
+            len = end - (unsigned long)base;
+            serverLogHexDump(LL_WARNING, "dump of function",
+                base, len);
+            dumpX86Calls(base, len);
+        }
+    }
+}
+
 void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
-    ucontext_t *uc = (ucontext_t*) secret;
-    g_fInCrash = true;
-    void *eip = getMcontextEip(uc);
-    sds infostring, clients;
-    struct sigaction act;
+    UNUSED(secret);
     UNUSED(info);
+    g_fInCrash = true;
 
     bugReportStart();
     serverLog(LL_WARNING,
         "KeyDB %s crashed by signal: %d, si_code: %d", KEYDB_REAL_VERSION, sig, info->si_code);
-    if (eip != NULL) {
-        serverLog(LL_WARNING,
-        "Crashed running the instruction at: %p", eip);
-    }
     if (sig == SIGSEGV || sig == SIGBUS) {
         serverLog(LL_WARNING,
         "Accessing address: %p", (void*)info->si_addr);
     }
-    if (info->si_pid != -1) {
-        serverLog(LL_WARNING, "Killed by PID: %d, UID: %d", info->si_pid, info->si_uid);
+    if (info->si_code <= SI_USER && info->si_pid != -1) {
+        serverLog(LL_WARNING, "Killed by PID: %ld, UID: %d", (long) info->si_pid, info->si_uid);
     }
-    serverLog(LL_WARNING,
-        "Failed assertion: %s (%s:%d)", g_pserver->assert_failed,
-                        g_pserver->assert_file, g_pserver->assert_line);
 
-    /* Log the stack trace */
-    serverLogRaw(LL_WARNING|LL_RAW, "\n------ STACK TRACE ------\n");
-    logStackTrace(uc);
+#ifdef HAVE_BACKTRACE
+    ucontext_t *uc = (ucontext_t*) secret;
+    void *eip = getMcontextEip(uc);
+    if (eip != NULL) {
+        serverLog(LL_WARNING,
+        "Crashed running the instruction at: %p", eip);
+    }
+
+    logStackTrace(getMcontextEip(uc), 1);
+
+    logRegisters(uc);
+#endif
+
+    printCrashReport();
+
+#ifdef HAVE_BACKTRACE
+    if (eip != NULL)
+        dumpCodeAroundEIP(eip);
+#endif
+
+    bugReportEnd(1, sig);
+}
+
+void printCrashReport(void) {
+    g_fInCrash = true;
 
     /* Log INFO and CLIENT LIST */
-    serverLogRaw(LL_WARNING|LL_RAW, "\n------ INFO OUTPUT ------\n");
-    infostring = genRedisInfoString("all");
-    serverLogRaw(LL_WARNING|LL_RAW, infostring);
-    serverLogRaw(LL_WARNING|LL_RAW, "\n------ CLIENT LIST OUTPUT ------\n");
-    clients = getAllClientsInfoString(-1);
-    serverLogRaw(LL_WARNING|LL_RAW, clients);
-    sdsfree(infostring);
-    sdsfree(clients);
+    logServerInfo();
 
     /* Log the current client */
     logCurrentClient();
 
-    /* Log dump of processor registers */
-    logRegisters(uc);
+    /* Log modules info. Something we wanna do last since we fear it may crash. */
+    logModulesInfo();
 
-    /* Log Modules INFO */
-    serverLogRaw(LL_WARNING|LL_RAW, "\n------ MODULES INFO OUTPUT ------\n");
-    infostring = modulesCollectInfo(sdsempty(), NULL, 1, 0);
-    serverLogRaw(LL_WARNING|LL_RAW, infostring);
-    sdsfree(infostring);
+    /* Run memory test in case the crash was triggered by memory corruption. */
+    doFastMemoryTest();
+}
 
-#if defined(HAVE_PROC_MAPS)
-    /* Test memory */
-    serverLogRaw(LL_WARNING|LL_RAW, "\n------ FAST MEMORY TEST ------\n");
-    killThreads();
-    if (memtest_test_linux_anonymous_maps()) {
-        serverLogRaw(LL_WARNING|LL_RAW,
-            "!!! MEMORY ERROR DETECTED! Check your memory ASAP !!!\n");
-    } else {
-        serverLogRaw(LL_WARNING|LL_RAW,
-            "Fast memory test PASSED, however your memory can still be broken. Please run a memory test for several hours if possible.\n");
-    }
-#endif
-
-    if (eip != NULL) {
-        Dl_info info;
-        if (dladdr(eip, &info) != 0) {
-            serverLog(LL_WARNING|LL_RAW,
-                "\n------ DUMPING CODE AROUND EIP ------\n"
-                "Symbol: %s (base: %p)\n"
-                "Module: %s (base %p)\n"
-                "$ xxd -r -p /tmp/dump.hex /tmp/dump.bin\n"
-                "$ objdump --adjust-vma=%p -D -b binary -m i386:x86-64 /tmp/dump.bin\n"
-                "------\n",
-                info.dli_sname, info.dli_saddr, info.dli_fname, info.dli_fbase,
-                info.dli_saddr);
-            size_t len = (long)eip - (long)info.dli_saddr;
-            unsigned long sz = sysconf(_SC_PAGESIZE);
-            if (len < 1<<13) { /* we don't have functions over 8k (verified) */
-                /* Find the address of the next page, which is our "safety"
-                 * limit when dumping. Then try to dump just 128 bytes more
-                 * than EIP if there is room, or stop sooner. */
-                void *base = (void *)info.dli_saddr;
-                unsigned long next = ((unsigned long)eip + sz) & ~(sz-1);
-                unsigned long end = (unsigned long)eip + 128;
-                if (end > next) end = next;
-                len = end - (unsigned long)base;
-                serverLogHexDump(LL_WARNING, "dump of function",
-                    base ,len);
-                dumpX86Calls(base,len);
-            }
-        }
-    }
+void bugReportEnd(int killViaSignal, int sig) {
+    struct sigaction act;
 
     serverLogRaw(LL_WARNING|LL_RAW,
 "\n=== KEYDB BUG REPORT END. Make sure to include from START to END. ===\n\n"
@@ -1823,6 +1970,12 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
     /* free(messages); Don't call free() with possibly corrupted memory. */
     if (cserver.daemonize && cserver.supervised == 0 && cserver.pidfile) unlink(cserver.pidfile);
 
+    if (!killViaSignal) {
+        if (g_pserver->use_exit_on_panic)
+            exit(1);
+        abort();
+    }
+
     /* Make sure we exit with the right signal at the end. So for instance
      * the core will be dumped if enabled. */
     sigemptyset (&act.sa_mask);
@@ -1831,7 +1984,6 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
     sigaction (sig, &act, NULL);
     kill(getpid(),sig);
 }
-#endif /* HAVE_BACKTRACE */
 
 /* ==================== Logging functions for debugging ===================== */
 
@@ -1871,7 +2023,7 @@ void watchdogSignalHandler(int sig, siginfo_t *info, void *secret) {
 
     serverLogFromHandler(LL_WARNING,"\n--- WATCHDOG TIMER EXPIRED ---");
 #ifdef HAVE_BACKTRACE
-    logStackTrace(uc);
+    logStackTrace(getMcontextEip(uc), 1);
 #else
     serverLogFromHandler(LL_WARNING,"Sorry: no support for backtrace().");
 #endif
@@ -1929,4 +2081,13 @@ void disableWatchdog(void) {
     act.sa_handler = SIG_IGN;
     sigaction(SIGALRM, &act, NULL);
     g_pserver->watchdog_period = 0;
+}
+
+/* Positive input is sleep time in microseconds. Negative input is fractions
+ * of microseconds, i.e. -10 means 100 nanoseconds. */
+void debugDelay(int usec) {
+    /* Since even the shortest sleep results in context switch and system call,
+     * the way we achive short sleeps is by statistically sleeping less often. */
+    if (usec < 0) usec = (rand() % -usec) == 0 ? 1: 0;
+    if (usec) usleep(usec);
 }

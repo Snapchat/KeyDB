@@ -1,20 +1,24 @@
 ---
 name: Bug report
-about: Create a report to help us improve
-title: ''
+about: Help us improve KeyDB by reporting a bug
+title: '[BUG]'
 labels: ''
 assignees: ''
 
 ---
 
 **Describe the bug**
-A clear and concise description of what the bug is.
 
-** Log Files **
-These should be KeyDB logs, not syslogs or logs from your container manager.  If you are reporting a crash there will be a line in your log stating:
-"=== KEYDB BUG REPORT START: Cut & paste starting from here ==="
+A short description of the bug.
 
-Please copy everything after this line.
+**To reproduce**
 
-**To Reproduce**
-Do you know how to reproduce this?  If so please provide repro steps.
+Steps to reproduce the behavior and/or a minimal code sample.
+
+**Expected behavior**
+
+A description of what you expected to happen.
+
+**Additional information**
+
+Any additional information that is relevant to the problem.

@@ -1856,6 +1856,8 @@ int writeToClient(client *c, int handler_installed) {
         * We always read from the replication backlog directly */
         std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
 
+        // serverLog(LL_NOTICE, "written to handler");
+
         long long repl_end_idx = getReplIndexFromOffset(c->repl_end_off);
         
         serverAssert(c->repl_curr_off != -1);
@@ -1884,8 +1886,12 @@ int writeToClient(client *c, int handler_installed) {
                 serverAssert(c->repl_curr_off <= c->repl_end_off);
                 /* If the client offset matches the global offset, we wrote all we needed to,
                  * in which case, there is no pending write */
+                
                 if (c->repl_curr_off == c->repl_end_off){
+                    // serverLog(LL_NOTICE, "Successfully wrote up until %lld", c->repl_end_off);
                     c->fPendingReplicaWrite = false;
+                } else {
+                    // serverLog(LL_NOTICE, "Wrote to %lld out of %lld", c->repl_curr_off, c->repl_end_off);
                 }
             }
 

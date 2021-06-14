@@ -241,6 +241,8 @@ void resizeReplicationBacklog(long long newsize) {
         newsize = CONFIG_REPL_BACKLOG_MIN_SIZE;
     if (g_pserver->repl_backlog_size == newsize) return;
 
+    std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
+
     if (g_pserver->repl_backlog != NULL) {
         /* What we actually do is to flush the old buffer and realloc a new
          * empty one. It will refill with new data incrementally.
@@ -310,8 +312,8 @@ void freeReplicationBacklog(void) {
  * the backlog without incrementing the offset. */
 void feedReplicationBacklog(const void *ptr, size_t len) {
     serverAssert(GlobalLocksAcquired());
-    serverAssert(g_pserver->repl_backlog_lock.fOwnLock());
     const unsigned char *p = (const unsigned char*)ptr;
+
 
     if (g_pserver->repl_batch_idxStart >= 0) {
         /* we are lower bounded by the lower client offset or the offStart if all the clients are up to date */
@@ -320,10 +322,11 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
             lower_bound = g_pserver->repl_batch_offStart;
         long long minimumsize = g_pserver->master_repl_offset + len - lower_bound + 1;
         if (minimumsize > g_pserver->repl_backlog_size) {
-            g_pserver->repl_backlog_lock.unlock();
             flushReplBacklogToClients();
-            g_pserver->repl_backlog_lock.lock();
-            minimumsize = g_pserver->master_repl_offset + len - lower_bound +1;
+            minimumsize = g_pserver->master_repl_offset + len - lower_bound + 1;
+
+            serverLog(LL_NOTICE, "minimumsize: %lld, g_pserver->master_repl_offset: %lld, len: %lu, lower_bound: %lld",
+                minimumsize, g_pserver->master_repl_offset, len, lower_bound);
 
             if (minimumsize > g_pserver->repl_backlog_size) {
                 // This is an emergency overflow, we better resize to fit
@@ -492,7 +495,6 @@ void replicationFeedSlavesCore(list *slaves, int dictid, robj **argv, int argc) 
 
     bool fSendRaw = !g_pserver->fActiveReplica;
     updateLowestOffsetAmongReplicas();
-    std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
 
     /* Send SELECT command to every replica if needed. */
     if (g_pserver->replicaseldb != dictid) {
@@ -655,7 +657,6 @@ void replicationFeedSlavesFromMasterStream(char *buf, size_t buflen) {
 
     if (g_pserver->repl_backlog){
         updateLowestOffsetAmongReplicas();
-        std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);   
         feedReplicationBacklog(buf,buflen);
     }
 }
@@ -750,7 +751,7 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
     serverLog(LL_DEBUG, "[PSYNC] Reply total length: %lld", len);
 
     c->repl_curr_off = offset - 1;
-    serverLog(LL_NOTICE, "Client %s, replica offset %lld in psync", replicationGetSlaveName(c), c->repl_curr_off);
+    // serverLog(LL_NOTICE, "Client %s, replica offset %lld in psync", replicationGetSlaveName(c), c->repl_curr_off);
     c->repl_end_off = g_pserver->master_repl_offset;
 
     /* Force the partial sync to be queued */
@@ -4988,7 +4989,7 @@ void flushReplBacklogToClients()
             if (!canFeedReplicaReplBuffer(replica)) continue;
             if (replica->flags & CLIENT_CLOSE_ASAP) continue;
 
-            serverLog(LL_NOTICE, "Client %s, replica offset %lld", replicationGetSlaveName(replica), replica->repl_curr_off);
+            // serverLog(LL_NOTICE, "Client %s, replica offset %lld", replicationGetSlaveName(replica), replica->repl_curr_off);
 
             std::unique_lock<fastlock> ul(replica->lock);
             if (!FCorrectThread(replica))
@@ -5013,6 +5014,7 @@ void flushReplBacklogToClients()
         // This may be called multiple times per "frame" so update with our progress flushing to clients
         g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
         g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
+        updateLowestOffsetAmongReplicas();
     } 
 }
 

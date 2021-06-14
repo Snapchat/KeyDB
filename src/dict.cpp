@@ -535,7 +535,8 @@ dictAsyncRehashCtl::~dictAsyncRehashCtl() {
     while (deGCList != nullptr) {
         auto next = deGCList->next;
         dictFreeKey(dict, deGCList);
-        dictFreeVal(dict, deGCList);
+        if (deGCList->v.val != nullptr)
+            dictFreeVal(dict, deGCList);
         zfree(deGCList);
         deGCList = next;
     }
@@ -694,6 +695,8 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
                     d->ht[table].table[idx] = he->next;
                 if (!nofree) {
                     if (table == 0 && d->asyncdata != nullptr && (ssize_t)idx < d->rehashidx) {
+                        dictFreeVal(d, he);
+                        he->v.val = nullptr;
                         he->next = d->asyncdata->deGCList;
                         d->asyncdata->deGCList = he;
                     } else {
@@ -752,6 +755,8 @@ void dictFreeUnlinkedEntry(dict *d, dictEntry *he) {
     if (he == NULL) return;
 
     if (d->asyncdata) {
+        dictFreeVal(d, he);
+        he->v.val = nullptr;
         he->next = d->asyncdata->deGCList;
         d->asyncdata->deGCList = he;
     } else { 
@@ -775,6 +780,8 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
         while(he) {
             nextHe = he->next;
             if (d->asyncdata && (ssize_t)i < d->rehashidx) {
+                dictFreeVal(d, he);
+                he->v.val = nullptr;
                 he->next = d->asyncdata->deGCList;
                 d->asyncdata->deGCList = he;
             } else {

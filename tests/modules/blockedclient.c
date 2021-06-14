@@ -65,6 +65,12 @@ int acquire_gil(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
         return REDISMODULE_OK;
     }
 
+    if ((allFlags & REDISMODULE_CTX_FLAGS_DENY_BLOCKING) &&
+        (flags & REDISMODULE_CTX_FLAGS_DENY_BLOCKING)) {
+        RedisModule_ReplyWithSimpleString(ctx, "Blocked client is not allowed");
+        return REDISMODULE_OK;
+    }
+
     /* This command handler tries to acquire the GIL twice
      * once in the worker thread using "RedisModule_ThreadSafeContextLock"
      * second in the sub-worker thread
@@ -135,6 +141,11 @@ int do_bg_rm_call(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
     if ((allFlags & REDISMODULE_CTX_FLAGS_MULTI) &&
         (flags & REDISMODULE_CTX_FLAGS_MULTI)) {
         RedisModule_ReplyWithSimpleString(ctx, "Blocked client is not supported inside multi");
+        return REDISMODULE_OK;
+    }
+    if ((allFlags & REDISMODULE_CTX_FLAGS_DENY_BLOCKING) &&
+        (flags & REDISMODULE_CTX_FLAGS_DENY_BLOCKING)) {
+        RedisModule_ReplyWithSimpleString(ctx, "Blocked client is not allowed");
         return REDISMODULE_OK;
     }
 

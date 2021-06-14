@@ -268,7 +268,6 @@ void execCommand(client *c) {
         if (g_pserver->repl_backlog && was_master && !is_master) {
             const char *execcmd = "*1\r\n$4\r\nEXEC\r\n";
             updateLowestOffsetAmongReplicas();
-            std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
             feedReplicationBacklog(execcmd,strlen(execcmd));
         }
         afterPropagateExec();

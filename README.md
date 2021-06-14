@@ -2,13 +2,11 @@
 ![CI](https://github.com/JohnSully/KeyDB/workflows/CI/badge.svg?branch=unstable)
 [![StackShare](http://img.shields.io/badge/tech-stack-0690fa.svg?style=flat)](https://stackshare.io/eq-alpha-technology-inc/eq-alpha-technology-inc)
 
-##### New! Want to extend KeyDB with Javascript?  Try [ModJS](https://github.com/JohnSully/ModJS)
+##### Want to extend KeyDB with Javascript?  Try [ModJS](https://github.com/JohnSully/ModJS)
 
 ##### Need Help? Check out our extensive [documentation](https://docs.keydb.dev).
 
-##### Have feedback?  Take our quick survey: https://www.surveymonkey.com/r/Y9XNS93
-
-##### KeyDB is Hiring! We are currently building out our dev team. If you are interested please see the posting here: https://keydb.dev/careers.html
+##### NEW!!! KeyDB now has a Slack Community Workspace. Click [here](https://docs.keydb.dev/slack/) to learn more and join the KeyDB Community Slack workspace.
 
 What is KeyDB?
 --------------
@@ -124,6 +122,13 @@ installed):
     % ./runtest --tls
 
 
+If TLS is built, running the tests with TLS enabled (you will need `tcl-tls`
+installed):
+
+    % ./utils/gen-test-certs.sh
+    % ./runtest --tls
+
+
 Fixing build problems with dependencies or cached build options
 ---------
 
@@ -174,6 +179,18 @@ To force compiling against libc malloc, use:
 To compile against jemalloc on Mac OS X systems, use:
 
     % make MALLOC=jemalloc
+
+Monotonic clock
+---------------
+
+By default, Redis will build using the POSIX clock_gettime function as the
+monotonic clock source.  On most modern systems, the internal processor clock
+can be used to improve performance.  Cautions can be found here: 
+    http://oliveryang.net/2015/09/pitfalls-of-TSC-usage/
+
+To build with support for the processor's internal instruction clock, use:
+
+    % make CFLAGS="-DUSE_PROCESSOR_CLOCK"
 
 Verbose build
 -------------

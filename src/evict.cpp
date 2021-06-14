@@ -470,11 +470,13 @@ public:
     FreeMemoryLazyFree(FreeMemoryLazyFree&&) = default;
 
     ~FreeMemoryLazyFree() {
+        aeAcquireLock();
         for (auto &pair : vecdictvecde) {
             for (auto de : pair.second) {
                 dictFreeUnlinkedEntry(pair.first, de);
             }
         }
+        aeReleaseLock();
         --s_clazyFreesInProgress;
     }
 

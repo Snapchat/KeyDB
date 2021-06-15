@@ -267,7 +267,6 @@ void execCommand(client *c) {
          * backlog with the final EXEC. */
         if (g_pserver->repl_backlog && was_master && !is_master) {
             const char *execcmd = "*1\r\n$4\r\nEXEC\r\n";
-            updateLowestOffsetAmongReplicas();
             feedReplicationBacklog(execcmd,strlen(execcmd));
         }
         afterPropagateExec();

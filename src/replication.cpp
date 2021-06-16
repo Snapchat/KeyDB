@@ -47,8 +47,6 @@
 #include <unordered_map>
 #include <string>
 
-#define BYPASS_BUFFER
-
 void replicationDiscardCachedMaster(redisMaster *mi);
 void replicationResurrectCachedMaster(redisMaster *mi, connection *conn);
 void replicationSendAck(redisMaster *mi);
@@ -60,8 +58,6 @@ static void propagateMasterStaleKeys();
  * because of replication, so that we can remove the RDB file in case
  * the instance is configured to have no persistence. */
 int RDBGeneratedByReplication = 0;
-
-void resizeReplicationBacklogForClients(long long newsize);
 
 /* --------------------------- Utility functions ---------------------------- */
 
@@ -205,7 +201,14 @@ void createReplicationBacklog(void) {
     g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
 }
 
-long long getReplIndexFromOffset(long long offset);
+/* Compute the corresponding index from a replication backlog offset 
+ * Since this computation needs the size of the replication backlog, 
+ * you need to have the repl_backlog_lock in order to call it */
+long long getReplIndexFromOffset(long long offset){
+    serverAssert(g_pserver->repl_backlog_lock.fOwnLock());
+    long long index = (offset - g_pserver->repl_backlog_start) % g_pserver->repl_backlog_size;
+    return index;
+}
 
 /* This function is called when the user modifies the replication backlog
  * size at runtime. It is up to the function to both update the
@@ -293,7 +296,7 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
 
 
     if (g_pserver->repl_batch_idxStart >= 0) {
-        /* we are lower bounded by the lower client offset or the offStart if all the clients are up to date */
+        /* We are lower bounded by the lowest replica offset, or the batch offset start if not applicable */
         long long lower_bound = g_pserver->repl_lowest_off.load(std::memory_order_seq_cst);
         if (lower_bound == -1)
             lower_bound = g_pserver->repl_batch_offStart;
@@ -305,9 +308,6 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
                 lower_bound = g_pserver->repl_batch_offStart;
 
             minimumsize = g_pserver->master_repl_offset + len - lower_bound + 1;
-
-            serverLog(LL_NOTICE, "minimumsize: %lld, g_pserver->master_repl_offset: %lld, len: %lu, lower_bound: %lld",
-                minimumsize, g_pserver->master_repl_offset, len, lower_bound);
 
             if (minimumsize > g_pserver->repl_backlog_size) {
                 // This is an emergency overflow, we better resize to fit
@@ -635,9 +635,7 @@ void replicationFeedSlavesFromMasterStream(char *buf, size_t buflen) {
         printf("\n");
     }
 
-    if (g_pserver->repl_backlog){
-        feedReplicationBacklog(buf,buflen);
-    }
+    if (g_pserver->repl_backlog) feedReplicationBacklog(buf,buflen);
 }
 
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc) {
@@ -689,13 +687,12 @@ int prepareClientToWrite(client *c);
 /* Feed the replica 'c' with the replication backlog starting from the
  * specified 'offset' up to the end of the backlog. */
 long long addReplyReplicationBacklog(client *c, long long offset) {
-    long long j, skip, len;
+    long long skip, len;
 
     serverLog(LL_DEBUG, "[PSYNC] Replica request offset: %lld", offset);
 
     if (g_pserver->repl_backlog_histlen == 0) {
         serverLog(LL_DEBUG, "[PSYNC] Backlog history len is zero");
-        serverLog(LL_NOTICE, "REOAD TO RESIST");
         c->repl_curr_off = g_pserver->master_repl_offset;
         c->repl_end_off = g_pserver->master_repl_offset;
         return 0;
@@ -714,30 +711,20 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
     skip = offset - g_pserver->repl_backlog_off;
     serverLog(LL_DEBUG, "[PSYNC] Skipping: %lld", skip);
 
-    /* Point j to the oldest byte, that is actually our
-     * g_pserver->repl_backlog_off byte. */
-    j = (g_pserver->repl_backlog_idx +
-        (g_pserver->repl_backlog_size-g_pserver->repl_backlog_histlen)) %
-        g_pserver->repl_backlog_size;
-    serverLog(LL_DEBUG, "[PSYNC] Index of first byte: %lld", j);
-
-    /* Discard the amount of data to seek to the specified 'offset'. */
-    j = (j + skip) % g_pserver->repl_backlog_size;
-
-    /* Feed replica with data. Since it is a circular buffer we have to
-     * split the reply in two parts if we are cross-boundary. */
     len = g_pserver->repl_backlog_histlen - skip;
     serverLog(LL_DEBUG, "[PSYNC] Reply total length: %lld", len);
 
+    /* Set the start and end offsets for the replica so that a future
+     * writeToClient will send the backlog from the given offset to 
+     * the current end of the backlog to said replica */
     c->repl_curr_off = offset - 1;
-    // serverLog(LL_NOTICE, "Client %s, replica offset %lld in psync", replicationGetSlaveName(c), c->repl_curr_off);
     c->repl_end_off = g_pserver->master_repl_offset;
 
     /* Force the partial sync to be queued */
     prepareClientToWrite(c);
     c->fPendingReplicaWrite = true; 
 
-    return g_pserver->repl_backlog_histlen - skip;
+    return len;
 }
 
 /* Return the offset to provide as reply to the PSYNC command received
@@ -4963,13 +4950,17 @@ void flushReplBacklogToClients()
         listIter li;
         listNode *ln;
         listRewind(g_pserver->slaves, &li);
+        /* We don't actually write any data in this function since we send data 
+         * directly from the replication backlog to replicas in writeToClient.
+         * 
+         * What we do however, is set the end offset of each replica here. This way, 
+         * future calls to writeToClient will know up to where in the replication
+         * backlog is valid for writing. */  
         while ((ln = listNext(&li))) {
             client *replica = (client*)listNodeValue(ln);
 
             if (!canFeedReplicaReplBuffer(replica)) continue;
             if (replica->flags & CLIENT_CLOSE_ASAP) continue;
-
-            // serverLog(LL_NOTICE, "Client %s, replica offset %lld", replicationGetSlaveName(replica), replica->repl_curr_off);
 
             std::unique_lock<fastlock> ul(replica->lock);
             if (!FCorrectThread(replica))

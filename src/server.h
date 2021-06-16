@@ -1590,9 +1590,11 @@ struct client {
                                        copying this replica output buffer
                                        should use. */
                                        
-    long long repl_curr_off = -1;  /* Replication offset of the client, only if it's a replica*/
-    long long repl_end_off = -1; /* Replication offset to write to */
-    int fPendingReplicaWrite;
+    long long repl_curr_off = -1;/* Replication offset of the replica, also where in the backlog we need to start from
+                                  * when sending data to this replica. */
+    long long repl_end_off = -1; /* Replication offset to write to, stored in the replica, as opposed to using the global offset 
+                                  * to prevent needing the global lock */
+    int fPendingReplicaWrite;    /* Is there a write queued for this replica? */
 
     char replid[CONFIG_RUN_ID_SIZE+1]; /* Master replication ID (if master). */
     int slave_listening_port; /* As configured with: REPLCONF listening-port */
@@ -2375,8 +2377,8 @@ struct redisServer {
     int repl_diskless_load;         /* Slave parse RDB directly from the socket.
                                      * see REPL_DISKLESS_LOAD_* enum */
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
-    std::atomic <long long> repl_lowest_off; /* The lowest offset amongst all clients 
-                                               Updated before calls to feed the replication backlog */
+    std::atomic <long long> repl_lowest_off; /* The lowest offset amongst all replicas
+                                                -1 if there are no replicas */
     /* Replication (replica) */
     list *masters;
     int enable_multimaster; 
@@ -2825,7 +2827,6 @@ sds getAllClientsInfoString(int type);
 void rewriteClientCommandVector(client *c, int argc, ...);
 void rewriteClientCommandArgument(client *c, int i, robj *newval);
 void replaceClientCommandVector(client *c, int argc, robj **argv);
-unsigned long getClientReplicationBacklogSharedUsage(client *c);
 unsigned long getClientOutputBufferMemoryUsage(client *c);
 int freeClientsInAsyncFreeQueue(int iel);
 void asyncCloseClientOnOutputBufferLimitReached(client *c);
@@ -3017,7 +3018,6 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
 void rdbPipeWriteHandlerConnRemoved(struct connection *conn);
 void replicationNotifyLoadedKey(redisDb *db, robj_roptr key, robj_roptr val, long long expire);
 void replicateSubkeyExpire(redisDb *db, robj_roptr key, robj_roptr subkey, long long expire);
-void updateLowestOffsetAmongReplicas(void);
 void clearFailoverState(void);
 void updateFailoverStatus(void);
 void abortFailover(redisMaster *mi, const char *err);

@@ -1765,15 +1765,7 @@ client *lookupClientByID(uint64_t id) {
     return (c == raxNotFound) ? NULL : c;
 }
 
-/* Compute the corresponding index from a replication backlog offset
- * by taking the distance between the input offset and the replication backlog offset 
- * and applying that to the replication backlog index, wrapping around if the index 
- * becomes negative. 
- * TODO: Rewrite comment for new logic */
-long long getReplIndexFromOffset(long long offset){
-    long long index = (offset - g_pserver->repl_backlog_start) % g_pserver->repl_backlog_size;
-    return index;
-}
+long long getReplIndexFromOffset(long long offset);
 
 /* Write data in output buffers to client. Return C_OK if the client
  * is still valid after the call, C_ERR if it was freed because of some
@@ -1832,35 +1824,31 @@ int writeToClient(client *c, int handler_installed) {
             }
         }
         /* Note that we avoid to send more than NET_MAX_WRITES_PER_EVENT
-        * bytes, in a single threaded server it's a good idea to serve
-        * other clients as well, even if a very large request comes from
-        * super fast link that is always able to accept data (in real world
-        * scenario think about 'KEYS *' against the loopback interface).
-        *
-        * However if we are over the maxmemory limit we ignore that and
-        * just deliver as much data as it is possible to deliver.
-        *
-        * Moreover, we also send as much as possible if the client is
-        * a replica or a monitor (otherwise, on high-speed traffic, the
-        * replication/output buffer will grow indefinitely) */
+         * bytes, in a single threaded server it's a good idea to serve
+         * other clients as well, even if a very large request comes from
+         * super fast link that is always able to accept data (in real world
+         * scenario think about 'KEYS *' against the loopback interface).
+         *
+         * However if we are over the maxmemory limit we ignore that and
+         * just deliver as much data as it is possible to deliver.
+         *
+         * Moreover, we also send as much as possible if the client is
+         * a replica or a monitor (otherwise, on high-speed traffic, the
+         * replication/output buffer will grow indefinitely) */
         if (totwritten > NET_MAX_WRITES_PER_EVENT &&
             (g_pserver->maxmemory == 0 ||
-            zmalloc_used_memory() < g_pserver->maxmemory) &&
+             zmalloc_used_memory() < g_pserver->maxmemory) &&
             !(c->flags & CLIENT_SLAVE)) break;
     }
 
     /* We can only directly read from the replication backlog if the client 
        is a replica, so only attempt to do so if that's the case. */
     if (c->flags & CLIENT_SLAVE && !(c->flags & CLIENT_MONITOR)) {
-        /* For replicas, we don't store all the information in the client buffer
-        * We always read from the replication backlog directly */
+
         std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
-
-        // serverLog(LL_NOTICE, "written to handler");
-
         long long repl_end_idx = getReplIndexFromOffset(c->repl_end_off);
-        
         serverAssert(c->repl_curr_off != -1);
+
         if (c->repl_curr_off != c->repl_end_off){
             long long repl_curr_idx = getReplIndexFromOffset(c->repl_curr_off); 
             long long nwritten2ndStage = 0; /* How much was written from the start of the replication backlog
@@ -1884,14 +1872,9 @@ int writeToClient(client *c, int handler_installed) {
                 totwritten += nwritten;
                 c->repl_curr_off += nwritten;
                 serverAssert(c->repl_curr_off <= c->repl_end_off);
-                /* If the client offset matches the global offset, we wrote all we needed to,
-                 * in which case, there is no pending write */
-                
+                /* If the client's current offset matches the last offset it can read from, there is no pending write */
                 if (c->repl_curr_off == c->repl_end_off){
-                    // serverLog(LL_NOTICE, "Successfully wrote up until %lld", c->repl_end_off);
                     c->fPendingReplicaWrite = false;
-                } else {
-                    // serverLog(LL_NOTICE, "Wrote to %lld out of %lld", c->repl_curr_off, c->repl_end_off);
                 }
             }
 
@@ -3719,8 +3702,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
     }
 }
 
-/* In the case of a replica client, it is possible (and very likely) 
- * that writes to said replica are using data from the replication backlog
+/* In the case of a replica client, writes to said replica are using data from the replication backlog
  * as opposed to it's own internal buffer, this number should keep track of that */
 unsigned long getClientReplicationBacklogSharedUsage(client *c) {
     return (!(c->flags & CLIENT_SLAVE) || !c->fPendingReplicaWrite ) ? 0 : g_pserver->master_repl_offset - c->repl_curr_off;

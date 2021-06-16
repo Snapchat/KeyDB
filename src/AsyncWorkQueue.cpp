@@ -18,14 +18,15 @@ void AsyncWorkQueue::WorkerThreadMain()
 
     vars.clients_pending_asyncwrite = listCreate();
 
-    aeAcquireLock();
+    m_mutex.lock();
     m_vecpthreadVars.push_back(&vars);
-    aeReleaseLock();
+    m_mutex.unlock();
 
     while (!m_fQuitting)
     {
         std::unique_lock<std::mutex> lock(m_mutex);
-        m_cvWakeup.wait(lock);
+        if (m_workqueue.empty())
+            m_cvWakeup.wait(lock);
 
         while (!m_workqueue.empty())
         {
@@ -41,9 +42,11 @@ void AsyncWorkQueue::WorkerThreadMain()
 
         lock.unlock();
         serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
-        aeAcquireLock();
-        ProcessPendingAsyncWrites();
-        aeReleaseLock();
+        if (listLength(serverTL->clients_pending_asyncwrite)) {
+            aeAcquireLock();
+            ProcessPendingAsyncWrites();
+            aeReleaseLock();
+        }
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
         serverTL->gcEpoch.reset();
     }
@@ -60,6 +63,7 @@ bool AsyncWorkQueue::removeClientAsyncWrites(client *c)
 {
     bool fFound = false;
     aeAcquireLock();
+    m_mutex.lock();
     for (auto pvars : m_vecpthreadVars)
     {
         listIter li;
@@ -74,6 +78,7 @@ bool AsyncWorkQueue::removeClientAsyncWrites(client *c)
             }
         }
     }
+    m_mutex.unlock();
     aeReleaseLock();
     return fFound;
 }

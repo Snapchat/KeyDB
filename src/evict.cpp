@@ -354,6 +354,8 @@ unsigned long LFUDecrAndReturn(robj_roptr o) {
     return counter;
 }
 
+unsigned long getClientReplicationBacklogSharedUsage(client *c);
+
 /* We don't want to count AOF buffers and slaves output buffers as
  * used memory: the eviction should use mostly data size. This function
  * returns the sum of AOF and slaves buffer. */

@@ -1,6 +1,7 @@
 build:
   stage: build
   script:
+    - make distclean
     - make
     - make install
 

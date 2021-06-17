@@ -36,6 +36,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
+#include <sys/resource.h>
 #include <sys/time.h>
 #include <signal.h>
 #include <assert.h>
@@ -863,6 +864,13 @@ int extractPropertyFromInfo(const char *info, const char *key, double &val) {
     return 0;
 }
 
+double getSelfCpuTime(struct rusage *self_ru) {
+    getrusage(RUSAGE_SELF, self_ru);
+    double user_time = self_ru->ru_utime.tv_sec + (self_ru->ru_utime.tv_usec / (double)1000000);
+    double system_time = self_ru->ru_stime.tv_sec + (self_ru->ru_stime.tv_usec / (double)1000000);
+    return user_time + system_time;
+}
+
 double getServerCpuTime(redisContext *ctx) {
     redisReply *reply = (redisReply*)redisCommand(ctx, "INFO");
     if (reply->type != REDIS_REPLY_STRING) {
@@ -924,7 +932,10 @@ int main(int argc, const char **argv) {
 
     initBenchmarkThreads();
     redisContext *ctx = getRedisContext(config.hostip, config.hostport, config.hostsocket);
-    double cpu_usage, last_cpu_usage = getServerCpuTime(ctx);
+    double server_cpu_time, last_server_cpu_time = getServerCpuTime(ctx);
+    struct rusage self_ru;
+    double self_cpu_time, last_self_cpu_time = getSelfCpuTime(&self_ru);
+
 
     while (threads_used < config.max_threads) {
         printf("Creating %d clients for thread %d...\n", config.numclients, threads_used);
@@ -944,12 +955,16 @@ int main(int argc, const char **argv) {
 
         sleep(period);
         
-        cpu_usage = getServerCpuTime(ctx);
-        if (cpu_usage < 0) {
+        server_cpu_time = getServerCpuTime(ctx);
+        self_cpu_time = getSelfCpuTime(&self_ru);
+        if (server_cpu_time < 0) {
             break;
         }
-        printf("CPU Usage: %.1f%%\r\n", (cpu_usage - last_cpu_usage) * 100 / period);
-        last_cpu_usage = cpu_usage;
+        printf("CPU Usage Self: %.1f%%, Server: %.1f%%\r\n",
+               (self_cpu_time - last_self_cpu_time) * 100 / period,
+               (server_cpu_time - last_server_cpu_time) * 100 / period);
+        last_server_cpu_time = server_cpu_time;
+        last_self_cpu_time = self_cpu_time;
     }
 
     printf("Done.\n");

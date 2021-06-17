@@ -863,6 +863,27 @@ int extractPropertyFromInfo(const char *info, const char *key, double &val) {
     return 0;
 }
 
+double getServerCpuTime(redisContext *ctx) {
+    redisReply *reply = (redisReply*)redisCommand(ctx, "INFO");
+    if (reply->type != REDIS_REPLY_STRING) {
+        freeReplyObject(reply);
+        printf("Error executing INFO command. Exiting.\r\n");
+        return -1;
+    }
+
+    double used_cpu_user, used_cpu_sys;
+    if (extractPropertyFromInfo(reply->str, "used_cpu_user", used_cpu_user)) {
+        printf("Error reading user CPU usage from INFO command. Exiting.\r\n");
+        return -1;
+    }
+    if (extractPropertyFromInfo(reply->str, "used_cpu_sys", used_cpu_sys)) {
+        printf("Error reading system CPU usage from INFO command. Exiting.\r\n");
+        return -1;
+    }
+    freeReplyObject(reply);
+    return used_cpu_user + used_cpu_sys;
+}
+
 int main(int argc, const char **argv) {
     int i;
     
@@ -898,11 +919,12 @@ int main(int argc, const char **argv) {
 
     const char *set_value = "abcdefghijklmnopqrstuvwxyz";
     int threads_used = 0;
+    unsigned int period = 5;
     char command[63];
 
     initBenchmarkThreads();
     redisContext *ctx = getRedisContext(config.hostip, config.hostport, config.hostsocket);
-    double cpu_usage;
+    double cpu_usage, last_cpu_usage = getServerCpuTime(ctx);
 
     while (threads_used < config.max_threads) {
         printf("Creating %d clients for thread %d...\n", config.numclients, threads_used);
@@ -920,20 +942,14 @@ int main(int argc, const char **argv) {
         }
         threads_used++;
 
-        sleep(1);
-
-        redisReply *reply = (redisReply*)redisCommand(ctx, "INFO");
-        if (reply->type != REDIS_REPLY_STRING) {
-            freeReplyObject(reply);
-            printf("Error executing INFO command. Exiting.\r\n");
+        sleep(period);
+        
+        cpu_usage = getServerCpuTime(ctx);
+        if (cpu_usage < 0) {
             break;
         }
-        if (extractPropertyFromInfo(reply->str, "used_cpu_sys", cpu_usage)) {
-            printf("Error reading CPU usage from INFO command. Exiting.\r\n");
-            break;
-        }
-        printf("CPU Usage: %f\r\n", cpu_usage);
-        freeReplyObject(reply);
+        printf("CPU Usage: %.1f%%\r\n", (cpu_usage - last_cpu_usage) * 100 / period);
+        last_cpu_usage = cpu_usage;
     }
 
     printf("Done.\n");

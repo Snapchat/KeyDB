@@ -4,6 +4,7 @@ build:
     - git submodule init && git submodule update
     - make distclean
     - make
+    - make uninstall
     - make install
 
 make-test:

@@ -1,0 +1,22 @@
+build:
+  stage: build
+  script:
+    - make
+    - make install
+
+make-test:
+  stage: test
+  script:
+    - make test
+
+node-redis-test:
+  stage: test
+  script:
+    - mkdir node-redis-test
+    - cd node-redis-test
+    - git clone https://gitlab.eqalpha.com/keydb-dev/node-redis.git
+    - cd node-redis
+    - npm install
+    - npm run test
+    - cd ../..
+    - rm -rf node-redis-test

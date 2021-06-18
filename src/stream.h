@@ -14,10 +14,10 @@ typedef struct streamID {
 } streamID;
 
 typedef struct stream {
-    rax *prax;               /* The radix tree holding the stream. */
+    ::rax *rax;               /* The radix tree holding the stream. */
     uint64_t length;        /* Number of elements inside this stream. */
     streamID last_id;       /* Zero if there are yet no items. */
-    rax *cgroups;           /* Consumer groups dictionary: name -> streamCG */
+    ::rax *cgroups;           /* Consumer groups dictionary: name -> streamCG */
 } stream;
 
 /* We define an iterator to iterate stream items in an abstract way, without
@@ -108,14 +108,25 @@ size_t streamReplyWithRange(client *c, stream *s, streamID *start, streamID *end
 void streamIteratorStart(streamIterator *si, stream *s, streamID *start, streamID *end, int rev);
 int streamIteratorGetID(streamIterator *si, streamID *id, int64_t *numfields);
 void streamIteratorGetField(streamIterator *si, unsigned char **fieldptr, unsigned char **valueptr, int64_t *fieldlen, int64_t *valuelen);
+void streamIteratorRemoveEntry(streamIterator *si, streamID *current);
 void streamIteratorStop(streamIterator *si);
 streamCG *streamLookupCG(stream *s, sds groupname);
-streamConsumer *streamLookupConsumer(streamCG *cg, sds name, int flags);
+streamConsumer *streamLookupConsumer(streamCG *cg, sds name, int flags, int *created);
 streamCG *streamCreateCG(stream *s, char *name, size_t namelen, streamID *id);
 streamNACK *streamCreateNACK(streamConsumer *consumer);
 void streamDecodeID(void *buf, streamID *id);
 int streamCompareID(streamID *a, streamID *b);
 void streamFreeNACK(streamNACK *na);
-void streamIncrID(streamID *id);
+int streamIncrID(streamID *id);
+int streamDecrID(streamID *id);
+void streamPropagateConsumerCreation(client *c, robj *key, robj *groupname, sds consumername);
+robj *streamDup(robj *o);
+int streamValidateListpackIntegrity(unsigned char *lp, size_t size, int deep);
+int streamParseID(const robj *o, streamID *id);
+robj *createObjectFromStreamID(streamID *id);
+int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_id, streamID *use_id);
+int streamDeleteItem(stream *s, streamID *id);
+int64_t streamTrimByLength(stream *s, long long maxlen, int approx);
+int64_t streamTrimByID(stream *s, streamID minid, int approx);
 
 #endif

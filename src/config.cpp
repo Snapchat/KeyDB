@@ -115,6 +115,19 @@ configEnum oom_score_adj_enum[] = {
     {NULL, 0}
 };
 
+configEnum acl_pubsub_default_enum[] = {
+    {"allchannels", USER_FLAG_ALLCHANNELS},
+    {"resetchannels", 0},
+    {NULL, 0}
+};
+
+configEnum sanitize_dump_payload_enum[] = {
+    {"no", SANITIZE_DUMP_NO},
+    {"yes", SANITIZE_DUMP_YES},
+    {"clients", SANITIZE_DUMP_CLIENTS},
+    {NULL, 0}
+};
+
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
     {0, 0, 0}, /* normal */
@@ -154,6 +167,15 @@ typedef struct stringConfigData {
     int convert_empty_to_null; /* Boolean indicating if empty strings should
                                   be stored as a NULL value. */
 } stringConfigData;
+
+typedef struct sdsConfigData {
+    sds *config; /* Pointer to the server config this value is stored in. */
+    const char *default_value; /* Default value of the config on rewrite. */
+    int (*is_valid_fn)(sds val, const char **err); /* Optional function to check validity of new value (generic doc above) */
+    int (*update_fn)(sds val, sds prev, const char **err); /* Optional function to apply new value at runtime (generic doc above) */
+    int convert_empty_to_null; /* Boolean indicating if empty SDS strings should
+                                  be stored as a NULL value. */
+} sdsConfigData;
 
 typedef struct enumConfigData {
     int *config; /* The pointer to the server config this value is stored in */
@@ -201,6 +223,7 @@ typedef struct numericConfigData {
 typedef union typeData {
     boolConfigData yesno;
     stringConfigData string;
+    sdsConfigData sds;
     enumConfigData enumd;
     numericConfigData numeric;
 } typeData;
@@ -208,8 +231,6 @@ typedef union typeData {
 typedef struct typeInterface {
     /* Called on server start, to init the server with default value */
     void (*init)(typeData data);
-    /* Called on server start, should return 1 on success, 0 on error and should set err */
-    int (*load)(typeData data, sds *argc, int argv, const char **err);
     /* Called on server startup and CONFIG SET, returns 1 on success, 0 on error
      * and can set a verbose err string, update is true when called from CONFIG SET */
     int (*set)(typeData data, sds value, int update, const char **err);
@@ -222,10 +243,15 @@ typedef struct typeInterface {
 typedef struct standardConfig {
     const char *name; /* The user visible name of this config */
     const char *alias; /* An alias that can also be used for this config */
-    const int modifiable; /* Can this value be updated by CONFIG SET? */
+    const unsigned int flags; /* Flags for this specific config */
     typeInterface interface; /* The function pointers that define the type interface */
     typeData data; /* The type specific data exposed used by the interface */
 } standardConfig;
+
+#define MODIFIABLE_CONFIG 0 /* This is the implied default for a standard 
+                             * config, which is mutable. */
+#define IMMUTABLE_CONFIG (1ULL<<0) /* Can this value only be set at startup? */
+#define SENSITIVE_CONFIG (1ULL<<1) /* Does this value contain sensitive information */
 
 extern standardConfig configs[];
 
@@ -375,6 +401,7 @@ void loadServerConfigFromString(char *config) {
     int linenum = 0, totlines, i;
     int slaveof_linenum = 0;
     sds *lines;
+    int save_loaded = 0;
 
     lines = sdssplitlen(config,strlen(config),"\n",1,&totlines);
 
@@ -447,6 +474,14 @@ void loadServerConfigFromString(char *config) {
                 err = "Invalid socket file permissions"; goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"save")) {
+            /* We don't reset save params before loading, because if they're not part
+             * of the file the defaults should be used.
+             */
+            if (!save_loaded) {
+                save_loaded = 1;
+                resetServerSaveParams();
+            }
+
             if (argc == 3) {
                 int seconds = atoi(argv[1]);
                 int changes = atoi(argv[2]);
@@ -480,9 +515,7 @@ void loadServerConfigFromString(char *config) {
                 fclose(logfp);
             }
         } else if (!strcasecmp(argv[0],"include") && argc == 2) {
-            loadServerConfig(argv[1],NULL);
-        } else if ((!strcasecmp(argv[0],"client-query-buffer-limit")) && argc == 2) {
-             cserver.client_max_querybuf_len = memtoll(argv[1],NULL);
+            loadServerConfig(argv[1], 0, NULL);
         } else if ((!strcasecmp(argv[0],"slaveof") ||
                     !strcasecmp(argv[0],"replicaof")) && argc == 3) {
             slaveof_linenum = linenum;
@@ -494,7 +527,7 @@ void loadServerConfigFromString(char *config) {
                     while ((ln = listNext(&li)))
                     {
                         struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
-                        zfree(mi->masterauth);
+                        sdsfree(mi->masterauth);
                         zfree(mi->masteruser);
                         zfree(mi->repl_transfer_tmpfile);
                         delete mi->staleKeyMap;
@@ -514,21 +547,6 @@ void loadServerConfigFromString(char *config) {
             if (strlen(argv[1]) > CONFIG_AUTHPASS_MAX_LEN) {
                 err = "Password is longer than CONFIG_AUTHPASS_MAX_LEN";
                 goto loaderr;
-            }
-            /* The old "requirepass" directive just translates to setting
-             * a password to the default user. The only thing we do
-             * additionally is to remember the cleartext password in this
-             * case, for backward compatibility with Redis <= 5. */
-            ACLSetUser(DefaultUser,"resetpass",-1);
-            sdsfree(g_pserver->requirepass);
-            g_pserver->requirepass = NULL;
-            if (sdslen(argv[1])) {
-                sds aclop = sdscatprintf(sdsempty(),">%s",argv[1]);
-                ACLSetUser(DefaultUser,aclop,sdslen(aclop));
-                sdsfree(aclop);
-                g_pserver->requirepass = sdsnew(argv[1]);
-            } else {
-                ACLSetUser(DefaultUser,"nopass",-1);
             }
         } else if (!strcasecmp(argv[0],"list-max-ziplist-entries") && argc == 2){
             /* DEAD OPTION */
@@ -613,8 +631,7 @@ void loadServerConfigFromString(char *config) {
                     err = "sentinel directive while not in sentinel mode";
                     goto loaderr;
                 }
-                err = sentinelHandleConfiguration(argv+1,argc-1);
-                if (err) goto loaderr;
+                queueSentinelConfig(argv+1,argc-1,linenum,lines[i]);
             }
         } else if (!strcasecmp(argv[0],"scratch-file-path")) {
 #ifdef USE_MEMKIND
@@ -678,6 +695,10 @@ void loadServerConfigFromString(char *config) {
         goto loaderr;
     }
 
+    /* To ensure backward compatibility and work while hz is out of range */
+    if (g_pserver->config_hz < CONFIG_MIN_HZ) g_pserver->config_hz = CONFIG_MIN_HZ;
+    if (g_pserver->config_hz > CONFIG_MAX_HZ) g_pserver->config_hz = CONFIG_MAX_HZ;
+
     sdsfreesplitres(lines,totlines);
     return;
 
@@ -697,28 +718,31 @@ loaderr:
  * Both filename and options can be NULL, in such a case are considered
  * empty. This way loadServerConfig can be used to just load a file or
  * just load a string. */
-void loadServerConfig(char *filename, char *options) {
+void loadServerConfig(char *filename, char config_from_stdin, char *options) {
     sds config = sdsempty();
     char buf[CONFIG_MAX_LINE+1];
+    FILE *fp;
 
     /* Load the file content */
     if (filename) {
-        FILE *fp;
-
-        if (filename[0] == '-' && filename[1] == '\0') {
-            fp = stdin;
-        } else {
-            if ((fp = fopen(filename,"r")) == NULL) {
-                serverLog(LL_WARNING,
+        if ((fp = fopen(filename,"r")) == NULL) {
+            serverLog(LL_WARNING,
                     "Fatal error, can't open config file '%s': %s",
                     filename, strerror(errno));
-                exit(1);
-            }
+            exit(1);
         }
         while(fgets(buf,CONFIG_MAX_LINE+1,fp) != NULL)
             config = sdscat(config,buf);
-        if (fp != stdin) fclose(fp);
+        fclose(fp);
     }
+    /* Append content from stdin */
+    if (config_from_stdin) {
+        serverLog(LL_WARNING,"Reading config from stdin");
+        fp = stdin;
+        while(fgets(buf,CONFIG_MAX_LINE+1,fp) != NULL)
+            config = sdscat(config,buf);
+    }
+
     /* Append the additional options */
     if (options) {
         config = sdscat(config,"\n");
@@ -771,9 +795,13 @@ void configSetCommand(client *c) {
 
     /* Iterate the configs that are standard */
     for (standardConfig *config = configs; config->name != NULL; config++) {
-        if(config->modifiable && (!strcasecmp(szFromObj(c->argv[2]),config->name) ||
+        if (!(config->flags & IMMUTABLE_CONFIG) && 
+            (!strcasecmp(szFromObj(c->argv[2]),config->name) ||
             (config->alias && !strcasecmp(szFromObj(c->argv[2]),config->alias))))
         {
+            if (config->flags & SENSITIVE_CONFIG) {
+                preventCommandLogging(c);
+            }
             if (!config->interface.set(config->data,szFromObj(o),1,&errstr)) {
                 goto badfmt;
             }
@@ -785,23 +813,38 @@ void configSetCommand(client *c) {
     if (0) { /* this starts the config_set macros else-if chain. */
 
     /* Special fields that can't be handled with general macros. */
-    config_set_special_field("requirepass") {
-        if (sdslen(szFromObj(o)) > CONFIG_AUTHPASS_MAX_LEN) goto badfmt;
-        /* The old "requirepass" directive just translates to setting
-         * a password to the default user. The only thing we do
-         * additionally is to remember the cleartext password in this
-         * case, for backward compatibility with Redis <= 5. */
-        ACLSetUser(DefaultUser,"resetpass",-1);
-        sdsfree(g_pserver->requirepass);
-        g_pserver->requirepass = NULL;
-        if (sdslen(szFromObj(o))) {
-            sds aclop = sdscatprintf(sdsempty(),">%s",(char*)ptrFromObj(o));
-            ACLSetUser(DefaultUser,aclop,sdslen(aclop));
-            sdsfree(aclop);
-            g_pserver->requirepass = sdsnew(szFromObj(o));
-        } else {
-            ACLSetUser(DefaultUser,"nopass",-1);
+    config_set_special_field("bind") {
+        int vlen;
+        sds *v = sdssplitlen(szFromObj(o),sdslen(szFromObj(o))," ",1,&vlen);
+
+        if (vlen < 1 || vlen > CONFIG_BINDADDR_MAX) {
+            addReplyError(c, "Too many bind addresses specified.");
+            sdsfreesplitres(v, vlen);
+            return;
         }
+
+        if (changeBindAddr(v, vlen, true) == C_ERR) {
+            addReplyError(c, "Failed to bind to specified addresses.");
+            sdsfreesplitres(v, vlen);
+            return;
+        }
+        // Now run the config change on the other threads
+        for (int ithread = 0; ithread < cserver.cthreads; ++ithread) {
+            if (&g_pserver->rgthreadvar[ithread] != serverTL) {
+                incrRefCount(o);
+                aePostFunction(g_pserver->rgthreadvar[ithread].el, [o]{
+                    int vlen;
+                    sds *v = sdssplitlen(szFromObj(o),sdslen(szFromObj(o))," ",1,&vlen);
+                    if (changeBindAddr(v, vlen, false) == C_ERR) {
+                        serverLog(LL_WARNING, "Failed to change the bind address for a thread.  Server will still be listening on old addresses.");
+                    }
+                    sdsfreesplitres(v, vlen);
+                    decrRefCount(o);
+                });
+            }
+        }
+
+        sdsfreesplitres(v, vlen);
     } config_set_special_field("save") {
         int vlen, j;
         sds *v = sdssplitlen(szFromObj(o),sdslen(szFromObj(o))," ",1,&vlen);
@@ -910,10 +953,6 @@ void configSetCommand(client *c) {
             enableWatchdog(ll);
         else
             disableWatchdog();
-    /* Memory fields.
-     * config_set_memory_field(name,var) */
-    } config_set_memory_field(
-      "client-query-buffer-limit",cserver.client_max_querybuf_len) {
     /* Everything else is an error... */
     } config_set_else {
         addReplyErrorFormat(c,"Unsupported CONFIG parameter: %s",
@@ -948,7 +987,7 @@ badfmt: /* Bad format errors */
         addReplyBulkCString(c,_var ? _var : ""); \
         matches++; \
     } \
-} while(0);
+} while(0)
 
 #define config_get_bool_field(_name,_var) do { \
     if (stringmatch(pattern,_name,1)) { \
@@ -956,7 +995,7 @@ badfmt: /* Bad format errors */
         addReplyBulkCString(c,_var ? "yes" : "no"); \
         matches++; \
     } \
-} while(0);
+} while(0)
 
 #define config_get_numerical_field(_name,_var) do { \
     if (stringmatch(pattern,_name,1)) { \
@@ -965,8 +1004,7 @@ badfmt: /* Bad format errors */
         addReplyBulkCString(c,buf); \
         matches++; \
     } \
-} while(0);
-
+} while(0)
 
 void configGetCommand(client *c) {
     robj *o = c->argv[2];
@@ -994,7 +1032,6 @@ void configGetCommand(client *c) {
     config_get_string_field("logfile",g_pserver->logfile);
 
     /* Numerical values */
-    config_get_numerical_field("client-query-buffer-limit",cserver.client_max_querybuf_len);
     config_get_numerical_field("watchdog-period",g_pserver->watchdog_period);
 
     /* Everything we can't handle with macros follows. */
@@ -1045,7 +1082,7 @@ void configGetCommand(client *c) {
     }
     if (stringmatch(pattern,"unixsocketperm",1)) {
         char buf[32];
-        snprintf(buf,sizeof(buf),"%o",g_pserver->unixsocketperm);
+        snprintf(buf,sizeof(buf),"%lo",(unsigned long)g_pserver->unixsocketperm);
         addReplyBulkCString(c,"unixsocketperm");
         addReplyBulkCString(c,buf);
         matches++;
@@ -1099,16 +1136,6 @@ void configGetCommand(client *c) {
         sdsfree(aux);
         matches++;
     }
-    if (stringmatch(pattern,"requirepass",1)) {
-        addReplyBulkCString(c,"requirepass");
-        sds password = g_pserver->requirepass;
-        if (password) {
-            addReplyBulkCBuffer(c,password,sdslen(password));
-        } else {
-            addReplyBulkCString(c,"");
-        }
-        matches++;
-    }
     if (stringmatch(pattern,"oom-score-adj-values",0)) {
         sds buf = sdsempty();
         int j;
@@ -1157,7 +1184,8 @@ dictType optionToLineDictType = {
     NULL,                       /* val dup */
     dictSdsKeyCaseCompare,      /* key compare */
     dictSdsDestructor,          /* key destructor */
-    dictListDestructor          /* val destructor */
+    dictListDestructor,         /* val destructor */
+    NULL                        /* allow to expand */
 };
 
 dictType optionSetDictType = {
@@ -1166,7 +1194,8 @@ dictType optionSetDictType = {
     NULL,                       /* val dup */
     dictSdsKeyCaseCompare,      /* key compare */
     dictSdsDestructor,          /* key destructor */
-    NULL                        /* val destructor */
+    NULL,                       /* val destructor */
+    NULL                        /* allow to expand */
 };
 
 /* The config rewrite state. */
@@ -1270,13 +1299,22 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
         char *p = strstr(argv[0],"slave");
         if (p) {
             sds alt = sdsempty();
-            alt = sdscatlen(alt,argv[0],p-argv[0]);;
+            alt = sdscatlen(alt,argv[0],p-argv[0]);
             alt = sdscatlen(alt,"replica",7);
             alt = sdscatlen(alt,p+5,strlen(p+5));
             sdsfree(argv[0]);
             argv[0] = alt;
         }
-        rewriteConfigAddLineNumberToOption(state,argv[0],linenum);
+        /* If this is sentinel config, we use sentinel "sentinel <config>" as option 
+            to avoid messing up the sequence. */
+        if (g_pserver->sentinel_mode && argc > 1 && !strcasecmp(argv[0],"sentinel")) {
+            sds sentinelOption = sdsempty();
+            sentinelOption = sdscatfmt(sentinelOption,"%S %S",argv[0],argv[1]);
+            rewriteConfigAddLineNumberToOption(state,sentinelOption,linenum);
+            sdsfree(sentinelOption);
+        } else {
+            rewriteConfigAddLineNumberToOption(state,argv[0],linenum);
+        }
         sdsfreesplitres(argv,argc);
     }
     fclose(fp);
@@ -1394,6 +1432,28 @@ void rewriteConfigStringOption(struct rewriteConfigState *state, const char *opt
     rewriteConfigRewriteLine(state,option,line,force);
 }
 
+/* Rewrite a SDS string option. */
+void rewriteConfigSdsOption(struct rewriteConfigState *state, const char *option, sds value, const sds defvalue) {
+    int force = 1;
+    sds line;
+
+    /* If there is no value set, we don't want the SDS option
+     * to be present in the configuration at all. */
+    if (value == NULL) {
+        rewriteConfigMarkAsProcessed(state, option);
+        return;
+    }
+
+    /* Set force to zero if the value is set to its default. */
+    if (defvalue && sdscmp(value, defvalue) == 0) force = 0;
+
+    line = sdsnew(option);
+    line = sdscatlen(line, " ", 1);
+    line = sdscatrepr(line, value, sdslen(value));
+
+    rewriteConfigRewriteLine(state, option, line, force);
+}
+
 /* Rewrite a numerical (long long range) option. */
 void rewriteConfigNumericalOption(struct rewriteConfigState *state, const char *option, long long value, long long defvalue) {
     int force = value != defvalue;
@@ -1433,15 +1493,20 @@ void rewriteConfigSaveOption(struct rewriteConfigState *state) {
         return;
     }
 
-    /* Note that if there are no save parameters at all, all the current
-     * config line with "save" will be detected as orphaned and deleted,
-     * resulting into no RDB persistence as expected. */
-    for (j = 0; j < g_pserver->saveparamslen; j++) {
-        line = sdscatprintf(sdsempty(),"save %ld %d",
-            (long) g_pserver->saveparams[j].seconds, g_pserver->saveparams[j].changes);
-        rewriteConfigRewriteLine(state,"save",line,1);
+    /* Rewrite save parameters, or an empty 'save ""' line to avoid the
+     * defaults from being used.
+     */
+    if (!g_pserver->saveparamslen) {
+        rewriteConfigRewriteLine(state,"save",sdsnew("save \"\""),1);
+    } else {
+        for (j = 0; j < g_pserver->saveparamslen; j++) {
+            line = sdscatprintf(sdsempty(),"save %ld %d",
+                (long) g_pserver->saveparams[j].seconds, g_pserver->saveparams[j].changes);
+            rewriteConfigRewriteLine(state,"save",line,1);
+        }
     }
-    /* Mark "save" as processed in case g_pserver->saveparamslen is zero. */
+
+    /* Mark "save" as processed in case server.saveparamslen is zero. */
     rewriteConfigMarkAsProcessed(state,"save");
 }
 
@@ -1597,26 +1662,6 @@ void rewriteConfigBindOption(struct rewriteConfigState *state) {
     rewriteConfigRewriteLine(state,option,line,force);
 }
 
-/* Rewrite the requirepass option. */
-void rewriteConfigRequirepassOption(struct rewriteConfigState *state, const char *option) {
-    int force = 1;
-    sds line;
-    sds password = g_pserver->requirepass;
-
-    /* If there is no password set, we don't want the requirepass option
-     * to be present in the configuration at all. */
-    if (password == NULL) {
-        rewriteConfigMarkAsProcessed(state,option);
-        return;
-    }
-
-    line = sdsnew(option);
-    line = sdscatlen(line, " ", 1);
-    line = sdscatsds(line, password);
-
-    rewriteConfigRewriteLine(state,option,line,force);
-}
-
 /* Glue together the configuration lines in the current configuration
  * rewrite state into a single string, stripping multiple empty lines. */
 sds rewriteConfigGetContentFromState(struct rewriteConfigState *state) {
@@ -1724,7 +1769,7 @@ int rewriteConfigOverwriteFile(char *configfile, sds content) {
 
     if (fsync(fd))
         serverLog(LL_WARNING, "Could not sync tmp config file to disk (%s)", strerror(errno));
-    else if (fchmod(fd, 0644) == -1)
+    else if (fchmod(fd, 0644 & ~g_pserver->umask) == -1)
         serverLog(LL_WARNING, "Could not chmod config file (%s)", strerror(errno));
     else if (rename(tmp_conffile, configfile) == -1)
         serverLog(LL_WARNING, "Could not rename tmp config file (%s)", strerror(errno));
@@ -1773,8 +1818,6 @@ int rewriteConfig(char *path, int force_all) {
     rewriteConfigUserOption(state);
     rewriteConfigDirOption(state);
     rewriteConfigSlaveofOption(state,"replicaof");
-    rewriteConfigRequirepassOption(state,"requirepass");
-    rewriteConfigBytesOption(state,"client-query-buffer-limit",cserver.client_max_querybuf_len,PROTO_MAX_QUERYBUF_LEN);
     rewriteConfigStringOption(state,"cluster-config-file",g_pserver->cluster_configfile,CONFIG_DEFAULT_CLUSTER_CONFIG_FILE);
     rewriteConfigNotifykeyspaceeventsOption(state);
     rewriteConfigClientoutputbufferlimitOption(state);
@@ -1806,14 +1849,11 @@ int rewriteConfig(char *path, int force_all) {
 #define LOADBUF_SIZE 256
 static char loadbuf[LOADBUF_SIZE];
 
-#define MODIFIABLE_CONFIG 1
-#define IMMUTABLE_CONFIG 0
-
-#define embedCommonConfig(config_name, config_alias, is_modifiable) \
-    config_name, config_alias, is_modifiable,
+#define embedCommonConfig(config_name, config_alias, config_flags) \
+    config_name, config_alias, config_flags,
 
 #define embedConfigInterface(initfn, setfn, getfn, rewritefn) { \
-    initfn, nullptr, setfn, getfn, rewritefn, \
+    initfn, setfn, getfn, rewritefn, \
 },
 
 /* What follows is the generic config types that are supported. To add a new
@@ -1860,11 +1900,11 @@ static void boolConfigRewrite(typeData data, const char *name, struct rewriteCon
     rewriteConfigYesNoOption(state, name,*(data.yesno.config), data.yesno.default_value);
 }
 
-constexpr standardConfig createBoolConfig(const char *name, const char *alias, int modifiable, int &config_addr, int defaultValue, int (*is_valid)(int val, const char **err), int (*update)(int val, int prev, const char **err))
+constexpr standardConfig createBoolConfig(const char *name, const char *alias, unsigned flags, int &config_addr, int defaultValue, int (*is_valid)(int val, const char **err), int (*update)(int val, int prev, const char **err))
 {
     standardConfig conf = {
-        embedCommonConfig(name, alias, modifiable)
-        { boolConfigInit, nullptr, boolConfigSet, boolConfigGet, boolConfigRewrite }
+        embedCommonConfig(name, alias, flags)
+        { boolConfigInit, boolConfigSet, boolConfigGet, boolConfigRewrite }
     };
     conf.data.yesno.config = &config_addr;
     conf.data.yesno.default_value = defaultValue;
@@ -1875,22 +1915,14 @@ constexpr standardConfig createBoolConfig(const char *name, const char *alias, i
 
 /* String Configs */
 static void stringConfigInit(typeData data) {
-    if (data.string.convert_empty_to_null) {
-        *data.string.config = data.string.default_value ? zstrdup(data.string.default_value) : NULL;
-    } else {
-        *data.string.config = zstrdup(data.string.default_value);
-    }
+    *data.string.config = (data.string.convert_empty_to_null && !data.string.default_value) ? NULL : zstrdup(data.string.default_value);
 }
 
 static int stringConfigSet(typeData data, sds value, int update, const char **err) {
     if (data.string.is_valid_fn && !data.string.is_valid_fn(value, err))
         return 0;
     char *prev = *data.string.config;
-    if (data.string.convert_empty_to_null) {
-        *data.string.config = value[0] ? zstrdup(value) : NULL;
-    } else {
-        *data.string.config = zstrdup(value);
-    }
+    *data.string.config = (data.string.convert_empty_to_null && !value[0]) ? NULL : zstrdup(value);
     if (update && data.string.update_fn && !data.string.update_fn(*data.string.config, prev, err)) {
         zfree(*data.string.config);
         *data.string.config = prev;
@@ -1908,15 +1940,62 @@ static void stringConfigRewrite(typeData data, const char *name, struct rewriteC
     rewriteConfigStringOption(state, name,*(data.string.config), data.string.default_value);
 }
 
+/* SDS Configs */
+static void sdsConfigInit(typeData data) {
+    *data.sds.config = (data.sds.convert_empty_to_null && !data.sds.default_value) ? NULL: sdsnew(data.sds.default_value);
+}
+
+static int sdsConfigSet(typeData data, sds value, int update, const char **err) {
+    if (data.sds.is_valid_fn && !data.sds.is_valid_fn(value, err))
+        return 0;
+    sds prev = *data.sds.config;
+    *data.sds.config = (data.sds.convert_empty_to_null && (sdslen(value) == 0)) ? NULL : sdsdup(value);
+    if (update && data.sds.update_fn && !data.sds.update_fn(*data.sds.config, prev, err)) {
+        sdsfree(*data.sds.config);
+        *data.sds.config = prev;
+        return 0;
+    }
+    sdsfree(prev);
+    return 1;
+}
+
+static void sdsConfigGet(client *c, typeData data) {
+    if (*data.sds.config) {
+        addReplyBulkSds(c, sdsdup(*data.sds.config));
+    } else {
+        addReplyBulkCString(c, "");
+    }
+}
+
+static void sdsConfigRewrite(typeData data, const char *name, struct rewriteConfigState *state) {
+    rewriteConfigSdsOption(state, name, *(data.sds.config), data.sds.default_value ? sdsnew(data.sds.default_value) : NULL);
+}
+
+
 #define ALLOW_EMPTY_STRING 0
 #define EMPTY_STRING_IS_NULL 1
 
-constexpr standardConfig createStringConfig(const char *name, const char *alias, int modifiable, int empty_to_null, char *&config_addr, const char *defaultValue, int (*is_valid)(char*,const char**), int (*update)(char*,char*,const char**)) {
+constexpr standardConfig createStringConfig(const char *name, const char *alias, unsigned flags, int empty_to_null, char *&config_addr, const char *defaultValue, int (*is_valid)(char*,const char**), int (*update)(char*,char*,const char**)) {
     standardConfig conf = {
-        embedCommonConfig(name, alias, modifiable)
+        embedCommonConfig(name, alias, flags)
         embedConfigInterface(stringConfigInit, stringConfigSet, stringConfigGet, stringConfigRewrite)
     };
     conf.data.string = {
+        &(config_addr),
+        (defaultValue),
+        (is_valid),
+        (update),
+        (empty_to_null),
+    };
+    return conf;
+}
+
+constexpr standardConfig createSDSConfig(const char *name, const char *alias, unsigned flags, int empty_to_null, sds &config_addr, const char *defaultValue, int (*is_valid)(char*,const char**), int (*update)(char*,char*,const char**)) {
+    standardConfig conf = {
+        embedCommonConfig(name, alias, flags)
+        embedConfigInterface(sdsConfigInit, sdsConfigSet, sdsConfigGet, sdsConfigRewrite)
+    };
+    conf.data.sds = {
         &(config_addr),
         (defaultValue),
         (is_valid),
@@ -1944,7 +2023,7 @@ static int enumConfigSet(typeData data, sds value, int update, const char **err)
         }
         sdsrange(enumerr,0,-3); /* Remove final ", ". */
 
-        strncpy(loadbuf, enumerr, LOADBUF_SIZE-1);
+        strncpy(loadbuf, enumerr, LOADBUF_SIZE);
         loadbuf[LOADBUF_SIZE - 1] = '\0';
 
         sdsfree(enumerr);
@@ -1970,9 +2049,9 @@ static void enumConfigRewrite(typeData data, const char *name, struct rewriteCon
     rewriteConfigEnumOption(state, name,*(data.enumd.config), data.enumd.enum_value, data.enumd.default_value);
 }
 
-constexpr standardConfig createEnumConfig(const char *name, const char *alias, int modifiable, configEnum *enumVal, int &config_addr, int defaultValue, int (*is_valid)(int,const char**), int (*update)(int,int,const char**)) {
+constexpr standardConfig createEnumConfig(const char *name, const char *alias, unsigned flags, configEnum *enumVal, int &config_addr, int defaultValue, int (*is_valid)(int,const char**), int (*update)(int,int,const char**)) {
     standardConfig c = {
-        embedCommonConfig(name, alias, modifiable)
+        embedCommonConfig(name, alias, flags)
         embedConfigInterface(enumConfigInit, enumConfigSet, enumConfigGet, enumConfigRewrite)
     };
     c.data.enumd = {
@@ -2128,9 +2207,9 @@ static void numericConfigRewrite(typeData data, const char *name, struct rewrite
 #define INTEGER_CONFIG 0
 #define MEMORY_CONFIG 1
 
-constexpr standardConfig embedCommonNumericalConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+constexpr standardConfig embedCommonNumericalConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
     standardConfig conf = {
-        embedCommonConfig(name, alias, modifiable)
+        embedCommonConfig(name, alias, flags)
         embedConfigInterface(numericConfigInit, numericConfigSet, numericConfigGet, numericConfigRewrite)
     };
     conf.data.numeric.is_memory = (memory);
@@ -2142,73 +2221,73 @@ constexpr standardConfig embedCommonNumericalConfig(const char *name, const char
     return conf;
 }
 
-constexpr standardConfig createIntConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, int &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**))
+constexpr standardConfig createIntConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, int &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**))
 {
-    standardConfig conf =  embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+    standardConfig conf =  embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_INT;
     conf.data.numeric.config.i = &config_addr;
     return conf;
 }
 
-constexpr standardConfig createUIntConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, unsigned int &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**))
+constexpr standardConfig createUIntConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, unsigned int &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**))
 {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_UINT;
     conf.data.numeric.config.ui = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createLongConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createLongConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_LONG;
     conf.data.numeric.config.l = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createULongConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, unsigned long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createULongConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, unsigned long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_ULONG;
     conf.data.numeric.config.ul = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createLongLongConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, long long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createLongLongConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, long long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_LONG_LONG;
     conf.data.numeric.config.ll = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createULongLongConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, unsigned long long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createULongLongConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, unsigned long long &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_ULONG_LONG;
     conf.data.numeric.config.ull = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createSizeTConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, size_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createSizeTConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, size_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_SIZE_T;
     conf.data.numeric.config.st = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createSSizeTConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, ssize_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createSSizeTConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, ssize_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_SSIZE_T;
     conf.data.numeric.config.sst = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createTimeTConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, time_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createTimeTConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, time_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_TIME_T;
     conf.data.numeric.config.tt = &(config_addr);
     return conf;
 }
 
-constexpr standardConfig createOffTConfig(const char *name, const char *alias, int modifiable, long long lower, long long upper, off_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
-    auto conf = embedCommonNumericalConfig(name, alias, modifiable, lower, upper, defaultValue, memory, is_valid, update);
+constexpr standardConfig createOffTConfig(const char *name, const char *alias, unsigned flags, long long lower, long long upper, off_t &config_addr, long long defaultValue, int memory, int (*is_valid)(long long, const char**), int (*update)(long long, long long, const char**)) {
+    auto conf = embedCommonNumericalConfig(name, alias, flags, lower, upper, defaultValue, memory, is_valid, update);
     conf.data.numeric.numeric_type = NUMERIC_TYPE_OFF_T;
     conf.data.numeric.config.ot = &(config_addr);
     return conf;
@@ -2218,8 +2297,8 @@ static int isValidActiveDefrag(int val, const char **err) {
 #ifndef HAVE_DEFRAG
     if (val) {
         *err = "Active defragmentation cannot be enabled: it "
-               "requires a Redis server compiled with a modified Jemalloc "
-               "like the one shipped by default with the Redis source "
+               "requires a KeyDB server compiled with a modified Jemalloc "
+               "like the one shipped by default with the KeyDB source "
                "distribution";
         return 0;
     }
@@ -2246,6 +2325,25 @@ static int isValidAOFfilename(char *val, const char **err) {
     return 1;
 }
 
+/* Validate specified string is a valid proc-title-template */
+static int isValidProcTitleTemplate(char *val, const char **err) {
+    if (!validateProcTitleTemplate(val)) {
+        *err = "template format is invalid or contains unknown variables";
+        return 0;
+    }
+    return 1;
+}
+
+static int updateProcTitleTemplate(char *val, char *prev, const char **err) {
+    UNUSED(val);
+    UNUSED(prev);
+    if (redisSetProcTitle(NULL) == C_ERR) {
+        *err = "failed to set process title";
+        return 0;
+    }
+    return 1;
+}
+
 static int updateHZ(long long val, long long prev, const char **err) {
     UNUSED(prev);
     UNUSED(err);
@@ -2255,6 +2353,32 @@ static int updateHZ(long long val, long long prev, const char **err) {
     if (g_pserver->config_hz < CONFIG_MIN_HZ) g_pserver->config_hz = CONFIG_MIN_HZ;
     if (g_pserver->config_hz > CONFIG_MAX_HZ) g_pserver->config_hz = CONFIG_MAX_HZ;
     g_pserver->hz = g_pserver->config_hz;
+    return 1;
+}
+
+static int updatePort(long long val, long long prev, const char **err) {
+    /* Do nothing if port is unchanged */
+    if (val == prev) {
+        return 1;
+    }
+
+    // Run this thread to make sure its valid
+    if (changeListenPort(val, &serverTL->ipfd, acceptTcpHandler, true) == C_ERR) {
+        *err = "Unable to listen on this port. Check server logs.";
+        return 0;
+    }
+
+    // Now run the config change on the other threads
+    for (int ithread = 0; ithread < cserver.cthreads; ++ithread) {
+        if (&g_pserver->rgthreadvar[ithread] != serverTL) {
+            aePostFunction(g_pserver->rgthreadvar[ithread].el, [val]{
+                if (changeListenPort(val, &serverTL->ipfd, acceptTcpHandler, false) == C_ERR) {
+                    serverLog(LL_WARNING, "Failed to change the listen port for a thread.  Server will still be listening on old ports.");
+                }
+            });
+        }
+    }
+
     return 1;
 }
 
@@ -2282,7 +2406,7 @@ static int updateMaxmemory(long long val, long long prev, const char **err) {
         if ((unsigned long long)val < used) {
             serverLog(LL_WARNING,"WARNING: the new maxmemory value set via CONFIG SET (%llu) is smaller than the current memory usage (%zu). This will result in key eviction and/or the inability to accept new write commands depending on the maxmemory-policy.", g_pserver->maxmemory, used);
         }
-        freeMemoryIfNeededAndSafe();
+        performEvictions();
     }
     return 1;
 }
@@ -2295,7 +2419,7 @@ static int updateGoodSlaves(long long val, long long prev, const char **err) {
     return 1;
 }
 
-static int updateMasterAuthConfig(char *, char *, const char **) {
+static int updateMasterAuthConfig(sds, sds, const char **) {
     updateMasterAuth();
     return 1;
 }
@@ -2310,6 +2434,16 @@ static int updateAppendonly(int val, int prev, const char **err) {
             return 0;
         }
     }
+    return 1;
+}
+
+static int updateSighandlerEnabled(int val, int prev, const char **err) {
+    UNUSED(err);
+    UNUSED(prev);
+    if (val)
+        setupSignalHandlers();
+    else
+        removeSignalHandlers();
     return 1;
 }
 
@@ -2335,7 +2469,7 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
             if (aeResizeSetSize(aeGetCurrentEventLoop(),
                 g_pserver->maxclients + CONFIG_FDSET_INCR) == AE_ERR)
             {
-                *err = "The event loop API used by Redis is not able to handle the specified number of clients";
+                *err = "The event loop API used by KeyDB is not able to handle the specified number of clients";
                 return 0;
             }
             serverLog(LL_DEBUG,"Successfully changed the setsize for current thread %d", ielFromEventLoop(aeGetCurrentEventLoop()));
@@ -2389,6 +2523,17 @@ static int updateOOMScoreAdj(int val, int prev, const char **err) {
     return 1;
 }
 
+int updateRequirePass(sds val, sds prev, const char **err) {
+    UNUSED(prev);
+    UNUSED(err);
+    /* The old "requirepass" directive just translates to setting
+     * a password to the default user. The only thing we do
+     * additionally is to remember the cleartext password in this
+     * case, for backward compatibility with Redis <= 5. */
+    ACLUpdateDefaultUserPassword(val);
+    return 1;
+}
+
 #ifdef USE_OPENSSL
 static int updateTlsCfg(char *val, char *prev, const char **err) {
     UNUSED(val);
@@ -2414,6 +2559,48 @@ static int updateTlsCfgInt(long long val, long long prev, const char **err) {
     UNUSED(prev);
     return updateTlsCfg(NULL, NULL, err);
 }
+
+static int updateTLSPortThread(long long val, bool fFirstCall, const char **err)
+{
+    if (changeListenPort(val, &serverTL->tlsfd, acceptTLSHandler, fFirstCall) == C_ERR) {
+        *err = "Unable to listen on this port. Check server logs.";
+        return 0;
+    }
+
+    return 1;
+}
+
+static int updateTLSPort(long long val, long long prev, const char **err) {
+    /* Do nothing if port is unchanged */
+    if (val == prev) {
+        return 1;
+    }
+
+    /* Configure TLS if tls is enabled */
+    if (prev == 0 && tlsConfigure(&g_pserver->tls_ctx_config) == C_ERR) {
+        *err = "Unable to update TLS configuration. Check server logs.";
+        return 0;
+    }
+
+    // Do our thread first in case there is a config issue
+    if (!updateTLSPortThread(val, true /*fFirstCall*/, err))
+        return 0;
+
+    for (int ithread = 0; ithread < cserver.cthreads; ++ithread) {
+        if  (ithread == serverTL - g_pserver->rgthreadvar)
+            continue;   // we already did our thread
+        aePostFunction(g_pserver->rgthreadvar[ithread].el, [val]{
+            const char **err = nullptr;
+            if (!updateTLSPortThread(val, false /*fFirstCall*/, err)) {
+                serverLog(LL_WARNING, "Failed to update TLS port for a thread: %s", *err);
+                serverLog(LL_WARNING, "\tKeyDB will still be listening on the old port for some threads.");
+            }
+        });
+    }
+
+    return 1;
+}
+
 #endif  /* USE_OPENSSL */
 
 int fDummy = false;
@@ -2429,11 +2616,13 @@ standardConfig configs[] = {
     createBoolConfig("rdb-del-sync-files", NULL, MODIFIABLE_CONFIG, g_pserver->rdb_del_sync_files, 0, NULL, NULL),
     createBoolConfig("activerehashing", NULL, MODIFIABLE_CONFIG, g_pserver->activerehashing, 1, NULL, NULL),
     createBoolConfig("stop-writes-on-bgsave-error", NULL, MODIFIABLE_CONFIG, g_pserver->stop_writes_on_bgsave_err, 1, NULL, NULL),
+    createBoolConfig("set-proc-title", NULL, IMMUTABLE_CONFIG, cserver.set_proc_title, 1, NULL, NULL), /* Should setproctitle be used? */
     createBoolConfig("dynamic-hz", NULL, MODIFIABLE_CONFIG, g_pserver->dynamic_hz, 1, NULL, NULL), /* Adapt hz to # of clients.*/
     createBoolConfig("lazyfree-lazy-eviction", NULL, MODIFIABLE_CONFIG, g_pserver->lazyfree_lazy_eviction, 0, NULL, NULL),
     createBoolConfig("lazyfree-lazy-expire", NULL, MODIFIABLE_CONFIG, g_pserver->lazyfree_lazy_expire, 0, NULL, NULL),
     createBoolConfig("lazyfree-lazy-server-del", NULL, MODIFIABLE_CONFIG, g_pserver->lazyfree_lazy_server_del, 0, NULL, NULL),
     createBoolConfig("lazyfree-lazy-user-del", NULL, MODIFIABLE_CONFIG, g_pserver->lazyfree_lazy_user_del , 0, NULL, NULL),
+    createBoolConfig("lazyfree-lazy-user-flush", NULL, MODIFIABLE_CONFIG, g_pserver->lazyfree_lazy_user_flush , 0, NULL, NULL),
     createBoolConfig("repl-disable-tcp-nodelay", NULL, MODIFIABLE_CONFIG, g_pserver->repl_disable_tcp_nodelay, 0, NULL, NULL),
     createBoolConfig("repl-diskless-sync", NULL, MODIFIABLE_CONFIG, g_pserver->repl_diskless_sync, 0, NULL, NULL),
     createBoolConfig("aof-rewrite-incremental-fsync", NULL, MODIFIABLE_CONFIG, g_pserver->aof_rewrite_incremental_fsync, 1, NULL, NULL),
@@ -2454,17 +2643,20 @@ standardConfig configs[] = {
     createBoolConfig("cluster-enabled", NULL, IMMUTABLE_CONFIG, g_pserver->cluster_enabled, 0, NULL, NULL),
     createBoolConfig("appendonly", NULL, MODIFIABLE_CONFIG, g_pserver->aof_enabled, 0, NULL, updateAppendonly),
     createBoolConfig("cluster-allow-reads-when-down", NULL, MODIFIABLE_CONFIG, g_pserver->cluster_allow_reads_when_down, 0, NULL, NULL),
-    createBoolConfig("multi-master-no-forward", NULL, MODIFIABLE_CONFIG, cserver.multimaster_no_forward, 0, validateMultiMasterNoForward, NULL),
-    createBoolConfig("allow-write-during-load", NULL, MODIFIABLE_CONFIG, g_pserver->fWriteDuringActiveLoad, 0, NULL, NULL),
     createBoolConfig("io-threads-do-reads", NULL, IMMUTABLE_CONFIG, fDummy, 0, NULL, NULL),
+    createBoolConfig("crash-log-enabled", NULL, MODIFIABLE_CONFIG, g_pserver->crashlog_enabled, 1, NULL, updateSighandlerEnabled),
+    createBoolConfig("crash-memcheck-enabled", NULL, MODIFIABLE_CONFIG, g_pserver->memcheck_enabled, 1, NULL, NULL),
+    createBoolConfig("use-exit-on-panic", NULL, MODIFIABLE_CONFIG, g_pserver->use_exit_on_panic, 0, NULL, NULL),
+    createBoolConfig("disable-thp", NULL, MODIFIABLE_CONFIG, g_pserver->disable_thp, 1, NULL, NULL),
+    createBoolConfig("cluster-allow-replica-migration", NULL, MODIFIABLE_CONFIG, g_pserver->cluster_allow_replica_migration, 1, NULL, NULL),
+    createBoolConfig("replica-announced", NULL, MODIFIABLE_CONFIG, g_pserver->replica_announced, 1, NULL, NULL),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->acl_filename, "", NULL, NULL),
     createStringConfig("unixsocket", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->unixsocket, NULL, NULL, NULL),
     createStringConfig("pidfile", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, cserver.pidfile, NULL, NULL, NULL),
     createStringConfig("replica-announce-ip", "slave-announce-ip", MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->slave_announce_ip, NULL, NULL, NULL),
-    createStringConfig("masteruser", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, cserver.default_masteruser, NULL, NULL, updateMasterAuthConfig),
-    createStringConfig("masterauth", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, cserver.default_masterauth, NULL, NULL, updateMasterAuthConfig),
+    createStringConfig("masteruser", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, cserver.default_masteruser, NULL, NULL, updateMasterAuthConfig),
     createStringConfig("cluster-announce-ip", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->cluster_announce_ip, NULL, NULL, NULL),
     createStringConfig("syslog-ident", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->syslog_ident, "redis", NULL, NULL),
     createStringConfig("dbfilename", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->rdb_filename, CONFIG_DEFAULT_RDB_FILENAME, isValidDBfilename, NULL),
@@ -2473,7 +2665,12 @@ standardConfig configs[] = {
     createStringConfig("bio_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->bio_cpulist, NULL, NULL, NULL),
     createStringConfig("aof_rewrite_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->aof_rewrite_cpulist, NULL, NULL, NULL),
     createStringConfig("bgsave_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->bgsave_cpulist, NULL, NULL, NULL),
-    createStringConfig("ignore-warnings", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->ignore_warnings, "ARM64-COW-BUG", NULL, NULL),
+    createStringConfig("ignore-warnings", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->ignore_warnings, "", NULL, NULL),
+    createStringConfig("proc-title-template", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, cserver.proc_title_template, CONFIG_DEFAULT_PROC_TITLE_TEMPLATE, isValidProcTitleTemplate, updateProcTitleTemplate),
+
+    /* SDS Configs */
+    createSDSConfig("masterauth", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, cserver.default_masterauth, NULL, NULL, updateMasterAuthConfig),
+    createSDSConfig("requirepass", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->requirepass, NULL, NULL, updateRequirePass),
 
     /* Enum Configs */
     createEnumConfig("supervised", NULL, IMMUTABLE_CONFIG, supervised_mode_enum, cserver.supervised_mode, SUPERVISED_NONE, NULL, NULL),
@@ -2483,10 +2680,12 @@ standardConfig configs[] = {
     createEnumConfig("maxmemory-policy", NULL, MODIFIABLE_CONFIG, maxmemory_policy_enum, g_pserver->maxmemory_policy, MAXMEMORY_NO_EVICTION, NULL, NULL),
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, g_pserver->aof_fsync, AOF_FSYNC_EVERYSEC, NULL, NULL),
     createEnumConfig("oom-score-adj", NULL, MODIFIABLE_CONFIG, oom_score_adj_enum, g_pserver->oom_score_adj, OOM_SCORE_ADJ_NO, NULL, updateOOMScoreAdj),
+    createEnumConfig("acl-pubsub-default", NULL, MODIFIABLE_CONFIG, acl_pubsub_default_enum, g_pserver->acl_pubsub_default, USER_FLAG_ALLCHANNELS, NULL, NULL),
+    createEnumConfig("sanitize-dump-payload", NULL, MODIFIABLE_CONFIG, sanitize_dump_payload_enum, cserver.sanitize_dump_payload, SANITIZE_DUMP_NO, NULL, NULL),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, cserver.dbnum, 16, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("port", NULL, IMMUTABLE_CONFIG, 0, 65535, g_pserver->port, 6379, INTEGER_CONFIG, NULL, NULL), /* TCP port. */
+    createIntConfig("port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->port, 6379, INTEGER_CONFIG, NULL, updatePort), /* TCP port. */
     createIntConfig("auto-aof-rewrite-percentage", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->aof_rewrite_perc, 100, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-replica-validity-factor", "cluster-slave-validity-factor", MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->cluster_slave_validity_factor, 10, INTEGER_CONFIG, NULL, NULL), /* Slave max data age factor. */
     createIntConfig("list-max-ziplist-size", NULL, MODIFIABLE_CONFIG, INT_MIN, INT_MAX, g_pserver->list_max_ziplist_size, -2, INTEGER_CONFIG, NULL, NULL),
@@ -2501,16 +2700,18 @@ standardConfig configs[] = {
     createIntConfig("replica-priority", "slave-priority", MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->slave_priority, 100, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("repl-diskless-sync-delay", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->repl_diskless_sync_delay, 5, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("maxmemory-samples", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, g_pserver->maxmemory_samples, 5, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("maxmemory-eviction-tenacity", NULL, MODIFIABLE_CONFIG, 0, 100, g_pserver->maxmemory_eviction_tenacity, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("timeout", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, cserver.maxidletime, 0, INTEGER_CONFIG, NULL, NULL), /* Default client timeout: infinite */
     createIntConfig("replica-announce-port", "slave-announce-port", MODIFIABLE_CONFIG, 0, 65535, g_pserver->slave_announce_port, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("tcp-backlog", NULL, IMMUTABLE_CONFIG, 0, INT_MAX, g_pserver->tcp_backlog, 511, INTEGER_CONFIG, NULL, NULL), /* TCP listen backlog. */
     createIntConfig("cluster-announce-bus-port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->cluster_announce_bus_port, 0, INTEGER_CONFIG, NULL, NULL), /* Default: Use +10000 offset. */
     createIntConfig("cluster-announce-port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->cluster_announce_port, 0, INTEGER_CONFIG, NULL, NULL), /* Use g_pserver->port */
+    createIntConfig("cluster-announce-tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->cluster_announce_tls_port, 0, INTEGER_CONFIG, NULL, NULL), /* Use server.tls_port */
     createIntConfig("repl-timeout", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, g_pserver->repl_timeout, 60, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("repl-ping-replica-period", "repl-ping-slave-period", MODIFIABLE_CONFIG, 1, INT_MAX, g_pserver->repl_ping_slave_period, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("list-compress-depth", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->list_compress_depth, 0, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("rdb-key-save-delay", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->rdb_key_save_delay, 0, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("key-load-delay", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->key_load_delay, 0, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("rdb-key-save-delay", NULL, MODIFIABLE_CONFIG, INT_MIN, INT_MAX, g_pserver->rdb_key_save_delay, 0, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("key-load-delay", NULL, MODIFIABLE_CONFIG, INT_MIN, INT_MAX, g_pserver->key_load_delay, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("active-expire-effort", NULL, MODIFIABLE_CONFIG, 1, 10, cserver.active_expire_effort, 1, INTEGER_CONFIG, NULL, NULL), /* From 1 to 10. */
     createIntConfig("hz", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->config_hz, CONFIG_DEFAULT_HZ, INTEGER_CONFIG, NULL, updateHZ),
     createIntConfig("min-replicas-to-write", "min-slaves-to-write", MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->repl_min_slaves_to_write, 0, INTEGER_CONFIG, NULL, updateGoodSlaves),
@@ -2522,7 +2723,6 @@ standardConfig configs[] = {
     createUIntConfig("loading-process-events-interval-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->loading_process_events_interval_keys, 8192, MEMORY_CONFIG, NULL, NULL),
 
     /* Unsigned Long configs */
-    createULongConfig("loading-process-events-interval-bytes", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->loading_process_events_interval_bytes, 2*1024*1024, MEMORY_CONFIG, NULL, NULL),
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, cserver.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */
     createULongConfig("slowlog-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->slowlog_max_len, 128, INTEGER_CONFIG, NULL, NULL),
     createULongConfig("acllog-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->acllog_max_len, 128, INTEGER_CONFIG, NULL, NULL),
@@ -2549,22 +2749,32 @@ standardConfig configs[] = {
     createSizeTConfig("zset-max-ziplist-value", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->zset_max_ziplist_value, 64, MEMORY_CONFIG, NULL, NULL),
     createSizeTConfig("hll-sparse-max-bytes", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->hll_sparse_max_bytes, 3000, MEMORY_CONFIG, NULL, NULL),
     createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL), /* Default: 1 million keys max. */
+    createSizeTConfig("client-query-buffer-limit", NULL, MODIFIABLE_CONFIG, 1024*1024, LONG_MAX, cserver.client_max_querybuf_len, 1024*1024*1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
 
     /* Other configs */
     createTimeTConfig("repl-backlog-ttl", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->repl_backlog_time_limit, 60*60, INTEGER_CONFIG, NULL, NULL), /* Default: 1 hour */
     createOffTConfig("auto-aof-rewrite-min-size", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->aof_rewrite_min_size, 64*1024*1024, MEMORY_CONFIG, NULL, NULL),
 
+    /* KeyDB Specific Configs */
+    createULongConfig("loading-process-events-interval-bytes", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->loading_process_events_interval_bytes, 2*1024*1024, MEMORY_CONFIG, NULL, NULL),
+    createBoolConfig("multi-master-no-forward", NULL, MODIFIABLE_CONFIG, cserver.multimaster_no_forward, 0, validateMultiMasterNoForward, NULL),
+    createBoolConfig("allow-write-during-load", NULL, MODIFIABLE_CONFIG, g_pserver->fWriteDuringActiveLoad, 0, NULL, NULL),
+
 #ifdef USE_OPENSSL
-    createIntConfig("tls-port", NULL, IMMUTABLE_CONFIG, 0, 65535, g_pserver->tls_port, 0, INTEGER_CONFIG, NULL, NULL), /* TCP port. */
+    createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->tls_port, 0, INTEGER_CONFIG, NULL, updateTLSPort), /* TCP port. */
     createIntConfig("tls-session-cache-size", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->tls_ctx_config.session_cache_size, 20*1024, INTEGER_CONFIG, NULL, updateTlsCfgInt),
     createIntConfig("tls-session-cache-timeout", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->tls_ctx_config.session_cache_timeout, 300, INTEGER_CONFIG, NULL, updateTlsCfgInt),
-    createBoolConfig("tls-cluster", NULL, MODIFIABLE_CONFIG, g_pserver->tls_cluster, 0, NULL, NULL),
-    createBoolConfig("tls-replication", NULL, MODIFIABLE_CONFIG, g_pserver->tls_replication, 0, NULL, NULL),
+    createBoolConfig("tls-cluster", NULL, MODIFIABLE_CONFIG, g_pserver->tls_cluster, 0, NULL, updateTlsCfgBool),
+    createBoolConfig("tls-replication", NULL, MODIFIABLE_CONFIG, g_pserver->tls_replication, 0, NULL, updateTlsCfgBool),
     createEnumConfig("tls-auth-clients", NULL, MODIFIABLE_CONFIG, tls_auth_clients_enum, g_pserver->tls_auth_clients, TLS_CLIENT_AUTH_YES, NULL, NULL),
     createBoolConfig("tls-prefer-server-ciphers", NULL, MODIFIABLE_CONFIG, g_pserver->tls_ctx_config.prefer_server_ciphers, 0, NULL, updateTlsCfgBool),
     createBoolConfig("tls-session-caching", NULL, MODIFIABLE_CONFIG, g_pserver->tls_ctx_config.session_caching, 1, NULL, updateTlsCfgBool),
     createStringConfig("tls-cert-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->tls_ctx_config.cert_file, NULL, NULL, updateTlsCfg),
     createStringConfig("tls-key-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->tls_ctx_config.key_file, NULL, NULL, updateTlsCfg),
+    createStringConfig("tls-key-file-pass", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->tls_ctx_config.key_file_pass, NULL, NULL, updateTlsCfg),
+    createStringConfig("tls-client-cert-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->tls_ctx_config.client_cert_file, NULL, NULL, updateTlsCfg),
+    createStringConfig("tls-client-key-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->tls_ctx_config.client_key_file, NULL, NULL, updateTlsCfg),
+    createStringConfig("tls-client-key-file-pass", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->tls_ctx_config.client_key_file_pass, NULL, NULL, updateTlsCfg),
     createStringConfig("tls-dh-params-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->tls_ctx_config.dh_params_file, NULL, NULL, updateTlsCfg),
     createStringConfig("tls-ca-cert-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->tls_ctx_config.ca_cert_file, NULL, NULL, updateTlsCfg),
     createStringConfig("tls-ca-cert-dir", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->tls_ctx_config.ca_cert_dir, NULL, NULL, updateTlsCfg),
@@ -2590,12 +2800,17 @@ void configCommand(client *c) {
 
     if (c->argc == 2 && !strcasecmp(szFromObj(c->argv[1]),"help")) {
         const char *help[] = {
-"GET <pattern> -- Return parameters matching the glob-like <pattern> and their values.",
-"SET <parameter> <value> -- Set parameter to value.",
-"RESETSTAT -- Reset statistics reported by INFO.",
-"REWRITE -- Rewrite the configuration file.",
+"GET <pattern>",
+"    Return parameters matching the glob-like <pattern> and their values.",
+"SET <directive> <value>",
+"    Set the configuration <directive> to <value>.",
+"RESETSTAT",
+"    Reset statistics reported by the INFO command.",
+"REWRITE",
+"    Rewrite the configuration file.",
 NULL
         };
+
         addReplyHelp(c, help);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"set") && c->argc == 4) {
         configSetCommand(c);
@@ -2604,6 +2819,7 @@ NULL
     } else if (!strcasecmp(szFromObj(c->argv[1]),"resetstat") && c->argc == 2) {
         resetServerStats();
         resetCommandTableStats();
+        resetErrorTableStats();
         addReply(c,shared.ok);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"rewrite") && c->argc == 2) {
         if (cserver.configfile == NULL) {

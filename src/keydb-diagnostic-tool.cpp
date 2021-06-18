@@ -45,6 +45,7 @@
 #include <deque>
 extern "C" {
 #include <sds.h> /* Use hiredis sds. */
+#include <sdscompat.h>
 #include "hiredis.h"
 }
 #include "ae.h"

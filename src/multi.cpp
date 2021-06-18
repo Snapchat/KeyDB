@@ -103,6 +103,7 @@ void multiCommand(client *c) {
         return;
     }
     c->flags |= CLIENT_MULTI;
+
     addReply(c,shared.ok);
 }
 
@@ -115,20 +116,34 @@ void discardCommand(client *c) {
     addReply(c,shared.ok);
 }
 
+void beforePropagateMulti() {
+    /* Propagating MULTI */
+    serverAssert(!g_pserver->propagate_in_transaction);
+    g_pserver->propagate_in_transaction = 1;
+}
+
+void afterPropagateExec() {
+    /* Propagating EXEC */
+    serverAssert(g_pserver->propagate_in_transaction == 1);
+    g_pserver->propagate_in_transaction = 0;
+}
+
 /* Send a MULTI command to all the slaves and AOF file. Check the execCommand
  * implementation for more information. */
-void execCommandPropagateMulti(client *c) {
-    propagate(cserver.multiCommand,c->db->id,&shared.multi,1,
+void execCommandPropagateMulti(int dbid) {
+    beforePropagateMulti();
+    propagate(cserver.multiCommand,dbid,&shared.multi,1,
               PROPAGATE_AOF|PROPAGATE_REPL);
 }
 
-void execCommandPropagateExec(client *c) {
-    propagate(cserver.execCommand,c->db->id,&shared.exec,1,
+void execCommandPropagateExec(int dbid) {
+    propagate(cserver.execCommand,dbid,&shared.exec,1,
               PROPAGATE_AOF|PROPAGATE_REPL);
+    afterPropagateExec();
 }
 
 /* Aborts a transaction, with a specific error message.
- * The transaction is always aboarted with -EXECABORT so that the client knows
+ * The transaction is always aborted with -EXECABORT so that the client knows
  * the server exited the multi state, but the actual reason for the abort is
  * included too.
  * Note: 'error' may or may not end with \r\n. see addReplyErrorFormat. */
@@ -150,7 +165,6 @@ void execCommand(client *c) {
     robj **orig_argv;
     int orig_argc;
     struct redisCommand *orig_cmd;
-    int must_propagate = 0; /* Need to propagate MULTI/EXEC to AOF / slaves? */
     int was_master = listLength(g_pserver->masters) == 0;
 
     if (!(c->flags & CLIENT_MULTI)) {
@@ -171,8 +185,17 @@ void execCommand(client *c) {
         goto handle_monitor;
     }
 
+{   // GOTO Protectect Variable Scope
+    uint64_t old_flags = c->flags;
+
+    /* we do not want to allow blocking commands inside multi */
+    c->flags |= CLIENT_DENY_BLOCKING;
+
     /* Exec all the queued commands */
     unwatchAllKeys(c); /* Unwatch ASAP otherwise we'll waste CPU cycles */
+
+    serverTL->in_exec = 1;
+
     orig_argv = c->argv;
     orig_argc = c->argc;
     orig_cmd = c->cmd;
@@ -182,37 +205,39 @@ void execCommand(client *c) {
         c->argv = c->mstate.commands[j].argv;
         c->cmd = c->mstate.commands[j].cmd;
 
-        /* Propagate a MULTI request once we encounter the first command which
-         * is not readonly nor an administrative one.
-         * This way we'll deliver the MULTI/..../EXEC block as a whole and
-         * both the AOF and the replication link will have the same consistency
-         * and atomicity guarantees. */
-        if (!must_propagate &&
-            !g_pserver->loading &&
-            !(c->cmd->flags & (CMD_READONLY|CMD_ADMIN)) &&
-            !(FInReplicaReplay()))
-        {
-            execCommandPropagateMulti(c);
-            must_propagate = 1;
-        }
-
-        int acl_keypos;
-        int acl_retval = ACLCheckCommandPerm(c,&acl_keypos);
+        /* ACL permissions are also checked at the time of execution in case
+         * they were changed after the commands were queued. */
+        int acl_errpos;
+        int acl_retval = ACLCheckAllPerm(c,&acl_errpos);
         if (acl_retval != ACL_OK) {
-            addACLLogEntry(c,acl_retval,acl_keypos,NULL);
+            const char *reason;
+            switch (acl_retval) {
+            case ACL_DENIED_CMD:
+                reason = "no permission to execute the command or subcommand";
+                break;
+            case ACL_DENIED_KEY:
+                reason = "no permission to touch the specified keys";
+                break;
+            case ACL_DENIED_CHANNEL:
+                reason = "no permission to access one of the channels used "
+                         "as arguments";
+                break;
+            default:
+                reason = "no permission";
+                break;
+            }
+            addACLLogEntry(c,acl_retval,acl_errpos,NULL);
             addReplyErrorFormat(c,
                 "-NOPERM ACLs rules changed between the moment the "
                 "transaction was accumulated and the EXEC call. "
                 "This command is no longer allowed for the "
-                "following reason: %s",
-                (acl_retval == ACL_DENIED_CMD) ?
-                "no permission to execute the command or subcommand" :
-                "no permission to touch the specified keys");
+                "following reason: %s", reason);
         } else {
             int flags = g_pserver->loading ? CMD_CALL_NONE : CMD_CALL_FULL;
             if (FInReplicaReplay())
                 flags &= ~CMD_CALL_PROPAGATE;
             call(c,flags);
+            serverAssert((c->flags & CLIENT_BLOCKED) == 0);
         }
 
         /* Commands may alter argc/argv, restore mstate. */
@@ -220,6 +245,11 @@ void execCommand(client *c) {
         c->mstate.commands[j].argv = c->argv;
         c->mstate.commands[j].cmd = c->cmd;
     }
+
+    // restore old DENY_BLOCKING value
+    if (!(old_flags & CLIENT_DENY_BLOCKING))
+        c->flags &= ~CLIENT_DENY_BLOCKING;
+
     c->argv = orig_argv;
     c->argc = orig_argc;
     c->cmd = orig_cmd;
@@ -227,7 +257,7 @@ void execCommand(client *c) {
 
     /* Make sure the EXEC command will be propagated as well if MULTI
      * was already propagated. */
-    if (must_propagate) {
+    if (g_pserver->propagate_in_transaction) {
         int is_master = listLength(g_pserver->masters) == 0;
         g_pserver->dirty++;
         /* If inside the MULTI/EXEC block this instance was suddenly
@@ -239,7 +269,11 @@ void execCommand(client *c) {
             const char *execcmd = "*1\r\n$4\r\nEXEC\r\n";
             feedReplicationBacklog(execcmd,strlen(execcmd));
         }
+        afterPropagateExec();
     }
+
+    serverTL->in_exec = 0;
+} // END Goto Variable Protection Scope
 
 handle_monitor:
     /* Send EXEC to clients waiting data from MONITOR. We do it here

@@ -981,7 +981,8 @@ int main(int argc, const char **argv) {
     }
     freeReplyObject(reply);
 
-    printf("Server has %d threads.\n", server_threads);
+    printf("Server has %d threads.\nStarting...\n", server_threads);
+    fflush(stdout);
 
     while (self_threads < config.max_threads) {
         for (int i = 0; i < config.numclients; i++) {

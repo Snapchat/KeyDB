@@ -8,13 +8,12 @@ build:
     - make install
 
 make-test:
-  stage: test
+  stage: make test
   script:
     - make test
 
 node-redis-test:
-  requires: make-test
-  stage: test
+  stage: node redis test
   script:
     - mkdir node-redis-test
     - cd node-redis-test

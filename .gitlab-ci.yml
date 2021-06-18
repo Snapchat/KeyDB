@@ -17,7 +17,7 @@ node-redis-test:
   script:
     - mkdir node-redis-test
     - cd node-redis-test
-    - git clone https://gitlab.eqalpha.com/keydb-dev/node-redis.git
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/node-redis.git
     - cd node-redis
     - npm install
     - npm run test

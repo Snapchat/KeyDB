@@ -9,15 +9,14 @@ build:
   artifacts:
     paths:
       - src/
+  allow_failure: true
 
 make-test:
-  needs: ["build"]
   stage: test
   script:
     - make test
 
 node-redis-test:
-  needs: ["build"]
   stage: test
   script:
     - mkdir node-redis-test

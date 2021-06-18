@@ -10,7 +10,7 @@ build:
 make-test:
   stage: test
   script:
-    - make test
+    - make test -j
 
 node-redis-test:
   stage: test

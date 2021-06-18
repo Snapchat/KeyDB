@@ -9,7 +9,6 @@ build:
   artifacts:
     paths:
       - src/
-  allow_failure: true
 
 make-test:
   stage: test

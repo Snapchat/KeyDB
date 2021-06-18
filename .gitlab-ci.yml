@@ -3,7 +3,7 @@ build:
   script:
     - git submodule init && git submodule update
     - make distclean
-    - make
+    - make -j
     - make uninstall
     - make install
 
@@ -13,6 +13,7 @@ make-test:
     - make test
 
 node-redis-test:
+  requires: make-test
   stage: test
   script:
     - mkdir node-redis-test

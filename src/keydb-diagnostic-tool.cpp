@@ -76,6 +76,7 @@ static struct config {
     const char *hostsocket;
     int numclients;
     int liveclients;
+    int period_ms;
     int requests;
     int requests_issued;
     int requests_finished;
@@ -662,6 +663,7 @@ void initConfigDefaults() {
     config.keepalive = 1;
     config.datasize = 3;
     config.pipeline = 1;
+    config.period_ms = 5000;
     config.showerrors = 0;
     config.randomkeys = 0;
     config.randomkeys_keyspacelen = 0;
@@ -708,6 +710,9 @@ int parseOptions(int argc, const char **argv) {
         } else if (!strcmp(argv[i],"-k")) {
             if (lastarg) goto invalid;
             config.keepalive = atoi(argv[++i]);
+        } else if (!strcmp(argv[i],"--ms")) {
+            if (lastarg) goto invalid;
+            config.period_ms = atoi(argv[++i]);
         } else if (!strcmp(argv[i],"-h")) {
             if (lastarg) goto invalid;
             config.hostip = strdup(argv[++i]);
@@ -805,36 +810,37 @@ invalid:
 usage:
     printf(
 "Usage: keydb-benchmark [-h <host>] [-p <port>] [-c <clients>] [-n <requests>] [-k <boolean>]\n\n"
-" -h <hostname>      Server hostname (default 127.0.0.1)\n"
-" -p <port>          Server port (default 6379)\n"
-" -s <socket>        Server socket (overrides host and port)\n"
-" -a <password>      Password for Redis Auth\n"
-" --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
-" -c <clients>       Number of parallel connections (default 50)\n"
-" -n <requests>      Total number of requests (default 100000)\n"
-" -d <size>          Data size of SET/GET value in bytes (default 3)\n"
-" --dbnum <db>       SELECT the specified db number (default 0)\n"
-" --threads <num>    Enable multi-thread mode.\n"
-" --cluster          Enable cluster mode.\n"
-" --enable-tracking  Send CLIENT TRACKING on before starting benchmark.\n"
-" -k <boolean>       1=keep alive 0=reconnect (default 1)\n"
-" -r <keyspacelen>   Use random keys for SET/GET/INCR, random values for SADD,\n"
-"                    random members and scores for ZADD.\n"
+" -h <hostname>       Server hostname (default 127.0.0.1)\n"
+" -p <port>           Server port (default 6379)\n"
+" -s <socket>         Server socket (overrides host and port)\n"
+" --ms <milliseconds> Time between spinning up new client threads\n"
+" -a <password>       Password for Redis Auth\n"
+" --user <username>   Used to send ACL style 'AUTH username pass'. Needs -a.\n"
+" -c <clients>        Number of parallel connections (default 50)\n"
+" -n <requests>       Total number of requests (default 100000)\n"
+" -d <size>           Data size of SET/GET value in bytes (default 3)\n"
+" --dbnum <db>        SELECT the specified db number (default 0)\n"
+" --threads <num>     Enable multi-thread mode.\n"
+" --cluster           Enable cluster mode.\n"
+" --enable-tracking   Send CLIENT TRACKING on before starting benchmark.\n"
+" -k <boolean>        1=keep alive 0=reconnect (default 1)\n"
+" -r <keyspacelen>    Use random keys for SET/GET/INCR, random values for SADD,\n"
+"                     random members and scores for ZADD.\n"
 "  Using this option the benchmark will expand the string __rand_int__\n"
 "  inside an argument with a 12 digits number in the specified range\n"
 "  from 0 to keyspacelen-1. The substitution changes every time a command\n"
 "  is executed. Default tests use this to hit random keys in the\n"
 "  specified range.\n"
-" -P <numreq>        Pipeline <numreq> requests. Default 1 (no pipeline).\n"
-" -e                 If server replies with errors, show them on stdout.\n"
-"                    (no more than 1 error per second is displayed)\n"
-" -q                 Quiet. Just show query/sec values\n"
-" --precision        Number of decimal places to display in latency output (default 0)\n"
-" --csv              Output in CSV format\n"
-" -l                 Loop. Run the tests forever\n"
-" -t <tests>         Only run the comma separated list of tests. The test\n"
-"                    names are the same as the ones produced as output.\n"
-" -I                 Idle mode. Just open N idle connections and wait.\n\n"
+" -P <numreq>         Pipeline <numreq> requests. Default 1 (no pipeline).\n"
+" -e                  If server replies with errors, show them on stdout.\n"
+"                     (no more than 1 error per second is displayed)\n"
+" -q                  Quiet. Just show query/sec values\n"
+" --precision         Number of decimal places to display in latency output (default 0)\n"
+" --csv               Output in CSV format\n"
+" -l                  Loop. Run the tests forever\n"
+" -t <tests>          Only run the comma separated list of tests. The test\n"
+"                     names are the same as the ones produced as output.\n"
+" -I                  Idle mode. Just open N idle connections and wait.\n\n"
 "Examples:\n\n"
 " Run the benchmark with the default configuration against 127.0.0.1:6379:\n"
 "   $ keydb-benchmark\n\n"
@@ -941,7 +947,6 @@ int main(int argc, const char **argv) {
 
     const char *set_value = "abcdefghijklmnopqrstuvwxyz";
     int self_threads = 0;
-    unsigned int period = 5;
     char command[63];
 
     initBenchmarkThreads();
@@ -983,12 +988,12 @@ int main(int argc, const char **argv) {
         }
         self_threads++;
 
-        sleep(period);
+        usleep(config.period_ms * 1000);
         
         server_cpu_time = getServerCpuTime(ctx);
         self_cpu_time = getSelfCpuTime(&self_ru);
-        server_cpu_load = (server_cpu_time - last_server_cpu_time) * 100 / period;
-        self_cpu_load = (self_cpu_time - last_self_cpu_time) * 100 / period;
+        server_cpu_load = (server_cpu_time - last_server_cpu_time) * 100000 / config.period_ms;
+        self_cpu_load = (self_cpu_time - last_self_cpu_time) * 100000 / config.period_ms;
         if (server_cpu_time < 0) {
             break;
         }
@@ -998,7 +1003,7 @@ int main(int argc, const char **argv) {
         last_self_cpu_time = self_cpu_time;
         last_server_cpu_load = server_cpu_load;
 
-        
+
 
         if (isAtFullLoad(server_cpu_load, server_threads)) {
             printf("Server is at full CPU load.\n");

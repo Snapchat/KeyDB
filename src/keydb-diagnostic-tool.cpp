@@ -864,6 +864,16 @@ int extractPropertyFromInfo(const char *info, const char *key, double &val) {
     return 0;
 }
 
+int extractPropertyFromInfo(const char *info, const char *key, unsigned int &val) {
+    char *line = strstr((char*)info, key);
+    if (line == nullptr) return 1;
+    line += strlen(key) + 1; // Skip past key name and following colon
+    char *newline = strchr(line, '\n');
+    *newline = 0; // Terminate string after relevant line
+    val = atoi(line);
+    return 0;
+}
+
 double getSelfCpuTime(struct rusage *self_ru) {
     getrusage(RUSAGE_SELF, self_ru);
     double user_time = self_ru->ru_utime.tv_sec + (self_ru->ru_utime.tv_usec / (double)1000000);
@@ -872,7 +882,7 @@ double getSelfCpuTime(struct rusage *self_ru) {
 }
 
 double getServerCpuTime(redisContext *ctx) {
-    redisReply *reply = (redisReply*)redisCommand(ctx, "INFO");
+    redisReply *reply = (redisReply*)redisCommand(ctx, "INFO CPU");
     if (reply->type != REDIS_REPLY_STRING) {
         freeReplyObject(reply);
         printf("Error executing INFO command. Exiting.\r\n");
@@ -890,6 +900,10 @@ double getServerCpuTime(redisContext *ctx) {
     }
     freeReplyObject(reply);
     return used_cpu_user + used_cpu_sys;
+}
+
+bool isAtFullLoad(double cpuPercent, unsigned int threads) {
+    return cpuPercent / threads >= 96;
 }
 
 int main(int argc, const char **argv) {
@@ -926,7 +940,7 @@ int main(int argc, const char **argv) {
     }
 
     const char *set_value = "abcdefghijklmnopqrstuvwxyz";
-    int threads_used = 0;
+    int self_threads = 0;
     unsigned int period = 5;
     char command[63];
 
@@ -935,36 +949,66 @@ int main(int argc, const char **argv) {
     double server_cpu_time, last_server_cpu_time = getServerCpuTime(ctx);
     struct rusage self_ru;
     double self_cpu_time, last_self_cpu_time = getSelfCpuTime(&self_ru);
+    double server_cpu_load, last_server_cpu_load, self_cpu_load, server_cpu_gain, last_server_cpu_gain;
+
+    redisReply *reply = (redisReply*)redisCommand(ctx, "INFO CPU");
+    if (reply->type != REDIS_REPLY_STRING) {
+        freeReplyObject(reply);
+        printf("Error executing INFO command. Exiting.\r\n");
+        return 1;
+    }
+    unsigned int server_threads;
+    if (extractPropertyFromInfo(reply->str, "server_threads", server_threads)) {
+        printf("Error reading server threads from INFO command. Exiting.\r\n");
+        return 1;
+    }
+    freeReplyObject(reply);
+
+    printf("Server has %d threads.\n", server_threads);
 
 
-    while (threads_used < config.max_threads) {
-        printf("Creating %d clients for thread %d...\n", config.numclients, threads_used);
+    while (self_threads < config.max_threads) {
+        printf("Creating %d clients for thread %d...\n", config.numclients, self_threads);
         for (int i = 0; i < config.numclients; i++) {
-            sprintf(command, "SET %d %s\r\n", threads_used * config.numclients + i, set_value);
-            createClient(command, strlen(command), NULL,threads_used);
+            sprintf(command, "SET %d %s\r\n", self_threads * config.numclients + i, set_value);
+            createClient(command, strlen(command), NULL,self_threads);
         }
 
-        printf("Starting thread %d\n", threads_used);
+        printf("Starting thread %d\n", self_threads);
 
-        benchmarkThread *t = config.threads[threads_used];
+        benchmarkThread *t = config.threads[self_threads];
         if (pthread_create(&(t->thread), NULL, execBenchmarkThread, t)){
-            fprintf(stderr, "FATAL: Failed to start thread %d.\n", threads_used);
+            fprintf(stderr, "FATAL: Failed to start thread %d.\n", self_threads);
             exit(1);
         }
-        threads_used++;
+        self_threads++;
 
         sleep(period);
         
         server_cpu_time = getServerCpuTime(ctx);
         self_cpu_time = getSelfCpuTime(&self_ru);
+        server_cpu_load = (server_cpu_time - last_server_cpu_time) * 100 / period;
+        self_cpu_load = (self_cpu_time - last_self_cpu_time) * 100 / period;
         if (server_cpu_time < 0) {
             break;
         }
-        printf("CPU Usage Self: %.1f%%, Server: %.1f%%\r\n",
-               (self_cpu_time - last_self_cpu_time) * 100 / period,
-               (server_cpu_time - last_server_cpu_time) * 100 / period);
+        printf("CPU Usage Self: %.1f%%, Server: %.1f%%\r\n", self_cpu_load, server_cpu_load);
+        server_cpu_gain = server_cpu_load - last_server_cpu_load;
         last_server_cpu_time = server_cpu_time;
         last_self_cpu_time = self_cpu_time;
+        last_server_cpu_load = server_cpu_load;
+
+        
+
+        if (isAtFullLoad(server_cpu_load, server_threads)) {
+            printf("Server is at full CPU load.\n");
+            break;
+        }
+
+        if (isAtFullLoad(self_cpu_load, self_threads)) {
+            printf("Diagnostic tool is at full CPU load.\n");
+            break;
+        }
     }
 
     printf("Done.\n");

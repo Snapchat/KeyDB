@@ -17,7 +17,7 @@ make-test:
     - make test
 
 node-redis-test:
-  needs: ["make-test"]
+  needs: ["build"]
   stage: test
   script:
     - mkdir node-redis-test

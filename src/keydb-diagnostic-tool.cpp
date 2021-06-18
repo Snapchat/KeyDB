@@ -42,6 +42,7 @@
 #include <assert.h>
 #include <math.h>
 #include <pthread.h>
+#include <deque>
 extern "C" {
 #include <sds.h> /* Use hiredis sds. */
 #include "hiredis.h"
@@ -891,21 +892,29 @@ double getServerCpuTime(redisContext *ctx) {
     redisReply *reply = (redisReply*)redisCommand(ctx, "INFO CPU");
     if (reply->type != REDIS_REPLY_STRING) {
         freeReplyObject(reply);
-        printf("Error executing INFO command. Exiting.\r\n");
+        printf("Error executing INFO command. Exiting.\n");
         return -1;
     }
 
     double used_cpu_user, used_cpu_sys;
     if (extractPropertyFromInfo(reply->str, "used_cpu_user", used_cpu_user)) {
-        printf("Error reading user CPU usage from INFO command. Exiting.\r\n");
+        printf("Error reading user CPU usage from INFO command. Exiting.\n");
         return -1;
     }
     if (extractPropertyFromInfo(reply->str, "used_cpu_sys", used_cpu_sys)) {
-        printf("Error reading system CPU usage from INFO command. Exiting.\r\n");
+        printf("Error reading system CPU usage from INFO command. Exiting.\n");
         return -1;
     }
     freeReplyObject(reply);
     return used_cpu_user + used_cpu_sys;
+}
+
+double getMean(std::deque<double> *q) {
+    double sum = 0;
+    for (long unsigned int i = 0; i < q->size(); i++) {
+        sum += (*q)[i];
+    }
+    return sum / q->size();
 }
 
 bool isAtFullLoad(double cpuPercent, unsigned int threads) {
@@ -954,7 +963,9 @@ int main(int argc, const char **argv) {
     double server_cpu_time, last_server_cpu_time = getServerCpuTime(ctx);
     struct rusage self_ru;
     double self_cpu_time, last_self_cpu_time = getSelfCpuTime(&self_ru);
-    double server_cpu_load, last_server_cpu_load, self_cpu_load, server_cpu_gain, last_server_cpu_gain;
+    double server_cpu_load, last_server_cpu_load = 0, self_cpu_load, server_cpu_gain;
+    std::deque<double> load_gain_history = {};
+    double current_gain_avg, peak_gain_avg = 0;
 
     redisReply *reply = (redisReply*)redisCommand(ctx, "INFO CPU");
     if (reply->type != REDIS_REPLY_STRING) {
@@ -971,19 +982,15 @@ int main(int argc, const char **argv) {
 
     printf("Server has %d threads.\n", server_threads);
 
-
     while (self_threads < config.max_threads) {
-        printf("Creating %d clients for thread %d...\n", config.numclients, self_threads);
         for (int i = 0; i < config.numclients; i++) {
             sprintf(command, "SET %d %s\r\n", self_threads * config.numclients + i, set_value);
             createClient(command, strlen(command), NULL,self_threads);
         }
 
-        printf("Starting thread %d\n", self_threads);
-
         benchmarkThread *t = config.threads[self_threads];
         if (pthread_create(&(t->thread), NULL, execBenchmarkThread, t)){
-            fprintf(stderr, "FATAL: Failed to start thread %d.\n", self_threads);
+            fprintf(stderr, "FATAL: Failed to start thread %d. Exiting.\n", self_threads);
             exit(1);
         }
         self_threads++;
@@ -997,22 +1004,41 @@ int main(int argc, const char **argv) {
         if (server_cpu_time < 0) {
             break;
         }
-        printf("CPU Usage Self: %.1f%%, Server: %.1f%%\r\n", self_cpu_load, server_cpu_load);
+        printf("%d threads, %d total clients. CPU Usage Self: %.1f%% (%.1f%% per thread), Server: %.1f%% (%.1f%% per thread)\r",
+                self_threads,
+                self_threads * config.numclients,
+                self_cpu_load,
+                self_cpu_load / self_threads,
+                server_cpu_load,
+                server_cpu_load / server_threads);
+        fflush(stdout);
         server_cpu_gain = server_cpu_load - last_server_cpu_load;
+        load_gain_history.push_back(server_cpu_gain);
+        if (load_gain_history.size() > 5) {
+            load_gain_history.pop_front();
+        }
+        current_gain_avg = getMean(&load_gain_history);
+        if (current_gain_avg > peak_gain_avg) {
+            peak_gain_avg = current_gain_avg;
+        }
         last_server_cpu_time = server_cpu_time;
         last_self_cpu_time = self_cpu_time;
         last_server_cpu_load = server_cpu_load;
 
-
-
         if (isAtFullLoad(server_cpu_load, server_threads)) {
-            printf("Server is at full CPU load.\n");
+            printf("\nServer is at full CPU load. If higher performance is expected, check server configuration.\n");
             break;
         }
 
-        if (isAtFullLoad(self_cpu_load, self_threads)) {
-            printf("Diagnostic tool is at full CPU load.\n");
+        if (current_gain_avg <= 0.05 * peak_gain_avg) {
+            printf("\nServer CPU load appears to have stagnated with increasing clients.\n"
+                   "Server does not appear to be at full load. Check network for throughput.\n");
             break;
+        }
+
+        if (self_threads * config.numclients > 2000) {
+            printf("\nClient limit of 2000 reached. Server is not at full load and appears to be increasing.\n"
+                   "2000 clients should be more than enough to reach a bottleneck. Check all configuration.\n");
         }
     }
 
@@ -1023,3 +1049,4 @@ int main(int argc, const char **argv) {
 
     return 0;
 }
+ 

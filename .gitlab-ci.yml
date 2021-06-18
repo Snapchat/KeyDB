@@ -6,14 +6,19 @@ build:
     - make -j
     - make uninstall
     - make install
+  artifacts:
+    paths:
+      - src/
 
 make-test:
-  stage: make test
+  needs: ["build"]
+  stage: test
   script:
     - make test
 
 node-redis-test:
-  stage: node redis test
+  needs: ["make-test"]
+  stage: test
   script:
     - mkdir node-redis-test
     - cd node-redis-test

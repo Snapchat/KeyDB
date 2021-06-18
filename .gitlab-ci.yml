@@ -6,9 +6,6 @@ build:
     - make -j
     - make uninstall
     - make install
-  artifacts:
-    paths:
-      - src/
 
 make-test:
   stage: test

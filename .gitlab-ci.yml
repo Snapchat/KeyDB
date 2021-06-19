@@ -6,7 +6,7 @@ build:
     - make -j
   artifacts:
     paths:
-      - src/
+      - ./
 
 make-test:
   stage: test

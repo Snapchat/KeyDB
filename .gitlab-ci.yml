@@ -4,8 +4,9 @@ build:
     - git submodule init && git submodule update
     - make distclean
     - make -j
-    - make uninstall
-    - make install
+  artifacts:
+    paths:
+      - src/
 
 make-test:
   stage: test
@@ -15,6 +16,7 @@ make-test:
 node-redis-test:
   stage: test
   script:
+    - make install
     - mkdir node-redis-test
     - cd node-redis-test
     - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/node-redis.git

@@ -4,18 +4,21 @@ build:
     - git submodule init && git submodule update
     - make distclean
     - make -j
-  artifacts:
-    paths:
-      - ./
 
 make-test:
   stage: test
   script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
     - make test -j
 
 node-redis-test:
   stage: test
   script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
     - make install
     - mkdir node-redis-test
     - cd node-redis-test

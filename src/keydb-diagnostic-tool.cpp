@@ -703,22 +703,19 @@ int parseOptions(int argc, const char **argv) {
     for (i = 1; i < argc; i++) {
         lastarg = (i == (argc-1));
 
-        if (!strcmp(argv[i],"-c")) {
+        if (!strcmp(argv[i],"-c") || !strcmp(argv[i],"--clients")) {
             if (lastarg) goto invalid;
             config.numclients = atoi(argv[++i]);
-        } else if (!strcmp(argv[i],"-n")) {
-            if (lastarg) goto invalid;
-            config.requests = atoi(argv[++i]);
         } else if (!strcmp(argv[i],"-k")) {
             if (lastarg) goto invalid;
             config.keepalive = atoi(argv[++i]);
         } else if (!strcmp(argv[i],"--ms")) {
             if (lastarg) goto invalid;
             config.period_ms = atoi(argv[++i]);
-        } else if (!strcmp(argv[i],"-h")) {
+        } else if (!strcmp(argv[i],"-h") || !strcmp(argv[i],"--host")) {
             if (lastarg) goto invalid;
             config.hostip = strdup(argv[++i]);
-        } else if (!strcmp(argv[i],"-p")) {
+        } else if (!strcmp(argv[i],"-p") || !strcmp(argv[i],"--port")) {
             if (lastarg) goto invalid;
             config.hostport = atoi(argv[++i]);
         } else if (!strcmp(argv[i],"-s")) {

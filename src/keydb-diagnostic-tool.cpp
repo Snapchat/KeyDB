@@ -760,17 +760,6 @@ int parseOptions(int argc, const char **argv) {
             config.idlemode = 1;
         } else if (!strcmp(argv[i],"-e")) {
             config.showerrors = 1;
-        } else if (!strcmp(argv[i],"-t")) {
-            if (lastarg) goto invalid;
-            /* We get the list of tests to run as a string in the form
-             * get,set,lrange,...,test_N. Then we add a comma before and
-             * after the string in order to make sure that searching
-             * for ",testname," will always get a match if the test is
-             * enabled. */
-            config.tests = sdsnew(",");
-            config.tests = sdscat(config.tests,(char*)argv[++i]);
-            config.tests = sdscat(config.tests,",");
-            sdstolower(config.tests);
         } else if (!strcmp(argv[i],"--dbnum")) {
             if (lastarg) goto invalid;
             config.dbnum = atoi(argv[++i]);
@@ -780,14 +769,16 @@ int parseOptions(int argc, const char **argv) {
             config.precision = atoi(argv[++i]);
             if (config.precision < 0) config.precision = 0;
             if (config.precision > MAX_LATENCY_PRECISION) config.precision = MAX_LATENCY_PRECISION;
-        } else if (!strcmp(argv[i],"--threads")) {
-             if (lastarg) goto invalid;
-             config.max_threads = atoi(argv[++i]);
-             if (config.max_threads > MAX_THREADS) {
-                printf("WARNING: too many threads, limiting threads to %d.\n",
-                       MAX_THREADS);
+        } else if (!strcmp(argv[i],"-t") || !strcmp(argv[i],"--threads")) {
+            if (lastarg) goto invalid;
+            config.max_threads = atoi(argv[++i]);
+            if (config.max_threads > MAX_THREADS) {
+                printf("WARNING: too many threads, limiting threads to %d.\n", MAX_THREADS);
                 config.max_threads = MAX_THREADS;
-             } else if (config.max_threads < 0) config.max_threads = 0;
+            } else if (config.max_threads <= 0) {
+                printf("Warning: Invalid value for max threads. Defaulting to %d.\n", MAX_THREADS);
+                config.max_threads = MAX_THREADS;
+            }
         } else if (!strcmp(argv[i],"--cluster")) {
             config.cluster_mode = 1;
         } else if (!strcmp(argv[i],"--enable-tracking")) {

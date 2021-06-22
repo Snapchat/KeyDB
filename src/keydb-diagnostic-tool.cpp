@@ -722,51 +722,16 @@ int parseOptions(int argc, const char **argv) {
         } else if (!strcmp(argv[i],"-s")) {
             if (lastarg) goto invalid;
             config.hostsocket = strdup(argv[++i]);
-        } else if (!strcmp(argv[i],"-a") ) {
+        } else if (!strcmp(argv[i],"--password") ) {
             if (lastarg) goto invalid;
             config.auth = strdup(argv[++i]);
         } else if (!strcmp(argv[i],"--user")) {
             if (lastarg) goto invalid;
             config.user = argv[++i];
-        } else if (!strcmp(argv[i],"-d")) {
-            if (lastarg) goto invalid;
-            config.datasize = atoi(argv[++i]);
-            if (config.datasize < 1) config.datasize=1;
-            if (config.datasize > 1024*1024*1024) config.datasize = 1024*1024*1024;
-        } else if (!strcmp(argv[i],"-P")) {
-            if (lastarg) goto invalid;
-            config.pipeline = atoi(argv[++i]);
-            if (config.pipeline <= 0) config.pipeline=1;
-        } else if (!strcmp(argv[i],"-r")) {
-            if (lastarg) goto invalid;
-            const char *next = argv[++i], *p = next;
-            if (*p == '-') {
-                p++;
-                if (*p < '0' || *p > '9') goto invalid;
-            }
-            config.randomkeys = 1;
-            config.randomkeys_keyspacelen = atoi(next);
-            if (config.randomkeys_keyspacelen < 0)
-                config.randomkeys_keyspacelen = 0;
-        } else if (!strcmp(argv[i],"-q")) {
-            config.quiet = 1;
-        } else if (!strcmp(argv[i],"--csv")) {
-            config.csv = 1;
-        } else if (!strcmp(argv[i],"-l")) {
-            config.loop = 1;
-        } else if (!strcmp(argv[i],"-I")) {
-            config.idlemode = 1;
-        } else if (!strcmp(argv[i],"-e")) {
-            config.showerrors = 1;
         } else if (!strcmp(argv[i],"--dbnum")) {
             if (lastarg) goto invalid;
             config.dbnum = atoi(argv[++i]);
             config.dbnumstr = sdsfromlonglong(config.dbnum);
-        } else if (!strcmp(argv[i],"--precision")) {
-            if (lastarg) goto invalid;
-            config.precision = atoi(argv[++i]);
-            if (config.precision < 0) config.precision = 0;
-            if (config.precision > MAX_LATENCY_PRECISION) config.precision = MAX_LATENCY_PRECISION;
         } else if (!strcmp(argv[i],"-t") || !strcmp(argv[i],"--threads")) {
             if (lastarg) goto invalid;
             config.max_threads = atoi(argv[++i]);
@@ -777,10 +742,6 @@ int parseOptions(int argc, const char **argv) {
                 printf("Warning: Invalid value for max threads. Defaulting to %d.\n", MAX_THREADS);
                 config.max_threads = MAX_THREADS;
             }
-        } else if (!strcmp(argv[i],"--cluster")) {
-            config.cluster_mode = 1;
-        } else if (!strcmp(argv[i],"--enable-tracking")) {
-            config.enable_tracking = 1;
         } else if (!strcmp(argv[i],"--help")) {
             exit_status = 0;
             goto usage;
@@ -803,34 +764,13 @@ usage:
 "Usage: keydb-benchmark [-h <host>] [-p <port>] [-c <clients>] [-n <requests>] [-k <boolean>]\n\n"
 " -h, --host <hostname>       Server hostname (default 127.0.0.1)\n"
 " -p, --port <port>           Server port (default 6379)\n"
-" -s <socket>         Server socket (overrides host and port)\n"
-" --time <time>       Time between spinning up new client threads, in milliseconds\n"
-" -a <password>       Password for Redis Auth\n"
-" --user <username>   Used to send ACL style 'AUTH username pass'. Needs -a.\n"
-" -c <clients>        Number of parallel connections (default 50)\n"
-" -n <requests>       Total number of requests (default 100000)\n"
-" -d <size>           Data size of SET/GET value in bytes (default 3)\n"
-" --dbnum <db>        SELECT the specified db number (default 0)\n"
-" --cluster           Enable cluster mode.\n"
-" --enable-tracking   Send CLIENT TRACKING on before starting benchmark.\n"
-" -k <boolean>        1=keep alive 0=reconnect (default 1)\n"
-" -r <keyspacelen>    Use random keys for SET/GET/INCR, random values for SADD,\n"
-"                     random members and scores for ZADD.\n"
-"  Using this option the benchmark will expand the string __rand_int__\n"
-"  inside an argument with a 12 digits number in the specified range\n"
-"  from 0 to keyspacelen-1. The substitution changes every time a command\n"
-"  is executed. Default tests use this to hit random keys in the\n"
-"  specified range.\n"
-" -P <numreq>         Pipeline <numreq> requests. Default 1 (no pipeline).\n"
-" -e                  If server replies with errors, show them on stdout.\n"
-"                     (no more than 1 error per second is displayed)\n"
-" -q                  Quiet. Just show query/sec values\n"
-" --precision         Number of decimal places to display in latency output (default 0)\n"
-" --csv               Output in CSV format\n"
-" -l                  Loop. Run the tests forever\n"
-" -t <tests>          Only run the comma separated list of tests. The test\n"
-"                     names are the same as the ones produced as output.\n"
-" -I                  Idle mode. Just open N idle connections and wait.\n\n");
+" -c <clients>                Number of parallel connections (default 50)\n"
+" -t, --threads <threads>     Maximum number of threads to start before ending\n"
+" --time <time>               Time between spinning up new client threads, in milliseconds\n"
+" --dbnum <db>                Select the specified DB number (default 0)\n"
+" --user <username>           Used to send ACL style 'AUTH username pass'. Needs -a.\n"
+" --password <password>       Password for Redis Auth\n\n"
+);
     exit(exit_status);
 }
 

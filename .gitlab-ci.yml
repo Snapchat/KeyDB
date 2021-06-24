@@ -20,11 +20,18 @@ node-redis-test:
     - make distclean
     - make -j
     - make install
-    - mkdir node-redis-test
-    - cd node-redis-test
     - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/node-redis.git
     - cd node-redis
     - npm install
     - npm run test
-    - cd ../..
-    - rm -rf node-redis-test
+
+jedis-test:
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
+    - make install
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/jedis.git
+    - cd jedis
+    - make test

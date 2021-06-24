@@ -32,6 +32,7 @@ jedis-test:
     - make distclean
     - make -j
     - make install
+    - pkill stunnel
     - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/jedis.git
     - cd jedis
     - make test

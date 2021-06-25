@@ -722,7 +722,6 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
 
     /* Force the partial sync to be queued */
     prepareClientToWrite(c);
-    c->fPendingReplicaWrite = true; 
 
     return len;
 }
@@ -4974,11 +4973,8 @@ void flushReplBacklogToClients()
             replica->repl_end_off = g_pserver->master_repl_offset;
 
             /* Only if the there isn't already a pending write do we prepare the client to write */
-            if (!replica->fPendingReplicaWrite){
-                serverAssert(replica->repl_curr_off != g_pserver->master_repl_offset);
-                prepareClientToWrite(replica);
-                replica->fPendingReplicaWrite = true; 
-            }
+            serverAssert(replica->repl_curr_off != g_pserver->master_repl_offset);
+            prepareClientToWrite(replica);
 
         }
         if (fAsyncWrite)

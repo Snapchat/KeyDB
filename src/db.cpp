@@ -2726,6 +2726,8 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
     serverAssert(sdsKey != nullptr);
     serverAssert(FImplies(*pde != nullptr, dictGetVal(*pde) != nullptr));    // early versions set a NULL object, this is no longer valid
     serverAssert(m_refCount == 0);
+    if (m_pdbSnapshot == nullptr && g_pserver->m_pstorageFactory == nullptr)
+        return;
     std::unique_lock<fastlock> ul(g_expireLock);
 
     // First see if the key can be obtained from a snapshot

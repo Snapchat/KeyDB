@@ -1,7 +1,11 @@
+#ifdef CLIENT
 extern "C" {
 #include <sdscompat.h>
 #include <sds.h>
 }
+#else
+#include "sds.h"
+#endif
 #include <cstring>
 #include <unistd.h>
 #include <sys/types.h>
@@ -15,6 +19,7 @@ extern "C" {
 #ifdef MOTD
 #include <curl/curl.h> 
 
+#ifdef CLIENT
 extern "C" {
 __attribute__ ((weak)) hisds hi_sdscatlen(hisds s, const void *t, size_t len) {
     return sdscatlen(s, t, len);
@@ -23,6 +28,7 @@ __attribute__ ((weak)) hisds hi_sdscat(hisds s, const char *t) {
     return sdscat(s, t);
 }
 }
+#endif
 
 static const char *szMotdCachePath()
 {

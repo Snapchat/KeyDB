@@ -1594,7 +1594,6 @@ struct client {
                                   * when sending data to this replica. */
     long long repl_end_off = -1; /* Replication offset to write to, stored in the replica, as opposed to using the global offset 
                                   * to prevent needing the global lock */
-    int fPendingReplicaWrite;    /* Is there a write queued for this replica? */
 
     char replid[CONFIG_RUN_ID_SIZE+1]; /* Master replication ID (if master). */
     int slave_listening_port; /* As configured with: REPLCONF listening-port */
@@ -1656,6 +1655,10 @@ struct client {
     int argc;
     robj **argv;
     size_t argv_len_sumActive = 0;
+
+    bool FPendingReplicaWrite() const {
+        return repl_curr_off != repl_end_off;
+    }
 
     // post a function from a non-client thread to run on its client thread
     bool postFunction(std::function<void(client *)> fn, bool fLock = true);

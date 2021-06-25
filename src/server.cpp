@@ -2021,7 +2021,6 @@ void clientsCron(int iel) {
     while(listLength(g_pserver->clients) && iterations--) {
         client *c;
         listNode *head;
-
         /* Rotate the list, take the current head, process.
          * This way if the client must be removed from the list it's the
          * first element and we don't incur into O(N) computation. */
@@ -3245,6 +3244,7 @@ void initServerConfig(void) {
     g_pserver->enable_multimaster = CONFIG_DEFAULT_ENABLE_MULTIMASTER;
     g_pserver->repl_syncio_timeout = CONFIG_REPL_SYNCIO_TIMEOUT;
     g_pserver->master_repl_offset = 0;
+    g_pserver->repl_lowest_off.store(-1, std::memory_order_seq_cst);
 
     /* Replication partial resync backlog */
     g_pserver->repl_backlog = NULL;

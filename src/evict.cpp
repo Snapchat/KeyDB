@@ -354,6 +354,8 @@ unsigned long LFUDecrAndReturn(robj_roptr o) {
     return counter;
 }
 
+unsigned long getClientReplicationBacklogSharedUsage(client *c);
+
 /* We don't want to count AOF buffers and slaves output buffers as
  * used memory: the eviction should use mostly data size. This function
  * returns the sum of AOF and slaves buffer. */
@@ -370,9 +372,15 @@ size_t freeMemoryGetNotCountedMemory(void) {
         while((ln = listNext(&li))) {
             client *replica = (client*)listNodeValue(ln);
             std::unique_lock<fastlock>(replica->lock);
-            overhead += getClientOutputBufferMemoryUsage(replica);
+            /* we don't wish to multiple count the replication backlog shared usage */
+            overhead += (getClientOutputBufferMemoryUsage(replica) - getClientReplicationBacklogSharedUsage(replica));
         }
     }
+
+    /* also don't count the replication backlog memory
+     * that's where the replication clients get their memory from */
+    overhead += g_pserver->repl_backlog_size;
+
     if (g_pserver->aof_state != AOF_OFF) {
         overhead += sdsalloc(g_pserver->aof_buf)+aofRewriteBufferSize();
     }

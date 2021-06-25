@@ -1589,6 +1589,13 @@ struct client {
     long long psync_initial_offset; /* FULLRESYNC reply offset other slaves
                                        copying this replica output buffer
                                        should use. */
+                                       
+    long long repl_curr_off = -1;/* Replication offset of the replica, also where in the backlog we need to start from
+                                  * when sending data to this replica. */
+    long long repl_end_off = -1; /* Replication offset to write to, stored in the replica, as opposed to using the global offset 
+                                  * to prevent needing the global lock */
+    int fPendingReplicaWrite;    /* Is there a write queued for this replica? */
+
     char replid[CONFIG_RUN_ID_SIZE+1]; /* Master replication ID (if master). */
     int slave_listening_port; /* As configured with: REPLCONF listening-port */
     char *slave_addr;       /* Optionally given by REPLCONF ip-address */
@@ -2356,6 +2363,9 @@ struct redisServer {
                                        that is the next byte will'll write to.*/
     long long repl_backlog_off;     /* Replication "master offset" of first
                                        byte in the replication backlog buffer.*/
+    long long repl_backlog_start;   /* Used to compute indicies from offsets
+                                       basically, index = (offset - start) % size */
+    fastlock repl_backlog_lock {"replication backlog"};
     time_t repl_backlog_time_limit; /* Time without slaves after the backlog
                                        gets released. */
     time_t repl_no_slaves_since;    /* We have no slaves since that time.
@@ -2367,6 +2377,8 @@ struct redisServer {
     int repl_diskless_load;         /* Slave parse RDB directly from the socket.
                                      * see REPL_DISKLESS_LOAD_* enum */
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
+    std::atomic <long long> repl_lowest_off; /* The lowest offset amongst all replicas
+                                                -1 if there are no replicas */
     /* Replication (replica) */
     list *masters;
     int enable_multimaster; 
@@ -3712,6 +3724,8 @@ void mixDigest(unsigned char *digest, const void *ptr, size_t len);
 void xorDigest(unsigned char *digest, const void *ptr, size_t len);
 int populateCommandTableParseFlags(struct redisCommand *c, const char *strflags);
 
+
+
 int moduleGILAcquiredByModule(void);
 extern int g_fInCrash;
 static inline int GlobalLocksAcquired(void)  // Used in asserts to verify all global locks are correctly acquired for a server-thread to operate
@@ -3779,6 +3793,7 @@ void tlsCleanup(void);
 int tlsConfigure(redisTLSContextConfig *ctx_config);
 
 
+
 class ShutdownException
 {};
 
@@ -3790,3 +3805,5 @@ class ShutdownException
 int iAmMaster(void);
 
 #endif
+
+

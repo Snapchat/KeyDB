@@ -2018,7 +2018,6 @@ void ProcessPendingAsyncWrites()
  * need to use a syscall in order to install the writable event handler,
  * get it called, and so forth. */
 int handleClientsWithPendingWrites(int iel, int aof_state) {
-    std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[iel].lockPendingWrite);
     int processed = 0;
     serverAssert(iel == (serverTL - g_pserver->rgthreadvar));
 
@@ -2041,7 +2040,9 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
         ae_flags |= AE_BARRIER;
     }
 
+    std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[iel].lockPendingWrite);
     auto vec = std::move(g_pserver->rgthreadvar[iel].clients_pending_write);
+    lockf.unlock();
     processed += (int)vec.size();
 
     for (client *c : vec) {

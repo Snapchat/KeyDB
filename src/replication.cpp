@@ -189,6 +189,7 @@ void createReplicationBacklog(void) {
     g_pserver->repl_backlog = (char*)zmalloc(g_pserver->repl_backlog_size, MALLOC_LOCAL);
     g_pserver->repl_backlog_histlen = 0;
     g_pserver->repl_backlog_idx = 0;
+    g_pserver->repl_backlog_start = g_pserver->master_repl_offset;
 
     /* We don't have any data inside our buffer, but virtually the first
      * byte we have is the next byte that will be generated for the
@@ -198,6 +199,15 @@ void createReplicationBacklog(void) {
     /* Allow transmission to clients */
     g_pserver->repl_batch_idxStart = 0;
     g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
+}
+
+/* Compute the corresponding index from a replication backlog offset 
+ * Since this computation needs the size of the replication backlog, 
+ * you need to have the repl_backlog_lock in order to call it */
+long long getReplIndexFromOffset(long long offset){
+    serverAssert(g_pserver->repl_backlog_lock.fOwnLock());
+    long long index = (offset - g_pserver->repl_backlog_start) % g_pserver->repl_backlog_size;
+    return index;
 }
 
 /* This function is called when the user modifies the replication backlog
@@ -211,6 +221,8 @@ void resizeReplicationBacklog(long long newsize) {
         newsize = CONFIG_REPL_BACKLOG_MIN_SIZE;
     if (g_pserver->repl_backlog_size == newsize) return;
 
+    std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
+
     if (g_pserver->repl_backlog != NULL) {
         /* What we actually do is to flush the old buffer and realloc a new
          * empty one. It will refill with new data incrementally.
@@ -218,19 +230,23 @@ void resizeReplicationBacklog(long long newsize) {
          * worse often we need to alloc additional space before freeing the
          * old buffer. */
 
-        if (g_pserver->repl_batch_idxStart >= 0) {
-            // We need to keep critical data so we can't shrink less than the hot data in the buffer
-            newsize = std::max(newsize, g_pserver->master_repl_offset - g_pserver->repl_batch_offStart);
-            char *backlog = (char*)zmalloc(newsize);
-            g_pserver->repl_backlog_histlen = g_pserver->master_repl_offset - g_pserver->repl_batch_offStart;
+        /* get the critical client size, i.e. the size of the data unflushed to clients */
+        long long earliest_off = g_pserver->repl_lowest_off.load();
 
-            if (g_pserver->repl_backlog_idx >= g_pserver->repl_batch_idxStart) {
-                auto cbActiveBacklog = g_pserver->repl_backlog_idx - g_pserver->repl_batch_idxStart;
-                memcpy(backlog, g_pserver->repl_backlog + g_pserver->repl_batch_idxStart, cbActiveBacklog);
+        if (earliest_off != -1) {
+            // We need to keep critical data so we can't shrink less than the hot data in the buffer
+            newsize = std::max(newsize, g_pserver->master_repl_offset - earliest_off);
+            char *backlog = (char*)zmalloc(newsize);
+            g_pserver->repl_backlog_histlen = g_pserver->master_repl_offset - earliest_off;
+            long long earliest_idx = getReplIndexFromOffset(earliest_off);
+
+            if (g_pserver->repl_backlog_idx >= earliest_idx) {
+                auto cbActiveBacklog = g_pserver->repl_backlog_idx - earliest_idx;
+                memcpy(backlog, g_pserver->repl_backlog + earliest_idx, cbActiveBacklog);
                 serverAssert(g_pserver->repl_backlog_histlen == cbActiveBacklog);
             } else {
-                auto cbPhase1 = g_pserver->repl_backlog_size - g_pserver->repl_batch_idxStart;
-                memcpy(backlog, g_pserver->repl_backlog + g_pserver->repl_batch_idxStart, cbPhase1);
+                auto cbPhase1 = g_pserver->repl_backlog_size - earliest_idx;
+                memcpy(backlog, g_pserver->repl_backlog + earliest_idx, cbPhase1);
                 memcpy(backlog + cbPhase1, g_pserver->repl_backlog, g_pserver->repl_backlog_idx);
                 auto cbActiveBacklog = cbPhase1 + g_pserver->repl_backlog_idx;
                 serverAssert(g_pserver->repl_backlog_histlen == cbActiveBacklog);
@@ -238,7 +254,10 @@ void resizeReplicationBacklog(long long newsize) {
             zfree(g_pserver->repl_backlog);
             g_pserver->repl_backlog = backlog;
             g_pserver->repl_backlog_idx = g_pserver->repl_backlog_histlen;
-            g_pserver->repl_batch_idxStart = 0;
+            g_pserver->repl_batch_idxStart -= earliest_idx;
+            if (g_pserver->repl_batch_idxStart < 0)
+                g_pserver->repl_batch_idxStart += g_pserver->repl_backlog_size;
+            g_pserver->repl_backlog_start = earliest_off;
         } else {
             zfree(g_pserver->repl_backlog);
             g_pserver->repl_backlog = (char*)zmalloc(newsize);
@@ -246,10 +265,12 @@ void resizeReplicationBacklog(long long newsize) {
             g_pserver->repl_backlog_idx = 0;
             /* Next byte we have is... the next since the buffer is empty. */
             g_pserver->repl_backlog_off = g_pserver->master_repl_offset+1;
+            g_pserver->repl_backlog_start = g_pserver->master_repl_offset;
         }
     }
     g_pserver->repl_backlog_size = newsize;
 }
+
 
 void freeReplicationBacklog(void) {
     serverAssert(GlobalLocksAcquired());
@@ -273,12 +294,20 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
     serverAssert(GlobalLocksAcquired());
     const unsigned char *p = (const unsigned char*)ptr;
 
+
     if (g_pserver->repl_batch_idxStart >= 0) {
-        long long minimumsize = g_pserver->master_repl_offset + len - g_pserver->repl_batch_offStart+1;
+        /* We are lower bounded by the lowest replica offset, or the batch offset start if not applicable */
+        long long lower_bound = g_pserver->repl_lowest_off.load(std::memory_order_seq_cst);
+        if (lower_bound == -1)
+            lower_bound = g_pserver->repl_batch_offStart;
+        long long minimumsize = g_pserver->master_repl_offset + len - lower_bound + 1;
         if (minimumsize > g_pserver->repl_backlog_size) {
             flushReplBacklogToClients();
-            serverAssert(g_pserver->master_repl_offset == g_pserver->repl_batch_offStart);
-            minimumsize = g_pserver->master_repl_offset + len - g_pserver->repl_batch_offStart+1;
+            lower_bound = g_pserver->repl_lowest_off.load(std::memory_order_seq_cst);
+            if (lower_bound == -1)
+                lower_bound = g_pserver->repl_batch_offStart;
+
+            minimumsize = g_pserver->master_repl_offset + len - lower_bound + 1;
 
             if (minimumsize > g_pserver->repl_backlog_size && minimumsize < (long long)cserver.client_obuf_limits[CLIENT_TYPE_SLAVE].hard_limit_bytes) {
                 // This is an emergency overflow, we better resize to fit
@@ -293,6 +322,7 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
 
     /* This is a circular buffer, so write as much data we can at every
      * iteration and rewind the "idx" index if we reach the limit. */
+    
     while(len) {
         size_t thislen = g_pserver->repl_backlog_size - g_pserver->repl_backlog_idx;
         if (thislen > len) thislen = len;
@@ -479,7 +509,6 @@ void replicationFeedSlavesCore(list *slaves, int dictid, robj **argv, int argc) 
         if (fSendRaw)
         {
             char aux[LONG_STR_SIZE+3];
-
             /* Add the multi bulk reply length. */
             aux[0] = '*';
             int multilen = ll2string(aux+1,sizeof(aux)-1,argc);
@@ -653,15 +682,19 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
     decrRefCount(cmdobj);
 }
 
+int prepareClientToWrite(client *c);
+
 /* Feed the replica 'c' with the replication backlog starting from the
  * specified 'offset' up to the end of the backlog. */
 long long addReplyReplicationBacklog(client *c, long long offset) {
-    long long j, skip, len;
+    long long skip, len;
 
     serverLog(LL_DEBUG, "[PSYNC] Replica request offset: %lld", offset);
 
     if (g_pserver->repl_backlog_histlen == 0) {
         serverLog(LL_DEBUG, "[PSYNC] Backlog history len is zero");
+        c->repl_curr_off = g_pserver->master_repl_offset;
+        c->repl_end_off = g_pserver->master_repl_offset;
         return 0;
     }
 
@@ -678,31 +711,20 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
     skip = offset - g_pserver->repl_backlog_off;
     serverLog(LL_DEBUG, "[PSYNC] Skipping: %lld", skip);
 
-    /* Point j to the oldest byte, that is actually our
-     * g_pserver->repl_backlog_off byte. */
-    j = (g_pserver->repl_backlog_idx +
-        (g_pserver->repl_backlog_size-g_pserver->repl_backlog_histlen)) %
-        g_pserver->repl_backlog_size;
-    serverLog(LL_DEBUG, "[PSYNC] Index of first byte: %lld", j);
-
-    /* Discard the amount of data to seek to the specified 'offset'. */
-    j = (j + skip) % g_pserver->repl_backlog_size;
-
-    /* Feed replica with data. Since it is a circular buffer we have to
-     * split the reply in two parts if we are cross-boundary. */
     len = g_pserver->repl_backlog_histlen - skip;
     serverLog(LL_DEBUG, "[PSYNC] Reply total length: %lld", len);
-    while(len) {
-        long long thislen =
-            ((g_pserver->repl_backlog_size - j) < len) ?
-            (g_pserver->repl_backlog_size - j) : len;
 
-        serverLog(LL_DEBUG, "[PSYNC] addReply() length: %lld", thislen);
-        addReplySds(c,sdsnewlen(g_pserver->repl_backlog + j, thislen));
-        len -= thislen;
-        j = 0;
-    }
-    return g_pserver->repl_backlog_histlen - skip;
+    /* Set the start and end offsets for the replica so that a future
+     * writeToClient will send the backlog from the given offset to 
+     * the current end of the backlog to said replica */
+    c->repl_curr_off = offset - 1;
+    c->repl_end_off = g_pserver->master_repl_offset;
+
+    /* Force the partial sync to be queued */
+    prepareClientToWrite(c);
+    c->fPendingReplicaWrite = true; 
+
+    return len;
 }
 
 /* Return the offset to provide as reply to the PSYNC command received
@@ -735,6 +757,10 @@ int replicationSetupSlaveForFullResync(client *replica, long long offset) {
 
     replica->psync_initial_offset = offset;
     replica->replstate = SLAVE_STATE_WAIT_BGSAVE_END;
+
+    replica->repl_curr_off = offset;
+    replica->repl_end_off = g_pserver->master_repl_offset;
+
     /* We are going to accumulate the incremental changes for this
      * replica as well. Set replicaseldb to -1 in order to force to re-emit
      * a SELECT statement in the replication stream. */
@@ -1357,6 +1383,7 @@ void replconfCommand(client *c) {
  * 4) Update the count of "good replicas". */
 void putSlaveOnline(client *replica) {
     replica->replstate = SLAVE_STATE_ONLINE;
+    
     replica->repl_put_online_on_ack = 0;
     replica->repl_ack_time = g_pserver->unixtime; /* Prevent false timeout. */
 
@@ -3059,6 +3086,11 @@ void syncWithMaster(connection *conn) {
 
     if (psync_result == PSYNC_CONTINUE) {
         serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Master accepted a Partial Resynchronization.");
+        /* Reset the bulklen information in case it is lingering from the last connection
+         * The partial sync will start from the beginning of a command so these should be reset */
+        mi->master->reqtype = 0;
+        mi->master->multibulklen = 0;
+        mi->master->bulklen = -1;
         if (cserver.supervised_mode == SUPERVISED_SYSTEMD) {
             redisCommunicateSystemd("STATUS=MASTER <-> REPLICA sync: Partial Resynchronization accepted. Ready to accept connections in read-write mode.\n");
         }
@@ -4898,15 +4930,19 @@ void replicateSubkeyExpire(redisDb *db, robj_roptr key, robj_roptr subkey, long 
 }
 
 void _clientAsyncReplyBufferReserve(client *c, size_t len);
+
 void flushReplBacklogToClients()
 {
     serverAssert(GlobalLocksAcquired());
+    /* If we have the repl backlog lock, we will deadlock */
+    serverAssert(!g_pserver->repl_backlog_lock.fOwnLock());
     if (g_pserver->repl_batch_offStart < 0)
         return;
     
     if (g_pserver->repl_batch_offStart != g_pserver->master_repl_offset) {
         bool fAsyncWrite = false;
-        
+        long long min_offset = LONG_LONG_MAX;
+        // Ensure no overflow
         serverAssert(g_pserver->repl_batch_offStart < g_pserver->master_repl_offset);
         if (g_pserver->master_repl_offset - g_pserver->repl_batch_offStart > g_pserver->repl_backlog_size) {
             // We overflowed
@@ -4930,33 +4966,36 @@ void flushReplBacklogToClients()
         listIter li;
         listNode *ln;
         listRewind(g_pserver->slaves, &li);
+        /* We don't actually write any data in this function since we send data 
+         * directly from the replication backlog to replicas in writeToClient.
+         * 
+         * What we do however, is set the end offset of each replica here. This way, 
+         * future calls to writeToClient will know up to where in the replication
+         * backlog is valid for writing. */  
         while ((ln = listNext(&li))) {
             client *replica = (client*)listNodeValue(ln);
 
             if (!canFeedReplicaReplBuffer(replica)) continue;
             if (replica->flags & CLIENT_CLOSE_ASAP) continue;
 
-            std::unique_lock<fastlock> ul(replica->lock, std::defer_lock);
-            if (FCorrectThread(replica))
-                ul.lock();
-            else
+            std::unique_lock<fastlock> ul(replica->lock);
+            if (!FCorrectThread(replica))
                 fAsyncWrite = true;
-            
-            if (g_pserver->repl_backlog_idx >= g_pserver->repl_batch_idxStart) {
-                long long cbCopy = g_pserver->repl_backlog_idx - g_pserver->repl_batch_idxStart;
-                serverAssert((g_pserver->master_repl_offset - g_pserver->repl_batch_offStart) == cbCopy);
-                serverAssert((g_pserver->repl_backlog_size - g_pserver->repl_batch_idxStart) >= (cbCopy));
-                serverAssert((g_pserver->repl_batch_idxStart + cbCopy) <= g_pserver->repl_backlog_size);
-                
-                addReplyProto(replica, g_pserver->repl_backlog + g_pserver->repl_batch_idxStart, cbCopy);
-            } else {
-                auto cbPhase1 = g_pserver->repl_backlog_size - g_pserver->repl_batch_idxStart;
-                if (fAsyncWrite)
-                    _clientAsyncReplyBufferReserve(replica, cbPhase1 + g_pserver->repl_backlog_idx);
-                addReplyProto(replica, g_pserver->repl_backlog + g_pserver->repl_batch_idxStart, cbPhase1);
-                addReplyProto(replica, g_pserver->repl_backlog, g_pserver->repl_backlog_idx);
-                serverAssert((cbPhase1 + g_pserver->repl_backlog_idx) == (g_pserver->master_repl_offset - g_pserver->repl_batch_offStart));
+
+            /* We should have set the repl_curr_off when synchronizing, so it shouldn't be -1 here */
+            serverAssert(replica->repl_curr_off != -1);
+
+            min_offset = std::min(min_offset, replica->repl_curr_off);      
+
+            replica->repl_end_off = g_pserver->master_repl_offset;
+
+            /* Only if the there isn't already a pending write do we prepare the client to write */
+            if (!replica->fPendingReplicaWrite){
+                serverAssert(replica->repl_curr_off != g_pserver->master_repl_offset);
+                prepareClientToWrite(replica);
+                replica->fPendingReplicaWrite = true; 
             }
+
         }
         if (fAsyncWrite)
             ProcessPendingAsyncWrites();
@@ -4965,7 +5004,8 @@ LDone:
         // This may be called multiple times per "frame" so update with our progress flushing to clients
         g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
         g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
-    }
+        g_pserver->repl_lowest_off.store(min_offset == LONG_LONG_MAX ? -1 : min_offset, std::memory_order_seq_cst);
+    } 
 }
 
 

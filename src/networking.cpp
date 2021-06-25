@@ -136,6 +136,7 @@ client *createClient(connection *conn, int iel) {
     client_id = g_pserver->next_client_id.fetch_add(1);
     c->iel = iel;
     c->id = client_id;
+    sprintf(c->lock.szName, "client %lu", client_id);
     c->resp = 2;
     c->conn = conn;
     c->name = NULL;
@@ -157,6 +158,7 @@ client *createClient(connection *conn, int iel) {
     c->flags = 0;
     c->fPendingAsyncWrite = FALSE;
     c->fPendingAsyncWriteHandler = FALSE;
+    c->fPendingReplicaWrite = FALSE;
     c->ctime = c->lastinteraction = g_pserver->unixtime;
     /* If the default user does not require authentication, the user is
      * directly authenticated. */
@@ -234,6 +236,7 @@ void clientInstallWriteHandler(client *c) {
     /* Schedule the client to write the output buffers to the socket only
      * if not already done and, for slaves, if the replica can actually receive
      * writes at this stage. */
+
     if (!(c->flags & CLIENT_PENDING_WRITE) &&
         (c->replstate == REPL_STATE_NONE ||
          (c->replstate == SLAVE_STATE_ONLINE && !c->repl_put_online_on_ack)))
@@ -315,7 +318,7 @@ int prepareClientToWrite(client *c) {
 
     /* Schedule the client to write the output buffers to the socket, unless
      * it should already be setup to do so (it has already pending data). */
-    if (!fAsync && !clientHasPendingReplies(c)) clientInstallWriteHandler(c);
+    if (!fAsync && !clientHasPendingReplies(c) && !c->fPendingReplicaWrite) clientInstallWriteHandler(c);
     if (fAsync && !(c->fPendingAsyncWrite)) clientInstallAsyncWriteHandler(c);
 
     /* Authorize the caller to queue in the output buffer of this client. */
@@ -1764,6 +1767,8 @@ client *lookupClientByID(uint64_t id) {
     return (c == raxNotFound) ? NULL : c;
 }
 
+long long getReplIndexFromOffset(long long offset);
+
 /* Write data in output buffers to client. Return C_OK if the client
  * is still valid after the call, C_ERR if it was freed because of some
  * error.  If handler_installed is set, it will attempt to clear the
@@ -1781,8 +1786,9 @@ int writeToClient(client *c, int handler_installed) {
     serverAssertDebug(FCorrectThread(c));
 
     std::unique_lock<decltype(c->lock)> lock(c->lock);
-   
+
     while(clientHasPendingReplies(c)) {
+        serverAssert(!(c->flags & CLIENT_SLAVE) || c->flags & CLIENT_MONITOR);
         if (c->bufpos > 0) {
             nwritten = connWrite(c->conn,c->buf+c->sentlen,c->bufpos-c->sentlen);
             if (nwritten <= 0) break;
@@ -1790,7 +1796,7 @@ int writeToClient(client *c, int handler_installed) {
             totwritten += nwritten;
 
             /* If the buffer was sent, set bufpos to zero to continue with
-             * the remainder of the reply. */
+            * the remainder of the reply. */
             if ((int)c->sentlen == c->bufpos) {
                 c->bufpos = 0;
                 c->sentlen = 0;
@@ -1836,7 +1842,49 @@ int writeToClient(client *c, int handler_installed) {
              zmalloc_used_memory() < g_pserver->maxmemory) &&
             !(c->flags & CLIENT_SLAVE)) break;
     }
-    
+
+    /* We can only directly read from the replication backlog if the client 
+       is a replica, so only attempt to do so if that's the case. */
+    if (c->flags & CLIENT_SLAVE && !(c->flags & CLIENT_MONITOR)) {
+
+        std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
+        long long repl_end_idx = getReplIndexFromOffset(c->repl_end_off);
+        serverAssert(c->repl_curr_off != -1);
+
+        if (c->repl_curr_off != c->repl_end_off){
+            long long repl_curr_idx = getReplIndexFromOffset(c->repl_curr_off); 
+            long long nwritten2ndStage = 0; /* How much was written from the start of the replication backlog
+                                             * in the event of a wrap around write */
+            /* normal case with no wrap around */
+            if (repl_end_idx >= repl_curr_idx){
+                nwritten = connWrite(c->conn, g_pserver->repl_backlog + repl_curr_idx, repl_end_idx - repl_curr_idx);
+            /* wrap around case */
+            } else {
+                nwritten = connWrite(c->conn, g_pserver->repl_backlog + repl_curr_idx, g_pserver->repl_backlog_size - repl_curr_idx);
+                /* only attempt wrapping if we write the correct number of bytes */
+                if (nwritten == g_pserver->repl_backlog_size - repl_curr_idx){
+                    nwritten2ndStage = connWrite(c->conn, g_pserver->repl_backlog, repl_end_idx);
+                    if (nwritten2ndStage != -1)
+                        nwritten += nwritten2ndStage;
+                }                
+            }
+
+            /* only increment bytes if an error didn't occur */
+            if (nwritten > 0){
+                totwritten += nwritten;
+                c->repl_curr_off += nwritten;
+                serverAssert(c->repl_curr_off <= c->repl_end_off);
+                /* If the client's current offset matches the last offset it can read from, there is no pending write */
+                if (c->repl_curr_off == c->repl_end_off){
+                    c->fPendingReplicaWrite = false;
+                }
+            }
+
+            /* If the second part of a write didn't go through, we still need to register that */
+            if (nwritten2ndStage == -1) nwritten = -1;
+        }
+    }
+
     g_pserver->stat_net_output_bytes += totwritten;
     if (nwritten == -1) {
         if (connGetState(c->conn) != CONN_STATE_CONNECTED) {
@@ -1854,7 +1902,7 @@ int writeToClient(client *c, int handler_installed) {
          * We just rely on data / pings received for timeout detection. */
         if (!(c->flags & CLIENT_MASTER)) c->lastinteraction = g_pserver->unixtime;
     }
-    if (!clientHasPendingReplies(c)) {
+    if (!clientHasPendingReplies(c) && !c->fPendingReplicaWrite) {
         c->sentlen = 0;
         if (handler_installed) connSetWriteHandler(c->conn, NULL);
 
@@ -1898,27 +1946,37 @@ void ProcessPendingAsyncWrites()
         serverAssert(c->fPendingAsyncWrite);
         if (c->flags & (CLIENT_CLOSE_ASAP | CLIENT_CLOSE_AFTER_REPLY))
         {
-            zfree(c->replyAsync);
-            c->replyAsync = nullptr;
+            if (c->replyAsync != nullptr){
+                zfree(c->replyAsync);
+                c->replyAsync = nullptr;
+            }
             c->fPendingAsyncWrite = FALSE;
             continue;
         }
 
-        int size = c->replyAsync->used;
+        /* since writes from master to replica can come directly from the replication backlog,
+         * writes may have been signalled without having been copied to the replyAsync buffer,
+         * thus causing the buffer to be NULL */ 
+        if (c->replyAsync != nullptr){
+            int size = c->replyAsync->used;
 
-        if (listLength(c->reply) == 0 && size <= (PROTO_REPLY_CHUNK_BYTES - c->bufpos)) {
-            memcpy(c->buf + c->bufpos, c->replyAsync->buf(), size);
-            c->bufpos += size;
-        } else {
-            c->reply_bytes += c->replyAsync->size;
-            listAddNodeTail(c->reply, c->replyAsync);
+            if (listLength(c->reply) == 0 && size <= (PROTO_REPLY_CHUNK_BYTES - c->bufpos)) {
+                memcpy(c->buf + c->bufpos, c->replyAsync->buf(), size);
+                c->bufpos += size;
+            } else {
+                c->reply_bytes += c->replyAsync->size;
+                listAddNodeTail(c->reply, c->replyAsync);
+                c->replyAsync = nullptr;
+            }
+
+            zfree(c->replyAsync);
             c->replyAsync = nullptr;
+        } else {
+            /* Only replicas should have empty async reply buffers */
+            serverAssert(c->flags & CLIENT_SLAVE);
         }
 
-        zfree(c->replyAsync);
-        c->replyAsync = nullptr;
         c->fPendingAsyncWrite = FALSE;
-
         // Now install the write event handler
         int ae_flags = AE_WRITABLE|AE_WRITE_THREADSAFE;
         /* For the fsync=always policy, we want that a given FD is never
@@ -1931,17 +1989,17 @@ void ProcessPendingAsyncWrites()
         {
             ae_flags |= AE_BARRIER;
         }
-        
+
         if (!((c->replstate == REPL_STATE_NONE ||
          (c->replstate == SLAVE_STATE_ONLINE && !c->repl_put_online_on_ack))))
             continue;
-
+        
         asyncCloseClientOnOutputBufferLimitReached(c);
         if (c->flags & CLIENT_CLOSE_ASAP)
             continue;   // we will never write this so don't post an op
-        
+
         std::atomic_thread_fence(std::memory_order_seq_cst);
-        
+
         if (FCorrectThread(c))
         {
             prepareClientToWrite(c); // queue an event
@@ -2024,9 +2082,10 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
 
         /* If after the synchronous writes above we still have data to
         * output to the client, we need to install the writable handler. */
-        if (clientHasPendingReplies(c)) {
-            if (connSetWriteHandlerWithBarrier(c->conn, sendReplyToClient, ae_flags, true) == C_ERR) 
+        if (clientHasPendingReplies(c) || c->fPendingReplicaWrite) {
+            if (connSetWriteHandlerWithBarrier(c->conn, sendReplyToClient, ae_flags, true) == C_ERR) {
                 freeClientAsync(c);
+            }
         }
     }
 
@@ -3647,6 +3706,12 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
     }
 }
 
+/* In the case of a replica client, writes to said replica are using data from the replication backlog
+ * as opposed to it's own internal buffer, this number should keep track of that */
+unsigned long getClientReplicationBacklogSharedUsage(client *c) {
+    return (!(c->flags & CLIENT_SLAVE) || !c->fPendingReplicaWrite ) ? 0 : g_pserver->master_repl_offset - c->repl_curr_off;
+}
+
 /* This function returns the number of bytes that Redis is
  * using to store the reply still not read by the client.
  *
@@ -3655,8 +3720,10 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
  * enforcing the client output length limits. */
 unsigned long getClientOutputBufferMemoryUsage(client *c) {
     unsigned long list_item_size = sizeof(listNode) + sizeof(clientReplyBlock);
-    return c->reply_bytes + (list_item_size*listLength(c->reply)) + (c->replyAsync ? c->replyAsync->size : 0);
+    return c->reply_bytes + (list_item_size*listLength(c->reply)) + (c->replyAsync ? c->replyAsync->size : 0) + getClientReplicationBacklogSharedUsage(c);
 }
+
+
 
 /* Get the class of a client, used in order to enforce limits to different
  * classes of clients.

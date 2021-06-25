@@ -1,4 +1,6 @@
 build:
+  tags:
+    - docker
   stage: build
   script:
     - git submodule init && git submodule update
@@ -6,6 +8,8 @@ build:
     - make -j
 
 make-test:
+  tags:
+    - docker
   stage: test
   script:
     - git submodule init && git submodule update
@@ -14,6 +18,8 @@ make-test:
     - make test -j
 
 node-redis-test:
+  tags:
+    - shell
   stage: test
   script:
     - git submodule init && git submodule update
@@ -26,13 +32,14 @@ node-redis-test:
     - npm run test
 
 jedis-test:
+  tags:
+    - docker
   stage: test
   script:
     - git submodule init && git submodule update
     - make distclean
     - make -j
     - make install
-    - pkill stunnel || true
     - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/jedis.git
     - cd jedis
     - mkdir tmp

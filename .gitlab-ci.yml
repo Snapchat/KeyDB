@@ -42,5 +42,4 @@ jedis-test:
     - make install
     - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/jedis.git
     - cd jedis
-    - mkdir tmp
     - make test

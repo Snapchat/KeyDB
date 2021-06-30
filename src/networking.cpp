@@ -158,7 +158,6 @@ client *createClient(connection *conn, int iel) {
     c->flags = 0;
     c->fPendingAsyncWrite = FALSE;
     c->fPendingAsyncWriteHandler = FALSE;
-    c->fPendingReplicaWrite = FALSE;
     c->ctime = c->lastinteraction = g_pserver->unixtime;
     /* If the default user does not require authentication, the user is
      * directly authenticated. */
@@ -318,7 +317,7 @@ int prepareClientToWrite(client *c) {
 
     /* Schedule the client to write the output buffers to the socket, unless
      * it should already be setup to do so (it has already pending data). */
-    if (!fAsync && !clientHasPendingReplies(c) && !c->fPendingReplicaWrite) clientInstallWriteHandler(c);
+    if (!fAsync && (c->flags & CLIENT_SLAVE || !clientHasPendingReplies(c))) clientInstallWriteHandler(c);
     if (fAsync && !(c->fPendingAsyncWrite)) clientInstallAsyncWriteHandler(c);
 
     /* Authorize the caller to queue in the output buffer of this client. */
@@ -1132,7 +1131,7 @@ void copyClientOutputBuffer(client *dst, client *src) {
 /* Return true if the specified client has pending reply buffers to write to
  * the socket. */
 int clientHasPendingReplies(client *c) {
-    return (c->bufpos || listLength(c->reply));
+    return (c->bufpos || listLength(c->reply) || c->FPendingReplicaWrite());
 }
 
 static std::atomic<int> rgacceptsInFlight[MAX_EVENT_LOOPS];
@@ -1787,66 +1786,9 @@ int writeToClient(client *c, int handler_installed) {
 
     std::unique_lock<decltype(c->lock)> lock(c->lock);
 
-    while(clientHasPendingReplies(c)) {
-        serverAssert(!(c->flags & CLIENT_SLAVE) || c->flags & CLIENT_MONITOR);
-        if (c->bufpos > 0) {
-            nwritten = connWrite(c->conn,c->buf+c->sentlen,c->bufpos-c->sentlen);
-            if (nwritten <= 0) break;
-            c->sentlen += nwritten;
-            totwritten += nwritten;
-
-            /* If the buffer was sent, set bufpos to zero to continue with
-            * the remainder of the reply. */
-            if ((int)c->sentlen == c->bufpos) {
-                c->bufpos = 0;
-                c->sentlen = 0;
-            }
-        } else {
-            o = (clientReplyBlock*)listNodeValue(listFirst(c->reply));
-            if (o->used == 0) {
-                c->reply_bytes -= o->size;
-                listDelNode(c->reply,listFirst(c->reply));
-                continue;
-            }
-
-            nwritten = connWrite(c->conn, o->buf() + c->sentlen, o->used - c->sentlen);
-            if (nwritten <= 0) break;
-            c->sentlen += nwritten;
-            totwritten += nwritten;
-            
-            /* If we fully sent the object on head go to the next one */
-            if (c->sentlen == o->used) {
-                c->reply_bytes -= o->size;
-                listDelNode(c->reply,listFirst(c->reply));
-                c->sentlen = 0;
-                /* If there are no longer objects in the list, we expect
-                    * the count of reply bytes to be exactly zero. */
-                if (listLength(c->reply) == 0)
-                    serverAssert(c->reply_bytes == 0);
-            }
-        }
-        /* Note that we avoid to send more than NET_MAX_WRITES_PER_EVENT
-         * bytes, in a single threaded server it's a good idea to serve
-         * other clients as well, even if a very large request comes from
-         * super fast link that is always able to accept data (in real world
-         * scenario think about 'KEYS *' against the loopback interface).
-         *
-         * However if we are over the maxmemory limit we ignore that and
-         * just deliver as much data as it is possible to deliver.
-         *
-         * Moreover, we also send as much as possible if the client is
-         * a replica or a monitor (otherwise, on high-speed traffic, the
-         * replication/output buffer will grow indefinitely) */
-        if (totwritten > NET_MAX_WRITES_PER_EVENT &&
-            (g_pserver->maxmemory == 0 ||
-             zmalloc_used_memory() < g_pserver->maxmemory) &&
-            !(c->flags & CLIENT_SLAVE)) break;
-    }
-
     /* We can only directly read from the replication backlog if the client 
        is a replica, so only attempt to do so if that's the case. */
     if (c->flags & CLIENT_SLAVE && !(c->flags & CLIENT_MONITOR)) {
-
         std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
         long long repl_end_idx = getReplIndexFromOffset(c->repl_end_off);
         serverAssert(c->repl_curr_off != -1);
@@ -1874,17 +1816,68 @@ int writeToClient(client *c, int handler_installed) {
                 totwritten += nwritten;
                 c->repl_curr_off += nwritten;
                 serverAssert(c->repl_curr_off <= c->repl_end_off);
-                /* If the client's current offset matches the last offset it can read from, there is no pending write */
-                if (c->repl_curr_off == c->repl_end_off){
-                    c->fPendingReplicaWrite = false;
-                }
             }
 
             /* If the second part of a write didn't go through, we still need to register that */
             if (nwritten2ndStage == -1) nwritten = -1;
         }
-    }
+    } else {
+        while(clientHasPendingReplies(c)) {
+            serverAssert(!(c->flags & CLIENT_SLAVE) || c->flags & CLIENT_MONITOR);
+            if (c->bufpos > 0) {
+                nwritten = connWrite(c->conn,c->buf+c->sentlen,c->bufpos-c->sentlen);
+                if (nwritten <= 0) break;
+                c->sentlen += nwritten;
+                totwritten += nwritten;
 
+                /* If the buffer was sent, set bufpos to zero to continue with
+                * the remainder of the reply. */
+                if ((int)c->sentlen == c->bufpos) {
+                    c->bufpos = 0;
+                    c->sentlen = 0;
+                }
+            } else {
+                o = (clientReplyBlock*)listNodeValue(listFirst(c->reply));
+                if (o->used == 0) {
+                    c->reply_bytes -= o->size;
+                    listDelNode(c->reply,listFirst(c->reply));
+                    continue;
+                }
+
+                nwritten = connWrite(c->conn, o->buf() + c->sentlen, o->used - c->sentlen);
+                if (nwritten <= 0) break;
+                c->sentlen += nwritten;
+                totwritten += nwritten;
+                
+                /* If we fully sent the object on head go to the next one */
+                if (c->sentlen == o->used) {
+                    c->reply_bytes -= o->size;
+                    listDelNode(c->reply,listFirst(c->reply));
+                    c->sentlen = 0;
+                    /* If there are no longer objects in the list, we expect
+                        * the count of reply bytes to be exactly zero. */
+                    if (listLength(c->reply) == 0)
+                        serverAssert(c->reply_bytes == 0);
+                }
+            }
+            /* Note that we avoid to send more than NET_MAX_WRITES_PER_EVENT
+            * bytes, in a single threaded server it's a good idea to serve
+            * other clients as well, even if a very large request comes from
+            * super fast link that is always able to accept data (in real world
+            * scenario think about 'KEYS *' against the loopback interface).
+            *
+            * However if we are over the maxmemory limit we ignore that and
+            * just deliver as much data as it is possible to deliver.
+            *
+            * Moreover, we also send as much as possible if the client is
+            * a replica or a monitor (otherwise, on high-speed traffic, the
+            * replication/output buffer will grow indefinitely) */
+            if (totwritten > NET_MAX_WRITES_PER_EVENT &&
+                (g_pserver->maxmemory == 0 ||
+                zmalloc_used_memory() < g_pserver->maxmemory) &&
+                !(c->flags & CLIENT_SLAVE)) break;
+        }
+    }
     g_pserver->stat_net_output_bytes += totwritten;
     if (nwritten == -1) {
         if (connGetState(c->conn) != CONN_STATE_CONNECTED) {
@@ -1902,7 +1895,7 @@ int writeToClient(client *c, int handler_installed) {
          * We just rely on data / pings received for timeout detection. */
         if (!(c->flags & CLIENT_MASTER)) c->lastinteraction = g_pserver->unixtime;
     }
-    if (!clientHasPendingReplies(c) && !c->fPendingReplicaWrite) {
+    if (!clientHasPendingReplies(c)) {
         c->sentlen = 0;
         if (handler_installed) connSetWriteHandler(c->conn, NULL);
 
@@ -2026,7 +2019,6 @@ void ProcessPendingAsyncWrites()
  * need to use a syscall in order to install the writable event handler,
  * get it called, and so forth. */
 int handleClientsWithPendingWrites(int iel, int aof_state) {
-    std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[iel].lockPendingWrite);
     int processed = 0;
     serverAssert(iel == (serverTL - g_pserver->rgthreadvar));
 
@@ -2049,7 +2041,9 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
         ae_flags |= AE_BARRIER;
     }
 
+    std::unique_lock<fastlock> lockf(g_pserver->rgthreadvar[iel].lockPendingWrite);
     auto vec = std::move(g_pserver->rgthreadvar[iel].clients_pending_write);
+    lockf.unlock();
     processed += (int)vec.size();
 
     for (client *c : vec) {
@@ -2082,7 +2076,7 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
 
         /* If after the synchronous writes above we still have data to
         * output to the client, we need to install the writable handler. */
-        if (clientHasPendingReplies(c) || c->fPendingReplicaWrite) {
+        if (clientHasPendingReplies(c)) {
             if (connSetWriteHandlerWithBarrier(c->conn, sendReplyToClient, ae_flags, true) == C_ERR) {
                 freeClientAsync(c);
             }
@@ -3709,7 +3703,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
 /* In the case of a replica client, writes to said replica are using data from the replication backlog
  * as opposed to it's own internal buffer, this number should keep track of that */
 unsigned long getClientReplicationBacklogSharedUsage(client *c) {
-    return (!(c->flags & CLIENT_SLAVE) || !c->fPendingReplicaWrite ) ? 0 : g_pserver->master_repl_offset - c->repl_curr_off;
+    return (!(c->flags & CLIENT_SLAVE) || !c->FPendingReplicaWrite() ) ? 0 : g_pserver->master_repl_offset - c->repl_curr_off;
 }
 
 /* This function returns the number of bytes that Redis is

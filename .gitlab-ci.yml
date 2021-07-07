@@ -100,4 +100,4 @@ coverage-test:
     - pkill stunnel || true
     - cd ..
     - geninfo -o KeyDB.info --no-external .
-	  - genhtml --legend -o lcov-html KeyDB.info
+    - genhtml --legend -o lcov-html KeyDB.info

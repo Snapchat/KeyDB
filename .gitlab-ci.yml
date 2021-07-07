@@ -43,3 +43,16 @@ jedis-test:
     - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/jedis.git
     - cd jedis
     - make test
+
+redis-rs-test:
+  tags:
+    - docker
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
+    - make install
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/redis-rs.git
+    - cd redis-rs
+    - make test

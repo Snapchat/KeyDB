@@ -59,7 +59,7 @@ redis-rs-test:
 
 coverage-test:
   rules:
-    - if: ${COVERAGE} == "TRUE"
+    - if: '${COVERAGE} == "TRUE"'
   tags:
     - docker
   stage: test

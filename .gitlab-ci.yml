@@ -56,3 +56,48 @@ redis-rs-test:
     - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/redis-rs.git
     - cd redis-rs
     - make test
+
+coverage-test:
+  rules:
+    - if: ${COVERAGE} == "TRUE"
+  tags:
+    - docker
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make gcov -j
+    - make install
+    - ./runtest || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - ./runtest-cluster || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - ./runtest-sentinel || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - ./runtest-moduleapi || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/redis-rs.git
+    - cd redis-rs
+    - make test || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - cd ..
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/jedis.git
+    - cd jedis
+    - make test || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - cd ..
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/node-redis.git
+    - cd node-redis
+    - npm install
+    - npm run test || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - cd ..
+    - geninfo -o KeyDB.info --no-external .
+	  - genhtml --legend -o lcov-html KeyDB.info

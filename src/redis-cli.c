@@ -467,7 +467,7 @@ static void cliOutputHelp(int argc, char **argv) {
         help = entry->org;
         if (group == -1) {
             /* Compare all arguments */
-            if (argc == entry->argc) {
+            if (argc <= entry->argc) {
                 for (j = 0; j < argc; j++) {
                     if (strcasecmp(argv[j],entry->argv[j]) != 0) break;
                 }
@@ -648,7 +648,9 @@ static int cliConnect(int flags) {
             cliRefreshPrompt();
         }
 
-        if (config.hostsocket == NULL) {
+        /* Do not use hostsocket when we got redirected in cluster mode */
+        if (config.hostsocket == NULL ||
+            (config.cluster_mode && config.cluster_reissue_command)) {
             context = redisConnect(config.hostip,config.hostport);
         } else {
             context = redisConnectUnix(config.hostsocket);
@@ -4554,7 +4556,7 @@ static void clusterManagerNodeArrayReset(clusterManagerNodeArray *array) {
 static void clusterManagerNodeArrayShift(clusterManagerNodeArray *array,
                                          clusterManagerNode **nodeptr)
 {
-    assert(array->nodes < (array->nodes + array->len));
+    assert(array->len > 0);
     /* If the first node to be shifted is not NULL, decrement count. */
     if (*array->nodes != NULL) array->count--;
     /* Store the first node to be shifted into 'nodeptr'. */
@@ -4567,7 +4569,7 @@ static void clusterManagerNodeArrayShift(clusterManagerNodeArray *array,
 static void clusterManagerNodeArrayAdd(clusterManagerNodeArray *array,
                                        clusterManagerNode *node)
 {
-    assert(array->nodes < (array->nodes + array->len));
+    assert(array->len > 0);
     assert(node != NULL);
     assert(array->count < array->len);
     array->nodes[array->count++] = node;
@@ -5944,7 +5946,7 @@ void showLatencyDistSamples(struct distsamples *samples, long long tot) {
     printf("\033[38;5;0m"); /* Set foreground color to black. */
     for (j = 0; ; j++) {
         int coloridx =
-            ceil((float) samples[j].count / tot * (spectrum_palette_size-1));
+            ceil((double) samples[j].count / tot * (spectrum_palette_size-1));
         int color = spectrum_palette[coloridx];
         printf("\033[48;5;%dm%c", (int)color, samples[j].character);
         samples[j].count = 0;

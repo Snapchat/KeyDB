@@ -125,6 +125,10 @@ DEBUG=-g -ggdb
 ifneq ($(uname_S),Darwin)
 	FINAL_LIBS+=-latomic
 endif
+# Linux ARM32 needs -latomic at linking time
+ifneq (,$(findstring armv,$(uname_M)))
+        FINAL_LIBS+=-latomic
+endif
 
 
 ifeq ($(uname_S),SunOS)

@@ -4131,16 +4131,16 @@ void sentinelSetCommand(client *c) {
         int numargs = j-old_j+1;
         switch(numargs) {
         case 2:
-            sentinelEvent(LL_WARNING,"+set",ri,"%@ %s %s",ptrFromObj(c->argv[old_j]),
-                                                          ptrFromObj(c->argv[old_j+1]));
+            sentinelEvent(LL_WARNING,"+set",ri,"%@ %s %s",szFromObj(c->argv[old_j]),
+                                                          szFromObj(c->argv[old_j+1]));
             break;
         case 3:
-            sentinelEvent(LL_WARNING,"+set",ri,"%@ %s %s %s",ptrFromObj(c->argv[old_j]),
-                                                             ptrFromObj(c->argv[old_j+1]),
-                                                             ptrFromObj(c->argv[old_j+2]));
+            sentinelEvent(LL_WARNING,"+set",ri,"%@ %s %s %s",szFromObj(c->argv[old_j]),
+                                                             szFromObj(c->argv[old_j+1]),
+                                                             szFromObj(c->argv[old_j+2]));
             break;
         default:
-            sentinelEvent(LL_WARNING,"+set",ri,"%@ %s",ptrFromObj(c->argv[old_j]));
+            sentinelEvent(LL_WARNING,"+set",ri,"%@ %s",szFromObj(c->argv[old_j]));
             break;
         }
     }

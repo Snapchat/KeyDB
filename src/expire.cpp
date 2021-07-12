@@ -822,7 +822,7 @@ void expireEntryFat::expireSubKey(const char *szSubkey, long long when)
                 }
                 if (fFound) {
                     dictDelete(m_dictIndex, szSubkey);
-					m_vecexpireEntries.erase(itr);
+                    m_vecexpireEntries.erase(itr);
                     break;
                 }
                 ++itr;

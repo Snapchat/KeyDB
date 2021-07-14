@@ -34,14 +34,7 @@ public:
     ~expireEntryFat();
 
     long long when() const noexcept { return m_vecexpireEntries.front().when; }
-    long long whenFull() const noexcept {
-        for (size_t i = 0; i < size(); ++i) {
-            if (m_vecexpireEntries[i].spsubkey == nullptr) {
-                return m_vecexpireEntries[i].when;
-            }
-        }
-        return INVALID_EXPIRE;
-    }
+
     const char *key() const noexcept { return m_keyPrimary; }
 
     bool operator<(long long when) const noexcept { return this->when() <  when; }
@@ -120,7 +113,10 @@ public:
     expireEntry(expireEntryFat *pfatentry)
     {
         u.m_pfatentry = pfatentry;
-        m_when = FFatMask() | pfatentry->whenFull();
+        if (FGetPrimaryExpireSlow(&m_when))
+            m_when = FFatMask() | m_when;
+        else
+            m_when = INVALID_EXPIRE;
     }
 
     expireEntry(expireEntry &&e)
@@ -173,11 +169,7 @@ public:
     { 
         if (FFat())
             return u.m_pfatentry->when();
-        return whenFull();
-    }
-    long long whenFull() const noexcept
-    { 
-        return m_when & (~FFatMask()); 
+        return FGetPrimaryExpire();
     }
 
     void update(const char *subkey, long long when)
@@ -221,12 +213,27 @@ public:
             pfatentry()->m_vecexpireEntries.begin() + itr.m_idx);
     }
 
-    bool FGetPrimaryExpire(long long *pwhen)
+    long long FGetPrimaryExpire() const noexcept
+    { 
+        return m_when & (~FFatMask()); 
+    }
+
+    bool FGetPrimaryExpire(long long *pwhen) const noexcept
+    { 
+        *pwhen = FGetPrimaryExpire();
+        return *pwhen != INVALID_EXPIRE;
+    }
+
+    bool FGetPrimaryExpireSlow(long long *pwhen)
     {
-        *pwhen = -1;
-        if (this->whenFull() != INVALID_EXPIRE) {
-            *pwhen = this->whenFull();
-            return true;
+        *pwhen = INVALID_EXPIRE;
+        for (auto itr : *this)
+        {
+            if (itr.subkey() == nullptr)
+            {
+                *pwhen = itr.when();
+                return true;
+            }
         }
         return false;
     }

@@ -128,7 +128,7 @@ void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj
     uint32_t aux = htonl(o->type);
     mixDigest(digest,&aux,sizeof(aux));
     expireEntry *pexpire = getExpire(db,keyobj);
-    long long expiretime = -1;
+    long long expiretime = INVALID_EXPIRE;
     char buf[128];
 
     if (pexpire != nullptr)
@@ -260,7 +260,7 @@ void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj
         serverPanic("Unknown object type");
     }
     /* If the key has an expire, add it to the mix */
-    if (expiretime != -1) xorDigest(digest,"!!expire!!",10);
+    if (expiretime != INVALID_EXPIRE) xorDigest(digest,"!!expire!!",10);
 }
 
 /* Compute the dataset digest. Since keys, sets elements, hashes elements

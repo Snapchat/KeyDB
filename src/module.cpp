@@ -2264,11 +2264,11 @@ int RM_UnlinkKey(RedisModuleKey *key) {
  * REDISMODULE_NO_EXPIRE is returned. */
 mstime_t RM_GetExpire(RedisModuleKey *key) {
     expireEntry *pexpire = getExpire(key->db,key->key);
-    mstime_t expire = -1;
+    mstime_t expire = INVALID_EXPIRE;
     if (pexpire != nullptr)
         pexpire->FGetPrimaryExpire(&expire);
     
-    if (expire == -1 || key->value == NULL)
+    if (expire == INVALID_EXPIRE || key->value == NULL)
         return REDISMODULE_NO_EXPIRE;
     expire -= mstime();
     return expire >= 0 ? expire : 0;

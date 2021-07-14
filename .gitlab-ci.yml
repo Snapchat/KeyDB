@@ -1,4 +1,10 @@
 build:
+  rules:
+    - if: '$COVERAGE'
+      when: never
+    - if: '$ENDURANCE'
+      when: never
+    - when: always
   tags:
     - docker
   stage: build
@@ -8,6 +14,12 @@ build:
     - make -j
 
 make-test:
+  rules:
+    - if: '$COVERAGE'
+      when: never
+    - if: '$ENDURANCE'
+      when: never
+    - when: always
   tags:
     - docker
   stage: test
@@ -18,6 +30,12 @@ make-test:
     - make test -j
 
 node-redis-test:
+  rules:
+    - if: '$COVERAGE'
+      when: never
+    - if: '$ENDURANCE'
+      when: never
+    - when: always
   tags:
     - docker
     - ipv6
@@ -33,6 +51,12 @@ node-redis-test:
     - npm run test
 
 jedis-test:
+  rules:
+    - if: '$COVERAGE'
+      when: never
+    - if: '$ENDURANCE'
+      when: never
+    - when: always
   tags:
     - docker
     - ipv4
@@ -47,6 +71,12 @@ jedis-test:
     - make test
 
 redis-rs-test:
+  rules:
+    - if: '$COVERAGE'
+      when: never
+    - if: '$ENDURANCE'
+      when: never
+    - when: always
   tags:
     - docker
   stage: test
@@ -58,6 +88,18 @@ redis-rs-test:
     - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/redis-rs.git
     - cd redis-rs
     - make test
+
+endurance-test:
+  rules:
+    - if: '$ENDURANCE'
+  tags:
+    - docker
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
+    - ./runtest --loop --stop
 
 coverage-test:
   rules:

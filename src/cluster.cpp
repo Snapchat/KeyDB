@@ -561,7 +561,7 @@ void clusterInit(void) {
     
     serverAssert(serverTL == &g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN]);
     if (createSocketAcceptHandler(&g_pserver->cfd, clusterAcceptHandler) != C_OK) {
-        serverPanic("Unrecoverable error creating Redis Cluster socket accept handler.");
+        serverPanic("Unrecoverable error creating KeyDB Cluster socket accept handler.");
     }
 
     /* The slots -> keys map is a radix tree. Initialize it here. */
@@ -5567,9 +5567,10 @@ try_again:
             if (ttl < 1) ttl = 1;
         }
 
-        /* Relocate valid (non expired) keys into the array in successive
+        /* Relocate valid (non expired) keys and values into the array in successive
          * positions to remove holes created by the keys that were present
          * in the first lookup but are now expired after the second lookup. */
+        ov[non_expired] = ov[j];
         kv[non_expired++] = kv[j];
 
         serverAssertWithInfo(c,NULL,

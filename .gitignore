@@ -30,6 +30,7 @@ redis-check-rdb
 keydb-check-rdb
 redis-check-dump
 keydb-check-dump
+keydb-diagnostic-tool
 redis-cli
 redis-sentinel
 redis-server

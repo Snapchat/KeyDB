@@ -5425,11 +5425,11 @@ try_again:
     for (j = 0; j < num_keys; j++) {
         long long ttl = 0;
         expireEntry *pexpire = getExpire(c->db,kv[j]);
-        long long expireat = -1;
+        long long expireat = INVALID_EXPIRE;
         if (pexpire != nullptr)
             pexpire->FGetPrimaryExpire(&expireat);
 
-        if (expireat != -1) {
+        if (expireat != INVALID_EXPIRE) {
             ttl = expireat-mstime();
             if (ttl < 0) {
                 continue;

@@ -1626,7 +1626,7 @@ int keyIsExpired(redisDb *db, robj *key) {
     /* Don't expire anything while loading. It will be done later. */
     if (g_pserver->loading) return 0;
 
-    long long when = pexpire->whenFull();
+    long long when = pexpire->FGetPrimaryExpire();
 
     if (when == INVALID_EXPIRE)
         return 0;

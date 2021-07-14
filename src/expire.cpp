@@ -668,7 +668,7 @@ void pexpireatCommand(client *c) {
 
 /* Implements TTL and PTTL */
 void ttlGenericCommand(client *c, int output_ms) {
-    long long expire = -1, ttl = -1;
+    long long expire = INVALID_EXPIRE, ttl = -1;
 
     /* If the key does not exist at all, return -2 */
     if (lookupKeyReadWithFlags(c->db,c->argv[1],LOOKUP_NOTOUCH) == nullptr) {
@@ -702,7 +702,7 @@ void ttlGenericCommand(client *c, int output_ms) {
     }
 
     
-    if (expire != -1) {
+    if (expire != INVALID_EXPIRE) {
         ttl = expire-mstime();
         if (ttl < 0) ttl = 0;
     }

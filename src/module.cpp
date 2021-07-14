@@ -6366,7 +6366,7 @@ int RM_GetClusterNodeInfo(RedisModuleCtx *ctx, const char *id, char *ip, char *m
         /* If the information is not available, the function will set the
          * field to zero bytes, so that when the field can't be populated the
          * function kinda remains predictable. */
-        if (node->flags & CLUSTER_NODE_MASTER && node->slaveof)
+        if (node->flags & CLUSTER_NODE_SLAVE && node->slaveof)
             memcpy(master_id,node->slaveof->name,REDISMODULE_NODE_ID_LEN);
         else
             memset(master_id,0,REDISMODULE_NODE_ID_LEN);
@@ -9425,6 +9425,7 @@ long moduleDefragGlobals(void) {
         module->defrag_cb(&defrag_ctx);
         defragged += defrag_ctx.defragged;
     }
+    dictReleaseIterator(di);
 
     return defragged;
 }

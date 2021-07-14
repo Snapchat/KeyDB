@@ -62,55 +62,55 @@ start_server {overrides {save ""} tags {"other"}} {
     } {*index is out of range*}
 
     tags {consistency} {
-		if {$::accurate} {set numops 10000} else {set numops 1000}
-		test {Check consistency of different data types after a reload} {
-			r flushdb
-			createComplexDataset r $numops
-			set dump [csvdump r]
-			set sha1 [r debug digest]
-			r debug reload
-			set sha1_after [r debug digest]
-			if {$sha1 eq $sha1_after} {
-				set _ 1
-			} else {
-				set newdump [csvdump r]
-				puts "Consistency test failed!"
-				puts "You can inspect the two dumps in /tmp/repldump*.txt"
+        if {$::accurate} {set numops 10000} else {set numops 1000}
+        test {Check consistency of different data types after a reload} {
+            r flushdb
+            createComplexDataset r $numops
+            set dump [csvdump r]
+            set sha1 [r debug digest]
+            r debug reload
+            set sha1_after [r debug digest]
+            if {$sha1 eq $sha1_after} {
+                set _ 1
+            } else {
+                set newdump [csvdump r]
+                puts "Consistency test failed!"
+                puts "You can inspect the two dumps in /tmp/repldump*.txt"
 
-				set fd [open /tmp/repldump1.txt w]
-				puts $fd $dump
-				close $fd
-				set fd [open /tmp/repldump2.txt w]
-				puts $fd $newdump
-				close $fd
+                set fd [open /tmp/repldump1.txt w]
+                puts $fd $dump
+                close $fd
+                set fd [open /tmp/repldump2.txt w]
+                puts $fd $newdump
+                close $fd
 
-				set _ 0
-			}
-		} {1}
+                set _ 0
+            }
+        } {1}
 
-		test {Same dataset digest if saving/reloading as AOF?} {
-			r config set aof-use-rdb-preamble no
-			r bgrewriteaof
-			waitForBgrewriteaof r
-			r debug loadaof
-			set sha1_after [r debug digest]
-			if {$sha1 eq $sha1_after} {
-				set _ 1
-			} else {
-				set newdump [csvdump r]
-				puts "Consistency test failed!"
-				puts "You can inspect the two dumps in /tmp/aofdump*.txt"
+        test {Same dataset digest if saving/reloading as AOF?} {
+            r config set aof-use-rdb-preamble no
+            r bgrewriteaof
+            waitForBgrewriteaof r
+            r debug loadaof
+            set sha1_after [r debug digest]
+            if {$sha1 eq $sha1_after} {
+                set _ 1
+            } else {
+                set newdump [csvdump r]
+                puts "Consistency test failed!"
+                puts "You can inspect the two dumps in /tmp/aofdump*.txt"
 
-				set fd [open /tmp/aofdump1.txt w]
-				puts $fd $dump
-				close $fd
-				set fd [open /tmp/aofdump2.txt w]
-				puts $fd $newdump
-				close $fd
+                set fd [open /tmp/aofdump1.txt w]
+                puts $fd $dump
+                close $fd
+                set fd [open /tmp/aofdump2.txt w]
+                puts $fd $newdump
+                close $fd
 
-				set _ 0
-			}
-		} {1}
+                set _ 0
+            }
+        } {1}
     }
 
     test {EXPIRES after a reload (snapshot + append only file rewrite)} {

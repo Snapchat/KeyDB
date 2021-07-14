@@ -125,6 +125,10 @@ DEBUG=-g -ggdb
 ifneq ($(uname_S),Darwin)
 	FINAL_LIBS+=-latomic
 endif
+# Linux ARM32 needs -latomic at linking time
+ifneq (,$(findstring armv,$(uname_M)))
+        FINAL_LIBS+=-latomic
+endif
 
 
 ifeq ($(uname_S),SunOS)
@@ -340,8 +344,10 @@ REDIS_BENCHMARK_NAME=keydb-benchmark$(PROG_SUFFIX)
 REDIS_BENCHMARK_OBJ=ae.o anet.o redis-benchmark.o adlist.o dict.o zmalloc.o release.o crcspeed.o crc64.o siphash.o redis-benchmark.o storage-lite.o fastlock.o new.o monotonic.o cli_common.o mt19937-64.o $(ASM_OBJ)
 REDIS_CHECK_RDB_NAME=keydb-check-rdb$(PROG_SUFFIX)
 REDIS_CHECK_AOF_NAME=keydb-check-aof$(PROG_SUFFIX)
+KEYDB_DIAGNOSTIC_NAME=keydb-diagnostic-tool$(PROG_SUFFIX)
+KEYDB_DIAGNOSTIC_OBJ=ae.o anet.o keydb-diagnostic-tool.o adlist.o dict.o zmalloc.o release.o crcspeed.o crc64.o siphash.o keydb-diagnostic-tool.o storage-lite.o fastlock.o new.o monotonic.o cli_common.o mt19937-64.o $(ASM_OBJ)
 
-all: $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME)
+all: $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) $(KEYDB_DIAGNOSTIC_NAME)
 	@echo ""
 	@echo "Hint: It's a good idea to run 'make test' ;)"
 	@echo ""
@@ -413,6 +419,10 @@ $(REDIS_CLI_NAME): $(REDIS_CLI_OBJ)
 $(REDIS_BENCHMARK_NAME): $(REDIS_BENCHMARK_OBJ)
 	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/hdr_histogram/hdr_histogram.o $(FINAL_LIBS)
 
+# keydb-diagnostic-tool
+$(KEYDB_DIAGNOSTIC_NAME): $(KEYDB_DIAGNOSTIC_OBJ)
+	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a $(FINAL_LIBS)
+
 DEP = $(REDIS_SERVER_OBJ:%.o=%.d) $(REDIS_CLI_OBJ:%.o=%.d) $(REDIS_BENCHMARK_OBJ:%.o=%.d)
 -include $(DEP)
 
@@ -429,7 +439,7 @@ DEP = $(REDIS_SERVER_OBJ:%.o=%.d) $(REDIS_CLI_OBJ:%.o=%.d) $(REDIS_BENCHMARK_OBJ
 	$(KEYDB_AS) $< -o $@
 
 clean:
-	rm -rf $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) *.o *.gcda *.gcno *.gcov KeyDB.info lcov-html Makefile.dep
+	rm -rf $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) $(KEYDB_DIAGNOSTIC_NAME) *.o *.gcda *.gcno *.gcov KeyDB.info lcov-html Makefile.dep
 	rm -f $(DEP)
 
 .PHONY: clean
@@ -492,4 +502,4 @@ install: all
 	@ln -sf $(REDIS_SERVER_NAME) $(INSTALL_BIN)/$(REDIS_SENTINEL_NAME)
 
 uninstall:
-	rm -f $(INSTALL_BIN)/{$(REDIS_SERVER_NAME),$(REDIS_BENCHMARK_NAME),$(REDIS_CLI_NAME),$(REDIS_CHECK_RDB_NAME),$(REDIS_CHECK_AOF_NAME),$(REDIS_SENTINEL_NAME)}
+	rm -f $(INSTALL_BIN)/{$(REDIS_SERVER_NAME),$(REDIS_BENCHMARK_NAME),$(REDIS_CLI_NAME),$(REDIS_CHECK_RDB_NAME),$(REDIS_CHECK_AOF_NAME),$(REDIS_SENTINEL_NAME),$(KEYDB_DIAGNOSTIC_NAME)}

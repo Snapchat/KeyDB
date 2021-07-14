@@ -173,12 +173,11 @@ void queueClientForReprocessing(client *c) {
     /* The client may already be into the unblocked list because of a previous
      * blocking operation, don't add back it into the list multiple times. */
     serverAssert(GlobalLocksAcquired());
-    fastlock_lock(&c->lock);
+    std::unique_lock<fastlock> ul(c->lock);
     if (!(c->flags & CLIENT_UNBLOCKED)) {
         c->flags |= CLIENT_UNBLOCKED;
         listAddNodeTail(g_pserver->rgthreadvar[c->iel].unblocked_clients,c);
     }
-    fastlock_unlock(&c->lock);
 }
 
 /* Unblock a client calling the right function depending on the kind

@@ -842,7 +842,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
 
 /* Trims a stream by length. Returns the number of deleted items. */
 int64_t streamTrimByLength(stream *s, long long maxlen, int approx) {
-    streamAddTrimArgs args = {0};
+    streamAddTrimArgs args = {{0}};
     args.trim_strategy = TRIM_STRATEGY_MAXLEN;
     args.approx_trim = approx;
     args.limit = approx ? 100 * g_pserver->stream_node_max_entries : 0;
@@ -852,7 +852,7 @@ int64_t streamTrimByLength(stream *s, long long maxlen, int approx) {
 
 /* Trims a stream by minimum ID. Returns the number of deleted items. */
 int64_t streamTrimByID(stream *s, streamID minid, int approx) {
-    streamAddTrimArgs args = {0};
+    streamAddTrimArgs args = {{0}};
     args.trim_strategy = TRIM_STRATEGY_MINID;
     args.approx_trim = approx;
     args.limit = approx ? 100 * g_pserver->stream_node_max_entries : 0;

@@ -4803,7 +4803,7 @@ void replicationNotifyLoadedKey(redisDb *db, robj_roptr key, robj_roptr val, lon
     redisObjectStack objTtl;
     initStaticStringObject(objTtl, sdscatprintf(sdsempty(), "%lld", expire));
     redisObjectStack objMvcc;
-    initStaticStringObject(objMvcc, sdscatprintf(sdsempty(), "%lu", mvccFromObj(val)));
+    initStaticStringObject(objMvcc, sdscatprintf(sdsempty(), "%" PRIu64, mvccFromObj(val)));
     redisObject *argv[5] = {shared.mvccrestore, key.unsafe_robjcast(), &objMvcc, &objTtl, &objPayload};
 
     replicationFeedSlaves(g_pserver->slaves, db - g_pserver->db, argv, 5);

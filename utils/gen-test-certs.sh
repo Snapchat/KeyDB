@@ -3,10 +3,10 @@
 # Generate some test certificates which are used by the regression test suite:
 #
 #   tests/tls/ca.{crt,key}          Self signed CA certificate.
-#   tests/tls/redis.{crt,key}       A certificate with no key usage/policy restrictions.
+#   tests/tls/keydb.{crt,key}       A certificate with no key usage/policy restrictions.
 #   tests/tls/client.{crt,key}      A certificate restricted for SSL client usage.
 #   tests/tls/server.{crt,key}      A certificate restricted fro SSL server usage.
-#   tests/tls/redis.dh              DH Params file.
+#   tests/tls/keydb.dh              DH Params file.
 
 generate_cert() {
     local name=$1
@@ -19,7 +19,7 @@ generate_cert() {
     [ -f $keyfile ] || openssl genrsa -out $keyfile 2048
     openssl req \
         -new -sha256 \
-        -subj "/O=Redis Test/CN=$cn" \
+        -subj "/O=KeyDB Test/CN=$cn" \
         -key $keyfile | \
         openssl x509 \
             -req -sha256 \
@@ -38,7 +38,7 @@ openssl req \
     -x509 -new -nodes -sha256 \
     -key tests/tls/ca.key \
     -days 3650 \
-    -subj '/O=Redis Test/CN=Certificate Authority' \
+    -subj '/O=KeyDB Test/CN=Certificate Authority' \
     -out tests/tls/ca.crt
 
 cat > tests/tls/openssl.cnf <<_END_
@@ -53,6 +53,6 @@ _END_
 
 generate_cert server "Server-only" "-extfile tests/tls/openssl.cnf -extensions server_cert"
 generate_cert client "Client-only" "-extfile tests/tls/openssl.cnf -extensions client_cert"
-generate_cert redis "Generic-cert"
+generate_cert keydb "Generic-cert"
 
-[ -f tests/tls/redis.dh ] || openssl dhparam -out tests/tls/redis.dh 2048
+[ -f tests/tls/keydb.dh ] || openssl dhparam -out tests/tls/keydb.dh 2048

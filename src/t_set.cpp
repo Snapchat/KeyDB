@@ -512,7 +512,7 @@ void spopWithCountCommand(client *c) {
     const char *sdsele;
     robj *objele;
     int encoding;
-    int64_t llele;
+    int64_t llele = 0;
     unsigned long remaining = size-count; /* Elements left after SPOP. */
 
     /* If we are here, the number of requested elements is less than the
@@ -664,7 +664,7 @@ void srandmemberWithCountCommand(client *c) {
     int uniq = 1;
     robj_roptr set;
     const char *ele;
-    int64_t llele;
+    int64_t llele = 0;
     int encoding;
 
     dict *d;
@@ -813,7 +813,7 @@ void srandmemberWithCountCommand(client *c) {
 void srandmemberCommand(client *c) {
     robj_roptr set;
     const char *ele;
-    int64_t llele;
+    int64_t llele = 0;
     int encoding;
 
     if (c->argc == 3) {

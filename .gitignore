@@ -59,4 +59,4 @@ Makefile.dep
 .ccls
 .ccls-cache/*
 compile_commands.json
-redis.code-workspace
+keydb.code-workspace

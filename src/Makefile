@@ -29,7 +29,7 @@ ifneq (,$(findstring FreeBSD,$(uname_S)))
   STD+=-Wno-c11-extensions
 endif
 endif
-WARN=-Wall -W -Wno-missing-field-initializers
+WARN=-Wall -W -Wno-missing-field-initializers -Wno-address-of-packed-member -Wno-atomic-alignment
 OPT=$(OPTIMIZATION)
 
 # Detect if the compiler supports C11 _Atomic

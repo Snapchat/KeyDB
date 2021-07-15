@@ -4,8 +4,8 @@ proc show_cluster_status {} {
         # The following is the regexp we use to match the log line
         # time info. Logs are in the following form:
         #
-        # 11296:M 25 May 2020 17:37:14.652 # Server initialized
-        set log_regexp {^[0-9]+:[A-Z] [0-9]+ [A-z]+ [0-9]+ ([0-9:.]+) .*}
+        # 11296:11296:M 25 May 2020 17:37:14.652 # Server initialized
+        set log_regexp {^[0-9]+:^[0-9]+:[A-Z] [0-9]+ [A-z]+ [0-9]+ ([0-9:.]+) .*}
         set repl_regexp {(master|repl|sync|backlog|meaningful|offset)}
 
         puts "Master ID is $master_id"

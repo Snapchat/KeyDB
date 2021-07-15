@@ -6838,7 +6838,7 @@ int main(int argc, char **argv) {
                 serverLog(LL_WARNING, "Failed to test the kernel for a bug that could lead to data corruption during background save. "
                                       "Your system could be affected, please report this error.");
             if (!checkIgnoreWarning("ARM64-COW-BUG")) {
-                serverLog(LL_WARNING,"Redis will now exit to prevent data corruption. "
+                serverLog(LL_WARNING,"KeyDB will now exit to prevent data corruption. "
                                      "Note that it is possible to suppress this warning by setting the following config: ignore-warnings ARM64-COW-BUG");
                 exit(1);
             }

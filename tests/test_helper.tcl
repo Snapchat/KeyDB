@@ -5,7 +5,7 @@
 package require Tcl 8.5
 
 set tcl_precision 17
-source tests/support/redis.tcl
+source tests/support/keydb.tcl
 source tests/support/server.tcl
 source tests/support/tmpfile.tcl
 source tests/support/test.tcl

@@ -1,5 +1,4 @@
 set system_name [string tolower [exec uname -s]]
-# ldd --version returns 1 under musl for unknown reasons. If this check stops working, that may be why
 set system_supported 0
 
 # We only support darwin or Linux with glibc

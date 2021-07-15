@@ -3,11 +3,11 @@
 # This file is released under the BSD license, see the COPYING file
 #
 # The Makefile composes the final FINAL_CFLAGS and FINAL_LDFLAGS using
-# what is needed for Redis plus the standard CFLAGS and LDFLAGS passed.
+# what is needed for KeyDB plus the standard CFLAGS and LDFLAGS passed.
 # However when building the dependencies (Jemalloc, Lua, Hiredis, ...)
 # CFLAGS and LDFLAGS are propagated to the dependencies, so to pass
-# flags only to be used when compiling / linking Redis itself REDIS_CFLAGS
-# and REDIS_LDFLAGS are used instead (this is the case of 'make gcov').
+# flags only to be used when compiling / linking KeyDB itself KEYDB_CFLAGS
+# and KEYDB_LDFLAGS are used instead (this is the case of 'make gcov').
 #
 # Dependencies are stored in the Makefile.dep file. To rebuild this file
 # Just use 'make dep', but this is only needed by developers.
@@ -29,7 +29,7 @@ ifneq (,$(findstring FreeBSD,$(uname_S)))
   STD+=-Wno-c11-extensions
 endif
 endif
-WARN=-Wall -W -Wno-missing-field-initializers
+WARN=-Wall -W -Wno-missing-field-initializers -Wno-address-of-packed-member -Wno-atomic-alignment
 OPT=$(OPTIMIZATION)
 
 # Detect if the compiler supports C11 _Atomic
@@ -85,7 +85,7 @@ ifeq ($(COMPILER_NAME),clang)
 	LDFLAGS+= -latomic
 endif
 
-# To get ARM stack traces if Redis crashes we need a special C flag.
+# To get ARM stack traces if KeyDB crashes we need a special C flag.
 ifneq (,$(filter aarch64 armv,$(uname_M)))
         CFLAGS+=-funwind-tables
 	CXXFLAGS+=-funwind-tables
@@ -116,9 +116,9 @@ endif
 # Override default settings if possible
 -include .make-settings
 
-FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
-FINAL_CXXFLAGS=$(CXX_STD) $(WARN) $(OPT) $(DEBUG) $(CXXFLAGS) $(REDIS_CFLAGS)
-FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
+FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(KEYDB_CFLAGS) $(REDIS_CFLAGS)
+FINAL_CXXFLAGS=$(CXX_STD) $(WARN) $(OPT) $(DEBUG) $(CXXFLAGS) $(KEYDB_CFLAGS) $(REDIS_CFLAGS)
+FINAL_LDFLAGS=$(LDFLAGS) $(KEYDB_LDFLAGS) $(DEBUG)
 FINAL_LIBS+=-lm
 DEBUG=-g -ggdb
 
@@ -371,9 +371,9 @@ persist-settings: distclean
 	echo CFLAGS=$(CFLAGS) >> .make-settings
 	echo CXXFLAGS=$(CXXFLAGS) >> .make-settings
 	echo LDFLAGS=$(LDFLAGS) >> .make-settings
-	echo REDIS_CFLAGS=$(REDIS_CFLAGS) >> .make-settings
-	echo REDIS_CXXFLAGS=$(REDIS_CXXFLAGS) >> .make-settings
-	echo REDIS_LDFLAGS=$(REDIS_LDFLAGS) >> .make-settings
+	echo KEYDB_CFLAGS=$(KEYDB_CFLAGS) >> .make-settings
+	echo KEYDB_CXXFLAGS=$(KEYDB_CXXFLAGS) >> .make-settings
+	echo KEYDB_LDFLAGS=$(KEYDB_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_CXXFLAGS=$(FINAL_CXXFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
@@ -478,7 +478,7 @@ bench: $(REDIS_BENCHMARK_NAME)
 	$(MAKE) CXXFLAGS="-m32" CFLAGS="-m32" LDFLAGS="-m32"
 
 gcov:
-	$(MAKE) REDIS_CXXFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" REDIS_CFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" REDIS_LDFLAGS="-fprofile-arcs -ftest-coverage"
+	$(MAKE) KEYDB_CXXFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" KEYDB_CFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" KEYDB_LDFLAGS="-fprofile-arcs -ftest-coverage"
 
 noopt:
 	$(MAKE) OPTIMIZATION="-O0"
@@ -487,7 +487,7 @@ valgrind:
 	$(MAKE) OPTIMIZATION="-O0" USEASM="false" MALLOC="libc" CFLAGS="-DSANITIZE" CXXFLAGS="-DSANITIZE"
 
 helgrind:
-	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc" CFLAGS="-D__ATOMIC_VAR_FORCE_SYNC_MACROS" REDIS_CFLAGS="-I/usr/local/include" REDIS_LDFLAGS="-L/usr/local/lib"
+	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc" CFLAGS="-D__ATOMIC_VAR_FORCE_SYNC_MACROS" KEYDB_CFLAGS="-I/usr/local/include" KEYDB_LDFLAGS="-L/usr/local/lib"
 
 src/help.h:
 	@../utils/generate-command-help.rb > help.h

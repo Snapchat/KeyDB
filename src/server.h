@@ -2358,6 +2358,7 @@ struct redisServer {
     int repl_ping_slave_period;     /* Master pings the replica every N seconds */
     char *repl_backlog;             /* Replication backlog for partial syncs */
     long long repl_backlog_size;    /* Backlog circular buffer size */
+    long long repl_backlog_config_size; /* The repl backlog may grow but we want to know what the user set it to */
     long long repl_backlog_histlen; /* Backlog actual data length */
     long long repl_backlog_idx;     /* Backlog circular buffer current offset,
                                        that is the next byte will'll write to.*/
@@ -3024,6 +3025,8 @@ void clearFailoverState(void);
 void updateFailoverStatus(void);
 void abortFailover(redisMaster *mi, const char *err);
 const char *getFailoverStateString();
+int canFeedReplicaReplBuffer(client *replica);
+void trimReplicationBacklog();
 
 /* Generic persistence functions */
 void startLoadingFile(FILE* fp, const char * filename, int rdbflags);

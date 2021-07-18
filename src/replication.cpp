@@ -254,9 +254,11 @@ void resizeReplicationBacklog(long long newsize) {
             zfree(g_pserver->repl_backlog);
             g_pserver->repl_backlog = backlog;
             g_pserver->repl_backlog_idx = g_pserver->repl_backlog_histlen;
-            g_pserver->repl_batch_idxStart -= earliest_idx;
-            if (g_pserver->repl_batch_idxStart < 0)
-                g_pserver->repl_batch_idxStart += g_pserver->repl_backlog_size;
+            if (g_pserver->repl_batch_idxStart >= 0) {
+                g_pserver->repl_batch_idxStart -= earliest_idx;
+                if (g_pserver->repl_batch_idxStart < 0)
+                    g_pserver->repl_batch_idxStart += g_pserver->repl_backlog_size;
+            }
             g_pserver->repl_backlog_start = earliest_off;
         } else {
             zfree(g_pserver->repl_backlog);

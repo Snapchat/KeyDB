@@ -7084,6 +7084,8 @@ static void validateConfiguration()
         serverLog(LL_WARNING, "\tKeyDB will now exit.  Please update your configuration file.");
         exit(EXIT_FAILURE);
     }
+
+    g_pserver->repl_backlog_config_size = g_pserver->repl_backlog_size; // this is normally set in the update logic, but not on initial config
 }
 
 int iAmMaster(void) {

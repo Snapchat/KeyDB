@@ -4321,6 +4321,8 @@ void replicationCron(void) {
     
     replicationStartPendingFork();
 
+    trimReplicationBacklog();
+
     /* Remove the RDB file used for replication if Redis is not running
      * with any persistence. */
     removeRDBUsedToSyncReplicas();
@@ -5065,4 +5067,18 @@ void updateFailoverStatus(void) {
         replicationAddMaster(g_pserver->target_replica_host,
             g_pserver->target_replica_port);
     }
+}
+
+// If we automatically grew the backlog we need to trim it back to
+//  the config setting when possible
+void trimReplicationBacklog() {
+    serverAssert(GlobalLocksAcquired());
+    serverAssert(g_pserver->repl_batch_offStart < 0);   // we shouldn't be in a batch
+    if (g_pserver->repl_backlog_size <= g_pserver->repl_backlog_config_size)
+        return; // We're already a good size
+    if (g_pserver->repl_lowest_off > 0 && (g_pserver->master_repl_offset - g_pserver->repl_lowest_off + 1) > g_pserver->repl_backlog_config_size)
+        return; // There is untransmitted data we can't truncate
+
+    serverLog(LL_NOTICE, "Reclaiming %lld replication backlog bytes", g_pserver->repl_backlog_size - g_pserver->repl_backlog_config_size);
+    resizeReplicationBacklog(g_pserver->repl_backlog_config_size);
 }

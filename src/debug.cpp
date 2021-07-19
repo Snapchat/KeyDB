@@ -1606,7 +1606,11 @@ void safe_write(int fd, const void *pv, ssize_t cb)
 
 #ifdef UNW_LOCAL_ONLY
 
-void logStackTrace(void *eip, int uplevel) {
+/* Logs the stack trace using the libunwind call.
+ * The eip argument is unused as libunwind only gets local context.
+ * The uplevel argument indicates how many of the calling functions to skip.
+ */
+void logStackTrace(void * __unused eip, int uplevel) {
     int fd = openDirectLogFiledes();
 
     if (fd == -1) return; /* If we can't log there is anything to do. */

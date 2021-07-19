@@ -3020,7 +3020,7 @@ void redisDbPersistentData::removeAllCachedValues()
         trackChanges(false);
     }
 
-    if (m_pdict->pauserehash == 0) {
+    if (m_pdict->pauserehash == 0 && m_pdict->refcount == 1) {
         dict *dT = m_pdict;
         m_pdict = dictCreate(&dbDictType, this);
         dictExpand(m_pdict, dictSize(dT)/2, false); // Make room for about half so we don't excessively rehash

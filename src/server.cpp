@@ -4661,6 +4661,8 @@ int processCommand(client *c, int callFlags) {
         return C_OK;
     }
 
+    int is_read_command = (c->cmd->flags & CMD_READONLY) ||
+                           (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_READONLY));
     int is_write_command = (c->cmd->flags & CMD_WRITE) ||
                            (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_WRITE));
     int is_denyoom_command = (c->cmd->flags & CMD_DENYOOM) ||
@@ -4879,7 +4881,7 @@ int processCommand(client *c, int callFlags) {
           c->cmd->proc != discardCommand &&
           c->cmd->proc != watchCommand &&
           c->cmd->proc != unwatchCommand &&
-	  c->cmd->proc != resetCommand &&
+          c->cmd->proc != resetCommand &&
         !(c->cmd->proc == shutdownCommand &&
           c->argc == 2 &&
           tolower(((char*)ptrFromObj(c->argv[1]))[0]) == 'n') &&
@@ -4888,6 +4890,14 @@ int processCommand(client *c, int callFlags) {
           tolower(((char*)ptrFromObj(c->argv[1]))[0]) == 'k'))
     {
         rejectCommand(c, shared.slowscripterr);
+        return C_OK;
+    }
+
+    /* Prevent a replica from sending commands that access the keyspace.
+     * The main objective here is to prevent abuse of client pause check
+     * from which replicas are exempt. */
+    if ((c->flags & CLIENT_SLAVE) && (is_may_replicate_command || is_write_command || is_read_command)) {
+        rejectCommandFormat(c, "Replica can't interract with the keyspace");
         return C_OK;
     }
 
@@ -6086,10 +6096,11 @@ sds genRedisInfoString(const char *section) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, "# Keyspace\r\n");
         for (j = 0; j < cserver.dbnum; j++) {
-            long long keys, vkeys;
+            long long keys, vkeys, cachedKeys;
 
             keys = g_pserver->db[j]->size();
             vkeys = g_pserver->db[j]->expireSize();
+            cachedKeys = g_pserver->db[j]->size(true /* fCachedOnly */);
 
             // Adjust TTL by the current time
             mstime_t mstime;
@@ -6101,8 +6112,8 @@ sds genRedisInfoString(const char *section) {
             
             if (keys || vkeys) {
                 info = sdscatprintf(info,
-                    "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n",
-                    j, keys, vkeys, static_cast<long long>(g_pserver->db[j]->avg_ttl));
+                    "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,cached_keys=%lld\r\n",
+                    j, keys, vkeys, static_cast<long long>(g_pserver->db[j]->avg_ttl), cachedKeys);
             }
         }
     }
@@ -6120,7 +6131,11 @@ sds genRedisInfoString(const char *section) {
             "variant:enterprise\r\n"
             "license_status:%s\r\n"
             "mvcc_depth:%d\r\n",
+#ifdef NO_LICENSE_CHECK
+            "OK",
+#else
             cserver.license_key ? "OK" : "Trial",
+#endif
             mvcc_depth
         );
     }
@@ -7070,6 +7085,8 @@ static void validateConfiguration()
         serverLog(LL_WARNING, "\tKeyDB will now exit.  Please update your configuration file.");
         exit(EXIT_FAILURE);
     }
+
+    g_pserver->repl_backlog_config_size = g_pserver->repl_backlog_size; // this is normally set in the update logic, but not on initial config
 }
 
 int iAmMaster(void) {

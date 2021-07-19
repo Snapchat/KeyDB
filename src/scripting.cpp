@@ -31,6 +31,7 @@
 #include "sha1.h"
 #include "rand.h"
 #include "cluster.h"
+#include "monotonic.h"
 
 extern "C" {
 #include <lua.h>
@@ -1437,7 +1438,7 @@ sds luaCreateFunction(client *c, lua_State *lua, robj *body) {
 
 /* This is the Lua script "count" hook that we use to detect scripts timeout. */
 void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
-    long long elapsed = mstime() - g_pserver->lua_time_start;
+    long long elapsed = elapsedMs(g_pserver->lua_time_start);
     UNUSED(ar);
     UNUSED(lua);
 
@@ -1591,7 +1592,8 @@ void evalGenericCommand(client *c, int evalsha) {
     serverTL->in_eval = 1;
     g_pserver->lua_caller = c;
     g_pserver->lua_cur_script = funcname + 2;
-    g_pserver->lua_time_start = mstime();
+    g_pserver->lua_time_start = getMonotonicUs();
+    g_pserver->lua_time_snapshot = mstime();
     g_pserver->lua_kill = 0;
     if (g_pserver->lua_time_limit > 0 && ldb.active == 0) {
         lua_sethook(lua,luaMaskCountHook,LUA_MASKCOUNT,100000);
@@ -2750,7 +2752,7 @@ void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
 
     /* Check if a timeout occurred. */
     if (ar->event == LUA_HOOKCOUNT && ldb.step == 0 && bp == 0) {
-        mstime_t elapsed = mstime() - g_pserver->lua_time_start;
+        mstime_t elapsed = elapsedMs(g_pserver->lua_time_start);
         mstime_t timelimit = g_pserver->lua_time_limit ?
                              g_pserver->lua_time_limit : 5000;
         if (elapsed >= timelimit) {
@@ -2780,6 +2782,7 @@ void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
             lua_pushstring(lua, "timeout during Lua debugging with client closing connection");
             lua_error(lua);
         }
-        g_pserver->lua_time_start = mstime();
+        g_pserver->lua_time_start = getMonotonicUs();
+        g_pserver->lua_time_snapshot = mstime();
     }
 }

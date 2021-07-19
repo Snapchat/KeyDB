@@ -2759,18 +2759,19 @@ void syncWithMaster(connection *conn) {
         goto error;
     }
 
+retry_connect:
     /* Send a PING to check the master is able to reply without errors. */
-    if (mi->repl_state == REPL_STATE_CONNECTING) {
+    if (mi->repl_state == REPL_STATE_CONNECTING || mi->repl_state == REPL_STATE_RETRY_NOREPLPING) {
         serverLog(LL_NOTICE,"Non blocking connect for SYNC fired the event.");
         /* Delete the writable event so that the readable event remains
          * registered and we can wait for the PONG reply. */
         connSetReadHandler(conn, syncWithMaster);
         connSetWriteHandler(conn, NULL);
-        mi->repl_state = REPL_STATE_RECEIVE_PING_REPLY;
         /* Send the PING, don't check for errors at all, we have the timeout
          * that will take care about this. */
-        err = sendCommand(conn,"REPLPING",NULL);
+        err = sendCommand(conn,mi->repl_state == REPL_STATE_RETRY_NOREPLPING ? "PING" : "REPLPING",NULL);
         if (err) goto write_error;
+        mi->repl_state = REPL_STATE_RECEIVE_PING_REPLY;
         return;
     }
 
@@ -2783,7 +2784,13 @@ void syncWithMaster(connection *conn) {
          * Note that older versions of Redis replied with "operation not
          * permitted" instead of using a proper error code, so we test
          * both. */
-        if (err[0] != '+' &&
+        if (strncmp(err,"-ERR unknown command",20) == 0) {
+            serverLog(LL_WARNING,"Master does not support REPLPING, sending PING instead...");
+            mi->repl_state = REPL_STATE_RETRY_NOREPLPING;
+            sdsfree(err);
+            err = NULL;
+            goto retry_connect;
+        } else if (err[0] != '+' &&
             strncmp(err,"-NOAUTH",7) != 0 &&
             strncmp(err,"-NOPERM",7) != 0 &&
             strncmp(err,"-ERR operation not permitted",28) != 0)

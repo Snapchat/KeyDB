@@ -505,6 +505,7 @@ typedef enum {
     REPL_STATE_NONE = 0,            /* No active replication */
     REPL_STATE_CONNECT,             /* Must connect to master */
     REPL_STATE_CONNECTING,          /* Connecting to master */
+    REPL_STATE_RETRY_NOREPLPING,    /* Master does not support REPLPING, retry with PING */
     /* --- Handshake states, must be ordered --- */
     REPL_STATE_RECEIVE_PING_REPLY,  /* Wait for PING reply */
     REPL_STATE_SEND_HANDSHAKE,      /* Send handshake sequance to master */

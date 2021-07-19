@@ -3026,7 +3026,7 @@ void redisDbPersistentData::removeAllCachedValues()
         dictExpand(m_pdict, dictSize(dT)/2, false); // Make room for about half so we don't excessively rehash
         g_pserver->asyncworkqueue->AddWorkFunction([dT]{
             dictRelease(dT);
-        }, true);
+        }, false);
     } else {
         dictEmpty(m_pdict, nullptr);
     }

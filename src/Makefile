@@ -127,7 +127,7 @@ ifneq ($(uname_S),Darwin)
 endif
 # Linux ARM32 needs -latomic at linking time
 ifneq (,$(findstring armv,$(uname_M)))
-        FINAL_LIBS+=-latomic
+	FINAL_LIBS+=-latomic
 endif
 
 
@@ -177,7 +177,7 @@ ifeq ($(uname_S),OpenBSD)
 	    FINAL_CXXFLAGS+= -DUSE_BACKTRACE -I/usr/local/include
 	    FINAL_LDFLAGS+= -L/usr/local/lib
 	    FINAL_LIBS+= -lexecinfo
-    	endif
+	endif
 
 else
 ifeq ($(uname_S),NetBSD)
@@ -187,7 +187,7 @@ ifeq ($(uname_S),NetBSD)
 	    FINAL_CFLAGS+= -DUSE_BACKTRACE -I/usr/pkg/include
 	    FINAL_LDFLAGS+= -L/usr/pkg/lib
 	    FINAL_LIBS+= -lexecinfo
-    	endif
+	endif
 else
 ifeq ($(uname_S),FreeBSD)
 	# FreeBSD
@@ -315,6 +315,13 @@ else
         $(INSTALL) $(1) $(2)
     endef
 endif
+
+OS := $(shell cat /etc/os-release | grep ID= | head -n 1 | cut -d'=' -f2)
+ifeq ($(OS),alpine)
+    FINAL_CXXFLAGS+=-DUNW_LOCAL_ONLY
+    FINAL_LIBS += -lunwind
+endif
+
 
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
 REDIS_CXX=$(QUIET_CC)$(CXX) $(FINAL_CXXFLAGS)

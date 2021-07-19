@@ -13,7 +13,7 @@ build:
     - make distclean
     - make -j
 
-make-test:
+runtest:
   rules:
     - if: '$COVERAGE'
       when: never
@@ -28,6 +28,54 @@ make-test:
     - make distclean
     - make -j
     - ./runtest --config server-threads 3
+
+runtest-cluster:
+  rules:
+    - if: '$COVERAGE'
+      when: never
+    - if: '$ENDURANCE'
+      when: never
+    - when: always
+  tags:
+    - docker
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
+    - ./runtest-cluster
+
+runtest-moduleapi:
+  rules:
+    - if: '$COVERAGE'
+      when: never
+    - if: '$ENDURANCE'
+      when: never
+    - when: always
+  tags:
+    - docker
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
+    - ./runtest-moduleapi
+
+runtest-sentinel:
+  rules:
+    - if: '$COVERAGE'
+      when: never
+    - if: '$ENDURANCE'
+      when: never
+    - when: always
+  tags:
+    - docker
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
+    - ./runtest-sentinel
 
 node-redis-test:
   rules:

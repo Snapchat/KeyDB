@@ -2769,7 +2769,7 @@ void syncWithMaster(connection *conn) {
         mi->repl_state = REPL_STATE_RECEIVE_PING_REPLY;
         /* Send the PING, don't check for errors at all, we have the timeout
          * that will take care about this. */
-        err = sendCommand(conn,"PING",NULL);
+        err = sendCommand(conn,"REPLPING",NULL);
         if (err) goto write_error;
         return;
     }

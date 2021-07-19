@@ -1283,7 +1283,7 @@ struct sharedObjectsStruct {
     *emptyscan, *multi, *exec, *left, *right, *hset, *srem, *xgroup, *xclaim,  
     *script, *replconf, *eval, *persist, *set, *pexpireat, *pexpire, 
     *time, *pxat, *px, *retrycount, *force, *justid, 
-    *lastid, *ping, *setid, *keepttl, *load, *createconsumer,
+    *lastid, *ping, *replping, *setid, *keepttl, *load, *createconsumer,
     *getack, *special_asterick, *special_equals, *default_username,
     *hdel, *zrem, *mvccrestore, *pexpirememberat,
     *select[PROTO_SHARED_SELECT_CMDS],

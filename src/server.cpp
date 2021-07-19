@@ -753,6 +753,10 @@ struct redisCommand redisCommandTable[] = {
      "ok-stale ok-loading fast @connection @replication",
      0,NULL,0,0,0,0,0,0},
 
+     {"replping",pingCommand,-1,
+     "ok-stale ok-loading fast @connection @replication",
+     0,NULL,0,0,0,0,0,0},
+
     {"echo",echoCommand,2,
      "fast @connection",
      0,NULL,0,0,0,0,0,0},
@@ -2768,6 +2772,7 @@ void createSharedObjects(void) {
     shared.lastid = makeObjectShared("LASTID",6);
     shared.default_username = makeObjectShared("default",7);
     shared.ping = makeObjectShared("ping",4);
+    shared.replping = makeObjectShared("replping", 8);
     shared.setid = makeObjectShared("SETID",5);
     shared.keepttl = makeObjectShared("KEEPTTL",7);
     shared.load = makeObjectShared("LOAD",4);

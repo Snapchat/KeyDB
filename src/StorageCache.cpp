@@ -25,6 +25,12 @@ StorageCache::StorageCache(IStorage *storage, bool fCache)
         m_pdict = dictCreate(&dbStorageCacheType, nullptr);
 }
 
+StorageCache::~StorageCache()
+{
+    if (m_pdict != nullptr)
+        dictRelease(m_pdict);
+}
+
 void StorageCache::clear()
 {
     std::unique_lock<fastlock> ul(m_lock);

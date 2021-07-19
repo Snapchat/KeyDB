@@ -2018,7 +2018,7 @@ int keyIsExpired(const redisDbPersistentDataSnapshot *db, robj *key) {
      * script execution, making propagation to slaves / AOF consistent.
      * See issue #1525 on Github for more information. */
     if (g_pserver->lua_caller) {
-        now = g_pserver->lua_time_start;
+        now = g_pserver->lua_time_snapshot;
     }
     /* If we are in the middle of a command execution, we still want to use
      * a reference time that does not change: in that case we just use the
@@ -2079,14 +2079,17 @@ int expireIfNeeded(redisDb *db, robj *key) {
     if (checkClientPauseTimeoutAndReturnIfPaused()) return 1;
 
     /* Delete the key */
+    if (g_pserver->lazyfree_lazy_expire) {
+        dbAsyncDelete(db,key);
+    } else {
+        dbSyncDelete(db,key);
+    }
     g_pserver->stat_expiredkeys++;
     propagateExpire(db,key,g_pserver->lazyfree_lazy_expire);
     notifyKeyspaceEvent(NOTIFY_EXPIRED,
         "expired",key,db->id);
-    int retval = g_pserver->lazyfree_lazy_expire ? dbAsyncDelete(db,key) :
-                                               dbSyncDelete(db,key);
-    if (retval) signalModifiedKey(NULL,db,key);
-    return retval;
+    signalModifiedKey(NULL,db,key);
+    return 1;
 }
 
 /* -----------------------------------------------------------------------------
@@ -2960,13 +2963,13 @@ dict_iter redisDbPersistentData::random()
     return dict_iter(m_pdict, de);
 }
 
-size_t redisDbPersistentData::size() const 
+size_t redisDbPersistentData::size(bool fCachedOnly) const 
 { 
-    if (m_spstorage != nullptr && !m_fAllChanged)
+    if (m_spstorage != nullptr && !m_fAllChanged && !fCachedOnly)
         return m_spstorage->count() + m_cnewKeysPending;
     
     return dictSize(m_pdict) 
-        + (m_pdbSnapshot ? (m_pdbSnapshot->size() - dictSize(m_pdictTombstone)) : 0); 
+        + (m_pdbSnapshot ? (m_pdbSnapshot->size(fCachedOnly) - dictSize(m_pdictTombstone)) : 0); 
 }
 
 bool redisDbPersistentData::removeCachedValue(const char *key)

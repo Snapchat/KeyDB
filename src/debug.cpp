@@ -1610,7 +1610,7 @@ void safe_write(int fd, const void *pv, ssize_t cb)
  * The eip argument is unused as libunwind only gets local context.
  * The uplevel argument indicates how many of the calling functions to skip.
  */
-void logStackTrace(void * __unused eip, int uplevel) {
+void logStackTrace(UNUSED void * eip, int uplevel) {
     int fd = openDirectLogFiledes();
 
     if (fd == -1) return; /* If we can't log there is anything to do. */

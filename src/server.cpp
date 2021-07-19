@@ -2124,7 +2124,7 @@ void databasesCron(bool fMainThread) {
                 ::dict *dict = g_pserver->db[rehash_db]->dictUnsafeKeyOnly();
                 /* Are we async rehashing? And if so is it time to re-calibrate? */
                 /* The recalibration limit is a prime number to ensure balancing across threads */
-                if (rehashes_per_ms > 0 && async_rehashes < 131 && !cserver.active_defrag_enabled && cserver.cthreads > 1) {
+                if (rehashes_per_ms > 0 && async_rehashes < 131 && !cserver.active_defrag_enabled && cserver.cthreads > 1 && dictSize(dict) > 2048 && dictIsRehashing(dict) && !g_pserver->loading) {
                     serverTL->rehashCtl = dictRehashAsyncStart(dict, rehashes_per_ms);
                     ++async_rehashes;
                 }
@@ -6112,10 +6112,11 @@ sds genRedisInfoString(const char *section) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, "# Keyspace\r\n");
         for (j = 0; j < cserver.dbnum; j++) {
-            long long keys, vkeys;
+            long long keys, vkeys, cachedKeys;
 
             keys = g_pserver->db[j]->size();
             vkeys = g_pserver->db[j]->expireSize();
+            cachedKeys = g_pserver->db[j]->size(true /* fCachedOnly */);
 
             // Adjust TTL by the current time
             mstime_t mstime;
@@ -6127,8 +6128,8 @@ sds genRedisInfoString(const char *section) {
             
             if (keys || vkeys) {
                 info = sdscatprintf(info,
-                    "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n",
-                    j, keys, vkeys, static_cast<long long>(g_pserver->db[j]->avg_ttl));
+                    "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,cached_keys=%lld\r\n",
+                    j, keys, vkeys, static_cast<long long>(g_pserver->db[j]->avg_ttl), cachedKeys);
             }
         }
     }
@@ -7100,6 +7101,8 @@ static void validateConfiguration()
         serverLog(LL_WARNING, "\tKeyDB will now exit.  Please update your configuration file.");
         exit(EXIT_FAILURE);
     }
+
+    g_pserver->repl_backlog_config_size = g_pserver->repl_backlog_size; // this is normally set in the update logic, but not on initial config
 }
 
 int iAmMaster(void) {

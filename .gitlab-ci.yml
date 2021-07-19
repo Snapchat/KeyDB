@@ -27,7 +27,7 @@ make-test:
     - git submodule init && git submodule update
     - make distclean
     - make -j
-    - make test -j
+    - ./runtest --config server-threads 3
 
 node-redis-test:
   rules:
@@ -99,7 +99,7 @@ endurance-test:
     - git submodule init && git submodule update
     - make distclean
     - make -j
-    - ./runtest --loop --stop
+    - ./runtest --config server-threads 3 --loop --stop
 
 coverage-test:
   rules:

@@ -51,6 +51,11 @@ typedef ucontext_t sigcontext_t;
 #include <cxxabi.h>
 #endif /* HAVE_BACKTRACE */
 
+#ifdef UNW_LOCAL_ONLY
+#include <libunwind.h>
+#include <cxxabi.h>
+#endif
+
 #ifdef __CYGWIN__
 #ifndef SA_ONSTACK
 #define SA_ONSTACK 0x08000000
@@ -947,7 +952,7 @@ void _serverAssert(const char *estr, const char *file, int line) {
     serverLog(LL_WARNING,"==> %s:%d '%s' is not true",file,line,estr);
 
     if (g_pserver->crashlog_enabled) {
-#ifdef HAVE_BACKTRACE
+#if defined HAVE_BACKTRACE || defined UNW_LOCAL_ONLY
         logStackTrace(NULL, 1);
 #endif
         printCrashReport();
@@ -1044,7 +1049,7 @@ void _serverPanic(const char *file, int line, const char *msg, ...) {
     serverLog(LL_WARNING,"Guru Meditation: %s #%s:%d",fmtmsg,file,line);
 
     if (g_pserver->crashlog_enabled) {
-#ifdef HAVE_BACKTRACE
+#if defined HAVE_BACKTRACE || defined UNW_LOCAL_ONLY
         logStackTrace(NULL, 1);
 #endif
         printCrashReport();
@@ -1599,6 +1604,52 @@ void safe_write(int fd, const void *pv, ssize_t cb)
     } while (offset < cb);
 }
 
+#ifdef UNW_LOCAL_ONLY
+
+void logStackTrace(void *eip, int uplevel) {
+    int fd = openDirectLogFiledes();
+
+    if (fd == -1) return; /* If we can't log there is anything to do. */
+    unw_cursor_t cursor;
+    unw_context_t context;
+
+    unw_getcontext(&context);
+    unw_init_local(&cursor, &context);
+
+    for (int i = 0; i < uplevel; i++) {
+        unw_step(&cursor);
+    }
+
+    while ( unw_step(&cursor) ) {
+    unw_word_t ip, sp, off;
+
+    unw_get_reg(&cursor, UNW_REG_IP, &ip);
+    unw_get_reg(&cursor, UNW_REG_SP, &sp);
+
+    char symbol[256] = {"<unknown>"};
+    char *name = symbol;
+
+    if ( !unw_get_proc_name(&cursor, symbol, sizeof(symbol), &off) ) {
+        int status;
+        if ( (name = abi::__cxa_demangle(symbol, NULL, NULL, &status)) == 0 )
+        name = symbol;
+    }
+
+    dprintf(fd, "%s(+0x%" PRIxPTR ") [0x%016" PRIxPTR "] sp=0x%016" PRIxPTR "\n",
+        name,
+        static_cast<uintptr_t>(off),
+        static_cast<uintptr_t>(ip),
+        static_cast<uintptr_t>(sp));
+
+    if ( name != symbol )
+        free(name);
+    }
+}
+
+#endif /* UNW_LOCAL_ONLY */
+
+#ifdef HAVE_BACKTRACE
+
 void backtrace_symbols_demangle_fd(void **trace, size_t csym, int fd)
 {
     char **syms = backtrace_symbols(trace, csym);
@@ -1641,8 +1692,6 @@ void backtrace_symbols_demangle_fd(void **trace, size_t csym, int fd)
     }
     free(syms);
 }
-
-#ifdef HAVE_BACKTRACE
 
 /* Logs the stack trace using the backtrace() call. This function is designed
  * to be called from signal handlers safely.
@@ -1934,6 +1983,9 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 
     logRegisters(uc);
 #endif
+#ifdef UNW_LOCAL_ONLY
+    logStackTrace(NULL, 1);
+#endif 
 
     printCrashReport();
 
@@ -2028,6 +2080,8 @@ void watchdogSignalHandler(int sig, siginfo_t *info, void *secret) {
     serverLogFromHandler(LL_WARNING,"\n--- WATCHDOG TIMER EXPIRED ---");
 #ifdef HAVE_BACKTRACE
     logStackTrace(getMcontextEip(uc), 1);
+#elif defined UNW_LOCAL_ONLY
+    logStackTrace(NULL, 1);
 #else
     serverLogFromHandler(LL_WARNING,"Sorry: no support for backtrace().");
 #endif

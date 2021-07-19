@@ -2963,13 +2963,13 @@ dict_iter redisDbPersistentData::random()
     return dict_iter(m_pdict, de);
 }
 
-size_t redisDbPersistentData::size() const 
+size_t redisDbPersistentData::size(bool fCachedOnly) const 
 { 
-    if (m_spstorage != nullptr && !m_fAllChanged)
+    if (m_spstorage != nullptr && !m_fAllChanged && !fCachedOnly)
         return m_spstorage->count() + m_cnewKeysPending;
     
     return dictSize(m_pdict) 
-        + (m_pdbSnapshot ? (m_pdbSnapshot->size() - dictSize(m_pdictTombstone)) : 0); 
+        + (m_pdbSnapshot ? (m_pdbSnapshot->size(fCachedOnly) - dictSize(m_pdictTombstone)) : 0); 
 }
 
 bool redisDbPersistentData::removeCachedValue(const char *key)

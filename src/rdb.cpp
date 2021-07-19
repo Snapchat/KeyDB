@@ -2884,6 +2884,8 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 do this every 16 keys to limit the perf impact */
             if (g_pserver->m_pstorageFactory && (ckeysLoaded % 128) == 0)
             {
+                g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
+                serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
                 bool fHighMemory = (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK);
                 if (fHighMemory || (ckeysLoaded % (1024)) == 0)
                 {

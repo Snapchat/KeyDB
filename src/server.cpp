@@ -6096,10 +6096,11 @@ sds genRedisInfoString(const char *section) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, "# Keyspace\r\n");
         for (j = 0; j < cserver.dbnum; j++) {
-            long long keys, vkeys;
+            long long keys, vkeys, cachedKeys;
 
             keys = g_pserver->db[j]->size();
             vkeys = g_pserver->db[j]->expireSize();
+            cachedKeys = g_pserver->db[j]->size(true /* fCachedOnly */);
 
             // Adjust TTL by the current time
             mstime_t mstime;
@@ -6111,8 +6112,8 @@ sds genRedisInfoString(const char *section) {
             
             if (keys || vkeys) {
                 info = sdscatprintf(info,
-                    "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n",
-                    j, keys, vkeys, static_cast<long long>(g_pserver->db[j]->avg_ttl));
+                    "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,cached_keys=%lld\r\n",
+                    j, keys, vkeys, static_cast<long long>(g_pserver->db[j]->avg_ttl), cachedKeys);
             }
         }
     }

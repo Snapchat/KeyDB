@@ -1095,7 +1095,7 @@ public:
     redisDbPersistentData(redisDbPersistentData &&) = default;
 
     size_t slots() const { return dictSlots(m_pdict); }
-    size_t size() const;
+    size_t size(bool fCachedOnly = false) const;
     void expand(uint64_t slots) { dictExpand(m_pdict, slots); }
     
     void trackkey(robj_roptr o, bool fUpdate)

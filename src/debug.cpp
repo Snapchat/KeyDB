@@ -1612,14 +1612,22 @@ void safe_write(int fd, const void *pv, ssize_t cb)
  */
 void logStackTrace(void * eip, int uplevel) {
     (void)eip;//UNUSED
+    const char *msg;
     int fd = openDirectLogFiledes();
 
     if (fd == -1) return; /* If we can't log there is anything to do. */
+
+    msg = "\n------ STACK TRACE ------\n";
+    if (write(fd,msg,strlen(msg)) == -1) {/* Avoid warning. */};
     unw_cursor_t cursor;
     unw_context_t context;
 
     unw_getcontext(&context);
     unw_init_local(&cursor, &context);
+
+    /* Write symbols to log file */
+    msg = "\nBacktrace:\n";
+    if (write(fd,msg,strlen(msg)) == -1) {/* Avoid warning. */};
 
     for (int i = 0; i < uplevel; i++) {
         unw_step(&cursor);

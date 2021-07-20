@@ -754,7 +754,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
      {"replping",pingCommand,-1,
-     "ok-stale ok-loading fast @connection @replication",
+     "ok-stale fast @connection @replication",
      0,NULL,0,0,0,0,0,0},
 
     {"echo",echoCommand,2,

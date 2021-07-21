@@ -113,10 +113,15 @@ public:
     expireEntry(expireEntryFat *pfatentry)
     {
         u.m_pfatentry = pfatentry;
-        if (FGetPrimaryExpireSlow(&m_when))
-            m_when = FFatMask() | m_when;
-        else
-            m_when = INVALID_EXPIRE;
+        m_when = FFatMask() | INVALID_EXPIRE;
+        for (auto itr : *this)
+        {
+            if (itr.subkey() == nullptr)
+            {
+                m_when = FFatMask() | itr.when();
+                break;
+            }
+        }
     }
 
     expireEntry(expireEntry &&e)
@@ -222,20 +227,6 @@ public:
     { 
         *pwhen = FGetPrimaryExpire();
         return *pwhen != INVALID_EXPIRE;
-    }
-
-    bool FGetPrimaryExpireSlow(long long *pwhen)
-    {
-        *pwhen = INVALID_EXPIRE;
-        for (auto itr : *this)
-        {
-            if (itr.subkey() == nullptr)
-            {
-                *pwhen = itr.when();
-                return true;
-            }
-        }
-        return false;
     }
 
     explicit operator const char*() const noexcept { return key(); }

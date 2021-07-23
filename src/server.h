@@ -1999,7 +1999,7 @@ public:
 
 // Per-thread variabels that may be accessed without a lock
 struct redisServerThreadVars {
-    aeEventLoop *el;
+    aeEventLoop *el = nullptr;
     socketFds ipfd;             /* TCP socket file descriptors */
     socketFds tlsfd;            /* TLS socket file descriptors */
     int in_eval;                /* Are we inside EVAL? */

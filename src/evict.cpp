@@ -832,7 +832,7 @@ int performEvictions(bool fPreSnapshot) {
                 /* After some time, exit the loop early - even if memory limit
                  * hasn't been reached.  If we suddenly need to free a lot of
                  * memory, don't want to spend too much time here.  */
-                if (elapsedUs(evictionTimer) > eviction_time_limit_us) {
+                if (g_pserver->m_pstorageFactory == nullptr && elapsedUs(evictionTimer) > eviction_time_limit_us) {
                     // We still need to free memory - start eviction timer proc
                     if (!isEvictionProcRunning && serverTL->el != nullptr) {
                         isEvictionProcRunning = 1;

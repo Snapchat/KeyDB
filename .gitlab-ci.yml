@@ -4,6 +4,8 @@ build:
       when: never
     - if: '$ENDURANCE'
       when: never
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+      when: never
     - when: always
   tags:
     - docker
@@ -18,6 +20,8 @@ runtest:
     - if: '$COVERAGE'
       when: never
     - if: '$ENDURANCE'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "push"'
       when: never
     - when: always
   tags:
@@ -35,6 +39,8 @@ runtest-cluster:
       when: never
     - if: '$ENDURANCE'
       when: never
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+      when: never
     - when: always
   tags:
     - docker
@@ -50,6 +56,8 @@ runtest-moduleapi:
     - if: '$COVERAGE'
       when: never
     - if: '$ENDURANCE'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "push"'
       when: never
     - when: always
   tags:
@@ -67,6 +75,8 @@ runtest-sentinel:
       when: never
     - if: '$ENDURANCE'
       when: never
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+      when: never
     - when: always
   tags:
     - docker
@@ -82,6 +92,8 @@ node-redis-test:
     - if: '$COVERAGE'
       when: never
     - if: '$ENDURANCE'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "push"'
       when: never
     - when: always
   tags:
@@ -104,6 +116,8 @@ jedis-test:
       when: never
     - if: '$ENDURANCE'
       when: never
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+      when: never
     - when: always
   tags:
     - docker
@@ -123,6 +137,8 @@ redis-rs-test:
     - if: '$COVERAGE'
       when: never
     - if: '$ENDURANCE'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "push"'
       when: never
     - when: always
   tags:

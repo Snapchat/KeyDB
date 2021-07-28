@@ -51,6 +51,7 @@ typedef ucontext_t sigcontext_t;
 #include <cxxabi.h>
 #endif /* HAVE_BACKTRACE */
 
+//UNW_LOCAL_ONLY being set means we use libunwind for backtraces instead of execinfo
 #ifdef UNW_LOCAL_ONLY
 #include <libunwind.h>
 #include <cxxabi.h>

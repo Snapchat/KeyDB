@@ -2785,7 +2785,7 @@ retry_connect:
          * permitted" instead of using a proper error code, so we test
          * both. */
         if (strncmp(err,"-ERR unknown command",20) == 0) {
-            serverLog(LL_WARNING,"Master does not support REPLPING, sending PING instead...");
+            serverLog(LL_NOTICE,"Master does not support REPLPING, sending PING instead...");
             mi->repl_state = REPL_STATE_RETRY_NOREPLPING;
             sdsfree(err);
             err = NULL;

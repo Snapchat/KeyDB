@@ -1,10 +1,13 @@
-build:
+.standard-pipeline:
   rules:
     - if: '$COVERAGE'
       when: never
     - if: '$ENDURANCE'
       when: never
-    - when: always
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+
+build:
+  extends: .standard-pipeline
   tags:
     - docker
   stage: build
@@ -14,12 +17,7 @@ build:
     - make -j
 
 runtest:
-  rules:
-    - if: '$COVERAGE'
-      when: never
-    - if: '$ENDURANCE'
-      when: never
-    - when: always
+  extends: .standard-pipeline
   tags:
     - docker
   stage: test
@@ -30,12 +28,7 @@ runtest:
     - ./runtest --config server-threads 3
 
 runtest-cluster:
-  rules:
-    - if: '$COVERAGE'
-      when: never
-    - if: '$ENDURANCE'
-      when: never
-    - when: always
+  extends: .standard-pipeline
   tags:
     - docker
   stage: test
@@ -46,12 +39,7 @@ runtest-cluster:
     - ./runtest-cluster
 
 runtest-moduleapi:
-  rules:
-    - if: '$COVERAGE'
-      when: never
-    - if: '$ENDURANCE'
-      when: never
-    - when: always
+  extends: .standard-pipeline
   tags:
     - docker
   stage: test
@@ -62,12 +50,7 @@ runtest-moduleapi:
     - ./runtest-moduleapi
 
 runtest-sentinel:
-  rules:
-    - if: '$COVERAGE'
-      when: never
-    - if: '$ENDURANCE'
-      when: never
-    - when: always
+  extends: .standard-pipeline
   tags:
     - docker
   stage: test
@@ -78,12 +61,9 @@ runtest-sentinel:
     - ./runtest-sentinel
 
 node-redis-test:
+  extends: .standard-pipeline
   rules:
-    - if: '$COVERAGE'
-      when: never
-    - if: '$ENDURANCE'
-      when: never
-    - when: always
+    - when: never
   tags:
     - docker
     - ipv6
@@ -99,12 +79,7 @@ node-redis-test:
     - npm run test
 
 jedis-test:
-  rules:
-    - if: '$COVERAGE'
-      when: never
-    - if: '$ENDURANCE'
-      when: never
-    - when: always
+  extends: .standard-pipeline
   tags:
     - docker
     - ipv4
@@ -119,12 +94,7 @@ jedis-test:
     - make test
 
 redis-rs-test:
-  rules:
-    - if: '$COVERAGE'
-      when: never
-    - if: '$ENDURANCE'
-      when: never
-    - when: always
+  extends: .standard-pipeline
   tags:
     - docker
   stage: test

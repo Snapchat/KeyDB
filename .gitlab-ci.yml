@@ -62,6 +62,8 @@ runtest-sentinel:
 
 node-redis-test:
   extends: .standard-pipeline
+  rules:
+    - when: never
   tags:
     - docker
     - ipv6

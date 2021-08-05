@@ -131,19 +131,6 @@ int _dictInit(dict *d, dictType *type,
     return DICT_OK;
 }
 
-/* Resize the table to the minimal size that contains all the elements,
- * but with the invariant of a USED/BUCKETS ratio near to <= 1 */
-int dictResize(dict *d)
-{
-    unsigned long minimal;
-
-    if (!dict_can_resize || dictIsRehashing(d)) return DICT_ERR;
-    minimal = d->ht[0].used;
-    if (minimal < DICT_HT_INITIAL_SIZE)
-        minimal = DICT_HT_INITIAL_SIZE;
-    return dictExpand(d, minimal, false /*fShirnk*/);
-}
-
 /* Expand or create the hash table,
  * when malloc_failed is non-NULL, it'll avoid panic if malloc fails (in which case it'll be set to 1).
  * Returns DICT_OK if expand was performed, and DICT_ERR if skipped. */
@@ -187,6 +174,19 @@ int _dictExpand(dict *d, unsigned long size, bool fShrink, int* malloc_failed)
     d->ht[1] = n;
     d->rehashidx = 0;
     return DICT_OK;
+}
+
+/* Resize the table to the minimal size that contains all the elements,
+ * but with the invariant of a USED/BUCKETS ratio near to <= 1 */
+int dictResize(dict *d)
+{
+    unsigned long minimal;
+
+    if (!dict_can_resize || dictIsRehashing(d)) return DICT_ERR;
+    minimal = d->ht[0].used;
+    if (minimal < DICT_HT_INITIAL_SIZE)
+        minimal = DICT_HT_INITIAL_SIZE;
+    return _dictExpand(d, minimal, false /*fShirnk*/, nullptr);
 }
 
 int dictMerge(dict *dst, dict *src)
@@ -273,7 +273,7 @@ int dictMerge(dict *dst, dict *src)
         return DICT_OK;
     }
 
-    dictExpand(dst, dictSize(dst)+dictSize(src), false /* fShrink */);    // start dst rehashing if necessary
+    _dictExpand(dst, dictSize(dst)+dictSize(src), false /* fShrink */, nullptr);    // start dst rehashing if necessary
     auto &htDst = dictIsRehashing(dst) ? dst->ht[1] : dst->ht[0];
     for (int iht = 0; iht < 2; ++iht)
     {
@@ -328,12 +328,16 @@ int dictMerge(dict *dst, dict *src)
 
 /* return DICT_ERR if expand was not performed */
 int dictExpand(dict *d, unsigned long size, bool fShrink) {
+    // External expand likely means mass insertion, and we don't want to shrink during that
+    d->noshrink = true;
     return _dictExpand(d, size, fShrink, NULL);
 }
 
 /* return DICT_ERR if expand failed due to memory allocation failure */
 int dictTryExpand(dict *d, unsigned long size, bool fShrink) {
     int malloc_failed;
+    // External expand likely means mass insertion, and we don't want to shrink during that
+    d->noshrink = true;
     _dictExpand(d, size, fShrink, &malloc_failed);
     return malloc_failed? DICT_ERR : DICT_OK;
 }
@@ -677,6 +681,9 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
     dictEntry *he, *prevHe;
     int table;
 
+    // if we are deleting elements we probably aren't mass inserting anymore and it is safe to shrink
+    d->noshrink = false;
+
     if (d->ht[0].used == 0 && d->ht[1].used == 0) return NULL;
 
     if (dictIsRehashing(d)) _dictRehashStep(d);
@@ -713,7 +720,6 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
         }
         if (!dictIsRehashing(d)) break;
     }
-
     _dictExpandIfNeeded(d);
     return NULL; /* not found */
 }
@@ -1317,7 +1323,7 @@ static int _dictExpandIfNeeded(dict *d)
     if (dictIsRehashing(d)) return DICT_OK;
 
     /* If the hash table is empty expand it to the initial size. */
-    if (d->ht[0].size == 0) return dictExpand(d, DICT_HT_INITIAL_SIZE, false /*fShrink*/);
+    if (d->ht[0].size == 0) return _dictExpand(d, DICT_HT_INITIAL_SIZE, false /*fShrink*/, nullptr);
 
     /* If we reached the 1:1 ratio, and we are allowed to resize the hash
      * table (global setting) or we should avoid it but the ratio between
@@ -1328,12 +1334,12 @@ static int _dictExpandIfNeeded(dict *d)
          d->ht[0].used/d->ht[0].size > dict_force_resize_ratio) &&
         dictTypeExpandAllowed(d))
     {
-        return dictExpand(d, d->ht[0].used + 1, false /*fShrink*/);
+        return _dictExpand(d, d->ht[0].used + 1, false /*fShrink*/, nullptr);
     }
-    else if (d->ht[0].used > 0 && d->ht[0].size >= (1024*SHRINK_FACTOR) && (d->ht[0].used * 16) < d->ht[0].size && dict_can_resize)
+    else if (d->ht[0].used > 0 && d->ht[0].size >= (1024*SHRINK_FACTOR) && (d->ht[0].used * 16) < d->ht[0].size && dict_can_resize && !d->noshrink)
     {
         // If the dictionary has shurnk a lot we'll need to shrink the hash table instead
-        return dictExpand(d, d->ht[0].size/SHRINK_FACTOR, true /*fShrink*/);
+        return _dictExpand(d, d->ht[0].size/SHRINK_FACTOR, true /*fShrink*/, nullptr);
     }
     return DICT_OK;
 }

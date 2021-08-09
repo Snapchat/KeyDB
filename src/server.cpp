@@ -2021,7 +2021,6 @@ void clientsCron(int iel) {
     while(listLength(g_pserver->clients) && iterations--) {
         client *c;
         listNode *head;
-
         /* Rotate the list, take the current head, process.
          * This way if the client must be removed from the list it's the
          * first element and we don't incur into O(N) computation. */
@@ -2125,7 +2124,7 @@ void databasesCron(bool fMainThread) {
                 ::dict *dict = g_pserver->db[rehash_db]->dictUnsafeKeyOnly();
                 /* Are we async rehashing? And if so is it time to re-calibrate? */
                 /* The recalibration limit is a prime number to ensure balancing across threads */
-                if (rehashes_per_ms > 0 && async_rehashes < 131 && !cserver.active_defrag_enabled && cserver.cthreads > 1) {
+                if (rehashes_per_ms > 0 && async_rehashes < 131 && !cserver.active_defrag_enabled && cserver.cthreads > 1 && dictSize(dict) > 2048 && dictIsRehashing(dict) && !g_pserver->loading) {
                     serverTL->rehashCtl = dictRehashAsyncStart(dict, rehashes_per_ms);
                     ++async_rehashes;
                 }
@@ -3261,6 +3260,7 @@ void initServerConfig(void) {
     g_pserver->enable_multimaster = CONFIG_DEFAULT_ENABLE_MULTIMASTER;
     g_pserver->repl_syncio_timeout = CONFIG_REPL_SYNCIO_TIMEOUT;
     g_pserver->master_repl_offset = 0;
+    g_pserver->repl_lowest_off.store(-1, std::memory_order_seq_cst);
 
     /* Replication partial resync backlog */
     g_pserver->repl_backlog = NULL;
@@ -4677,6 +4677,8 @@ int processCommand(client *c, int callFlags) {
         return C_OK;
     }
 
+    int is_read_command = (c->cmd->flags & CMD_READONLY) ||
+                           (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_READONLY));
     int is_write_command = (c->cmd->flags & CMD_WRITE) ||
                            (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_WRITE));
     int is_denyoom_command = (c->cmd->flags & CMD_DENYOOM) ||
@@ -4895,7 +4897,7 @@ int processCommand(client *c, int callFlags) {
           c->cmd->proc != discardCommand &&
           c->cmd->proc != watchCommand &&
           c->cmd->proc != unwatchCommand &&
-	  c->cmd->proc != resetCommand &&
+          c->cmd->proc != resetCommand &&
         !(c->cmd->proc == shutdownCommand &&
           c->argc == 2 &&
           tolower(((char*)ptrFromObj(c->argv[1]))[0]) == 'n') &&
@@ -4904,6 +4906,14 @@ int processCommand(client *c, int callFlags) {
           tolower(((char*)ptrFromObj(c->argv[1]))[0]) == 'k'))
     {
         rejectCommand(c, shared.slowscripterr);
+        return C_OK;
+    }
+
+    /* Prevent a replica from sending commands that access the keyspace.
+     * The main objective here is to prevent abuse of client pause check
+     * from which replicas are exempt. */
+    if ((c->flags & CLIENT_SLAVE) && (is_may_replicate_command || is_write_command || is_read_command)) {
+        rejectCommandFormat(c, "Replica can't interract with the keyspace");
         return C_OK;
     }
 
@@ -6102,10 +6112,11 @@ sds genRedisInfoString(const char *section) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, "# Keyspace\r\n");
         for (j = 0; j < cserver.dbnum; j++) {
-            long long keys, vkeys;
+            long long keys, vkeys, cachedKeys;
 
             keys = g_pserver->db[j]->size();
             vkeys = g_pserver->db[j]->expireSize();
+            cachedKeys = g_pserver->db[j]->size(true /* fCachedOnly */);
 
             // Adjust TTL by the current time
             mstime_t mstime;
@@ -6117,8 +6128,8 @@ sds genRedisInfoString(const char *section) {
             
             if (keys || vkeys) {
                 info = sdscatprintf(info,
-                    "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n",
-                    j, keys, vkeys, static_cast<long long>(g_pserver->db[j]->avg_ttl));
+                    "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,cached_keys=%lld\r\n",
+                    j, keys, vkeys, static_cast<long long>(g_pserver->db[j]->avg_ttl), cachedKeys);
             }
         }
     }
@@ -6136,7 +6147,11 @@ sds genRedisInfoString(const char *section) {
             "variant:enterprise\r\n"
             "license_status:%s\r\n"
             "mvcc_depth:%d\r\n",
+#ifdef NO_LICENSE_CHECK
+            "OK",
+#else
             cserver.license_key ? "OK" : "Trial",
+#endif
             mvcc_depth
         );
     }
@@ -7012,9 +7027,10 @@ void OnTerminate()
 void wakeTimeThread() {
     updateCachedTime();
     std::lock_guard<std::mutex> lock(time_thread_mutex);
+    if (sleeping_threads >= cserver.cthreads)
+        time_thread_cv.notify_one();
     sleeping_threads--;
     serverAssert(sleeping_threads >= 0);
-    time_thread_cv.notify_one();
 }
 
 void *timeThreadMain(void*) {
@@ -7085,6 +7101,8 @@ static void validateConfiguration()
         serverLog(LL_WARNING, "\tKeyDB will now exit.  Please update your configuration file.");
         exit(EXIT_FAILURE);
     }
+
+    g_pserver->repl_backlog_config_size = g_pserver->repl_backlog_size; // this is normally set in the update logic, but not on initial config
 }
 
 int iAmMaster(void) {

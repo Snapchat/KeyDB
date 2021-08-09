@@ -2788,6 +2788,8 @@ public:
                 if (fHighMemory)
                     performEvictions(false /* fPreSnapshot*/);
             }
+            g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
+            serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
         }
     }
 
@@ -2916,6 +2918,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now;
     long long lru_clock = 0;
+    unsigned long long ckeysLoaded = 0;
     uint64_t mvcc_tstamp = OBJ_MVCC_INVALID;
     now = mstime();
     rdbAsyncWorkThread wqueue(rsi, rdbflags, now);
@@ -3188,6 +3191,13 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
          * assume to work in an exact keyspace state. */
         bool fExpiredKey = iAmMaster() && !(rdbflags&RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now;
         fLastKeyExpired = fStaleMvccKey || fExpiredKey;
+
+        ckeysLoaded++;
+        if (g_pserver->m_pstorageFactory && (ckeysLoaded % 128) == 0)
+        {
+            g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
+            serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
+        }
 
         if (g_pserver->key_load_delay)
             debugDelay(g_pserver->key_load_delay);

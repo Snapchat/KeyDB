@@ -221,29 +221,27 @@ int aofFsyncInProgress(void) {
 /* Starts a background task that performs fsync() against the specified
  * file descriptor (the one of the AOF file) in another thread. */
 void aof_background_fsync(int fd) {
-    bioCreateBackgroundJob(BIO_AOF_FSYNC,(void*)(long)fd,NULL,NULL);
+    bioCreateFsyncJob(fd);
 }
 
 /* Kills an AOFRW child process if exists */
 void killAppendOnlyChild(void) {
     int statloc;
     /* No AOFRW child? return. */
-    if (g_pserver->aof_child_pid == -1) return;
+    if (g_pserver->child_type != CHILD_TYPE_AOF) return;
     /* Kill AOFRW child, wait for child exit. */
     serverLog(LL_NOTICE,"Killing running AOF rewrite child: %ld",
-        (long) g_pserver->aof_child_pid);
-    if (kill(g_pserver->aof_child_pid,SIGUSR1) != -1) {
-        while(wait3(&statloc,0,NULL) != g_pserver->aof_child_pid);
+        (long) g_pserver->child_pid);
+    if (kill(g_pserver->child_pid,SIGUSR1) != -1) {
+        while(waitpid(-1, &statloc, 0) != g_pserver->child_pid);
     }
     /* Reset the buffer accumulating changes while the child saves. */
     aofRewriteBufferReset();
-    aofRemoveTempFile(g_pserver->aof_child_pid);
-    g_pserver->aof_child_pid = -1;
+    aofRemoveTempFile(g_pserver->child_pid);
+    resetChildState();
     g_pserver->aof_rewrite_time_start = -1;
     /* Close pipes used for IPC between the two processes. */
     aofClosePipes();
-    closeChildInfoPipe();
-    updateDictResizePolicy();
 }
 
 /* Called when the user switches from "appendonly yes" to "appendonly no"
@@ -251,7 +249,12 @@ void killAppendOnlyChild(void) {
 void stopAppendOnly(void) {
     serverAssert(g_pserver->aof_state != AOF_OFF);
     flushAppendOnlyFile(1);
-    redis_fsync(g_pserver->aof_fd);
+    if (redis_fsync(g_pserver->aof_fd) == -1) {
+        serverLog(LL_WARNING,"Fail to fsync the AOF file: %s",strerror(errno));
+    } else {
+        g_pserver->aof_fsync_offset = g_pserver->aof_current_size;
+        g_pserver->aof_last_fsync = g_pserver->unixtime;
+    }
     close(g_pserver->aof_fd);
 
     g_pserver->aof_fd = -1;
@@ -259,6 +262,8 @@ void stopAppendOnly(void) {
     g_pserver->aof_state = AOF_OFF;
     g_pserver->aof_rewrite_scheduled = 0;
     killAppendOnlyChild();
+    sdsfree(g_pserver->aof_buf);
+    g_pserver->aof_buf = sdsempty();
 }
 
 /* Called when the user switches from "appendonly no" to "appendonly yes"
@@ -273,27 +278,27 @@ int startAppendOnly(void) {
         char *cwdp = getcwd(cwd,MAXPATHLEN);
 
         serverLog(LL_WARNING,
-            "Redis needs to enable the AOF but can't open the "
+            "KeyDB needs to enable the AOF but can't open the "
             "append only file %s (in server root dir %s): %s",
             g_pserver->aof_filename,
             cwdp ? cwdp : "unknown",
             strerror(errno));
         return C_ERR;
     }
-    if (hasActiveChildProcess() && g_pserver->aof_child_pid == -1) {
+    if (hasActiveChildProcess() && g_pserver->child_type != CHILD_TYPE_AOF) {
         g_pserver->aof_rewrite_scheduled = 1;
         serverLog(LL_WARNING,"AOF was enabled but there is already another background operation. An AOF background was scheduled to start when possible.");
     } else {
         /* If there is a pending AOF rewrite, we need to switch it off and
          * start a new one: the old one cannot be reused because it is not
          * accumulating the AOF buffer. */
-        if (g_pserver->aof_child_pid != -1) {
+        if (g_pserver->child_type == CHILD_TYPE_AOF) {
             serverLog(LL_WARNING,"AOF was enabled but there is already an AOF rewriting in background. Stopping background AOF and starting a rewrite now.");
             killAppendOnlyChild();
         }
         if (rewriteAppendOnlyFileBackground() == C_ERR) {
             close(newfd);
-            serverLog(LL_WARNING,"Redis needs to enable the AOF but can't trigger a background AOF rewrite operation. Check the above logs for more info about the error.");
+            serverLog(LL_WARNING,"KeyDB needs to enable the AOF but can't trigger a background AOF rewrite operation. Check the above logs for more info about the error.");
             return C_ERR;
         }
     }
@@ -302,6 +307,21 @@ int startAppendOnly(void) {
     g_pserver->aof_state = AOF_WAIT_REWRITE;
     g_pserver->aof_last_fsync = g_pserver->unixtime;
     g_pserver->aof_fd = newfd;
+
+    /* If AOF fsync error in bio job, we just ignore it and log the event. */
+    int aof_bio_fsync_status;
+    atomicGet(g_pserver->aof_bio_fsync_status, aof_bio_fsync_status);
+    if (aof_bio_fsync_status == C_ERR) {
+        serverLog(LL_WARNING,
+            "AOF reopen, just ignore the AOF fsync error in bio job");
+        atomicSet(g_pserver->aof_bio_fsync_status,C_OK);
+    }
+
+    /* If AOF was in error state, we just ignore it and log the event. */
+    if (g_pserver->aof_last_write_status == C_ERR) {
+        serverLog(LL_WARNING,"AOF reopen, just ignore the last error.");
+        g_pserver->aof_last_write_status = C_OK;
+    }
     return C_OK;
 }
 
@@ -395,7 +415,7 @@ void flushAppendOnlyFile(int force) {
             /* Otherwise fall trough, and go write since we can't wait
              * over two seconds. */
             g_pserver->aof_delayed_fsync++;
-            serverLog(LL_NOTICE,"Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer without waiting for fsync to complete, this may slow down Redis.");
+            serverLog(LL_NOTICE,"Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer without waiting for fsync to complete, this may slow down KeyDB.");
         }
     }
     /* We want to perform a single write. This should be guaranteed atomic
@@ -457,7 +477,7 @@ void flushAppendOnlyFile(int force) {
             if (ftruncate(g_pserver->aof_fd, g_pserver->aof_current_size) == -1) {
                 if (can_log) {
                     serverLog(LL_WARNING, "Could not remove short write "
-                             "from the append-only file.  Redis may refuse "
+                             "from the append-only file.  KeyDB may refuse "
                              "to load the AOF the next time it starts.  "
                              "ftruncate: %s", strerror(errno));
                 }
@@ -471,10 +491,11 @@ void flushAppendOnlyFile(int force) {
 
         /* Handle the AOF write error. */
         if (g_pserver->aof_fsync == AOF_FSYNC_ALWAYS) {
-            /* We can't recover when the fsync policy is ALWAYS since the
-             * reply for the client is already in the output buffers, and we
-             * have the contract with the user that on acknowledged write data
-             * is synced on disk. */
+            /* We can't recover when the fsync policy is ALWAYS since the reply
+             * for the client is already in the output buffers (both writes and
+             * reads), and the changes to the db can't be rolled back. Since we
+             * have a contract with the user that on acknowledged or observed
+             * writes are is synced on disk, we must exit. */
             serverLog(LL_WARNING,"Can't recover from AOF write error when the AOF fsync policy is 'always'. Exiting...");
             exit(1);
         } else {
@@ -496,7 +517,7 @@ void flushAppendOnlyFile(int force) {
          * OK state and log the event. */
         if (g_pserver->aof_last_write_status == C_ERR) {
             serverLog(LL_WARNING,
-                "AOF write error looks solved, Redis can write again.");
+                "AOF write error looks solved, KeyDB can write again.");
             g_pserver->aof_last_write_status = C_OK;
         }
     }
@@ -522,7 +543,14 @@ try_fsync:
         /* redis_fsync is defined as fdatasync() for Linux in order to avoid
          * flushing metadata. */
         latencyStartMonitor(latency);
-        redis_fsync(g_pserver->aof_fd); /* Let's try to get this data on the disk */
+        /* Let's try to get this data on the disk. To guarantee data safe when
+         * the AOF fsync policy is 'always', we should exit if failed to fsync
+         * AOF (see comment next to the exit(1) after write error above). */
+        if (redis_fsync(g_pserver->aof_fd) == -1) {
+            serverLog(LL_WARNING,"Can't persist AOF for fsync error when the "
+              "AOF fsync policy is 'always': %s. Exiting...", strerror(errno));
+            exit(1);
+        }
         latencyEndMonitor(latency);
         latencyAddSampleIfNeeded("aof-fsync-always",latency);
         g_pserver->aof_fsync_offset = g_pserver->aof_current_size;
@@ -594,11 +622,10 @@ sds catAppendOnlyExpireAtCommand(sds buf, struct redisCommand *cmd, robj *key, r
     }
     decrRefCount(seconds);
 
-    argv[0] = createStringObject("PEXPIREAT",9);
+    argv[0] = shared.pexpireat;
     argv[1] = key;
     argv[2] = createStringObjectFromLongLong(when);
     buf = catAppendOnlyGenericCommand(buf, 3, argv);
-    decrRefCount(argv[0]);
     decrRefCount(argv[2]);
     return buf;
 }
@@ -653,43 +680,40 @@ sds catAppendOnlyExpireMemberAtCommand(sds buf, struct redisCommand *cmd, robj *
 }
 
 sds catCommandForAofAndActiveReplication(sds buf, struct redisCommand *cmd, robj **argv, int argc)
-{
-    robj *tmpargv[3];
-    
+{   
     if (cmd->proc == expireCommand || cmd->proc == pexpireCommand ||
         cmd->proc == expireatCommand) {
         /* Translate EXPIRE/PEXPIRE/EXPIREAT into PEXPIREAT */
         buf = catAppendOnlyExpireAtCommand(buf,cmd,argv[1],argv[2]);
-    } else if (cmd->proc == setexCommand || cmd->proc == psetexCommand) {
-        /* Translate SETEX/PSETEX to SET and PEXPIREAT */
-        tmpargv[0] = createStringObject("SET",3);
-        tmpargv[1] = argv[1];
-        tmpargv[2] = argv[3];
-        buf = catAppendOnlyGenericCommand(buf,3,tmpargv);
-        decrRefCount(tmpargv[0]);
-        buf = catAppendOnlyExpireAtCommand(buf,cmd,argv[1],argv[2]);
     } else if (cmd->proc == setCommand && argc > 3) {
-        int i;
-        robj *exarg = NULL, *pxarg = NULL;
-        for (i = 3; i < argc; i ++) {
-            if (!strcasecmp(szFromObj(argv[i]), "ex")) exarg = argv[i+1];
-            if (!strcasecmp(szFromObj(argv[i]), "px")) pxarg = argv[i+1];
+        robj *pxarg = NULL;
+        /* When SET is used with EX/PX argument setGenericCommand propagates them with PX millisecond argument.
+         * So since the command arguments are re-written there, we can rely here on the index of PX being 3. */
+        if (!strcasecmp(szFromObj(argv[3]), "px")) {
+            pxarg = argv[4];
         }
-        serverAssert(!(exarg && pxarg));
-        if (exarg || pxarg) {
-            /* Translate SET [EX seconds][PX milliseconds] to SET and PEXPIREAT */
-            buf = catAppendOnlyGenericCommand(buf,3,argv);
-            if (exarg)
-                buf = catAppendOnlyExpireAtCommand(buf,cserver.expireCommand,argv[1],
-                                                   exarg);
-            if (pxarg)
-                buf = catAppendOnlyExpireAtCommand(buf,cserver.pexpireCommand,argv[1],
-                                                   pxarg);
+        /* For AOF we convert SET key value relative time in milliseconds to SET key value absolute time in
+         * millisecond. Whenever the condition is true it implies that original SET has been transformed
+         * to SET PX with millisecond time argument so we do not need to worry about unit here.*/
+        if (pxarg) {
+            robj *millisecond = getDecodedObject(pxarg);
+            long long when = strtoll(szFromObj(millisecond),NULL,10);
+            when += mstime();
+
+            decrRefCount(millisecond);
+
+            robj *newargs[5];
+            newargs[0] = argv[0];
+            newargs[1] = argv[1];
+            newargs[2] = argv[2];
+            newargs[3] = shared.pxat;
+            newargs[4] = createStringObjectFromLongLong(when);
+            buf = catAppendOnlyGenericCommand(buf,5,newargs);
+            decrRefCount(newargs[4]);
         } else {
             buf = catAppendOnlyGenericCommand(buf,argc,argv);
         }
-    } else if (cmd->proc == expireMemberCommand || cmd->proc == expireMemberAtCommand ||
-        cmd->proc == pexpireMemberAtCommand) {
+    } else if (cmd->proc == expireMemberCommand || cmd->proc == expireMemberAtCommand || cmd->proc == pexpireMemberAtCommand) {
         /* Translate subkey expire commands to PEXPIREMEMBERAT */
         buf = catAppendOnlyExpireMemberAtCommand(buf, cmd, argv, argc);
     } else {
@@ -728,7 +752,7 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
      * accumulate the differences between the child DB and the current one
      * in a buffer, so that when the child process will do its work we
      * can append the differences to the new append only file. */
-    if (g_pserver->aof_child_pid != -1)
+    if (g_pserver->child_type == CHILD_TYPE_AOF)
         aofRewriteBufferAppend((unsigned char*)buf,sdslen(buf));
 
     sdsfree(buf);
@@ -752,11 +776,24 @@ struct client *createAOFClient(void) {
     c->querybuf_peak = 0;
     c->argc = 0;
     c->argv = NULL;
+    c->original_argc = 0;
+    c->original_argv = NULL;
     c->argv_len_sum = 0;
     c->bufpos = 0;
-    c->flags = 0;
     c->fPendingAsyncWrite = FALSE;
     c->fPendingAsyncWriteHandler = FALSE;
+
+    /*
+     * The AOF client should never be blocked (unlike master
+     * replication connection).
+     * This is because blocking the AOF client might cause
+     * deadlock (because potentially no one will unblock it).
+     * Also, if the AOF client will be blocked just for
+     * background processing there is a chance that the
+     * command execution order will be violated.
+     */
+    c->flags = CLIENT_DENY_BLOCKING;
+
     c->btype = BLOCKED_NONE;
     /* We set the fake client as a replica waiting for the synchronization
      * so that Redis will not try to send replies to this client. */
@@ -766,8 +803,9 @@ struct client *createAOFClient(void) {
     c->obuf_soft_limit_reached_time = 0;
     c->watched_keys = listCreate();
     c->peerid = NULL;
+    c->sockname = NULL;
     c->resp = 2;
-    c->puser = NULL;
+    c->user = NULL;
     listSetFreeMethod(c->reply,freeClientReplyValue);
     listSetDupMethod(c->reply,dupClientReplyValue);
     fastlock_init(&c->lock, "fake client");
@@ -790,6 +828,7 @@ void freeFakeClient(struct client *c) {
     listRelease(c->reply);
     listRelease(c->watched_keys);
     freeClientMultiState(c);
+    freeClientOriginalArgv(c);
     fastlock_unlock(&c->lock);
     fastlock_free(&c->lock);
     zfree(c);
@@ -951,7 +990,7 @@ int loadAppendOnlyFile(char *filename) {
         fakeClient->cmd = NULL;
         if (g_pserver->aof_load_truncated) valid_up_to = ftello(fp);
         if (g_pserver->key_load_delay)
-            usleep(g_pserver->key_load_delay);
+            debugDelay(g_pserver->key_load_delay);
     }
 
     /* This point can only be reached when EOF is reached without errors.
@@ -1052,15 +1091,25 @@ int rewriteListObject(rio *r, robj *key, robj *o) {
             if (count == 0) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ?
                     AOF_REWRITE_ITEMS_PER_CMD : items;
-                if (rioWriteBulkCount(r,'*',2+cmd_items) == 0) return 0;
-                if (rioWriteBulkString(r,"RPUSH",5) == 0) return 0;
-                if (rioWriteBulkObject(r,key) == 0) return 0;
+                if (!rioWriteBulkCount(r,'*',2+cmd_items) ||
+                    !rioWriteBulkString(r,"RPUSH",5) ||
+                    !rioWriteBulkObject(r,key)) 
+                {
+                    quicklistReleaseIterator(li);
+                    return 0;
+                }
             }
 
             if (entry.value) {
-                if (rioWriteBulkString(r,(char*)entry.value,entry.sz) == 0) return 0;
+                if (!rioWriteBulkString(r,(char*)entry.value,entry.sz)) {
+                    quicklistReleaseIterator(li);
+                    return 0;
+                }
             } else {
-                if (rioWriteBulkLongLong(r,entry.longval) == 0) return 0;
+                if (!rioWriteBulkLongLong(r,entry.longval)) {
+                    quicklistReleaseIterator(li);
+                    return 0;
+                }
             }
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
             items--;
@@ -1086,11 +1135,14 @@ int rewriteSetObject(rio *r, robj *key, robj *o) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ?
                     AOF_REWRITE_ITEMS_PER_CMD : items;
 
-                if (rioWriteBulkCount(r,'*',2+cmd_items) == 0) return 0;
-                if (rioWriteBulkString(r,"SADD",4) == 0) return 0;
-                if (rioWriteBulkObject(r,key) == 0) return 0;
+                if (!rioWriteBulkCount(r,'*',2+cmd_items) ||
+                    !rioWriteBulkString(r,"SADD",4) ||
+                    !rioWriteBulkObject(r,key)) 
+                {
+                    return 0;
+                }
             }
-            if (rioWriteBulkLongLong(r,llval) == 0) return 0;
+            if (!rioWriteBulkLongLong(r,llval)) return 0;
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
             items--;
         }
@@ -1104,11 +1156,18 @@ int rewriteSetObject(rio *r, robj *key, robj *o) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ?
                     AOF_REWRITE_ITEMS_PER_CMD : items;
 
-                if (rioWriteBulkCount(r,'*',2+cmd_items) == 0) return 0;
-                if (rioWriteBulkString(r,"SADD",4) == 0) return 0;
-                if (rioWriteBulkObject(r,key) == 0) return 0;
+                if (!rioWriteBulkCount(r,'*',2+cmd_items) ||
+                    !rioWriteBulkString(r,"SADD",4) ||
+                    !rioWriteBulkObject(r,key)) 
+                {
+                    dictReleaseIterator(di);
+                    return 0;
+                }
             }
-            if (rioWriteBulkString(r,ele,sdslen(ele)) == 0) return 0;
+            if (!rioWriteBulkString(r,ele,sdslen(ele))) {
+                dictReleaseIterator(di);
+                return 0;          
+            }
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
             items--;
         }
@@ -1145,15 +1204,18 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ?
                     AOF_REWRITE_ITEMS_PER_CMD : items;
 
-                if (rioWriteBulkCount(r,'*',2+cmd_items*2) == 0) return 0;
-                if (rioWriteBulkString(r,"ZADD",4) == 0) return 0;
-                if (rioWriteBulkObject(r,key) == 0) return 0;
+                if (!rioWriteBulkCount(r,'*',2+cmd_items*2) ||
+                    !rioWriteBulkString(r,"ZADD",4) ||
+                    !rioWriteBulkObject(r,key)) 
+                {
+                    return 0;
+                }
             }
-            if (rioWriteBulkDouble(r,score) == 0) return 0;
+            if (!rioWriteBulkDouble(r,score)) return 0;
             if (vstr != NULL) {
-                if (rioWriteBulkString(r,(char*)vstr,vlen) == 0) return 0;
+                if (!rioWriteBulkString(r,(char*)vstr,vlen)) return 0;
             } else {
-                if (rioWriteBulkLongLong(r,vll) == 0) return 0;
+                if (!rioWriteBulkLongLong(r,vll)) return 0;
             }
             zzlNext(zl,&eptr,&sptr);
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
@@ -1172,12 +1234,20 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ?
                     AOF_REWRITE_ITEMS_PER_CMD : items;
 
-                if (rioWriteBulkCount(r,'*',2+cmd_items*2) == 0) return 0;
-                if (rioWriteBulkString(r,"ZADD",4) == 0) return 0;
-                if (rioWriteBulkObject(r,key) == 0) return 0;
+                if (!rioWriteBulkCount(r,'*',2+cmd_items*2) ||
+                    !rioWriteBulkString(r,"ZADD",4) ||
+                    !rioWriteBulkObject(r,key)) 
+                {
+                    dictReleaseIterator(di);
+                    return 0;
+                }
             }
-            if (rioWriteBulkDouble(r,*score) == 0) return 0;
-            if (rioWriteBulkString(r,ele,sdslen(ele)) == 0) return 0;
+            if (!rioWriteBulkDouble(r,*score) ||
+                !rioWriteBulkString(r,ele,sdslen(ele)))
+            {
+                dictReleaseIterator(di);
+                return 0;
+            }
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
             items--;
         }
@@ -1226,13 +1296,21 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
             int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ?
                 AOF_REWRITE_ITEMS_PER_CMD : items;
 
-            if (rioWriteBulkCount(r,'*',2+cmd_items*2) == 0) return 0;
-            if (rioWriteBulkString(r,"HMSET",5) == 0) return 0;
-            if (rioWriteBulkObject(r,key) == 0) return 0;
+            if (!rioWriteBulkCount(r,'*',2+cmd_items*2) ||
+                !rioWriteBulkString(r,"HMSET",5) ||
+                !rioWriteBulkObject(r,key)) 
+            {
+                hashTypeReleaseIterator(hi);
+                return 0;
+            }
         }
 
-        if (rioWriteHashIteratorCursor(r, hi, OBJ_HASH_KEY) == 0) return 0;
-        if (rioWriteHashIteratorCursor(r, hi, OBJ_HASH_VALUE) == 0) return 0;
+        if (!rioWriteHashIteratorCursor(r, hi, OBJ_HASH_KEY) ||
+            !rioWriteHashIteratorCursor(r, hi, OBJ_HASH_VALUE))
+        {
+            hashTypeReleaseIterator(hi);
+            return 0;           
+        }
         if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
         items--;
     }
@@ -1275,6 +1353,20 @@ int rioWriteStreamPendingEntry(rio *r, robj *key, const char *groupname, size_t 
     if (rioWriteBulkLongLong(r,nack->delivery_count) == 0) return 0;
     if (rioWriteBulkString(r,"JUSTID",6) == 0) return 0;
     if (rioWriteBulkString(r,"FORCE",5) == 0) return 0;
+    return 1;
+}
+
+/* Helper for rewriteStreamObject(): emit the XGROUP CREATECONSUMER is
+ * needed in order to create consumers that do not have any pending entries.
+ * All this in the context of the specified key and group. */
+int rioWriteStreamEmptyConsumer(rio *r, robj *key, const char *groupname, size_t groupname_len, streamConsumer *consumer) {
+    /* XGROUP CREATECONSUMER <key> <group> <consumer> */
+    if (rioWriteBulkCount(r,'*',5) == 0) return 0;
+    if (rioWriteBulkString(r,"XGROUP",6) == 0) return 0;
+    if (rioWriteBulkString(r,"CREATECONSUMER",14) == 0) return 0;
+    if (rioWriteBulkObject(r,key) == 0) return 0;
+    if (rioWriteBulkString(r,groupname,groupname_len) == 0) return 0;
+    if (rioWriteBulkString(r,consumer->name,sdslen(consumer->name)) == 0) return 0;
     return 1;
 }
 
@@ -1366,13 +1458,25 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
             }
 
             /* Generate XCLAIMs for each consumer that happens to
-             * have pending entries. Empty consumers have no semantical
-             * value so they are discarded. */
+             * have pending entries. Empty consumers would be generated with
+             * XGROUP CREATECONSUMER. */
             raxIterator ri_cons;
             raxStart(&ri_cons,group->consumers);
             raxSeek(&ri_cons,"^",NULL,0);
             while(raxNext(&ri_cons)) {
                 streamConsumer *consumer = (streamConsumer*)ri_cons.data;
+                /* If there are no pending entries, just emit XGROUP CREATECONSUMER */
+                if (raxSize(consumer->pel) == 0) {
+                    if (rioWriteStreamEmptyConsumer(r,key,(char*)ri.key,
+                                                    ri.key_len,consumer) == 0)
+                    {
+                        raxStop(&ri_cons);
+                        raxStop(&ri);
+                        streamIteratorStop(&si);
+                        return 0;
+                    }
+                    continue;
+                }
                 /* For the current consumer, iterate all the PEL entries
                  * to emit the XCLAIM protocol. */
                 raxIterator ri_pel;
@@ -1438,6 +1542,8 @@ int rewriteAppendOnlyFileRio(rio *aof) {
     dictEntry *de;
     size_t processed = 0;
     int j;
+    long key_count = 0;
+    long long updated_time = 0;
 
     for (j = 0; j < cserver.dbnum; j++) {
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
@@ -1509,6 +1615,17 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                 processed = aof->processed_bytes;
                 aofReadDiffFromParent();
             }
+
+            /* Update info every 1 second (approximately).
+             * in order to avoid calling mstime() on each iteration, we will
+             * check the diff every 1024 keys */
+            if ((key_count++ & 1023) == 0) {
+                long long now = mstime();
+                if (now - updated_time >= 1000) {
+                    sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, key_count, "AOF rewrite");
+                    updated_time = now;
+                }
+            }
         }
         dictReleaseIterator(di);
         di = NULL;
@@ -1535,6 +1652,7 @@ int rewriteAppendOnlyFile(char *filename) {
     int nodata = 0;
     mstime_t start = 0;
 
+{ // BEGIN GOTO SCOPED VARIABLES
     /* Note that we have to use a different temp name here compared to the
      * one used by rewriteAppendOnlyFileBackground() function. */
     snprintf(tmpfile,256,"temp-rewriteaof-%d.aof", (int) getpid());
@@ -1589,7 +1707,7 @@ int rewriteAppendOnlyFile(char *filename) {
     if (write(g_pserver->aof_pipe_write_ack_to_parent,"!",1) != 1) goto werr;
     if (anetNonBlock(NULL,g_pserver->aof_pipe_read_ack_from_parent) != ANET_OK)
         goto werr;
-    /* We read the ACK from the server using a 10 seconds timeout. Normally
+    /* We read the ACK from the server using a 5 seconds timeout. Normally
      * it should reply ASAP, but just in case we lose its reply, we are sure
      * the child will eventually get terminated. */
     if (syncRead(g_pserver->aof_pipe_read_ack_from_parent,&byte,1,5000) != 1 ||
@@ -1603,8 +1721,31 @@ int rewriteAppendOnlyFile(char *filename) {
     serverLog(LL_NOTICE,
         "Concatenating %.2f MB of AOF diff received from parent.",
         (double) sdslen(g_pserver->aof_child_diff) / (1024*1024));
-    if (rioWrite(&aof,g_pserver->aof_child_diff,sdslen(g_pserver->aof_child_diff)) == 0)
-        goto werr;
+
+    /* Now we write the entire AOF buffer we received from the parent
+     * via the pipe during the life of this fork child.
+     * once a second, we'll take a break and send updated COW info to the parent */
+    size_t bytes_to_write = sdslen(g_pserver->aof_child_diff);
+    const char *buf = g_pserver->aof_child_diff;
+    long long cow_updated_time = mstime();
+    long long key_count = dbTotalServerKeyCount();
+    while (bytes_to_write) {
+        /* We write the AOF buffer in chunk of 8MB so that we can check the time in between them */
+        size_t chunk_size = bytes_to_write < (8<<20) ? bytes_to_write : (8<<20);
+
+        if (rioWrite(&aof,buf,chunk_size) == 0)
+            goto werr;
+
+        bytes_to_write -= chunk_size;
+        buf += chunk_size;
+
+        /* Update COW info */
+        long long now = mstime();
+        if (now - cow_updated_time >= 1000) {
+            sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, key_count, "AOF rewrite");
+            cow_updated_time = now;
+        }
+    }
 
     /* Make sure data will not remain on the OS's output buffers */
     if (fflush(fp)) goto werr;
@@ -1623,6 +1764,7 @@ int rewriteAppendOnlyFile(char *filename) {
     serverLog(LL_NOTICE,"SYNC append only file rewrite performed");
     stopSaving(1);
     return C_OK;
+} // END GOTO SCOPED VARIABLES
 
 werr:
     serverLog(LL_WARNING,"Write error writing append only file on disk: %s", strerror(errno));
@@ -1739,7 +1881,6 @@ int rewriteAppendOnlyFileBackground(void) {
 
     if (hasActiveChildProcess()) return C_ERR;
     if (aofCreatePipes() != C_OK) return C_ERR;
-    openChildInfoPipe();
     if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0) {
         char tmpfile[256];
 
@@ -1748,7 +1889,7 @@ int rewriteAppendOnlyFileBackground(void) {
         redisSetCpuAffinity(g_pserver->aof_rewrite_cpulist);
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
         if (rewriteAppendOnlyFile(tmpfile) == C_OK) {
-            sendChildCOWInfo(CHILD_TYPE_AOF, "AOF rewrite");
+            sendChildCowInfo(CHILD_INFO_TYPE_AOF_COW_SIZE, "AOF rewrite");
             exitFromChild(0);
         } else {
             exitFromChild(1);
@@ -1756,7 +1897,6 @@ int rewriteAppendOnlyFileBackground(void) {
     } else {
         /* Parent */
         if (childpid == -1) {
-            closeChildInfoPipe();
             serverLog(LL_WARNING,
                 "Can't rewrite append only file in background: fork: %s",
                 strerror(errno));
@@ -1764,10 +1904,9 @@ int rewriteAppendOnlyFileBackground(void) {
             return C_ERR;
         }
         serverLog(LL_NOTICE,
-            "Background append only file rewriting started by pid %d",childpid);
+            "Background append only file rewriting started by pid %ld",(long)childpid);
         g_pserver->aof_rewrite_scheduled = 0;
         g_pserver->aof_rewrite_time_start = time(NULL);
-        g_pserver->aof_child_pid = childpid;
         updateDictResizePolicy();
         /* We set appendseldb to -1 in order to force the next call to the
          * feedAppendOnlyFile() to issue a SELECT command, so the differences
@@ -1781,7 +1920,7 @@ int rewriteAppendOnlyFileBackground(void) {
 }
 
 void bgrewriteaofCommand(client *c) {
-    if (g_pserver->aof_child_pid != -1) {
+    if (g_pserver->child_type == CHILD_TYPE_AOF) {
         addReplyError(c,"Background append only file rewriting already in progress");
     } else if (hasActiveChildProcess()) {
         g_pserver->aof_rewrite_scheduled = 1;
@@ -1839,7 +1978,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
          * rewritten AOF. */
         latencyStartMonitor(latency);
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof",
-            (int)g_pserver->aof_child_pid);
+            (int)g_pserver->child_pid);
         newfd = open(tmpfile,O_WRONLY|O_APPEND);
         if (newfd == -1) {
             serverLog(LL_WARNING,
@@ -1855,6 +1994,20 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
         }
         latencyEndMonitor(latency);
         latencyAddSampleIfNeeded("aof-rewrite-diff-write",latency);
+  
+        if (g_pserver->aof_fsync == AOF_FSYNC_EVERYSEC) {
+            aof_background_fsync(newfd);
+        } else if (g_pserver->aof_fsync == AOF_FSYNC_ALWAYS) {
+            latencyStartMonitor(latency);
+            if (redis_fsync(newfd) == -1) {
+                serverLog(LL_WARNING,
+                    "Error trying to fsync the parent diff to the rewritten AOF: %s", strerror(errno));
+                close(newfd);
+                goto cleanup;
+            }
+            latencyEndMonitor(latency);
+            latencyAddSampleIfNeeded("aof-rewrite-done-fsync",latency);
+        }
 
         serverLog(LL_NOTICE,
             "Residual parent diff successfully flushed to the rewritten AOF (%.2f MB)", (double) aofRewriteBufferSize() / (1024*1024));
@@ -1922,14 +2075,11 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             /* AOF enabled, replace the old fd with the new one. */
             oldfd = g_pserver->aof_fd;
             g_pserver->aof_fd = newfd;
-            if (g_pserver->aof_fsync == AOF_FSYNC_ALWAYS)
-                redis_fsync(newfd);
-            else if (g_pserver->aof_fsync == AOF_FSYNC_EVERYSEC)
-                aof_background_fsync(newfd);
             g_pserver->aof_selected_db = -1; /* Make sure SELECT is re-issued */
             aofUpdateCurrentSize();
             g_pserver->aof_rewrite_base_size = g_pserver->aof_current_size;
             g_pserver->aof_fsync_offset = g_pserver->aof_current_size;
+            g_pserver->aof_last_fsync = g_pserver->unixtime;
 
             /* Clear regular AOF buffer since its contents was just written to
              * the new AOF from the background rewrite buffer. */
@@ -1945,7 +2095,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             g_pserver->aof_state = AOF_ON;
 
         /* Asynchronously close the overwritten AOF. */
-        if (oldfd != -1) bioCreateBackgroundJob(BIO_CLOSE_FILE,(void*)(long)oldfd,NULL,NULL);
+        if (oldfd != -1) bioCreateCloseJob(oldfd);
 
         serverLog(LL_VERBOSE,
             "Background AOF rewrite signal handler took %lldus", ustime()-now);
@@ -1967,8 +2117,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
 cleanup:
     aofClosePipes();
     aofRewriteBufferReset();
-    aofRemoveTempFile(g_pserver->aof_child_pid);
-    g_pserver->aof_child_pid = -1;
+    aofRemoveTempFile(g_pserver->child_pid);
     g_pserver->aof_rewrite_time_last = time(NULL)-g_pserver->aof_rewrite_time_start;
     g_pserver->aof_rewrite_time_start = -1;
     /* Schedule a new rewrite if we are waiting for it to switch the AOF ON. */

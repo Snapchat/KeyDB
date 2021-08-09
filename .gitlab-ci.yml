@@ -1,0 +1,147 @@
+build:
+  rules:
+    - if: '$COVERAGE'
+      when: never
+    - if: '$ENDURANCE'
+      when: never
+    - when: always
+  tags:
+    - docker
+  stage: build
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
+
+make-test:
+  rules:
+    - if: '$COVERAGE'
+      when: never
+    - if: '$ENDURANCE'
+      when: never
+    - when: always
+  tags:
+    - docker
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
+    - make test -j
+
+node-redis-test:
+  rules:
+    - if: '$COVERAGE'
+      when: never
+    - if: '$ENDURANCE'
+      when: never
+    - when: always
+  tags:
+    - docker
+    - ipv6
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
+    - make install
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/node-redis.git
+    - cd node-redis
+    - npm install
+    - npm run test
+
+jedis-test:
+  rules:
+    - if: '$COVERAGE'
+      when: never
+    - if: '$ENDURANCE'
+      when: never
+    - when: always
+  tags:
+    - docker
+    - ipv4
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
+    - make install
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/jedis.git
+    - cd jedis
+    - make test
+
+redis-rs-test:
+  rules:
+    - if: '$COVERAGE'
+      when: never
+    - if: '$ENDURANCE'
+      when: never
+    - when: always
+  tags:
+    - docker
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
+    - make install
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/redis-rs.git
+    - cd redis-rs
+    - make test
+
+endurance-test:
+  rules:
+    - if: '$ENDURANCE'
+  tags:
+    - docker
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
+    - ./runtest --loop --stop
+
+coverage-test:
+  rules:
+    - if: '$COVERAGE'
+  tags:
+    - docker
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make gcov -j
+    - make install
+    - ./runtest || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - ./runtest-cluster || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - ./runtest-sentinel || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - ./runtest-moduleapi || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/redis-rs.git
+    - cd redis-rs
+    - make test || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - cd ..
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/jedis.git
+    - cd jedis
+    - make test || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - cd ..
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/node-redis.git
+    - cd node-redis
+    - npm install
+    - npm run test || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - cd ..
+    - geninfo -o KeyDB.info --no-external .
+    - genhtml --legend -o lcov-html KeyDB.info

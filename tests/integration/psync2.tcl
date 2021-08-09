@@ -39,6 +39,7 @@ proc show_cluster_status {} {
         # all the lists are empty.
         #
         # regexp {^[0-9]+:[A-Z] [0-9]+ [A-z]+ [0-9]+ ([0-9:.]+) .*} $l - logdate
+        catch {
         while 1 {
             # Find the log with smallest time.
             set empty 0
@@ -66,6 +67,7 @@ proc show_cluster_status {} {
             # event in the time line).
             puts "\[$best port $R_port($best)\] [lindex $log($best) 0]"
             set log($best) [lrange $log($best) 1 end]
+        }
         }
     }
 }

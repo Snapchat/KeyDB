@@ -29,6 +29,8 @@ class StorageCache
     }
 
 public:
+    ~StorageCache();
+
     static StorageCache *create(IStorageFactory *pfactory, int db, IStorageFactory::key_load_iterator fn, void *privdata) {
         StorageCache *cache = new StorageCache(nullptr, pfactory->FSlow() /*fCache*/);
         load_iter_data data = {cache, fn, privdata};
@@ -45,7 +47,7 @@ public:
     bool enumerate(IStorage::callback fn) const { return m_spstorage->enumerate(fn); }
 
     void beginWriteBatch();
-    void endWriteBatch() { m_spstorage->endWriteBatch(); m_lock.unlock(); }
+    void endWriteBatch() { m_spstorage->endWriteBatch(); }
     void batch_lock() { return m_spstorage->batch_lock(); }
     void batch_unlock() { return m_spstorage->batch_unlock(); }
 

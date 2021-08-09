@@ -49,10 +49,16 @@ public:
         m_setepochOutstanding.clear();
     }
 
+    bool empty() const
+    {
+        std::unique_lock<fastlock> lock(m_lock);
+        return m_vecepochs.empty();
+    }
+
     void endEpoch(uint64_t epoch, bool fNoFree = false)
     {
         std::unique_lock<fastlock> lock(m_lock);
-        assert(m_setepochOutstanding.find(epoch) != m_setepochOutstanding.end());
+        serverAssert(m_setepochOutstanding.find(epoch) != m_setepochOutstanding.end());
         bool fMinElement = *std::min_element(m_setepochOutstanding.begin(), m_setepochOutstanding.end());
         m_setepochOutstanding.erase(epoch);
         if (fNoFree)
@@ -91,8 +97,8 @@ public:
     void enqueue(uint64_t epoch, std::unique_ptr<T> &&sp)
     {
         std::unique_lock<fastlock> lock(m_lock);
-        assert(m_setepochOutstanding.find(epoch) != m_setepochOutstanding.end());
-        assert(sp->FWillFreeChildDebug() == false);
+        serverAssert(m_setepochOutstanding.find(epoch) != m_setepochOutstanding.end());
+        serverAssert(sp->FWillFreeChildDebug() == false);
 
         auto itr = std::find(m_vecepochs.begin(), m_vecepochs.end(), m_epochNext+1);
         if (itr == m_vecepochs.end())
@@ -109,7 +115,7 @@ public:
     }
 
 private:
-    fastlock m_lock { "Garbage Collector"};
+    mutable fastlock m_lock { "Garbage Collector"};
 
     std::vector<EpochHolder> m_vecepochs;
     std::unordered_set<uint64_t> m_setepochOutstanding;

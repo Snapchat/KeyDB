@@ -33,7 +33,8 @@ start_server {tags {"maxmemory"}} {
             # Get the current memory limit and calculate a new limit.
             # We just add 100k to the current memory size so that it is
             # fast for us to reach that limit.
-            set used [s used_memory]
+            set overhead [s mem_not_counted_for_evict]
+            set used [expr [s used_memory] - $overhead]
             set limit [expr {$used+100*1024}]
             r config set maxmemory $limit
             r config set maxmemory-policy $policy
@@ -42,7 +43,7 @@ start_server {tags {"maxmemory"}} {
             while 1 {
                 r setex [randomKey] 10000 x
                 incr numkeys
-                if {[s used_memory]+4096 > $limit} {
+                if {[expr {[s used_memory] - $overhead + 4096}] > $limit} {
                     assert {$numkeys > 10}
                     break
                 }
@@ -52,7 +53,8 @@ start_server {tags {"maxmemory"}} {
             for {set j 0} {$j < $numkeys} {incr j} {
                 r setex [randomKey] 10000 x
             }
-            assert {[s used_memory] < ($limit+4096)}
+            set used_amt [expr [s used_memory] - $overhead]
+            assert {$used_amt < ($limit+4096)}
         }
     }
 
@@ -65,7 +67,8 @@ start_server {tags {"maxmemory"}} {
             # Get the current memory limit and calculate a new limit.
             # We just add 100k to the current memory size so that it is
             # fast for us to reach that limit.
-            set used [s used_memory]
+            set overhead [s mem_not_counted_for_evict]
+            set used [expr [s used_memory] - $overhead]
             set limit [expr {$used+100*1024}]
             r config set maxmemory $limit
             r config set maxmemory-policy $policy
@@ -74,7 +77,7 @@ start_server {tags {"maxmemory"}} {
             while 1 {
                 r set [randomKey] x
                 incr numkeys
-                if {[s used_memory]+4096 > $limit} {
+                if {[expr [s used_memory] - $overhead]+4096 > $limit} {
                     assert {$numkeys > 10}
                     break
                 }
@@ -91,7 +94,7 @@ start_server {tags {"maxmemory"}} {
                 }
             }
             if {[string match allkeys-* $policy]} {
-                assert {[s used_memory] < ($limit+4096)}
+                assert {[expr [s used_memory] - $overhead] < ($limit+4096)}
             } else {
                 assert {$err == 1}
             }
@@ -107,7 +110,8 @@ start_server {tags {"maxmemory"}} {
             # Get the current memory limit and calculate a new limit.
             # We just add 100k to the current memory size so that it is
             # fast for us to reach that limit.
-            set used [s used_memory]
+            set overhead [s mem_not_counted_for_evict]
+            set used [expr [s used_memory] - $overhead]
             set limit [expr {$used+100*1024}]
             r config set maxmemory $limit
             r config set maxmemory-policy $policy
@@ -121,7 +125,7 @@ start_server {tags {"maxmemory"}} {
                 } else {
                     r set "key:$numkeys" x
                 }
-                if {[s used_memory]+4096 > $limit} {
+                if {[expr [s used_memory] - $overhead]+4096 > $limit} {
                     assert {$numkeys > 10}
                     break
                 }
@@ -135,7 +139,7 @@ start_server {tags {"maxmemory"}} {
                 catch {r setex "foo:$j" 10000 x}
             }
             # We should still be under the limit.
-            assert {[s used_memory] < ($limit+4096)}
+            assert {[expr [s used_memory] - $overhead] < ($limit+4096)}
             # However all our non volatile keys should be here.
             for {set j 0} {$j < $numkeys} {incr j 2} {
                 assert {[r exists "key:$j"]}
@@ -183,7 +187,7 @@ proc test_slave_buffers {test_name cmd_count payload_len limit_memory pipeline} 
             set orig_client_buf [s -1 mem_clients_normal]
             set orig_mem_not_counted_for_evict [s -1 mem_not_counted_for_evict]
             set orig_used_no_repl [expr {$orig_used - $orig_mem_not_counted_for_evict}]
-            set limit [expr {$orig_used - $orig_mem_not_counted_for_evict + 20*1024}]
+            set limit [expr {$orig_used - $orig_mem_not_counted_for_evict + 32*1024}]
 
             if {$limit_memory==1} {
                 $master config set maxmemory $limit
@@ -247,9 +251,30 @@ test_slave_buffers {slave buffer are counted correctly} 1000000 10 0 1
 test_slave_buffers "replica buffer don't induce eviction" 100000 100 1 0
 
 start_server {tags {"maxmemory"} overrides {server-threads 1}} {
+    test {Don't rehash if used memory exceeds maxmemory after rehash} {
+        r config set maxmemory 0
+        r config set maxmemory-policy allkeys-random
+
+        # Next rehash size is 8192, that will eat 64k memory
+        populate 4096 "" 1
+
+        set used [s used_memory]
+        set limit [expr {$used + 10*1024}]
+        r config set maxmemory $limit
+        r set k1 v1
+        # Next writing command will trigger evicting some keys if last
+        # command trigger DB dict rehash
+        r set k2 v2
+        # There must be 4098 keys because redis doesn't evict keys.
+        r dbsize
+    } {4098}
+}
+
+start_server {tags {"maxmemory"} overrides {server-threads 1}} {
     test {client tracking don't cause eviction feedback loop} {
         r config set maxmemory 0
         r config set maxmemory-policy allkeys-lru
+        r config set maxmemory-eviction-tenacity 100
 
         # 10 clients listening on tracking messages
         set clients {}
@@ -284,7 +309,8 @@ start_server {tags {"maxmemory"} overrides {server-threads 1}} {
         # we need to make sure to evict keynames of a total size of more than
         # 16kb since the (PROTO_REPLY_CHUNK_BYTES), only after that the
         # invalidation messages have a chance to trigger further eviction.
-        set used [s used_memory]
+        set overhead [s mem_not_counted_for_evict]
+        set used [expr [s used_memory] - $overhead]
         set limit [expr {$used - 40000}]
         r config set maxmemory $limit
 
@@ -308,4 +334,4 @@ start_server {tags {"maxmemory"} overrides {server-threads 1}} {
         if {$::verbose} { puts "evicted: $evicted" }
     }
 }
-}; #run_solo
+}

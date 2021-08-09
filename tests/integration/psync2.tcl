@@ -5,7 +5,7 @@ proc show_cluster_status {} {
         # time info. Logs are in the following form:
         #
         # 11296:M 25 May 2020 17:37:14.652 # Server initialized
-        set log_regexp {^[0-9]+:[A-Z] [0-9]+ [A-z]+ [0-9]+ ([0-9:.]+) .*}
+        set log_regexp {^[0-9]+:^[0-9]+:[A-Z] [0-9]+ [A-z]+ [0-9]+ ([0-9:.]+) .*}
         set repl_regexp {(master|repl|sync|backlog|meaningful|offset)}
 
         puts "Master ID is $master_id"
@@ -25,15 +25,11 @@ proc show_cluster_status {} {
         array set log {}
         for {set j 0} {$j < 5} {incr j} {
             set fd [open $R_log($j)]
-            set found 0
-            set tries 0
-            while {([gets $fd l] >= 0 || !$found) && $tries < 1000} {
+            while {[gets $fd l] >= 0} {
                 if {[regexp $log_regexp $l] &&
                     [regexp -nocase $repl_regexp $l]} {
                     lappend log($j) $l
-                    set found 1
                 }
-                incr $tries
             }
             close $fd
         }
@@ -43,6 +39,7 @@ proc show_cluster_status {} {
         # all the lists are empty.
         #
         # regexp {^[0-9]+:[A-Z] [0-9]+ [A-z]+ [0-9]+ ([0-9:.]+) .*} $l - logdate
+        catch {
         while 1 {
             # Find the log with smallest time.
             set empty 0
@@ -71,6 +68,7 @@ proc show_cluster_status {} {
             puts "\[$best port $R_port($best)\] [lindex $log($best) 0]"
             set log($best) [lrange $log($best) 1 end]
         }
+        }
     }
 }
 
@@ -98,7 +96,7 @@ start_server {} {
                                       # master and slave instances while the
                                       # master is loaded with writes.
 
-    set disconnect_period 2000      ; # Disconnect repl link every N ms.
+    set disconnect_period 1000      ; # Disconnect repl link every N ms.
 
     for {set j 0} {$j < 5} {incr j} {
         set R($j) [srv [expr 0-$j] client]
@@ -160,7 +158,7 @@ start_server {} {
         test "PSYNC2: cluster is consistent after failover" {
             $R($master_id) incr x; incr counter_value
             for {set j 0} {$j < 5} {incr j} {
-                wait_for_condition 50 2000 {
+                wait_for_condition 50 1000 {
                     [$R($j) get x] == $counter_value
                 } else {
                     show_cluster_status
@@ -196,7 +194,7 @@ start_server {} {
         set x [$R($master_id) get x]
         test "PSYNC2: cluster is consistent after load (x = $x)" {
             for {set j 0} {$j < 5} {incr j} {
-                wait_for_condition 50 2000 {
+                wait_for_condition 50 1000 {
                     [$R($j) get x] == $counter_value
                 } else {
                     show_cluster_status
@@ -284,12 +282,12 @@ start_server {} {
         set sync_partial_err [status $R($master_id) sync_partial_err]
         catch {
             $R($slave_id) config rewrite
-            restart_server [expr {0-$slave_id}] true
+            restart_server [expr {0-$slave_id}] true false
             set R($slave_id) [srv [expr {0-$slave_id}] client]
         }
         # note: just waiting for connected_slaves==4 has a race condition since
         # we might do the check before the master realized that the slave disconnected
-        wait_for_condition 50 2000 {
+        wait_for_condition 50 1000 {
             [status $R($master_id) sync_partial_ok] == $sync_partial + 1
         } else {
             puts "prev sync_full: $sync_count"
@@ -315,7 +313,7 @@ start_server {} {
         $R($master_id) EVALSHA e6e0b547500efcec21eddb619ac3724081afee89 0
 
         # Wait for the two to sync
-        wait_for_condition 50 2000 {
+        wait_for_condition 50 1000 {
             [$R($master_id) debug digest] == [$R($slave_id) debug digest]
         } else {
             show_cluster_status
@@ -333,7 +331,7 @@ start_server {} {
 
         catch {
             $R($slave_id) config rewrite
-            restart_server [expr {0-$slave_id}] true
+            restart_server [expr {0-$slave_id}] true false
             set R($slave_id) [srv [expr {0-$slave_id}] client]
         }
 
@@ -343,7 +341,7 @@ start_server {} {
             if {[catch {
                 $R($slave_id) slaveof $master_host $master_port
             }]} {
-                after 2000
+                after 1000
             } else {
                 break
             }
@@ -351,7 +349,7 @@ start_server {} {
         }
 
         # The master should be back at 4 slaves eventually
-        wait_for_condition 50 2000 {
+        wait_for_condition 50 1000 {
             [status $R($master_id) connected_slaves] == 4
         } else {
             show_cluster_status
@@ -362,7 +360,7 @@ start_server {} {
 
         # However if the slave started with the full state of the
         # scripting engine, we should now have the same digest.
-        wait_for_condition 50 2000 {
+        wait_for_condition 50 1000 {
             [$R($master_id) debug digest] == [$R($slave_id) debug digest]
         } else {
             show_cluster_status
@@ -371,7 +369,8 @@ start_server {} {
     }
 
     if {$no_exit} {
-        while 1 { puts -nonewline .; flush stdout; after 2000}
+        while 1 { puts -nonewline .; flush stdout; after 1000}
     }
 
 }}}}}
+

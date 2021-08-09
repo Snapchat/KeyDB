@@ -38,6 +38,17 @@ void RocksDBStorageProvider::insert(const char *key, size_t cchKey, void *data, 
         ++m_count;
 }
 
+void RocksDBStorageProvider::bulkInsert(sds *rgkeys, sds *rgvals, size_t celem)
+{
+    auto spbatch = std::make_unique<rocksdb::WriteBatch>();
+    for (size_t ielem = 0; ielem < celem; ++ielem) {
+        spbatch->Put(m_spcolfamily.get(), rocksdb::Slice(rgkeys[ielem], sdslen(rgkeys[ielem])), rocksdb::Slice(rgvals[ielem], sdslen(rgvals[ielem])));
+    }
+    m_spdb->Write(WriteOptions(), spbatch.get());
+    std::unique_lock<fastlock> l(m_lock);
+    m_count += celem;
+}
+
 bool RocksDBStorageProvider::erase(const char *key, size_t cchKey)
 {
     rocksdb::Status status;

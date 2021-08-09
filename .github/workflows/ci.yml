@@ -15,7 +15,7 @@ jobs:
           sudo apt-get update
           sudo apt-get -y remove libzstd || true
           sudo apt-get -y install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
-          make BUILD_TLS=yes -j2
+          make BUILD_TLS=yes -j2 KEYDB_CFLAGS='-Werror' KEYDB_CXXFLAGS='-Werror'
     - name: gen-cert
       run: ./utils/gen-test-certs.sh
     - name: test-tls

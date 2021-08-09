@@ -25,6 +25,12 @@ StorageCache::StorageCache(IStorage *storage, bool fCache)
         m_pdict = dictCreate(&dbStorageCacheType, nullptr);
 }
 
+StorageCache::~StorageCache()
+{
+    if (m_pdict != nullptr)
+        dictRelease(m_pdict);
+}
+
 void StorageCache::clear()
 {
     std::unique_lock<fastlock> ul(m_lock);
@@ -91,6 +97,20 @@ void StorageCache::insert(sds key, const void *data, size_t cbdata, bool fOverwr
     m_spstorage->insert(key, sdslen(key), (void*)data, cbdata, fOverwrite);
 }
 
+void StorageCache::bulkInsert(sds *rgkeys, sds *rgvals, size_t celem)
+{
+    std::unique_lock<fastlock> ul(m_lock);
+    bulkInsertsInProgress++;
+    if (m_pdict != nullptr) {
+        for (size_t ielem = 0; ielem < celem; ++ielem) {
+            cacheKey(rgkeys[ielem]);
+        }
+    }
+    ul.unlock();
+    m_spstorage->bulkInsert(rgkeys, rgvals, celem);
+    bulkInsertsInProgress--;
+}
+
 const StorageCache *StorageCache::clone()
 {
     std::unique_lock<fastlock> ul(m_lock);
@@ -119,7 +139,7 @@ size_t StorageCache::count() const
     std::unique_lock<fastlock> ul(m_lock);
     size_t count = m_spstorage->count();
     if (m_pdict != nullptr) {
-        serverAssert(count == (dictSize(m_pdict) + m_collisionCount));
+        serverAssert(bulkInsertsInProgress.load(std::memory_order_seq_cst) || count == (dictSize(m_pdict) + m_collisionCount));
     }
     return count;
 }

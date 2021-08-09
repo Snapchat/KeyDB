@@ -22,14 +22,22 @@ fastlock_lock:
 	# [rdi+64] ...
 	#	uint16_t active
 	#	uint16_t avail
+	#
+	# RSI points to a spin function to call, or NULL
 	
 	# First get our TID and put it in ecx
-	push rdi                # we need our struct pointer (also balance the stack for the call)
-	.cfi_adjust_cfa_offset 8
+	sub rsp, 24				# We only use 16 bytes, but we also need the stack aligned
+	.cfi_adjust_cfa_offset 24
+	mov [rsp], rdi			# we need our struct pointer (also balance the stack for the call)
+	mov [rsp+8], rsi		# backup the spin  function
+	
 	call gettid             # get our thread ID (TLS is nasty in ASM so don't bother inlining)
 	mov esi, eax            # back it up in esi
-	pop rdi                 # get our pointer back
-	.cfi_adjust_cfa_offset -8
+
+	mov rdi, [rsp]          # Restore spin struct
+	mov r8, [rsp+8]         # restore the function (in a different register)
+	add rsp, 24
+	.cfi_adjust_cfa_offset -24
 
 	cmp [rdi], esi          # Is the TID we got back the owner of the lock?
 	je .LLocked             # Don't spin in that case
@@ -47,6 +55,8 @@ fastlock_lock:
 	# ax now contains the ticket
 	# OK Start the wait loop
 	xor ecx, ecx
+	test r8, r8
+	jnz .LLoopFunction
 .ALIGN 16
 .LLoop:
 	mov edx, [rdi+64]
@@ -83,6 +93,40 @@ fastlock_lock:
 	mov [rdi], esi          # lock->m_pidOwner = gettid()
 	inc dword ptr [rdi+4]   # lock->m_depth++
 	ret
+
+.LLoopFunction:
+	sub rsp, 40
+	.cfi_adjust_cfa_offset 40
+	xor ecx, ecx
+	mov [rsp], rcx
+	mov [rsp+8], r8
+	mov [rsp+16], rdi
+	mov [rsp+24], rsi
+	mov [rsp+32], eax
+.LLoopFunctionCore:
+	mov edx, [rdi+64]
+	cmp dx, ax
+	je .LExitLoopFunction
+	mov r8, [rsp+8]
+	call r8
+	test eax, eax
+	jz .LExitLoopFunctionForNormal
+	mov eax, [rsp+32]    # restore clobbered eax
+	mov rdi, [rsp+16]
+	jmp .LLoopFunctionCore
+.LExitLoopFunction:
+	mov rsi, [rsp+24]
+	add rsp, 40
+	.cfi_adjust_cfa_offset -40
+	jmp .LLocked
+.LExitLoopFunctionForNormal:
+	xor ecx, ecx
+	mov rdi, [rsp+16]
+	mov rsi, [rsp+24]
+	mov eax, [rsp+32]
+	add rsp, 40
+	.cfi_adjust_cfa_offset -40
+	jmp .LLoop
 .cfi_endproc
 
 .ALIGN 16

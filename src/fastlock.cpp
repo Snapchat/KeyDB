@@ -70,7 +70,9 @@
 
 #ifdef HAVE_BACKTRACE
 #include <ucontext.h>
-__attribute__((weak)) void logStackTrace(ucontext_t *) {}
+__attribute__((weak)) void logStackTrace(void *, int) {
+    printf("\tFailed to generate stack trace\n");
+}
 #endif
 
 extern int g_fInCrash;
@@ -188,9 +190,7 @@ void printTrace()
 {
 #ifdef HAVE_BACKTRACE
     serverLog(3 /*LL_WARNING*/, "printing backtrace for thread %d", gettid());
-    ucontext_t ctxt;
-    getcontext(&ctxt);
-    logStackTrace(&ctxt);
+    logStackTrace(nullptr, 1);
 #endif
 }
 
@@ -304,6 +304,10 @@ uint64_t fastlock_getlongwaitcount()
 
 extern "C" void fastlock_sleep(fastlock *lock, pid_t pid, unsigned wake, unsigned myticket)
 {
+    UNUSED(lock);
+    UNUSED(pid);
+    UNUSED(wake);
+    UNUSED(myticket);
 #ifdef __linux__
     g_dlock.registerwait(lock, pid);
     unsigned mask = (1U << (myticket % 32));
@@ -338,7 +342,7 @@ extern "C" void fastlock_init(struct fastlock *lock, const char *name)
 }
 
 #ifndef ASM_SPINLOCK
-extern "C" void fastlock_lock(struct fastlock *lock)
+extern "C" void fastlock_lock(struct fastlock *lock, spin_worker worker)
 {
     int pidOwner;
     __atomic_load(&lock->m_pidOwner, &pidOwner, __ATOMIC_ACQUIRE);
@@ -356,20 +360,32 @@ extern "C" void fastlock_lock(struct fastlock *lock)
     __atomic_load(&g_fHighCpuPressure, &fHighPressure, __ATOMIC_RELAXED);
     unsigned loopLimit = fHighPressure ? 0x10000 : 0x100000;
 
-    for (;;)
-    {
-        __atomic_load(&lock->m_ticket.u, &ticketT.u, __ATOMIC_ACQUIRE);
-        if ((ticketT.u & 0xffff) == myticket)
-            break;
+    if (worker != nullptr) {
+        for (;;) {
+            __atomic_load(&lock->m_ticket.u, &ticketT.u, __ATOMIC_ACQUIRE);
+            if ((ticketT.u & 0xffff) == myticket)
+                break;
+            if (!worker())
+                goto LNormalLoop;
+        }
+    } else {
+LNormalLoop:
+        for (;;)
+        {
+            __atomic_load(&lock->m_ticket.u, &ticketT.u, __ATOMIC_ACQUIRE);
+            if ((ticketT.u & 0xffff) == myticket)
+                break;
 
 #if defined(__i386__) || defined(__amd64__)
-        __asm__ __volatile__ ("pause");
+            __asm__ __volatile__ ("pause");
 #elif defined(__aarch64__)
-        __asm__ __volatile__ ("yield");
+            __asm__ __volatile__ ("yield");
 #endif
-        if ((++cloops % loopLimit) == 0)
-        {
-            fastlock_sleep(lock, tid, ticketT.u, myticket);
+
+            if ((++cloops % loopLimit) == 0)
+            {
+                fastlock_sleep(lock, tid, ticketT.u, myticket);
+            }
         }
     }
 

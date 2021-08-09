@@ -2470,6 +2470,7 @@ static int updateReplBacklogSize(long long val, long long prev, const char **err
      * being able to tell when the size changes, so restore prev before calling it. */
     UNUSED(err);
     g_pserver->repl_backlog_size = prev;
+    g_pserver->repl_backlog_config_size = val;
     resizeReplicationBacklog(val);
     return 1;
 }

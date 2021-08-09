@@ -2018,7 +2018,7 @@ int keyIsExpired(const redisDbPersistentDataSnapshot *db, robj *key) {
      * script execution, making propagation to slaves / AOF consistent.
      * See issue #1525 on Github for more information. */
     if (g_pserver->lua_caller) {
-        now = g_pserver->lua_time_start;
+        now = g_pserver->lua_time_snapshot;
     }
     /* If we are in the middle of a command execution, we still want to use
      * a reference time that does not change: in that case we just use the
@@ -2079,14 +2079,17 @@ int expireIfNeeded(redisDb *db, robj *key) {
     if (checkClientPauseTimeoutAndReturnIfPaused()) return 1;
 
     /* Delete the key */
+    if (g_pserver->lazyfree_lazy_expire) {
+        dbAsyncDelete(db,key);
+    } else {
+        dbSyncDelete(db,key);
+    }
     g_pserver->stat_expiredkeys++;
     propagateExpire(db,key,g_pserver->lazyfree_lazy_expire);
     notifyKeyspaceEvent(NOTIFY_EXPIRED,
         "expired",key,db->id);
-    int retval = g_pserver->lazyfree_lazy_expire ? dbAsyncDelete(db,key) :
-                                               dbSyncDelete(db,key);
-    if (retval) signalModifiedKey(NULL,db,key);
-    return retval;
+    signalModifiedKey(NULL,db,key);
+    return 1;
 }
 
 /* -----------------------------------------------------------------------------
@@ -2726,6 +2729,8 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
     serverAssert(sdsKey != nullptr);
     serverAssert(FImplies(*pde != nullptr, dictGetVal(*pde) != nullptr));    // early versions set a NULL object, this is no longer valid
     serverAssert(m_refCount == 0);
+    if (m_pdbSnapshot == nullptr && g_pserver->m_pstorageFactory == nullptr)
+        return;
     std::unique_lock<fastlock> ul(g_expireLock);
 
     // First see if the key can be obtained from a snapshot
@@ -2986,13 +2991,13 @@ dict_iter redisDbPersistentData::random()
     return dict_iter(m_pdict, de);
 }
 
-size_t redisDbPersistentData::size() const 
+size_t redisDbPersistentData::size(bool fCachedOnly) const 
 { 
-    if (m_spstorage != nullptr && !m_fAllChanged)
+    if (m_spstorage != nullptr && !m_fAllChanged && !fCachedOnly)
         return m_spstorage->count() + m_cnewKeysPending;
     
     return dictSize(m_pdict) 
-        + (m_pdbSnapshot ? (m_pdbSnapshot->size() - dictSize(m_pdictTombstone)) : 0); 
+        + (m_pdbSnapshot ? (m_pdbSnapshot->size(fCachedOnly) - dictSize(m_pdictTombstone)) : 0); 
 }
 
 bool redisDbPersistentData::removeCachedValue(const char *key, dictEntry **ppde)
@@ -3047,13 +3052,13 @@ void redisDbPersistentData::removeAllCachedValues()
         trackChanges(false);
     }
 
-    if (m_pdict->pauserehash == 0) {
+    if (m_pdict->pauserehash == 0 && m_pdict->refcount == 1) {
         dict *dT = m_pdict;
         m_pdict = dictCreate(&dbDictType, this);
         dictExpand(m_pdict, dictSize(dT)/2, false); // Make room for about half so we don't excessively rehash
         g_pserver->asyncworkqueue->AddWorkFunction([dT]{
             dictRelease(dT);
-        }, true);
+        }, false);
     } else {
         dictEmpty(m_pdict, nullptr);
     }

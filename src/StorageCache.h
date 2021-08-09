@@ -7,6 +7,7 @@ class StorageCache
     dict *m_pdict = nullptr;
     int m_collisionCount = 0;
     mutable fastlock m_lock {"StorageCache"};
+    std::atomic<int> bulkInsertsInProgress;
 
     StorageCache(IStorage *storage, bool fNoCache);
 
@@ -28,6 +29,8 @@ class StorageCache
     }
 
 public:
+    ~StorageCache();
+
     static StorageCache *create(IStorageFactory *pfactory, int db, IStorageFactory::key_load_iterator fn, void *privdata) {
         StorageCache *cache = new StorageCache(nullptr, pfactory->FSlow() /*fCache*/);
         load_iter_data data = {cache, fn, privdata};
@@ -37,6 +40,7 @@ public:
 
     void clear();
     void insert(sds key, const void *data, size_t cbdata, bool fOverwrite);
+    void bulkInsert(sds *rgkeys, sds *rgvals, size_t celem);
     void retrieve(sds key, IStorage::callbackSingle fn) const;
     bool erase(sds key);
 

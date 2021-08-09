@@ -42,7 +42,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     serverAssert(GlobalLocksAcquired());
     serverAssert(m_refCount == 0);  // do not call this on a snapshot
 
-    if (freeMemoryIfNeededAndSafe(false /*fQuickCycle*/, true /*fPreSnapshot*/) != C_OK && fOptional)
+    if (performEvictions(true /*fPreSnapshot*/) != C_OK && fOptional)
         return nullptr; // can't create snapshot due to OOM
 
     int levels = 1;
@@ -86,7 +86,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     spdb->m_pdict = m_pdict;
     spdb->m_pdictTombstone = m_pdictTombstone;
     // Add a fake iterator so the dicts don't rehash (they need to be read only)
-    spdb->m_pdict->iterators++;
+    dictPauseRehashing(spdb->m_pdict);
     dictForceRehash(spdb->m_pdictTombstone);    // prevent rehashing by finishing the rehash now
     spdb->m_spdbSnapshotHOLDER = std::move(m_spdbSnapshotHOLDER);
     if (m_spstorage != nullptr)
@@ -109,7 +109,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     dictExpand(m_pdict, 1024);   // minimize rehash overhead
     m_pdictTombstone = dictCreate(&dbTombstoneDictType, this);
 
-    serverAssert(spdb->m_pdict->iterators == 1);
+    serverAssert(spdb->m_pdict->pauserehash == 1);
 
     m_spdbSnapshotHOLDER = std::move(spdb);
     m_pdbSnapshot = m_spdbSnapshotHOLDER.get();
@@ -371,12 +371,12 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
 
     size_t sizeStart = size();
     serverAssert(m_spdbSnapshotHOLDER->m_refCount == 0);
-    serverAssert((m_refCount == 0 && m_pdict->iterators == 0) || (m_refCount != 0 && m_pdict->iterators == 1));
+    serverAssert((m_refCount == 0 && m_pdict->pauserehash == 0) || (m_refCount != 0 && m_pdict->pauserehash == 1));
 
-    serverAssert(m_spdbSnapshotHOLDER->m_pdict->iterators == 1);  // All iterators should have been free'd except the fake one from createSnapshot
+    serverAssert(m_spdbSnapshotHOLDER->m_pdict->pauserehash == 1);  // All iterators should have been free'd except the fake one from createSnapshot
     if (m_refCount == 0)
     {
-        m_spdbSnapshotHOLDER->m_pdict->iterators--;
+        dictResumeRehashing(m_spdbSnapshotHOLDER->m_pdict);
     }
 
     if (m_pdbSnapshot == nullptr)
@@ -390,7 +390,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     // Stage 1 Loop through all the tracked deletes and remove them from the snapshot DB
     dictIterator *di = dictGetIterator(m_pdictTombstone);
     dictEntry *de;
-    m_spdbSnapshotHOLDER->m_pdict->iterators++;
+    dictPauseRehashing(m_spdbSnapshotHOLDER->m_pdict);
     auto splazy = std::make_unique<LazyFree>();
     while ((de = dictNext(di)) != NULL)
     {
@@ -426,7 +426,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     }
 
     
-    m_spdbSnapshotHOLDER->m_pdict->iterators--;
+    dictResumeRehashing(m_spdbSnapshotHOLDER->m_pdict);
     dictReleaseIterator(di);
     splazy->vecdictLazyFree.push_back(m_pdictTombstone);
     m_pdictTombstone = dictCreate(&dbTombstoneDictType, nullptr);
@@ -453,7 +453,7 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     // Fixup the about to free'd snapshots iterator count so the dtor doesn't complain
     if (m_refCount)
     {
-        m_spdbSnapshotHOLDER->m_pdict->iterators--;
+        dictResumeRehashing(m_spdbSnapshotHOLDER->m_pdict);
     }
 
     auto spsnapshotFree = std::move(m_spdbSnapshotHOLDER);
@@ -466,14 +466,14 @@ void redisDbPersistentData::endSnapshot(const redisDbPersistentDataSnapshot *psn
     // Sanity Checks
     serverAssert(m_spdbSnapshotHOLDER != nullptr || m_pdbSnapshot == nullptr);
     serverAssert(m_pdbSnapshot == m_spdbSnapshotHOLDER.get() || m_pdbSnapshot == nullptr);
-    serverAssert((m_refCount == 0 && m_pdict->iterators == 0) || (m_refCount != 0 && m_pdict->iterators == 1));
+    serverAssert((m_refCount == 0 && m_pdict->pauserehash == 0) || (m_refCount != 0 && m_pdict->pauserehash == 1));
     serverAssert(m_spdbSnapshotHOLDER != nullptr || dictSize(m_pdictTombstone) == 0);
     serverAssert(sizeStart == size());
 
     latencyEndMonitor(latency_endsnapshot);
     latencyAddSampleIfNeeded("end-mvcc-snapshot", latency_endsnapshot);
 
-    freeMemoryIfNeededAndSafe(false /*fQuickCycle*/, false);
+    performEvictions(false);
 }
 
 dict_iter redisDbPersistentDataSnapshot::random_cache_threadsafe(bool fPrimaryOnly) const

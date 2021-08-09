@@ -70,7 +70,9 @@
 
 #ifdef HAVE_BACKTRACE
 #include <ucontext.h>
-__attribute__((weak)) void logStackTrace(ucontext_t *) {}
+__attribute__((weak)) void logStackTrace(void *, int) {
+    printf("\tFailed to generate stack trace\n");
+}
 #endif
 
 extern int g_fInCrash;
@@ -188,9 +190,7 @@ void printTrace()
 {
 #ifdef HAVE_BACKTRACE
     serverLog(3 /*LL_WARNING*/, "printing backtrace for thread %d", gettid());
-    ucontext_t ctxt;
-    getcontext(&ctxt);
-    logStackTrace(&ctxt);
+    logStackTrace(nullptr, 1);
 #endif
 }
 
@@ -304,6 +304,10 @@ uint64_t fastlock_getlongwaitcount()
 
 extern "C" void fastlock_sleep(fastlock *lock, pid_t pid, unsigned wake, unsigned myticket)
 {
+    UNUSED(lock);
+    UNUSED(pid);
+    UNUSED(wake);
+    UNUSED(myticket);
 #ifdef __linux__
     g_dlock.registerwait(lock, pid);
     unsigned mask = (1U << (myticket % 32));

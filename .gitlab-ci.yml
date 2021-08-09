@@ -1,0 +1,164 @@
+.standard-pipeline:
+  rules:
+    - if: '$COVERAGE'
+      when: never
+    - if: '$ENDURANCE'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+
+build:
+  extends: .standard-pipeline
+  tags:
+    - docker
+  stage: build
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
+  artifacts:
+    paths:
+      - src/
+
+runtest:
+  extends: .standard-pipeline
+  dependencies:
+    - build
+  tags:
+    - docker
+  stage: test
+  script:
+    - ./runtest --config server-threads 3
+
+runtest-cluster:
+  extends: .standard-pipeline
+  dependencies:
+    - build
+  tags:
+    - docker
+  stage: test
+  script:
+    - ./runtest-cluster
+
+runtest-moduleapi:
+  extends: .standard-pipeline
+  dependencies:
+    - build
+  tags:
+    - docker
+  stage: test
+  script:
+    - ./runtest-moduleapi
+
+runtest-sentinel:
+  extends: .standard-pipeline
+  dependencies:
+    - build
+  tags:
+    - docker
+  stage: test
+  script:
+    - ./runtest-sentinel
+
+node-redis-test:
+  extends: .standard-pipeline
+  dependencies:
+    - build
+  rules:
+    - when: never
+  tags:
+    - docker
+    - ipv6
+  stage: test
+  script:
+    - cp -pf src/keydb-server /usr/local/bin
+    - cp -pf src/keydb-cli /usr/local/bin
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/node-redis.git
+    - cd node-redis
+    - npm install
+    - npm run test
+
+jedis-test:
+  extends: .standard-pipeline
+  dependencies:
+    - build
+  tags:
+    - docker
+    - ipv4
+  stage: test
+  script:
+    - cp -pf src/keydb-server /usr/local/bin
+    - cp -pf src/keydb-cli /usr/local/bin
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/jedis.git
+    - cd jedis
+    - make test
+
+redis-rs-test:
+  extends: .standard-pipeline
+  dependencies:
+    - build
+  tags:
+    - docker
+  stage: test
+  script:
+    - cp -pf src/keydb-server /usr/local/bin
+    - cp -pf src/keydb-cli /usr/local/bin
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/redis-rs.git
+    - cd redis-rs
+    - make test
+
+endurance-test:
+  rules:
+    - if: '$ENDURANCE'
+  tags:
+    - docker
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make -j
+    - ./runtest --config server-threads 3 --loop --stop
+
+coverage-test:
+  rules:
+    - if: '$COVERAGE'
+  tags:
+    - docker
+  stage: test
+  script:
+    - git submodule init && git submodule update
+    - make distclean
+    - make gcov -j
+    - make install
+    - ./runtest || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - ./runtest-cluster || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - ./runtest-sentinel || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - ./runtest-moduleapi || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/redis-rs.git
+    - cd redis-rs
+    - make test || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - cd ..
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/jedis.git
+    - cd jedis
+    - make test || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - cd ..
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.eqalpha.com/keydb-dev/node-redis.git
+    - cd node-redis
+    - npm install
+    - npm run test || true
+    - pkill keydb-server || true
+    - pkill stunnel || true
+    - cd ..
+    - geninfo -o KeyDB.info --no-external .
+    - genhtml --legend -o lcov-html KeyDB.info

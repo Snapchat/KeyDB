@@ -14,15 +14,20 @@ public:
             : when(when), spsubkey(subkey, sdsfree)
         {}
 
-        subexpireEntry(const subexpireEntry &e)
-            : when(e.when), spsubkey(nullptr, sdsfree)
+        subexpireEntry(const subexpireEntry &other)
+            : spsubkey((const char*)sdsdupshared(other.spsubkey.get()), sdsfree)
         {
-            if (e.spsubkey)
-                spsubkey = std::unique_ptr<const char, void(*)(const char*)>((const char*)sdsdup((sds)e.spsubkey.get()), sdsfree);
+            when = other.when;
         }
 
-        subexpireEntry(subexpireEntry &&e) = default;
-        subexpireEntry& operator=(subexpireEntry &&e) = default;
+        subexpireEntry(subexpireEntry &&) = default;
+        subexpireEntry& operator=(subexpireEntry&&) = default;
+
+        subexpireEntry& operator=(const subexpireEntry &src) {
+            when = src.when;
+            spsubkey = std::unique_ptr<const char, void(*)(const char*)>((const char*)sdsdupshared(src.spsubkey.get()), sdsfree);
+            return *this;
+        }
 
         bool operator<(long long when) const noexcept { return this->when < when; }
         bool operator<(const subexpireEntry &se) { return this->when < se.when; }
@@ -65,6 +70,7 @@ class expireEntry {
     } u;
     long long m_when;   // LLONG_MIN means this is a fat entry and we should use the pointer
 
+    expireEntry() = default;
 public:
     class iter
     {
@@ -132,6 +138,18 @@ public:
     {
         u.m_pfatentry = pfatentry;
         m_when = LLONG_MIN;
+    }
+
+    // Duplicate the expire, note this is intended to be passed directly to setExpire
+    expireEntry duplicate() const {
+        expireEntry dst;
+        dst.m_when = m_when;
+        if (FFat()) {
+            dst.u.m_pfatentry = new expireEntryFat(*u.m_pfatentry);
+        } else {
+            dst.u.m_key = u.m_key;
+        }
+        return dst;
     }
 
     ~expireEntry()

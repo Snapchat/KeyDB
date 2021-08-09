@@ -1095,7 +1095,7 @@ public:
     redisDbPersistentData(redisDbPersistentData &&) = default;
 
     size_t slots() const { return dictSlots(m_pdict); }
-    size_t size() const;
+    size_t size(bool fCachedOnly = false) const;
     void expand(uint64_t slots) { dictExpand(m_pdict, slots); }
     
     void trackkey(robj_roptr o, bool fUpdate)
@@ -1591,6 +1591,12 @@ struct client {
     long long psync_initial_offset; /* FULLRESYNC reply offset other slaves
                                        copying this replica output buffer
                                        should use. */
+                                       
+    long long repl_curr_off = -1;/* Replication offset of the replica, also where in the backlog we need to start from
+                                  * when sending data to this replica. */
+    long long repl_end_off = -1; /* Replication offset to write to, stored in the replica, as opposed to using the global offset 
+                                  * to prevent needing the global lock */
+
     char replid[CONFIG_RUN_ID_SIZE+1]; /* Master replication ID (if master). */
     int slave_listening_port; /* As configured with: REPLCONF listening-port */
     char *slave_addr;       /* Optionally given by REPLCONF ip-address */
@@ -1651,6 +1657,10 @@ struct client {
     int argc;
     robj **argv;
     size_t argv_len_sumActive = 0;
+
+    bool FPendingReplicaWrite() const {
+        return repl_curr_off != repl_end_off;
+    }
 
     // post a function from a non-client thread to run on its client thread
     bool postFunction(std::function<void(client *)> fn, bool fLock = true);
@@ -1991,7 +2001,7 @@ public:
 
 // Per-thread variabels that may be accessed without a lock
 struct redisServerThreadVars {
-    aeEventLoop *el;
+    aeEventLoop *el = nullptr;
     socketFds ipfd;             /* TCP socket file descriptors */
     socketFds tlsfd;            /* TLS socket file descriptors */
     int in_eval;                /* Are we inside EVAL? */
@@ -2355,11 +2365,15 @@ struct redisServer {
     int repl_ping_slave_period;     /* Master pings the replica every N seconds */
     char *repl_backlog;             /* Replication backlog for partial syncs */
     long long repl_backlog_size;    /* Backlog circular buffer size */
+    long long repl_backlog_config_size; /* The repl backlog may grow but we want to know what the user set it to */
     long long repl_backlog_histlen; /* Backlog actual data length */
     long long repl_backlog_idx;     /* Backlog circular buffer current offset,
                                        that is the next byte will'll write to.*/
     long long repl_backlog_off;     /* Replication "master offset" of first
                                        byte in the replication backlog buffer.*/
+    long long repl_backlog_start;   /* Used to compute indicies from offsets
+                                       basically, index = (offset - start) % size */
+    fastlock repl_backlog_lock {"replication backlog"};
     time_t repl_backlog_time_limit; /* Time without slaves after the backlog
                                        gets released. */
     time_t repl_no_slaves_since;    /* We have no slaves since that time.
@@ -2371,6 +2385,8 @@ struct redisServer {
     int repl_diskless_load;         /* Slave parse RDB directly from the socket.
                                      * see REPL_DISKLESS_LOAD_* enum */
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
+    std::atomic <long long> repl_lowest_off; /* The lowest offset amongst all replicas
+                                                -1 if there are no replicas */
     /* Replication (replica) */
     list *masters;
     int enable_multimaster; 
@@ -2475,7 +2491,8 @@ struct redisServer {
     ::dict *lua_scripts;         /* A dictionary of SHA1 -> Lua scripts */
     unsigned long long lua_scripts_mem;  /* Cached scripts' memory + oh */
     mstime_t lua_time_limit;  /* Script timeout in milliseconds */
-    mstime_t lua_time_start;  /* Start time of script, milliseconds time */
+    monotime lua_time_start;  /* monotonic timer to detect timed-out script */
+    mstime_t lua_time_snapshot; /* Snapshot of mstime when script is started */
     int lua_write_dirty;  /* True if a write command was called during the
                              execution of the current script. */
     int lua_random_dirty; /* True if a random command was called during the
@@ -2865,6 +2882,7 @@ void disableTracking(client *c);
 void trackingRememberKeys(client *c);
 void trackingInvalidateKey(client *c, robj *keyobj);
 void trackingInvalidateKeysOnFlush(int async);
+void freeTrackingRadixTree(rax *rt);
 void freeTrackingRadixTreeAsync(rax *rt);
 void trackingLimitUsedSlots(void);
 uint64_t trackingGetTotalItems(void);
@@ -3014,6 +3032,8 @@ void clearFailoverState(void);
 void updateFailoverStatus(void);
 void abortFailover(redisMaster *mi, const char *err);
 const char *getFailoverStateString();
+int canFeedReplicaReplBuffer(client *replica);
+void trimReplicationBacklog();
 
 /* Generic persistence functions */
 void startLoadingFile(FILE* fp, const char * filename, int rdbflags);
@@ -3716,6 +3736,8 @@ void mixDigest(unsigned char *digest, const void *ptr, size_t len);
 void xorDigest(unsigned char *digest, const void *ptr, size_t len);
 int populateCommandTableParseFlags(struct redisCommand *c, const char *strflags);
 
+
+
 int moduleGILAcquiredByModule(void);
 extern int g_fInCrash;
 static inline int GlobalLocksAcquired(void)  // Used in asserts to verify all global locks are correctly acquired for a server-thread to operate
@@ -3783,6 +3805,7 @@ void tlsCleanup(void);
 int tlsConfigure(redisTLSContextConfig *ctx_config);
 
 
+
 class ShutdownException
 {};
 
@@ -3794,3 +3817,5 @@ class ShutdownException
 int iAmMaster(void);
 
 #endif
+
+

@@ -355,6 +355,8 @@ unsigned long LFUDecrAndReturn(robj_roptr o) {
     return counter;
 }
 
+unsigned long getClientReplicationBacklogSharedUsage(client *c);
+
 /* We don't want to count AOF buffers and slaves output buffers as
  * used memory: the eviction should use mostly data size. This function
  * returns the sum of AOF and slaves buffer. */
@@ -371,9 +373,15 @@ size_t freeMemoryGetNotCountedMemory(void) {
         while((ln = listNext(&li))) {
             client *replica = (client*)listNodeValue(ln);
             std::unique_lock<fastlock>(replica->lock);
-            overhead += getClientOutputBufferMemoryUsage(replica);
+            /* we don't wish to multiple count the replication backlog shared usage */
+            overhead += (getClientOutputBufferMemoryUsage(replica) - getClientReplicationBacklogSharedUsage(replica));
         }
     }
+
+    /* also don't count the replication backlog memory
+     * that's where the replication clients get their memory from */
+    overhead += g_pserver->repl_backlog_size;
+
     if (g_pserver->aof_state != AOF_OFF) {
         overhead += sdsalloc(g_pserver->aof_buf)+aofRewriteBufferSize();
     }
@@ -470,11 +478,13 @@ public:
     FreeMemoryLazyFree(FreeMemoryLazyFree&&) = default;
 
     ~FreeMemoryLazyFree() {
+        aeAcquireLock();
         for (auto &pair : vecdictvecde) {
             for (auto de : pair.second) {
                 dictFreeUnlinkedEntry(pair.first, de);
             }
         }
+        aeReleaseLock();
         --s_clazyFreesInProgress;
     }
 
@@ -822,9 +832,9 @@ int performEvictions(bool fPreSnapshot) {
                 /* After some time, exit the loop early - even if memory limit
                  * hasn't been reached.  If we suddenly need to free a lot of
                  * memory, don't want to spend too much time here.  */
-                if (elapsedUs(evictionTimer) > eviction_time_limit_us) {
+                if (g_pserver->m_pstorageFactory == nullptr && elapsedUs(evictionTimer) > eviction_time_limit_us) {
                     // We still need to free memory - start eviction timer proc
-                    if (!isEvictionProcRunning) {
+                    if (!isEvictionProcRunning && serverTL->el != nullptr) {
                         isEvictionProcRunning = 1;
                         aeCreateTimeEvent(serverTL->el, 0,
                                 evictionTimeProc, NULL, NULL);

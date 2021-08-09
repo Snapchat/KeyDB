@@ -70,7 +70,8 @@ static dictType clusterManagerDictType = {
     NULL,                      /* val dup */
     dictSdsKeyCompare,         /* key compare */
     NULL,                      /* key destructor */
-    dictSdsDestructor          /* val destructor */
+    dictSdsDestructor,         /* val destructor */
+    NULL                       /* allow to expand */
 };
 
 static dictType clusterManagerLinkDictType = {
@@ -79,7 +80,8 @@ static dictType clusterManagerLinkDictType = {
     NULL,                      /* val dup */
     dictSdsKeyCompare,         /* key compare */
     dictSdsDestructor,         /* key destructor */
-    dictListDestructor         /* val destructor */
+    dictListDestructor,        /* val destructor */
+    NULL                       /* allow to expand */
 };
 
 
@@ -136,17 +138,17 @@ static clusterManagerNode *clusterManagerNodeMasterRandom() {
 }
 
 static int clusterManagerFixSlotsCoverage(char *all_slots) {
+    dictIterator *iter = nullptr;
     int force_fix = config.cluster_manager_command.flags &
                     CLUSTER_MANAGER_CMD_FLAG_FIX_WITH_UNREACHABLE_MASTERS;
-    /* we want explicit manual confirmation from users for all the fix cases */
-    int ignore_force = 1;
-
-    dictIterator *iter = nullptr;
 
     if (cluster_manager.unreachable_masters > 0 && !force_fix) {
         clusterManagerLogWarn("*** Fixing slots coverage with %d unreachable masters is dangerous: redis-cli will assume that slots about masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the --cluster-fix-with-unreachable-masters option.\n", cluster_manager.unreachable_masters);
         exit(1);
     }
+
+    /* we want explicit manual confirmation from users for all the fix cases */
+    int ignore_force = 1;
 
     int i, fixed = 0;
     list *none = NULL, *single = NULL, *multi = NULL;
@@ -395,8 +397,12 @@ int clusterManagerGetAntiAffinityScore(clusterManagerNodeArray *ipnodes,
             else types = sdsempty();
             /* Master type 'm' is always set as the first character of the
              * types string. */
-            if (!node->replicate) types = sdscatprintf(types, "m%s", types);
-            else types = sdscat(types, "s");
+            if (node->replicate) types = sdscat(types, "s");
+            else {
+                sds s = sdscatsds(sdsnew("m"), types);
+                sdsfree(types);
+                types = s;
+            }
             dictReplace(related, key, types);
         }
         /* Now it's trivial to check, for each related group having the
@@ -750,7 +756,8 @@ static dictType typeinfoDictType = {
     NULL,                      /* val dup */
     dictSdsKeyCompare,         /* key compare */
     NULL,                      /* key destructor (owned by the value)*/
-    type_free                  /* val destructor */
+    type_free,                 /* val destructor */
+    NULL                       /* allow to expand */
 };
 
 static void getKeyTypes(dict *types_dict, redisReply *keys, typeinfo **types) {
@@ -830,8 +837,8 @@ void findBigKeys(int memkeys, unsigned memkeys_samples) {
 
         /* Reallocate our type and size array if we need to */
         if(keys->elements > arrsize) {
-            types = (typeinfo**)zrealloc(types, sizeof(int)*keys->elements, MALLOC_LOCAL);
-            sizes = (unsigned long long*)zrealloc(sizes, sizeof(unsigned long long)*keys->elements, MALLOC_LOCAL);
+            types = (typeinfo**)zrealloc(types, sizeof(typeinfo*)*keys->elements);
+            sizes = (unsigned long long*)zrealloc(sizes, sizeof(unsigned long long)*keys->elements);
 
             if(!types || !sizes) {
                 fprintf(stderr, "Failed to allocate storage for keys!\n");

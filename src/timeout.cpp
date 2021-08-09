@@ -190,4 +190,3 @@ int getTimeoutFromObjectOrReply(client *c, robj *object, mstime_t *timeout, int 
 
     return C_OK;
 }
-

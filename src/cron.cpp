@@ -82,7 +82,7 @@ void executeCronJobExpireHook(const char *key, robj *o)
     client *cFake = createClient(nullptr, IDX_EVENT_LOOP_MAIN);
     cFake->lock.lock();
     cFake->authenticated = 1;
-    cFake->puser = nullptr;
+    cFake->user = nullptr;
     selectDb(cFake, job->dbNum);
     serverAssert(cFake->argc == 0);
 

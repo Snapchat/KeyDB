@@ -1,12 +1,10 @@
 set system_name [string tolower [exec uname -s]]
-# ldd --version returns 1 under musl for unknown reasons. If this check stops working, that may be why
-set is_musl [catch {exec ldd --version}]
 set system_supported 0
 
 # We only support darwin or Linux with glibc
 if {$system_name eq {darwin}} {
     set system_supported 1
-} elseif {$system_name eq {linux} && $is_musl eq 0} {
+} elseif {$system_name eq {linux}} {
     # Avoid the test on libmusl, which does not support backtrace
     set ldd [exec ldd src/keydb-server]
     if {![string match {*libc.musl*} $ldd]} {

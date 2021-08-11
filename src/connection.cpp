@@ -456,6 +456,9 @@ void connSetThreadAffinity(connection *conn, int cpu) {
     {
         serverLog(LL_WARNING, "Failed to set socket affinity");
     }
+#else
+    (void)conn;
+    (void)cpu;
 #endif
 }
 

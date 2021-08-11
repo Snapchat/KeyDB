@@ -57,7 +57,6 @@
 #include <limits.h>
 #include <float.h>
 #include <math.h>
-#include <sys/resource.h>
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
@@ -69,7 +68,6 @@
 #include "keycheck.h"
 #include "motd.h"
 #include "t_nhash.h"
-#include <sys/resource.h>
 #ifdef __linux__
 #include <sys/prctl.h>
 #include <sys/mman.h>
@@ -759,6 +757,10 @@ struct redisCommand redisCommandTable[] = {
      * not available. */
     {"ping",pingCommand,-1,
      "ok-stale ok-loading fast @connection @replication",
+     0,NULL,0,0,0,0,0,0},
+
+     {"replping",pingCommand,-1,
+     "ok-stale fast @connection @replication",
      0,NULL,0,0,0,0,0,0},
 
     {"echo",echoCommand,2,
@@ -3114,6 +3116,7 @@ void createSharedObjects(void) {
     shared.lastid = makeObjectShared("LASTID",6);
     shared.default_username = makeObjectShared("default",7);
     shared.ping = makeObjectShared("ping",4);
+    shared.replping = makeObjectShared("replping", 8);
     shared.setid = makeObjectShared("SETID",5);
     shared.keepttl = makeObjectShared("KEEPTTL",7);
     shared.load = makeObjectShared("LOAD",4);
@@ -5009,11 +5012,7 @@ int prepareForShutdown(int flags) {
        overwrite the synchronous saving did by SHUTDOWN. */
     if (g_pserver->FRdbSaveInProgress()) {
         serverLog(LL_WARNING,"There is a child saving an .rdb. Killing it!");
-        /* Note that, in killRDBChild, we call rdbRemoveTempFile that will
-         * do close fd(in order to unlink file actully) in background thread.
-         * The temp rdb file fd may won't be closed when redis exits quickly,
-         * but OS will close this fd when process exits. */
-        killRDBChild(true);
+        killRDBChild();
         /* Note that, in killRDBChild normally has backgroundSaveDoneHandler
          * doing it's cleanup, but in this case this code will not be reached,
          * so we need to call rdbRemoveTempFile which will close fd(in order
@@ -7358,7 +7357,7 @@ int main(int argc, char **argv) {
                 serverLog(LL_WARNING, "Failed to test the kernel for a bug that could lead to data corruption during background save. "
                                       "Your system could be affected, please report this error.");
             if (!checkIgnoreWarning("ARM64-COW-BUG")) {
-                serverLog(LL_WARNING,"Redis will now exit to prevent data corruption. "
+                serverLog(LL_WARNING,"KeyDB will now exit to prevent data corruption. "
                                      "Note that it is possible to suppress this warning by setting the following config: ignore-warnings ARM64-COW-BUG");
                 exit(1);
             }

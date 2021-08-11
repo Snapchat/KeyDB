@@ -6757,6 +6757,7 @@ void loadDataFromDisk(void) {
         serverLog(LL_NOTICE, "Loading the RDB even though we have a storage provider because the database is empty");
     }
     
+    serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
     if (g_pserver->aof_state == AOF_ON) {
         if (loadAppendOnlyFile(g_pserver->aof_filename) == C_OK)
             serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
@@ -6802,6 +6803,8 @@ void loadDataFromDisk(void) {
             exit(1);
         }
     }
+    g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
+    serverTL->gcEpoch.reset();
 }
 
 void redisOutOfMemoryHandler(size_t allocation_size) {

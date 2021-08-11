@@ -571,6 +571,7 @@ typedef enum {
     REPL_STATE_NONE = 0,            /* No active replication */
     REPL_STATE_CONNECT,             /* Must connect to master */
     REPL_STATE_CONNECTING,          /* Connecting to master */
+    REPL_STATE_RETRY_NOREPLPING,    /* Master does not support REPLPING, retry with PING */
     /* --- Handshake states, must be ordered --- */
     REPL_STATE_RECEIVE_PING_REPLY,  /* Wait for PING reply */
     REPL_STATE_SEND_HANDSHAKE,      /* Send handshake sequance to master */
@@ -1698,7 +1699,7 @@ struct sharedObjectsStruct {
     *emptyscan, *multi, *exec, *left, *right, *hset, *srem, *xgroup, *xclaim,  
     *script, *replconf, *eval, *persist, *set, *pexpireat, *pexpire, 
     *time, *pxat, *px, *retrycount, *force, *justid, 
-    *lastid, *ping, *setid, *keepttl, *load, *createconsumer,
+    *lastid, *ping, *replping, *setid, *keepttl, *load, *createconsumer,
     *getack, *special_asterick, *special_equals, *default_username,
     *hdel, *zrem, *mvccrestore, *pexpirememberat,
     *select[PROTO_SHARED_SELECT_CMDS],
@@ -2953,6 +2954,7 @@ robj *createZsetZiplistObject(void);
 robj *createStreamObject(void);
 robj *createModuleObject(moduleType *mt, void *value);
 int getLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg);
+int getUnsignedLongLongFromObjectOrReply(client *c, robj *o, uint64_t *target, const char *msg);
 int getPositiveLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg);
 int getRangeLongFromObjectOrReply(client *c, robj *o, long min, long max, long *target, const char *msg);
 int checkType(client *c, robj_roptr o, int type);

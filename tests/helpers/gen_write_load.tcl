@@ -1,4 +1,4 @@
-source tests/support/redis.tcl
+source tests/support/keydb.tcl
 
 set ::tlsdir "tests/tls"
 

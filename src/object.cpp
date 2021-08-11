@@ -763,6 +763,20 @@ int getLongLongFromObjectOrReply(client *c, robj *o, long long *target, const ch
     return C_OK;
 }
 
+int getUnsignedLongLongFromObjectOrReply(client *c, robj *o, uint64_t *target, const char *msg) {
+    uint64_t value;
+    if (getUnsignedLongLongFromObject(o, &value) != C_OK) {
+        if (msg != NULL) {
+            addReplyError(c,(char*)msg);
+        } else {
+            addReplyError(c,"value is not an integer or out of range");
+        }
+        return C_ERR;
+    }
+    *target = value;
+    return C_OK;
+}
+
 int getLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg) {
     long long value;
 

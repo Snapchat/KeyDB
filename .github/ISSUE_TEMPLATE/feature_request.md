@@ -1,20 +1,24 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
-title: ''
+about: Suggest a feature for KeyDB
+title: '[NEW]'
 labels: ''
 assignees: ''
 
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+**The problem/use-case that the feature addresses**
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+A description of the problem that the feature will solve, or the use-case with which the feature will be used.
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
+**Description of the feature**
 
-**Additional context**
-Add any other context or screenshots about the feature request here.
+A description of what you want to happen.
+
+**Alternatives you've considered**
+
+Any alternative solutions or features you've considered, including references to existing open and closed feature requests in this repository.
+
+**Additional information**
+
+Any additional information that is relevant to the feature request.

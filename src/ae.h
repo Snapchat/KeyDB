@@ -36,7 +36,7 @@
 #ifdef __cplusplus
 #include <functional>
 #endif
-#include <time.h>
+#include "monotonic.h"
 #include "fastlock.h"
 
 #ifdef __cplusplus
@@ -91,8 +91,7 @@ typedef struct aeFileEvent {
 /* Time event structure */
 typedef struct aeTimeEvent {
     long long id; /* time event identifier. */
-    long when_sec; /* seconds */
-    long when_ms; /* milliseconds */
+    monotime when;
     aeTimeProc *timeProc;
     aeEventFinalizerProc *finalizerProc;
     void *clientData;
@@ -113,7 +112,6 @@ typedef struct aeEventLoop {
     int maxfd;   /* highest file descriptor currently registered */
     int setsize; /* max number of file descriptors tracked */
     long long timeEventNextId;
-    time_t lastTime;     /* Used to detect system clock skew */
     aeFileEvent *events; /* Registered events */
     aeFiredEvent *fired; /* Fired events */
     aeTimeEvent *timeEventHead;
@@ -163,6 +161,7 @@ int aeGetSetSize(aeEventLoop *eventLoop);
 aeEventLoop *aeGetCurrentEventLoop();
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
 void aeSetDontWait(aeEventLoop *eventLoop, int noWait);
+void aeClosePipesForForkChild(aeEventLoop *eventLoop);
 
 void setAeLockSetThreadSpinWorker(spin_worker worker);
 void aeAcquireLock();

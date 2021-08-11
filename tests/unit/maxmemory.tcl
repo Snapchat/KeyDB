@@ -183,7 +183,7 @@ proc test_slave_buffers {test_name cmd_count payload_len limit_memory pipeline} 
             set orig_client_buf [s -1 mem_clients_normal]
             set orig_mem_not_counted_for_evict [s -1 mem_not_counted_for_evict]
             set orig_used_no_repl [expr {$orig_used - $orig_mem_not_counted_for_evict}]
-            set limit [expr {$orig_used - $orig_mem_not_counted_for_evict + 20*1024}]
+            set limit [expr {$orig_used - $orig_mem_not_counted_for_evict + 32*1024}]
 
             if {$limit_memory==1} {
                 $master config set maxmemory $limit
@@ -247,9 +247,30 @@ test_slave_buffers {slave buffer are counted correctly} 1000000 10 0 1
 test_slave_buffers "replica buffer don't induce eviction" 100000 100 1 0
 
 start_server {tags {"maxmemory"} overrides {server-threads 1}} {
+    test {Don't rehash if used memory exceeds maxmemory after rehash} {
+        r config set maxmemory 0
+        r config set maxmemory-policy allkeys-random
+
+        # Next rehash size is 8192, that will eat 64k memory
+        populate 4096 "" 1
+
+        set used [s used_memory]
+        set limit [expr {$used + 10*1024}]
+        r config set maxmemory $limit
+        r set k1 v1
+        # Next writing command will trigger evicting some keys if last
+        # command trigger DB dict rehash
+        r set k2 v2
+        # There must be 4098 keys because redis doesn't evict keys.
+        r dbsize
+    } {4098}
+}
+
+start_server {tags {"maxmemory"} overrides {server-threads 1}} {
     test {client tracking don't cause eviction feedback loop} {
         r config set maxmemory 0
         r config set maxmemory-policy allkeys-lru
+        r config set maxmemory-eviction-tenacity 100
 
         # 10 clients listening on tracking messages
         set clients {}
@@ -308,4 +329,4 @@ start_server {tags {"maxmemory"} overrides {server-threads 1}} {
         if {$::verbose} { puts "evicted: $evicted" }
     }
 }
-}; #run_solo
+}

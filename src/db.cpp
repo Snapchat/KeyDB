@@ -1669,9 +1669,8 @@ void copyCommand(client *c) {
     }
 
     dbAdd(dst,newkey,newobj);
-    if (expire != nullptr) {
-        if (expire != nullptr) setExpire(c, dst, newkey, expire->duplicate());
-    }
+    if (expire != nullptr)
+        setExpire(c, dst, newkey, expire->duplicate());
 
     /* OK! key copied */
     signalModifiedKey(c,dst,c->argv[2]);

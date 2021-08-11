@@ -10,7 +10,7 @@
 package require Tcl 8.5
 
 set tcl_precision 17
-source ../support/redis.tcl
+source ../support/keydb.tcl
 source ../support/util.tcl
 source ../support/server.tcl
 source ../support/test.tcl
@@ -36,7 +36,7 @@ set ::run_matching {} ; # If non empty, only tests matching pattern are run.
 
 if {[catch {cd tmp}]} {
     puts "tmp directory not found."
-    puts "Please run this test from the Redis source root."
+    puts "Please run this test from the KeyDB source root."
     exit 1
 }
 
@@ -92,7 +92,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
             puts $cfg [format "tls-key-file %s/../../tls/server.key" [pwd]]
             puts $cfg [format "tls-client-cert-file %s/../../tls/client.crt" [pwd]]
             puts $cfg [format "tls-client-key-file %s/../../tls/client.key" [pwd]]
-            puts $cfg [format "tls-dh-params-file %s/../../tls/redis.dh" [pwd]]
+            puts $cfg [format "tls-dh-params-file %s/../../tls/keydb.dh" [pwd]]
             puts $cfg [format "tls-ca-cert-file %s/../../tls/ca.crt" [pwd]]
             puts $cfg "loglevel debug"
         } else {
@@ -303,7 +303,7 @@ proc pause_on_error {} {
             set count 10
             if {[lindex $argv 1] ne {}} {set count [lindex $argv 1]}
             foreach_redis_id id {
-                puts "=== REDIS $id ===="
+                puts "=== KeyDB $id ===="
                 puts [exec tail -$count redis_$id/log.txt]
                 puts "---------------------\n"
             }
@@ -317,7 +317,7 @@ proc pause_on_error {} {
             }
         } elseif {$cmd eq {ls}} {
             foreach_redis_id id {
-                puts -nonewline "Redis $id"
+                puts -nonewline "KeyDB $id"
                 set errcode [catch {
                     set str {}
                     append str "@[RI $id tcp_port]: "
@@ -348,13 +348,13 @@ proc pause_on_error {} {
                 }
             }
         } elseif {$cmd eq {help}} {
-            puts "ls                     List Sentinel and Redis instances."
+            puts "ls                     List Sentinel and KeyDB instances."
             puts "show-sentinel-logs \[N\] Show latest N lines of logs."
             puts "show-keydb-logs \[N\]    Show latest N lines of logs."
             puts "S <id> cmd ... arg     Call command in Sentinel <id>."
-            puts "R <id> cmd ... arg     Call command in Redis <id>."
+            puts "R <id> cmd ... arg     Call command in KeyDB <id>."
             puts "SI <id> <field>        Show Sentinel <id> INFO <field>."
-            puts "RI <id> <field>        Show Redis <id> INFO <field>."
+            puts "RI <id> <field>        Show KeyDB <id> INFO <field>."
             puts "continue               Resume test."
         } else {
             set errcode [catch {eval $line} retval]

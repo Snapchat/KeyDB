@@ -3195,8 +3195,10 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         ckeysLoaded++;
         if (g_pserver->m_pstorageFactory && (ckeysLoaded % 128) == 0)
         {
-            g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
-            serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
+            if (!serverTL->gcEpoch.isReset()) {
+                g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
+                serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
+            }
         }
 
         if (g_pserver->key_load_delay)

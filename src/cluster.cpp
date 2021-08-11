@@ -561,7 +561,7 @@ void clusterInit(void) {
     
     serverAssert(serverTL == &g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN]);
     if (createSocketAcceptHandler(&g_pserver->cfd, clusterAcceptHandler) != C_OK) {
-        serverPanic("Unrecoverable error creating Redis Cluster socket accept handler.");
+        serverPanic("Unrecoverable error creating KeyDB Cluster socket accept handler.");
     }
 
     /* The slots -> keys map is a radix tree. Initialize it here. */
@@ -5172,11 +5172,12 @@ void dumpCommand(client *c) {
 
 /* KEYDB.MVCCRESTORE key mvcc expire serialized-value */
 void mvccrestoreCommand(client *c) {
-    long long mvcc, expire;
+    long long expire;
+    uint64_t mvcc;
     robj *key = c->argv[1], *obj = nullptr;
     int type;
     
-    if (getLongLongFromObjectOrReply(c, c->argv[2], &mvcc, "Invalid MVCC Tstamp") != C_OK)
+    if (getUnsignedLongLongFromObjectOrReply(c, c->argv[2], &mvcc, "Invalid MVCC Tstamp") != C_OK)
         return;
 
     if (getLongLongFromObjectOrReply(c, c->argv[3], &expire, "Invalid expire") != C_OK)

@@ -247,8 +247,8 @@ public:
         /* Generate human readable stats. */
         l += snprintf(buf+l,bufsize-l,
             "semiordered set stats:\n"
-            " table size: %ld\n"
-            " number of slots: %ld\n"
+            " table size: %zu\n"
+            " number of slots: %zu\n"
             " used slots: %ld\n"
             " max chain length: %ld\n"
             " avg chain length (counted): %.02f\n"

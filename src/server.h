@@ -901,7 +901,7 @@ public:
     void addref() const { refcount.fetch_add(1, std::memory_order_relaxed); }
     unsigned release() const { return refcount.fetch_sub(1, std::memory_order_seq_cst) & ~(1U << 31); }
 } robj;
-static_assert(sizeof(redisObject) == 16, "object size is critical, don't increase");
+static_assert(sizeof(redisObject) <= 16, "object size is critical, don't increase");
 
 class redisObjectStack : public redisObjectExtended, public redisObject
 {

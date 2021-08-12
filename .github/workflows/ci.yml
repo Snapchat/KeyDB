@@ -62,7 +62,8 @@ jobs:
     - uses: actions/checkout@v2
     - name: make
       run: |
+          sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get -y install uuid-dev libcurl4-openssl-dev
+          sudo apt-get -y install gcc-multilib g++-multilib libc6-dev-i386 lib32z1 uuid-dev:i386 libcurl4-openssl-dev:i386
           make KEYDB_CFLAGS='-Werror' KEYDB_CXXFLAGS='-Werror' 32bit -j2
 

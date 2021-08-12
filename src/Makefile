@@ -70,7 +70,7 @@ endif
 # Do we use our assembly spinlock? X64 only
 ifeq ($(uname_S),Linux)
 ifeq ($(uname_M),x86_64)
-ifneq ($(@@),32bit)
+ifneq ($(TARGET32), true)
 ifeq ($(USEASM),true)
 	ASM_OBJ+= fastlock_x64.o
 	CFLAGS+= -DASM_SPINLOCK
@@ -484,7 +484,7 @@ bench: $(REDIS_BENCHMARK_NAME)
 	@echo ""
 	@echo "WARNING: if it fails under Linux you probably need to install libc6-dev-i386"
 	@echo ""
-	$(MAKE) CXXFLAGS="-m32" CFLAGS="-m32" LDFLAGS="-m32"
+	$(MAKE) CXXFLAGS="-m32" CFLAGS="-m32" LDFLAGS="-m32" TARGET32=true
 
 gcov:
 	$(MAKE) KEYDB_CXXFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" KEYDB_CFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" KEYDB_LDFLAGS="-fprofile-arcs -ftest-coverage"

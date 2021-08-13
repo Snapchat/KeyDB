@@ -1,3 +1,18 @@
+keydb-enterprise (6:6.2.0-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * Removed unused command line options(-a, -d, -P, -r, -q, --csv, -l, -I, -e, --precision, --cluster, --enable-tracking)
+  * --ms option changed to --time, added --clients, --host, --port, and --threads options
+  * Added keydb-diagnostic-tool
+  * Improved test reliability
+  * Fixed memory leak in keydb-benchmark
+  * Fixed a number of race conditions
+  * Fixed OSX build issues
+  * Feature parity with Redis 6.2.3
+  * Config for prefetch added
+  * Fixed Issues: #323 #325 #276
+
+ -- Ben Schermel <ben@eqalpha.com>  Thu, 12 Aug 2021 20:00:37 +0000
+
 keydb-enterprise (6:6.0.18-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * 6.0.18 Initial build & distribution for KeyDB Enterprise packages.

@@ -5,3 +5,4 @@ src/keydb-check-rdb	/usr/bin
 src/keydb-cli		/usr/bin
 src/keydb-server	/usr/bin
 src/keydb-sentinel	/usr/bin
+src/keydb-diagnostic-tool	/usr/bin

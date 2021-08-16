@@ -727,6 +727,9 @@ sds catCommandForAofAndActiveReplication(sds buf, struct redisCommand *cmd, robj
 }
 
 void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int argc) {
+    /* If we encounter a replica replay command, no need to store it into the AOF */
+    if (cmd == cserver.rreplayCommand) return;
+
     sds buf = sdsempty();
 
     /* The DB this command was targeting is not the same as the last command
@@ -964,6 +967,11 @@ int loadAppendOnlyFile(char *filename) {
                 (char*)ptrFromObj(argv[0]));
             exit(1);
         }
+
+        /* If you see an RREPLAY command in the append-only file, it was from a 
+         * a version of KeyDB before we stopped writing them to AOFs. 
+         * In any case, ignore it. */
+        if (cmd == cserver.rreplayCommand) continue;
 
         if (cmd == cserver.multiCommand) valid_before_multi = valid_up_to;
 

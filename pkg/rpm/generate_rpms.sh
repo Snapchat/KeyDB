@@ -25,7 +25,13 @@ mkdir -p $DIR/keydb_build/keydb_rpm/var/log/keydb
 
 # move binaries to bin
 rm $DIR/keydb_build/keydb_rpm/usr/bin/*
-cp $DIR/../../src/keydb-* $DIR/keydb_build/keydb_rpm/usr/bin/
+cp $DIR/../../src/keydb-server $DIR/keydb_build/keydb_rpm/usr/bin/
+cp $DIR/../../src/keydb-sentinel $DIR/keydb_build/keydb_rpm/usr/bin/
+cp $DIR/../../src/keydb-cli $DIR/keydb_build/keydb_rpm/usr/bin/
+cp $DIR/../../src/keydb-benchmark $DIR/keydb_build/keydb_rpm/usr/bin/
+cp $DIR/../../src/keydb-check-aof $DIR/keydb_build/keydb_rpm/usr/bin/
+cp $DIR/../../src/keydb-check-rdb $DIR/keydb_build/keydb_rpm/usr/bin/
+cp $DIR/../../src/keydb-diagnostic-tool $DIR/keydb_build/keydb_rpm/usr/bin/
 
 # update spec file with build info
 sed -i '2d' $DIR/keydb_build/keydb.spec

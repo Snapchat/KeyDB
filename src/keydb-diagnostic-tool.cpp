@@ -211,6 +211,11 @@ extern "C" void _serverAssert(const char *estr, const char *file, int line) {
     *((char*)-1) = 'x';
 }
 
+/* asyncFreeDictTable is needed by dict */
+extern "C" void asyncFreeDictTable(struct dictEntry **de) {
+    zfree(de);
+}
+
 static redisContext *getRedisContext(const char *ip, int port,
                                      const char *hostsocket)
 {

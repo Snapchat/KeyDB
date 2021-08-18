@@ -1,7 +1,11 @@
 #pragma once
 
-// eventually this number might actually end up being a valid expire time, this could cause bugs so at that time it might be a good idea to use a larger data type.
-#define INVALID_EXPIRE (LLONG_MIN & ~((1LL) << (sizeof(long long)*CHAR_BIT - 1)))
+/* 
+ * INVALID_EXPIRE is the value we set the expireEntry's m_when value to when the main key is not expired and the value we return when we try to get the expire time of a key or subkey that is not expired
+ * Want this value to be LLONG_MAX however we use the most significant bit of m_when as a flag to see if the expireEntry is Fat or not so we want to ensure that it is unset hence the (& ~((1LL) << (sizeof(long long)*CHAR_BIT - 1)))
+ * Eventually this number might actually end up being a valid expire time, this could cause bugs so at that time it might be a good idea to use a larger data type.
+ */
+#define INVALID_EXPIRE (LLONG_MAX & ~((1LL) << (sizeof(long long)*CHAR_BIT - 1)))
 
 class expireEntryFat
 {
@@ -56,6 +60,7 @@ class expireEntry {
     } u;
     long long m_when;   // bit wise and with FFatMask means this is a fat entry and we should use the pointer
 
+    /* Mask to check if an entry is Fat, most significant bit of m_when being set means it is Fat otherwise it is not */
     long long FFatMask() const noexcept {
         return (1LL) << (sizeof(long long)*CHAR_BIT - 1);
     }

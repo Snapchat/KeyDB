@@ -1124,7 +1124,7 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, expireEntry *pexpire) {
     int savelfu = g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU;
 
     /* Save the expire time */
-    long long expiretime = -1;
+    long long expiretime = INVALID_EXPIRE;
     if (pexpire != nullptr && pexpire->FGetPrimaryExpire(&expiretime)) {
         if (rdbSaveType(rdb,RDB_OPCODE_EXPIRETIME_MS) == -1) return -1;
         if (rdbSaveMillisecondTime(rdb,expiretime) == -1) return -1;

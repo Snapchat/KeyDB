@@ -1751,17 +1751,9 @@ int keyIsExpired(redisDb *db, robj *key) {
     /* Don't expire anything while loading. It will be done later. */
     if (g_pserver->loading) return 0;
 
-    long long when = -1;
-    for (auto &exp : *pexpire)
-    {
-        if (exp.subkey() == nullptr)
-        {
-            when = exp.when();
-            break;
-        }
-    }
+    long long when = pexpire->FGetPrimaryExpire();
 
-    if (when == -1)
+    if (when == INVALID_EXPIRE)
         return 0;
 
     /* If we are in the context of a Lua script, we pretend that time is

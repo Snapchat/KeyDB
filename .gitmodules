@@ -1,6 +1,6 @@
 [submodule "deps/rocksdb"]
 	path = deps/rocksdb
-	url = https://gitlab.eqalpha.com/keydb-dev/rocksdb.git
+	url = https://gitlab.eqalpha.com/submodules/rocksdb.git
 [submodule "deps/depot_tools"]
 	path = deps/depot_tools
 	url = https://chromium.googlesource.com/chromium/tools/depot_tools.git

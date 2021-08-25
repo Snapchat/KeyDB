@@ -4952,6 +4952,26 @@ bool client::postFunction(std::function<void(client *)> fn, bool fLock) {
     }, fLock) == AE_OK;
 }
 
+void client::asyncCommand(std::function<void()> &&preFn, std::function<void()> &&mainFn, std::function<void()> &&postFn) {
+    aeEventLoop *el = serverTL->el;
+    blockClient(this, BLOCKED_ASYNC);
+    g_pserver->asyncworkqueue->AddWorkFunction([el, this, preFn, mainFn, postFn] {
+        preFn();
+        aePostFunction(el, [this, mainFn, postFn] {
+            aeReleaseLock();
+            std::unique_lock<decltype(this->lock)> lock(this->lock);
+            AeLocker locker;
+            locker.arm(this);
+            unblockClient(this);
+            mainFn();
+            locker.disarm();
+            lock.unlock();
+            postFn();
+            aeAcquireLock();
+        });
+    });
+}
+
 /* ====================== Error lookup and execution ===================== */
 
 void incrementErrorCount(const char *fullerr, size_t namelen) {

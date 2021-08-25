@@ -12,7 +12,7 @@ build:
     - docker
   stage: build
   script:
-    - git submodule update --init --remote
+    - git submodule update --init
     - make distclean
     - make -j
   artifacts:
@@ -113,7 +113,7 @@ endurance-test:
     - docker
   stage: test
   script:
-    - git submodule update --init --remote
+    - git submodule update --init
     - make distclean
     - make -j
     - ./runtest --config server-threads 3 --loop --stop
@@ -125,7 +125,7 @@ coverage-test:
     - docker
   stage: test
   script:
-    - git submodule update --init --remote
+    - git submodule update --init
     - make distclean
     - make gcov -j
     - make install

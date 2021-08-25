@@ -526,7 +526,7 @@ void getrangeCommand(client *c) {
 
 void mgetCommand(client *c) {
     // Do async version for large number of arguments
-    if (c->argc > 1) {
+    if (c->argc > 100) {
         const redisDbPersistentDataSnapshot *snapshot = nullptr;
         if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
             snapshot = c->db->createSnapshot(c->mvccCheckpoint, false /* fOptional */);
@@ -534,30 +534,30 @@ void mgetCommand(client *c) {
             list *keys = listCreate();
             redisDb *db = c->db;
             c->asyncCommand(
-            [c, keys] {
-                for (int j = 1; j < c->argc; j++) {
-                    incrRefCount(c->argv[j]);
-                    listAddNodeTail(keys, c->argv[j]);
-                }
-            }, 
-            [c, keys, snapshot] {
-                addReplyArrayLen(c,listLength(keys));
-                listNode *ln = listFirst(keys);
-                while (ln != nullptr) {
-                    robj_roptr o = snapshot->find_cached_threadsafe(szFromObj((robj*)listNodeValue(ln))).val();
-                    if (o == nullptr || o->type != OBJ_STRING) {
-                        addReplyNull(c);
-                    } else {
-                        addReplyBulk(c,o);
+                [c, keys] {
+                    for (int j = 1; j < c->argc; j++) {
+                        incrRefCount(c->argv[j]);
+                        listAddNodeTail(keys, c->argv[j]);
                     }
-                    ln = ln->next;
+                }, 
+                [c, keys, snapshot] {
+                    addReplyArrayLen(c,listLength(keys));
+                    listNode *ln = listFirst(keys);
+                    while (ln != nullptr) {
+                        robj_roptr o = snapshot->find_cached_threadsafe(szFromObj((robj*)listNodeValue(ln))).val();
+                        if (o == nullptr || o->type != OBJ_STRING) {
+                            addReplyNull(c);
+                        } else {
+                            addReplyBulk(c,o);
+                        }
+                        ln = ln->next;
+                    }
+                }, 
+                [keys, snapshot, db] {
+                    db->endSnapshotAsync(snapshot);
+                    listSetFreeMethod(keys,decrRefCountVoid);
+                    listRelease(keys);
                 }
-            }, 
-            [keys, snapshot, db] {
-                db->endSnapshotAsync(snapshot);
-                listSetFreeMethod(keys,decrRefCountVoid);
-                listRelease(keys);
-            }
             );
             return;
         }

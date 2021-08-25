@@ -526,47 +526,39 @@ void getrangeCommand(client *c) {
 
 void mgetCommand(client *c) {
     // Do async version for large number of arguments
-    if (c->argc > 100) {
+    if (c->argc > 1) {
         const redisDbPersistentDataSnapshot *snapshot = nullptr;
         if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
             snapshot = c->db->createSnapshot(c->mvccCheckpoint, false /* fOptional */);
         if (snapshot != nullptr) {
             list *keys = listCreate();
-            aeEventLoop *el = serverTL->el;
-            blockClient(c, BLOCKED_ASYNC);
             redisDb *db = c->db;
-            g_pserver->asyncworkqueue->AddWorkFunction([el, c, keys, snapshot, db] {
+            c->asyncCommand(
+            [c, keys] {
                 for (int j = 1; j < c->argc; j++) {
                     incrRefCount(c->argv[j]);
                     listAddNodeTail(keys, c->argv[j]);
                 }
-                aePostFunction(el, [c, keys, snapshot, db] {
-                    aeReleaseLock();
-                    std::unique_lock<decltype(c->lock)> lock(c->lock);
-                    AeLocker locker;
-                    locker.arm(c);
-                    unblockClient(c);
-
-                    addReplyArrayLen(c,listLength(keys));
-                    listNode *ln = listFirst(keys);
-                    while (ln != nullptr) {
-                        robj_roptr o = snapshot->find_cached_threadsafe(szFromObj((robj*)listNodeValue(ln))).val();
-                        if (o == nullptr || o->type != OBJ_STRING) {
-                            addReplyNull(c);
-                        } else {
-                            addReplyBulk(c,o);
-                        }
-                        ln = ln->next;
+            }, 
+            [c, keys, snapshot] {
+                addReplyArrayLen(c,listLength(keys));
+                listNode *ln = listFirst(keys);
+                while (ln != nullptr) {
+                    robj_roptr o = snapshot->find_cached_threadsafe(szFromObj((robj*)listNodeValue(ln))).val();
+                    if (o == nullptr || o->type != OBJ_STRING) {
+                        addReplyNull(c);
+                    } else {
+                        addReplyBulk(c,o);
                     }
-
-                    locker.disarm();
-                    lock.unlock();
-                    db->endSnapshotAsync(snapshot);
-                    listSetFreeMethod(keys,decrRefCountVoid);
-                    listRelease(keys);
-                    aeAcquireLock();
-                });
-            });
+                    ln = ln->next;
+                }
+            }, 
+            [keys, snapshot, db] {
+                db->endSnapshotAsync(snapshot);
+                listSetFreeMethod(keys,decrRefCountVoid);
+                listRelease(keys);
+            }
+            );
             return;
         }
     }

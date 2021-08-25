@@ -12,6 +12,16 @@ start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.
         assert_equal {0} [r dbsize] "Key count is accurate after non-existant delete"
     }
 
+    test { DEL of flushed key works } {
+        r flushall
+        r set testkey foo
+        assert_equal {1} [r dbsize] "Only one key after first insert"
+        r flushall cache
+        assert_equal {foo} [r get testkey] "Value still there after flushing cache"
+        r del testkey
+        assert_equal {0} [r dbsize] "No keys after delete"
+    }
+
    test { SET of existing but flushed key works } {
         r flushall
         r set testkey foo
@@ -97,6 +107,16 @@ start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.
         set expectedDigest [r debug digest]
         r flushall cache
         assert_equal $expectedDigest [r debug digest]
+    }
+
+    test { DELETE of flushed set member persists after another flush } {
+        r flushall
+        r sadd set1 val1 val2 val3
+        assert_equal {3} [r scard set1]
+        r flushall cache
+        r srem set1 val1
+        r flushall cache
+        assert_equal {2} [r scard set1]
     }
 
     r flushall

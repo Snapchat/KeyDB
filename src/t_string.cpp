@@ -524,58 +524,59 @@ void getrangeCommand(client *c) {
     }
 }
 
+list *mgetKeysFromClient(client *c) {
+    list *keys = listCreate();
+    for (int j = 1; j < c->argc; j++) {
+        incrRefCount(c->argv[j]);
+        listAddNodeTail(keys, c->argv[j]);
+    }
+    return keys;
+}
+
+void mgetCore(client *c, list *keys, const redisDbPersistentDataSnapshot *snapshot = nullptr) {
+    addReplyArrayLen(c,listLength(keys));
+    listNode *ln = listFirst(keys);
+    while (ln != nullptr) {
+        robj_roptr o;
+        if (snapshot)
+            o = snapshot->find_cached_threadsafe(szFromObj((robj*)listNodeValue(ln))).val();
+        else
+            o = lookupKeyRead(c->db,(robj*)listNodeValue(ln));
+        if (o == nullptr || o->type != OBJ_STRING) {
+            addReplyNull(c);
+        } else {
+            addReplyBulk(c,o);
+        }
+        ln = ln->next;
+    }
+}
+
+void mgetClearKeys(list *keys) {
+    listSetFreeMethod(keys,decrRefCountVoid);
+    listRelease(keys);
+}
+
 void mgetCommand(client *c) {
     // Do async version for large number of arguments
     if (c->argc > 100) {
-        const redisDbPersistentDataSnapshot *snapshot = nullptr;
-        if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
-            snapshot = c->db->createSnapshot(c->mvccCheckpoint, false /* fOptional */);
-        if (snapshot != nullptr) {
-            list *keys = listCreate();
-            redisDb *db = c->db;
-            c->asyncCommand(
-                [c, keys] {
-                    for (int j = 1; j < c->argc; j++) {
-                        incrRefCount(c->argv[j]);
-                        listAddNodeTail(keys, c->argv[j]);
-                    }
+        if (c->asyncCommand(
+                [c] (const redisDbPersistentDataSnapshot *snapshot) {
+                    return mgetKeysFromClient(c);
                 }, 
-                [c, keys, snapshot] {
-                    addReplyArrayLen(c,listLength(keys));
-                    listNode *ln = listFirst(keys);
-                    while (ln != nullptr) {
-                        robj_roptr o = snapshot->find_cached_threadsafe(szFromObj((robj*)listNodeValue(ln))).val();
-                        if (o == nullptr || o->type != OBJ_STRING) {
-                            addReplyNull(c);
-                        } else {
-                            addReplyBulk(c,o);
-                        }
-                        ln = ln->next;
-                    }
+                [c] (const redisDbPersistentDataSnapshot *snapshot, void *keys) {
+                    mgetCore(c, (list *)keys, snapshot);
                 }, 
-                [keys, snapshot, db] {
-                    db->endSnapshotAsync(snapshot);
-                    listSetFreeMethod(keys,decrRefCountVoid);
-                    listRelease(keys);
+                [] (const redisDbPersistentDataSnapshot *snapshot, void *keys) {
+                    mgetClearKeys((list *)keys);
                 }
-            );
+            )) {
             return;
         }
     }
-    
-    addReplyArrayLen(c,c->argc-1);
-    for (int j = 1; j < c->argc; j++) {
-        robj_roptr o = lookupKeyRead(c->db,c->argv[j]);
-        if (o == nullptr) {
-            addReplyNull(c);
-        } else {
-            if (o->type != OBJ_STRING) {
-                addReplyNull(c);
-            } else {
-                addReplyBulk(c,o);
-            }
-        }
-    }
+
+    list *keys = mgetKeysFromClient(c);
+    mgetCore(c, keys);
+    mgetClearKeys(keys);
 }
 
 void msetGenericCommand(client *c, int nx) {

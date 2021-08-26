@@ -4956,6 +4956,7 @@ bool client::asyncCommand(std::function<void *(const redisDbPersistentDataSnapsh
                             std::function<void(const redisDbPersistentDataSnapshot *, void *)> &&mainFn, 
                             std::function<void(const redisDbPersistentDataSnapshot *, void *)> &&postFn) 
 {
+    serverAssert(FCorrectThread(this));
     const redisDbPersistentDataSnapshot *snapshot = nullptr;
     if (!(this->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
         snapshot = this->db->createSnapshot(this->mvccCheckpoint, false /* fOptional */);
@@ -4963,7 +4964,6 @@ bool client::asyncCommand(std::function<void *(const redisDbPersistentDataSnapsh
         return false;
     }
     aeEventLoop *el = serverTL->el;
-    serverAssert(FCorrectThread(this));
     blockClient(this, BLOCKED_ASYNC);
     g_pserver->asyncworkqueue->AddWorkFunction([el, this, preFn, mainFn, postFn, snapshot] {
         void *preData = preFn(snapshot);

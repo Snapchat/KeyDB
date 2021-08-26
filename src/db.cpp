@@ -2801,8 +2801,10 @@ LNotFound:
                     serverAssert(m_setexpire->find(sdsKey) != m_setexpire->end());
                 }
                 serverAssert(o->FExpires() == (m_setexpire->find(sdsKey) != m_setexpire->end()));
+                g_pserver->stat_storage_provider_read_hits++;
             } else {
                 sdsfree(sdsNewKey);
+                g_pserver->stat_storage_provider_read_misses++;
             }
 
             *pde = dictFind(m_pdict, sdsKey);

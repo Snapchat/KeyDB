@@ -4963,6 +4963,7 @@ bool client::asyncCommand(std::function<void *(const redisDbPersistentDataSnapsh
         return false;
     }
     aeEventLoop *el = serverTL->el;
+    serverAssert(FCorrectThread(this));
     blockClient(this, BLOCKED_ASYNC);
     g_pserver->asyncworkqueue->AddWorkFunction([el, this, preFn, mainFn, postFn, snapshot] {
         void *preData = preFn(snapshot);

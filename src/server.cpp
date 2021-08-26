@@ -5798,7 +5798,9 @@ sds genRedisInfoString(const char *section) {
             "total_reads_processed:%lld\r\n"
             "total_writes_processed:%lld\r\n"
             "instantaneous_lock_contention:%d\r\n"
-            "avg_lock_contention:%f\r\n",
+            "avg_lock_contention:%f\r\n"
+            "storage_provider_read_hits:%lld\r\n"
+            "storage_provider_read_misses:%lld\r\n",
             g_pserver->stat_numconnections,
             g_pserver->stat_numcommands,
             getInstantaneousMetric(STATS_METRIC_COMMAND),
@@ -5836,7 +5838,9 @@ sds genRedisInfoString(const char *section) {
             stat_total_reads_processed,
             stat_total_writes_processed,
             aeLockContention(),
-            avgLockContention);
+            avgLockContention,
+            g_pserver->stat_storage_provider_read_hits,
+            g_pserver->stat_storage_provider_read_misses);
     }
 
     /* Replication */

@@ -4952,24 +4952,35 @@ bool client::postFunction(std::function<void(client *)> fn, bool fLock) {
     }, fLock) == AE_OK;
 }
 
-void client::asyncCommand(std::function<void()> &&preFn, std::function<void()> &&mainFn, std::function<void()> &&postFn) {
+bool client::asyncCommand(std::function<void *(const redisDbPersistentDataSnapshot *)> &&preFn, 
+                            std::function<void(const redisDbPersistentDataSnapshot *, void *)> &&mainFn, 
+                            std::function<void(const redisDbPersistentDataSnapshot *, void *)> &&postFn) 
+{
+    const redisDbPersistentDataSnapshot *snapshot = nullptr;
+    if (!(this->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
+        snapshot = this->db->createSnapshot(this->mvccCheckpoint, false /* fOptional */);
+    if (snapshot == nullptr) {
+        return false;
+    }
     aeEventLoop *el = serverTL->el;
     blockClient(this, BLOCKED_ASYNC);
-    g_pserver->asyncworkqueue->AddWorkFunction([el, this, preFn, mainFn, postFn] {
-        preFn();
-        aePostFunction(el, [this, mainFn, postFn] {
+    g_pserver->asyncworkqueue->AddWorkFunction([el, this, preFn, mainFn, postFn, snapshot] {
+        void *preData = preFn(snapshot);
+        aePostFunction(el, [this, mainFn, postFn, snapshot, preData] {
             aeReleaseLock();
             std::unique_lock<decltype(this->lock)> lock(this->lock);
             AeLocker locker;
             locker.arm(this);
             unblockClient(this);
-            mainFn();
+            mainFn(snapshot, preData);
             locker.disarm();
             lock.unlock();
-            postFn();
+            postFn(snapshot, preData);
+            this->db->endSnapshotAsync(snapshot);
             aeAcquireLock();
         });
     });
+    return true;
 }
 
 /* ====================== Error lookup and execution ===================== */

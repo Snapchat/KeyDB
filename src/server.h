@@ -1661,7 +1661,9 @@ struct client {
     // post a function from a non-client thread to run on its client thread
     bool postFunction(std::function<void(client *)> fn, bool fLock = true);
     size_t argv_len_sum() const;
-    void asyncCommand(std::function<void()> &&preFn, std::function<void()> &&mainFn, std::function<void()> &&postFn);
+    bool asyncCommand(std::function<void *(const redisDbPersistentDataSnapshot *)> &&preFn, 
+                        std::function<void(const redisDbPersistentDataSnapshot *, void *)> &&mainFn, 
+                        std::function<void(const redisDbPersistentDataSnapshot *, void *)> &&postFn);
 };
 
 struct saveparam {

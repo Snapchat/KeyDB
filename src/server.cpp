@@ -3091,7 +3091,7 @@ int setOOMScoreAdj(int process_class) {
 
     fd = open("/proc/self/oom_score_adj", O_WRONLY);
     if (fd < 0 || write(fd, buf, strlen(buf)) < 0) {
-        serverLog(LOG_WARNING, "Unable to write oom_score_adj: %s", strerror(errno));
+        serverLog(LL_WARNING, "Unable to write oom_score_adj: %s", strerror(errno));
         if (fd != -1) close(fd);
         return C_ERR;
     }
@@ -6538,7 +6538,7 @@ void OnTerminate()
 void *workerThreadMain(void *parg)
 {
     int iel = (int)((int64_t)parg);
-    serverLog(LOG_INFO, "Thread %d alive.", iel);
+    serverLog(LL_NOTICE, "Thread %d alive.", iel);
     serverTL = g_pserver->rgthreadvar+iel;  // set the TLS threadsafe global
     tlsInitThread();
 
@@ -6940,7 +6940,7 @@ int main(int argc, char **argv) {
             CPU_SET(iel + cserver.threadAffinityOffset, &cpuset);
             if (pthread_setaffinity_np(g_pserver->rgthread[iel], sizeof(cpu_set_t), &cpuset) == 0)
             {
-                serverLog(LOG_INFO, "Binding thread %d to cpu %d", iel, iel + cserver.threadAffinityOffset + 1);
+                serverLog(LL_NOTICE, "Binding thread %d to cpu %d", iel, iel + cserver.threadAffinityOffset + 1);
             }
 #else
 			serverLog(LL_WARNING, "CPU pinning not available on this platform");

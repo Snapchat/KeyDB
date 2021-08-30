@@ -3498,11 +3498,6 @@ void initServer(void) {
             selectDb(mi->cached_master, 0);
     }
 
-    if (g_pserver->syslog_enabled) {
-        openlog(g_pserver->syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,
-            g_pserver->syslog_facility);
-    }
-
     g_pserver->aof_state = g_pserver->aof_enabled ? AOF_ON : AOF_OFF;
     g_pserver->hz = g_pserver->config_hz;
     cserver.pid = getpid();
@@ -6780,6 +6775,11 @@ int main(int argc, char **argv) {
         loadServerConfig(cserver.configfile, config_from_stdin, options);
         if (g_pserver->sentinel_mode) loadSentinelConfigFromQueue();
         sdsfree(options);
+    }
+
+    if (g_pserver->syslog_enabled) {
+        openlog(g_pserver->syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,
+            g_pserver->syslog_facility);
     }
 
     if (cserver.fUsePro) {

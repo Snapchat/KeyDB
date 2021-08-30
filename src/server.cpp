@@ -4952,6 +4952,20 @@ bool client::postFunction(std::function<void(client *)> fn, bool fLock) {
     }, fLock) == AE_OK;
 }
 
+list *client::argsAsList() {
+    list *args = listCreate();
+    for (int j = 1; j < this->argc; j++) {
+        incrRefCount(this->argv[j]);
+        listAddNodeTail(args, this->argv[j]);
+    }
+    return args;
+}
+
+void client::freeArgList(list* args) {
+    listSetFreeMethod(args,decrRefCountVoid);
+    listRelease(args);
+}
+
 bool client::asyncCommand(std::function<void *(const redisDbPersistentDataSnapshot *)> &&preFn, 
                             std::function<void(const redisDbPersistentDataSnapshot *, void *)> &&mainFn, 
                             std::function<void(const redisDbPersistentDataSnapshot *, void *)> &&postFn) 

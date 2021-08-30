@@ -524,15 +524,6 @@ void getrangeCommand(client *c) {
     }
 }
 
-list *mgetKeysFromClient(client *c) {
-    list *keys = listCreate();
-    for (int j = 1; j < c->argc; j++) {
-        incrRefCount(c->argv[j]);
-        listAddNodeTail(keys, c->argv[j]);
-    }
-    return keys;
-}
-
 void mgetCore(client *c, list *keys, const redisDbPersistentDataSnapshot *snapshot = nullptr) {
     addReplyArrayLen(c,listLength(keys));
     listNode *ln = listFirst(keys);
@@ -551,32 +542,27 @@ void mgetCore(client *c, list *keys, const redisDbPersistentDataSnapshot *snapsh
     }
 }
 
-void mgetClearKeys(list *keys) {
-    listSetFreeMethod(keys,decrRefCountVoid);
-    listRelease(keys);
-}
-
 void mgetCommand(client *c) {
     // Do async version for large number of arguments
     if (c->argc > 100) {
         if (c->asyncCommand(
                 [c] (const redisDbPersistentDataSnapshot *snapshot) {
-                    return mgetKeysFromClient(c);
+                    return c->argsAsList();
                 }, 
                 [c] (const redisDbPersistentDataSnapshot *snapshot, void *keys) {
                     mgetCore(c, (list *)keys, snapshot);
                 }, 
-                [] (const redisDbPersistentDataSnapshot *snapshot, void *keys) {
-                    mgetClearKeys((list *)keys);
+                [c] (const redisDbPersistentDataSnapshot *snapshot, void *keys) {
+                    c->freeArgList((list *)keys);
                 }
             )) {
             return;
         }
     }
 
-    list *keys = mgetKeysFromClient(c);
+    list *keys = c->argsAsList();
     mgetCore(c, keys);
-    mgetClearKeys(keys);
+    c->freeArgList(keys);
 }
 
 void msetGenericCommand(client *c, int nx) {

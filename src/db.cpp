@@ -1209,14 +1209,14 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
                     sdsfree(typeCopy);
                 return (void *)cursorResult;
             },
-            [c, keys] (const redisDbPersistentDataSnapshot * snapshot, void *data) {
+            [c, keys] (const redisDbPersistentDataSnapshot *, void *data) {
                 mstime_t timeScanFilter;
                 latencyStartMonitor(timeScanFilter);
                 scanFilterAndReply(c, keys, nullptr, nullptr, false, nullptr, (unsigned long)data);
                 latencyEndMonitor(timeScanFilter);
                 latencyAddSampleIfNeeded("scan-async-filter", timeScanFilter);
             },
-            [keys] (const redisDbPersistentDataSnapshot * snapshot, void *data) {
+            [keys] (const redisDbPersistentDataSnapshot *, void *) {
                 listSetFreeMethod(keys,decrRefCountVoid);
                 listRelease(keys);
             }

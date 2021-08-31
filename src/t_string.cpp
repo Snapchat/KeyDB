@@ -546,13 +546,13 @@ void mgetCommand(client *c) {
     // Do async version for large number of arguments
     if (c->argc > 100) {
         if (c->asyncCommand(
-                [c] (const redisDbPersistentDataSnapshot *snapshot) {
+                [c] (const redisDbPersistentDataSnapshot *) {
                     return c->argsAsList();
                 }, 
                 [c] (const redisDbPersistentDataSnapshot *snapshot, void *keys) {
                     mgetCore(c, (list *)keys, snapshot);
                 }, 
-                [c] (const redisDbPersistentDataSnapshot *snapshot, void *keys) {
+                [c] (const redisDbPersistentDataSnapshot *, void *keys) {
                     c->freeArgList((list *)keys);
                 }
             )) {

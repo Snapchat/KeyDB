@@ -544,7 +544,7 @@ void mgetCommand(client *c) {
     // Do async version for large number of arguments
     if (c->argc > 100) {
         if (c->asyncCommand(
-                [c] (const redisDbPersistentDataSnapshot *snapshot, std::vector<robj_sharedptr> keys) {
+                [c] (const redisDbPersistentDataSnapshot *snapshot, const std::vector<robj_sharedptr> &keys) {
                     mgetCore(c, (robj **)keys.data(), keys.size(), snapshot);
                 }
             )) {

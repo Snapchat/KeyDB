@@ -4952,15 +4952,15 @@ bool client::postFunction(std::function<void(client *)> fn, bool fLock) {
     }, fLock) == AE_OK;
 }
 
-std::vector<robj_sharedptr> client::args() {
+std::vector<robj_sharedptr> clientArgs(client *c) {
     std::vector<robj_sharedptr> args;
-    for (int j = 1; j < this->argc; j++) {
-        args.push_back(robj_sharedptr(argv[j]));
+    for (int j = 1; j < c->argc; j++) {
+        args.push_back(robj_sharedptr(c->argv[j]));
     }
     return args;
 }
 
-bool client::asyncCommand(std::function<void(const redisDbPersistentDataSnapshot *, std::vector<robj_sharedptr>)> &&mainFn, 
+bool client::asyncCommand(std::function<void(const redisDbPersistentDataSnapshot *, const std::vector<robj_sharedptr> &)> &&mainFn, 
                             std::function<void(const redisDbPersistentDataSnapshot *)> &&postFn) 
 {
     serverAssert(FCorrectThread(this));
@@ -4973,7 +4973,7 @@ bool client::asyncCommand(std::function<void(const redisDbPersistentDataSnapshot
     aeEventLoop *el = serverTL->el;
     blockClient(this, BLOCKED_ASYNC);
     g_pserver->asyncworkqueue->AddWorkFunction([el, this, mainFn, postFn, snapshot] {
-        std::vector<robj_sharedptr> args = this->args();
+        std::vector<robj_sharedptr> args = clientArgs(this);
         aePostFunction(el, [this, mainFn, postFn, snapshot, args] {
             aeReleaseLock();
             std::unique_lock<decltype(this->lock)> lock(this->lock);

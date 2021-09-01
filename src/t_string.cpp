@@ -524,21 +524,19 @@ void getrangeCommand(client *c) {
     }
 }
 
-void mgetCore(client *c, list *keys, const redisDbPersistentDataSnapshot *snapshot = nullptr) {
-    addReplyArrayLen(c,listLength(keys));
-    listNode *ln = listFirst(keys);
-    while (ln != nullptr) {
+void mgetCore(client *c, robj **keys, int count, const redisDbPersistentDataSnapshot *snapshot = nullptr) {
+    addReplyArrayLen(c,count);
+    for (int i = 0; i < count; i++) {
         robj_roptr o;
         if (snapshot)
-            o = snapshot->find_cached_threadsafe(szFromObj((robj*)listNodeValue(ln))).val();
+            o = snapshot->find_cached_threadsafe(szFromObj(keys[i])).val();
         else
-            o = lookupKeyRead(c->db,(robj*)listNodeValue(ln));
+            o = lookupKeyRead(c->db,keys[i]);
         if (o == nullptr || o->type != OBJ_STRING) {
             addReplyNull(c);
         } else {
             addReplyBulk(c,o);
         }
-        ln = ln->next;
     }
 }
 
@@ -546,23 +544,15 @@ void mgetCommand(client *c) {
     // Do async version for large number of arguments
     if (c->argc > 100) {
         if (c->asyncCommand(
-                [c] (const redisDbPersistentDataSnapshot *) {
-                    return c->argsAsList();
-                }, 
-                [c] (const redisDbPersistentDataSnapshot *snapshot, void *keys) {
-                    mgetCore(c, (list *)keys, snapshot);
-                }, 
-                [c] (const redisDbPersistentDataSnapshot *, void *keys) {
-                    c->freeArgList((list *)keys);
+                [c] (const redisDbPersistentDataSnapshot *snapshot, std::vector<robj_sharedptr> keys) {
+                    mgetCore(c, (robj **)keys.data(), keys.size(), snapshot);
                 }
             )) {
             return;
         }
     }
 
-    list *keys = c->argsAsList();
-    mgetCore(c, keys);
-    c->freeArgList(keys);
+    mgetCore(c, c->argv + 1, c->argc - 1);
 }
 
 void msetGenericCommand(client *c, int nx) {

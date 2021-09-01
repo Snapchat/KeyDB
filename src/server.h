@@ -1154,6 +1154,7 @@ public:
     void setStorageProvider(StorageCache *pstorage);
 
     void trackChanges(bool fBulk, size_t sizeHint = 0);
+    bool FTrackingChanges() const { return !!m_fTrackingChanges; }
 
     // Process and commit changes for secondary storage.  Note that process and commit are seperated
     //  to allow you to release the global lock before commiting.  To prevent deadlocks you *must*
@@ -1338,6 +1339,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::prefetchKeysAsync;
     using redisDbPersistentData::prepOverwriteForSnapshot;
     using redisDbPersistentData::FRehashing;
+    using redisDbPersistentData::FTrackingChanges;
 
 public:
     expireset::setiter expireitr;

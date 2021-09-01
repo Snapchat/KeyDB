@@ -1661,11 +1661,9 @@ struct client {
     // post a function from a non-client thread to run on its client thread
     bool postFunction(std::function<void(client *)> fn, bool fLock = true);
     size_t argv_len_sum() const;
-    list *argsAsList();
-    void freeArgList(list* args);
-    bool asyncCommand(std::function<void *(const redisDbPersistentDataSnapshot *)> &&preFn, 
-                        std::function<void(const redisDbPersistentDataSnapshot *, void *)> &&mainFn, 
-                        std::function<void(const redisDbPersistentDataSnapshot *, void *)> &&postFn);
+    std::vector<robj_sharedptr> args();
+    bool asyncCommand(std::function<void(const redisDbPersistentDataSnapshot *, std::vector<robj_sharedptr>)> &&mainFn, 
+                        std::function<void(const redisDbPersistentDataSnapshot *)> &&postFn = nullptr);
 };
 
 struct saveparam {

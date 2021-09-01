@@ -4952,23 +4952,16 @@ bool client::postFunction(std::function<void(client *)> fn, bool fLock) {
     }, fLock) == AE_OK;
 }
 
-list *client::argsAsList() {
-    list *args = listCreate();
+std::vector<robj_sharedptr> client::args() {
+    std::vector<robj_sharedptr> args;
     for (int j = 1; j < this->argc; j++) {
-        incrRefCount(this->argv[j]);
-        listAddNodeTail(args, this->argv[j]);
+        args.push_back(robj_sharedptr(argv[j]));
     }
     return args;
 }
 
-void client::freeArgList(list* args) {
-    listSetFreeMethod(args,decrRefCountVoid);
-    listRelease(args);
-}
-
-bool client::asyncCommand(std::function<void *(const redisDbPersistentDataSnapshot *)> &&preFn, 
-                            std::function<void(const redisDbPersistentDataSnapshot *, void *)> &&mainFn, 
-                            std::function<void(const redisDbPersistentDataSnapshot *, void *)> &&postFn) 
+bool client::asyncCommand(std::function<void(const redisDbPersistentDataSnapshot *, std::vector<robj_sharedptr>)> &&mainFn, 
+                            std::function<void(const redisDbPersistentDataSnapshot *)> &&postFn) 
 {
     serverAssert(FCorrectThread(this));
     const redisDbPersistentDataSnapshot *snapshot = nullptr;
@@ -4979,18 +4972,19 @@ bool client::asyncCommand(std::function<void *(const redisDbPersistentDataSnapsh
     }
     aeEventLoop *el = serverTL->el;
     blockClient(this, BLOCKED_ASYNC);
-    g_pserver->asyncworkqueue->AddWorkFunction([el, this, preFn, mainFn, postFn, snapshot] {
-        void *preData = preFn(snapshot);
-        aePostFunction(el, [this, mainFn, postFn, snapshot, preData] {
+    g_pserver->asyncworkqueue->AddWorkFunction([el, this, mainFn, postFn, snapshot] {
+        std::vector<robj_sharedptr> args = this->args();
+        aePostFunction(el, [this, mainFn, postFn, snapshot, args] {
             aeReleaseLock();
             std::unique_lock<decltype(this->lock)> lock(this->lock);
             AeLocker locker;
             locker.arm(this);
             unblockClient(this);
-            mainFn(snapshot, preData);
+            mainFn(snapshot, args);
             locker.disarm();
             lock.unlock();
-            postFn(snapshot, preData);
+            if (postFn)
+                postFn(snapshot);
             this->db->endSnapshotAsync(snapshot);
             aeAcquireLock();
         });

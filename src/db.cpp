@@ -2902,6 +2902,7 @@ bool redisDbPersistentData::processChanges(bool fSnapshot)
 void redisDbPersistentData::processChangesAsync(std::atomic<int> &pendingJobs)
 {
     ++pendingJobs;
+    serverAssert(!m_fAllChanged);
     dictEmpty(m_dictChanged, nullptr);
     dict *dictNew = dictCreate(&dbDictType, nullptr);
     std::swap(dictNew, m_pdict);

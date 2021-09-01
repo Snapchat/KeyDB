@@ -2927,6 +2927,16 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     bool fLastKeyExpired = false;
     std::unique_ptr<rdbInsertJob> spjob;
 
+    // If we're tracking changes we need to reset this
+    bool fTracking = g_pserver->db[0]->FTrackingChanges();
+    if (fTracking) {
+        // We don't want to track here because processChangesAsync is outside the normal scope handling
+        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+            if (g_pserver->db[idb]->processChanges(false))
+                g_pserver->db[idb]->commitChanges();
+        }
+    }
+
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->chksum_arg = &wqueue;
     rdb->max_processing_chunk = g_pserver->loading_process_events_interval_bytes;
@@ -3249,6 +3259,12 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     }
 
     wqueue.endWork();
+    if (fTracking) {
+        // Reset track changes
+        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+            g_pserver->db[idb]->trackChanges(false);
+        }
+    }
 
     return C_OK;
 
@@ -3257,6 +3273,13 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
      * the RDB file from a socket during initial SYNC (diskless replica mode),
      * we'll report the error to the caller, so that we can retry. */
 eoferr:
+    if (fTracking) {
+        // Reset track changes
+        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+            g_pserver->db[idb]->trackChanges(false);
+        }
+    }
+
     wqueue.endWork();
     if (key != nullptr)
     {

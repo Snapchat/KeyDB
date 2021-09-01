@@ -1184,7 +1184,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
     {
         // Do an async version
         if (c->asyncCommand(
-            [c, keys, pat, type, cursor, count, use_pattern] (const redisDbPersistentDataSnapshot *snapshot, std::vector<robj_sharedptr>) {
+            [c, keys, pat, type, cursor, count, use_pattern] (const redisDbPersistentDataSnapshot *snapshot, const std::vector<robj_sharedptr> &) {
                 sds patCopy = pat ? sdsdup(pat) : nullptr;
                 sds typeCopy = type ? sdsdup(type) : nullptr;
                 auto cursorResult = snapshot->scan_threadsafe(cursor, count, typeCopy, keys);

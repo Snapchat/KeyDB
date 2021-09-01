@@ -1184,7 +1184,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
     {
         // Do an async version
         if (c->asyncCommand(
-            [c, cursor, keys, pat, type, use_pattern, count] (const redisDbPersistentDataSnapshot * snapshot) {
+            [c, keys, pat, type, cursor, count, use_pattern] (const redisDbPersistentDataSnapshot *snapshot, std::vector<robj_sharedptr>) {
                 sds patCopy = pat ? sdsdup(pat) : nullptr;
                 sds typeCopy = type ? sdsdup(type) : nullptr;
                 auto cursorResult = snapshot->scan_threadsafe(cursor, count, typeCopy, keys);
@@ -1207,16 +1207,13 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
                     sdsfree(patCopy);
                 if (typeCopy != nullptr)
                     sdsfree(typeCopy);
-                return (void *)cursorResult;
-            },
-            [c, keys] (const redisDbPersistentDataSnapshot *, void *data) {
                 mstime_t timeScanFilter;
                 latencyStartMonitor(timeScanFilter);
-                scanFilterAndReply(c, keys, nullptr, nullptr, false, nullptr, (unsigned long)data);
+                scanFilterAndReply(c, keys, nullptr, nullptr, false, nullptr, cursorResult);
                 latencyEndMonitor(timeScanFilter);
                 latencyAddSampleIfNeeded("scan-async-filter", timeScanFilter);
             },
-            [keys] (const redisDbPersistentDataSnapshot *, void *) {
+            [keys] (const redisDbPersistentDataSnapshot *) {
                 listSetFreeMethod(keys,decrRefCountVoid);
                 listRelease(keys);
             }

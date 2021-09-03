@@ -140,47 +140,6 @@ static void initCryptoLocks(void) {
 }
 #endif /* USE_CRYPTO_LOCKS */
 
-/**
- * OpenSSL global initialization and locking handling callbacks.
- * Note that this is only required for OpenSSL < 1.1.0.
- */
-
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-#define USE_CRYPTO_LOCKS
-#endif
-
-#ifdef USE_CRYPTO_LOCKS
-
-static pthread_mutex_t *openssl_locks;
-
-static void sslLockingCallback(int mode, int lock_id, const char *f, int line) {
-    pthread_mutex_t *mt = openssl_locks + lock_id;
-
-    if (mode & CRYPTO_LOCK) {
-        pthread_mutex_lock(mt);
-    } else {
-        pthread_mutex_unlock(mt);
-    }
-
-    (void)f;
-    (void)line;
-}
-
-static void initCryptoLocks(void) {
-    unsigned i, nlocks;
-    if (CRYPTO_get_locking_callback() != NULL) {
-        /* Someone already set the callback before us. Don't destroy it! */
-        return;
-    }
-    nlocks = CRYPTO_num_locks();
-    openssl_locks = zmalloc(sizeof(*openssl_locks) * nlocks);
-    for (i = 0; i < nlocks; i++) {
-        pthread_mutex_init(openssl_locks + i, NULL);
-    }
-    CRYPTO_set_locking_callback(sslLockingCallback);
-}
-#endif /* USE_CRYPTO_LOCKS */
-
 void tlsInit(void) {
     /* Enable configuring OpenSSL using the standard openssl.cnf
      * OPENSSL_config()/OPENSSL_init_crypto() should be the first 
@@ -190,6 +149,8 @@ void tlsInit(void) {
      */
     #if OPENSSL_VERSION_NUMBER < 0x10100000L
     OPENSSL_config(NULL);
+    #elif OPENSSL_VERSION_NUMBER < 0x10101000L
+    OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CONFIG, NULL);
     #else
     OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CONFIG|OPENSSL_INIT_ATFORK, NULL);
     #endif

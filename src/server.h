@@ -2244,6 +2244,8 @@ struct redisServer {
     long long stat_dump_payload_sanitizations; /* Number deep dump payloads integrity validations. */
     std::atomic<long long> stat_total_reads_processed; /* Total number of read events processed */
     std::atomic<long long> stat_total_writes_processed; /* Total number of write events processed */
+    long long stat_storage_provider_read_hits;
+    long long stat_storage_provider_read_misses;
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {

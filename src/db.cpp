@@ -1183,17 +1183,10 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
     if (o == nullptr && count >= 100)
     {
         // Do an async version
-        const redisDbPersistentDataSnapshot *snapshot = nullptr;
-        if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
-            snapshot = c->db->createSnapshot(c->mvccCheckpoint, false /* fOptional */);
-        if (snapshot != nullptr)
-        {
-            aeEventLoop *el = serverTL->el;
-            blockClient(c, BLOCKED_ASYNC);
-            redisDb *db = c->db;
-            sds patCopy = pat ? sdsdup(pat) : nullptr;
-            sds typeCopy = type ? sdsdup(type) : nullptr;
-            g_pserver->asyncworkqueue->AddWorkFunction([c, snapshot, cursor, count, keys, el, db, patCopy, typeCopy, use_pattern]{
+        if (c->asyncCommand(
+            [c, keys, pat, type, cursor, count, use_pattern] (const redisDbPersistentDataSnapshot *snapshot, const std::vector<robj_sharedptr> &) {
+                sds patCopy = pat ? sdsdup(pat) : nullptr;
+                sds typeCopy = type ? sdsdup(type) : nullptr;
                 auto cursorResult = snapshot->scan_threadsafe(cursor, count, typeCopy, keys);
                 if (use_pattern) {
                     listNode *ln = listFirst(keys);
@@ -1214,30 +1207,17 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
                     sdsfree(patCopy);
                 if (typeCopy != nullptr)
                     sdsfree(typeCopy);
-
-                aePostFunction(el, [c, snapshot, keys, db, cursorResult, use_pattern]{
-                    aeReleaseLock();    // we need to lock with coordination of the client
-
-                    std::unique_lock<decltype(c->lock)> lock(c->lock);
-                    AeLocker locker;
-                    locker.arm(c);
-
-                    unblockClient(c);
-                    mstime_t timeScanFilter;
-                    latencyStartMonitor(timeScanFilter);
-                    scanFilterAndReply(c, keys, nullptr, nullptr, false, nullptr, cursorResult);
-                    latencyEndMonitor(timeScanFilter);
-                    latencyAddSampleIfNeeded("scan-async-filter", timeScanFilter);
-
-                    locker.disarm();
-                    lock.unlock();
-
-                    db->endSnapshotAsync(snapshot);
-                    listSetFreeMethod(keys,decrRefCountVoid);
-                    listRelease(keys);
-                    aeAcquireLock();
-                });
-            });
+                mstime_t timeScanFilter;
+                latencyStartMonitor(timeScanFilter);
+                scanFilterAndReply(c, keys, nullptr, nullptr, false, nullptr, cursorResult);
+                latencyEndMonitor(timeScanFilter);
+                latencyAddSampleIfNeeded("scan-async-filter", timeScanFilter);
+            },
+            [keys] (const redisDbPersistentDataSnapshot *) {
+                listSetFreeMethod(keys,decrRefCountVoid);
+                listRelease(keys);
+            }
+            )) {
             return;
         }
     }

@@ -4954,7 +4954,7 @@ bool client::postFunction(std::function<void(client *)> fn, bool fLock) {
 
 std::vector<robj_sharedptr> clientArgs(client *c) {
     std::vector<robj_sharedptr> args;
-    for (int j = 1; j < c->argc; j++) {
+    for (int j = 0; j < c->argc; j++) {
         args.push_back(robj_sharedptr(c->argv[j]));
     }
     return args;

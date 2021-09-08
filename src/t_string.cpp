@@ -545,7 +545,7 @@ void mgetCommand(client *c) {
     if (c->argc > 100) {
         if (c->asyncCommand(
                 [c] (const redisDbPersistentDataSnapshot *snapshot, const std::vector<robj_sharedptr> &keys) {
-                    mgetCore(c, (robj **)keys.data(), keys.size(), snapshot);
+                    mgetCore(c, (robj **)keys.data() + 1, keys.size() - 1, snapshot);
                 }
             )) {
             return;

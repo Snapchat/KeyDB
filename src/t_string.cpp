@@ -29,6 +29,7 @@
 
 #include "server.h"
 #include <cmath> /* isnan(), isinf() */
+#include "aelocker.h"
 
 /* Forward declarations */
 int getGenericCommand(client *c);
@@ -523,22 +524,35 @@ void getrangeCommand(client *c) {
     }
 }
 
-void mgetCommand(client *c) {
-    int j;
-
-    addReplyArrayLen(c,c->argc-1);
-    for (j = 1; j < c->argc; j++) {
-        robj_roptr o = lookupKeyRead(c->db,c->argv[j]);
-        if (o == nullptr) {
+void mgetCore(client *c, robj **keys, int count, const redisDbPersistentDataSnapshot *snapshot = nullptr) {
+    addReplyArrayLen(c,count);
+    for (int i = 0; i < count; i++) {
+        robj_roptr o;
+        if (snapshot)
+            o = snapshot->find_cached_threadsafe(szFromObj(keys[i])).val();
+        else
+            o = lookupKeyRead(c->db,keys[i]);
+        if (o == nullptr || o->type != OBJ_STRING) {
             addReplyNull(c);
         } else {
-            if (o->type != OBJ_STRING) {
-                addReplyNull(c);
-            } else {
-                addReplyBulk(c,o);
-            }
+            addReplyBulk(c,o);
         }
     }
+}
+
+void mgetCommand(client *c) {
+    // Do async version for large number of arguments
+    if (c->argc > 100) {
+        if (c->asyncCommand(
+                [c] (const redisDbPersistentDataSnapshot *snapshot, const std::vector<robj_sharedptr> &keys) {
+                    mgetCore(c, (robj **)keys.data(), keys.size(), snapshot);
+                }
+            )) {
+            return;
+        }
+    }
+
+    mgetCore(c, c->argv + 1, c->argc - 1);
 }
 
 void msetGenericCommand(client *c, int nx) {

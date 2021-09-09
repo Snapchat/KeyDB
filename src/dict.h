@@ -124,6 +124,7 @@ typedef struct dict {
     unsigned refcount;
     dictAsyncRehashCtl *asyncdata;
     int16_t pauserehash; /* If >0 rehashing is paused (<0 indicates coding error) */
+    uint8_t noshrink = false;
 } dict;
 
 /* If safe is set to 1 this is a safe iterator, that means, you can call

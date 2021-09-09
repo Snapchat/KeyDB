@@ -57,7 +57,6 @@
 #include <limits.h>
 #include <float.h>
 #include <math.h>
-#include <sys/resource.h>
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
@@ -69,7 +68,6 @@
 #include "keycheck.h"
 #include "motd.h"
 #include "t_nhash.h"
-#include <sys/resource.h>
 #ifdef __linux__
 #include <sys/prctl.h>
 #include <sys/mman.h>
@@ -759,6 +757,10 @@ struct redisCommand redisCommandTable[] = {
      * not available. */
     {"ping",pingCommand,-1,
      "ok-stale ok-loading fast @connection @replication",
+     0,NULL,0,0,0,0,0,0},
+
+     {"replping",pingCommand,-1,
+     "ok-stale fast @connection @replication",
      0,NULL,0,0,0,0,0,0},
 
     {"echo",echoCommand,2,
@@ -3114,6 +3116,7 @@ void createSharedObjects(void) {
     shared.lastid = makeObjectShared("LASTID",6);
     shared.default_username = makeObjectShared("default",7);
     shared.ping = makeObjectShared("ping",4);
+    shared.replping = makeObjectShared("replping", 8);
     shared.setid = makeObjectShared("SETID",5);
     shared.keepttl = makeObjectShared("KEEPTTL",7);
     shared.load = makeObjectShared("LOAD",4);
@@ -4949,6 +4952,46 @@ bool client::postFunction(std::function<void(client *)> fn, bool fLock) {
     }, fLock) == AE_OK;
 }
 
+std::vector<robj_sharedptr> clientArgs(client *c) {
+    std::vector<robj_sharedptr> args;
+    for (int j = 0; j < c->argc; j++) {
+        args.push_back(robj_sharedptr(c->argv[j]));
+    }
+    return args;
+}
+
+bool client::asyncCommand(std::function<void(const redisDbPersistentDataSnapshot *, const std::vector<robj_sharedptr> &)> &&mainFn, 
+                            std::function<void(const redisDbPersistentDataSnapshot *)> &&postFn) 
+{
+    serverAssert(FCorrectThread(this));
+    const redisDbPersistentDataSnapshot *snapshot = nullptr;
+    if (!(this->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
+        snapshot = this->db->createSnapshot(this->mvccCheckpoint, false /* fOptional */);
+    if (snapshot == nullptr) {
+        return false;
+    }
+    aeEventLoop *el = serverTL->el;
+    blockClient(this, BLOCKED_ASYNC);
+    g_pserver->asyncworkqueue->AddWorkFunction([el, this, mainFn, postFn, snapshot] {
+        std::vector<robj_sharedptr> args = clientArgs(this);
+        aePostFunction(el, [this, mainFn, postFn, snapshot, args] {
+            aeReleaseLock();
+            std::unique_lock<decltype(this->lock)> lock(this->lock);
+            AeLocker locker;
+            locker.arm(this);
+            unblockClient(this);
+            mainFn(snapshot, args);
+            locker.disarm();
+            lock.unlock();
+            if (postFn)
+                postFn(snapshot);
+            this->db->endSnapshotAsync(snapshot);
+            aeAcquireLock();
+        });
+    });
+    return true;
+}
+
 /* ====================== Error lookup and execution ===================== */
 
 void incrementErrorCount(const char *fullerr, size_t namelen) {
@@ -5009,11 +5052,7 @@ int prepareForShutdown(int flags) {
        overwrite the synchronous saving did by SHUTDOWN. */
     if (g_pserver->FRdbSaveInProgress()) {
         serverLog(LL_WARNING,"There is a child saving an .rdb. Killing it!");
-        /* Note that, in killRDBChild, we call rdbRemoveTempFile that will
-         * do close fd(in order to unlink file actully) in background thread.
-         * The temp rdb file fd may won't be closed when redis exits quickly,
-         * but OS will close this fd when process exits. */
-        killRDBChild(true);
+        killRDBChild();
         /* Note that, in killRDBChild normally has backgroundSaveDoneHandler
          * doing it's cleanup, but in this case this code will not be reached,
          * so we need to call rdbRemoveTempFile which will close fd(in order
@@ -5799,7 +5838,9 @@ sds genRedisInfoString(const char *section) {
             "total_reads_processed:%lld\r\n"
             "total_writes_processed:%lld\r\n"
             "instantaneous_lock_contention:%d\r\n"
-            "avg_lock_contention:%f\r\n",
+            "avg_lock_contention:%f\r\n"
+            "storage_provider_read_hits:%lld\r\n"
+            "storage_provider_read_misses:%lld\r\n",
             g_pserver->stat_numconnections,
             g_pserver->stat_numcommands,
             getInstantaneousMetric(STATS_METRIC_COMMAND),
@@ -5837,7 +5878,9 @@ sds genRedisInfoString(const char *section) {
             stat_total_reads_processed,
             stat_total_writes_processed,
             aeLockContention(),
-            avgLockContention);
+            avgLockContention,
+            g_pserver->stat_storage_provider_read_hits,
+            g_pserver->stat_storage_provider_read_misses);
     }
 
     /* Replication */
@@ -7358,7 +7401,7 @@ int main(int argc, char **argv) {
                 serverLog(LL_WARNING, "Failed to test the kernel for a bug that could lead to data corruption during background save. "
                                       "Your system could be affected, please report this error.");
             if (!checkIgnoreWarning("ARM64-COW-BUG")) {
-                serverLog(LL_WARNING,"Redis will now exit to prevent data corruption. "
+                serverLog(LL_WARNING,"KeyDB will now exit to prevent data corruption. "
                                      "Note that it is possible to suppress this warning by setting the following config: ignore-warnings ARM64-COW-BUG");
                 exit(1);
             }

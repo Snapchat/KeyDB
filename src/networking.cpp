@@ -2547,7 +2547,7 @@ void parseClientCommandBuffer(client *c) {
         }
 
         /* Prefetch outside the lock for better perf */
-        if (g_pserver->prefetch_enabled && cqueriesStart < c->vecqueuedcmd.size() &&
+        if (g_pserver->prefetch_enabled && cserver.cthreads > 1 && cqueriesStart < c->vecqueuedcmd.size() &&
             (g_pserver->m_pstorageFactory || aeLockContested(cserver.cthreads/2) || cserver.cthreads == 1) && !GlobalLocksAcquired()) {
             auto &query = c->vecqueuedcmd.back();
             if (query.argc > 0 && query.argc == query.argcMax) {
@@ -2622,7 +2622,7 @@ void readQueryFromClient(connection *conn) {
     int nread, readlen;
     size_t qblen;
 
-    serverAssertDebug(FCorrectThread(c) sdfsdf);
+    serverAssertDebug(FCorrectThread(c));
     serverAssertDebug(!GlobalLocksAcquired());
     
     AeLocker aelock;
@@ -2694,9 +2694,16 @@ void readQueryFromClient(connection *conn) {
         return;
     }
 
-    parseClientCommandBuffer(c);
-
-    serverTL->vecclientsProcess.push_back(c);
+    if (cserver.cthreads > 1) {
+        parseClientCommandBuffer(c);
+        serverTL->vecclientsProcess.push_back(c);
+    } else {
+        // If we're single threaded its actually better to just process the command here while the query is hot in the cache
+        //  multithreaded lock contention dominates and batching is better
+        aeAcquireLock();
+        runAndPropogateToReplicas(processInputBuffer, c, true /*fParse*/, CMD_CALL_FULL);
+        aeReleaseLock();
+    }
 }
 
 void processClients()

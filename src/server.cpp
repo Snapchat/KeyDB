@@ -2086,7 +2086,7 @@ void databasesCron(bool fMainThread) {
     /* Perform hash tables rehashing if needed, but only if there are no
      * other processes saving the DB on disk. Otherwise rehashing is bad
      * as will cause a lot of copy-on-write of memory pages. */
-    if (!hasActiveChildProcess() || g_pserver->FRdbSaveInProgress()) {
+    if (!(hasActiveChildProcess() || g_pserver->FRdbSaveInProgress())) {
         /* We use global counters so if we stop the computation at a given
          * DB we'll be able to start from the successive in the next
          * cron loop iteration. */

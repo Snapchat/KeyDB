@@ -1067,6 +1067,9 @@ class dict_iter : public dict_const_iter
 {
     dict *m_dict = nullptr;
 public:
+    dict_iter()
+        : dict_const_iter(nullptr)
+    {}
     explicit dict_iter(nullptr_t)
         : dict_const_iter(nullptr)
     {}
@@ -1131,7 +1134,7 @@ public:
     void getStats(char *buf, size_t bufsize) { dictGetStats(buf, bufsize, m_pdict); }
     void getExpireStats(char *buf, size_t bufsize) { m_setexpire->getstats(buf, bufsize); }
 
-    bool insert(char *k, robj *o, bool fAssumeNew = false);
+    bool insert(char *k, robj *o, bool fAssumeNew = false, dict_iter *existing = nullptr);
     void tryResize();
     int incrementallyRehash();
     void updateValue(dict_iter itr, robj *val);
@@ -3325,7 +3328,7 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
 #define LOOKUP_NONOTIFY (1<<1)
 #define LOOKUP_UPDATEMVCC (1<<2)
 void dbAdd(redisDb *db, robj *key, robj *val);
-void dbOverwrite(redisDb *db, robj *key, robj *val, bool fRemoveExpire = false);
+void dbOverwrite(redisDb *db, robj *key, robj *val, bool fRemoveExpire = false, dict_iter *pitrExisting = nullptr);
 int dbMerge(redisDb *db, sds key, robj *val, int fReplace);
 void genericSetKey(client *c, redisDb *db, robj *key, robj *val, int keepttl, int signal);
 void setKey(client *c, redisDb *db, robj *key, robj *val);

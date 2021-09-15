@@ -1201,6 +1201,21 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             == -1) return -1;
         if (rdbSaveAuxFieldStrInt(rdb,"repl-offset",g_pserver->master_repl_offset)
             == -1) return -1;
+        if (g_pserver->enable_multimaster && listLength(g_pserver->masters) > 0) {
+            sdsstring val = sdsstring(sdsempty());
+            listNode *ln;
+            listIter li;
+            redisMaster* mi;
+            listRewind(g_pserver->masters,&li);
+            while ((ln = listNext(&li)) != NULL) {
+                mi = (redisMaster*)listNodeValue(ln);
+                val = val.catfmt("%s:%I:%s:%i;", mi->master_replid,
+                    mi->master_initial_offset,
+                    mi->masterhost,
+                    mi->masterport);
+            }
+            if (rdbSaveAuxFieldStrStr(rdb, "repl-masters",val.get()) == -1) return -1;
+        }
     }
     if (rdbSaveAuxFieldStrInt(rdb,"aof-preamble",aof_preamble) == -1) return -1;
     return 1;

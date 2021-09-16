@@ -1398,7 +1398,62 @@ struct redisMemOverhead {
  * replication in order to make sure that chained slaves (slaves of slaves)
  * select the correct DB and are able to accept the stream coming from the
  * top-level master. */
-typedef struct rdbSaveInfo {
+class rdbSaveInfo {
+public:
+    rdbSaveInfo() {
+        repl_stream_db = -1;
+        repl_id_is_set = 0;
+        memcpy(repl_id, "0000000000000000000000000000000000000000", sizeof(repl_id));
+        repl_offset = -1;
+        fForceSetKey = TRUE;
+        mvccMinThreshold = 0;
+        masters = nullptr;
+        masterCount = 0;
+    }
+    rdbSaveInfo(const rdbSaveInfo &other) {
+        repl_stream_db = other.repl_stream_db;
+        repl_id_is_set = other.repl_id_is_set;
+        memcpy(repl_id, other.repl_id, sizeof(repl_id));
+        repl_offset = other.repl_offset;
+        fForceSetKey = other.fForceSetKey;
+        mvccMinThreshold = other.mvccMinThreshold;
+        masters = (struct redisMaster*)malloc(sizeof(struct redisMaster) * other.masterCount);
+        memcpy(masters, other.masters, sizeof(struct redisMaster) * other.masterCount);
+        masterCount = other.masterCount;
+    }
+    rdbSaveInfo(rdbSaveInfo &&other) : rdbSaveInfo() {
+        swap(*this, other);
+    }
+    rdbSaveInfo &operator=(rdbSaveInfo other) {
+        swap(*this, other);
+        return *this;
+    }
+    ~rdbSaveInfo() {
+        free(masters);
+    }
+    friend void swap(rdbSaveInfo &first, rdbSaveInfo &second) {
+        std::swap(first.repl_stream_db, second.repl_stream_db);
+        std::swap(first.repl_id_is_set, second.repl_id_is_set);
+        std::swap(first.repl_id, second.repl_id);
+        std::swap(first.repl_offset, second.repl_offset);
+        std::swap(first.fForceSetKey, second.fForceSetKey);
+        std::swap(first.mvccMinThreshold, second.mvccMinThreshold);
+        std::swap(first.masters, second.masters);
+        std::swap(first.masterCount, second.masterCount);
+
+    }
+
+    void addMaster(const struct redisMaster &mi) {
+        masterCount++;
+        if (masters == nullptr) {
+            masters = (struct redisMaster*)malloc(sizeof(struct redisMaster));
+        }
+        else {
+            masters = (struct redisMaster*)realloc(masters, sizeof(struct redisMaster) * masterCount);
+        }
+        memcpy(masters + masterCount, &mi, sizeof(struct redisMaster));
+    }
+
     /* Used saving and loading. */
     int repl_stream_db;  /* DB to select in g_pserver->master client. */
 
@@ -1408,10 +1463,11 @@ typedef struct rdbSaveInfo {
     long long repl_offset;                  /* Replication offset. */
     int fForceSetKey;
     uint64_t mvccMinThreshold;
-    struct redisMaster *mi;
-} rdbSaveInfo;
+    struct redisMaster *masters;
 
-#define RDB_SAVE_INFO_INIT {-1,0,"0000000000000000000000000000000000000000",-1, TRUE, 0, nullptr}
+private:
+    size_t masterCount;
+};
 
 struct malloc_stats {
     size_t zmalloc_used;

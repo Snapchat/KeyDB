@@ -1986,7 +1986,7 @@ void readSyncBulkPayload(connection *conn) {
     ssize_t nread, readlen, nwritten;
     int use_diskless_load = useDisklessLoad();
     dbBackup *diskless_load_backup = NULL;
-    rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+    rdbSaveInfo rsi;
     int empty_db_flags = g_pserver->repl_slave_lazy_flush ? EMPTYDB_ASYNC :
                                                         EMPTYDB_NO_FLAGS;
     off_t left;
@@ -2307,7 +2307,7 @@ void readSyncBulkPayload(connection *conn) {
                 mi->staleKeyMap->clear();
             else
                 mi->staleKeyMap = new (MALLOC_LOCAL) std::map<int, std::vector<robj_sharedptr>>();
-            rsi.mi = mi;
+            rsi.addMaster(mi);
         }
         if (rdbLoadFile(rdb_filename,&rsi,RDBFLAGS_REPLICATION) != C_OK) {
             serverLog(LL_WARNING,

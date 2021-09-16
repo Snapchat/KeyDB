@@ -2725,11 +2725,11 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         initStaticStringObject(keyobj,key);
         bool fExpiredKey = iAmMaster() && !(rdbflags&RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now;
         if (fStaleMvccKey || fExpiredKey) {
-            if (fStaleMvccKey && !fExpiredKey && rsi != nullptr && rsi->mi != nullptr && rsi->mi->staleKeyMap != nullptr && lookupKeyRead(db, &keyobj) == nullptr) {
+            if (fStaleMvccKey && !fExpiredKey && rsi != nullptr && rsi->masters != nullptr && rsi->masters[0]->staleKeyMap != nullptr && lookupKeyRead(db, &keyobj) == nullptr) {
                 // We have a key that we've already deleted and is not back in our database.
                 //  We'll need to inform the sending master of the delete if it is also a replica of us
                 robj_sharedptr objKeyDup(createStringObject(key, sdslen(key)));
-                rsi->mi->staleKeyMap->operator[](db - g_pserver->db).push_back(objKeyDup);                
+                rsi->masters[0]->staleKeyMap->operator[](db - g_pserver->db).push_back(objKeyDup);                
             }
             fLastKeyExpired = true;
             sdsfree(key);
@@ -3142,8 +3142,8 @@ void bgsaveCommand(client *c) {
  * is returned, and the RDB saving will not persist any replication related
  * information. */
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
-    rdbSaveInfo rsi_init = RDB_SAVE_INFO_INIT;
-    *rsi = rsi_init;
+    rdbSaveInfo rsi_init;
+    *rsi = std::move(rsi_init);
 
     /* If the instance is a master, we can populate the replication info
      * only when repl_backlog is not NULL. If the repl_backlog is NULL,

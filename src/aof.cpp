@@ -879,7 +879,7 @@ int loadAppendOnlyFile(char *filename) {
     } else {
         /* RDB preamble. Pass loading the RDB functions. */
         rio rdb;
-        rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+        rdbSaveInfo rsi;
 
         serverLog(LL_NOTICE,"Reading RDB preamble from AOF file...");
         if (fseek(fp,0,SEEK_SET) == -1) goto readerr;

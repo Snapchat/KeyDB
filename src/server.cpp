@@ -6294,7 +6294,7 @@ void loadDataFromDisk(void) {
         if (loadAppendOnlyFile(g_pserver->aof_filename) == C_OK)
             serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     } else if (g_pserver->rdb_filename != NULL || g_pserver->rdb_s3bucketpath != NULL) {
-        rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+        rdbSaveInfo rsi;
         errno = 0; /* Prevent a stale value from affecting error checking */
         if (rdbLoad(&rsi,RDBFLAGS_NONE) == C_OK) {
             serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
@@ -6862,7 +6862,7 @@ int main(int argc, char **argv) {
             __AFL_INIT();
 #endif
             rio rdb;
-            rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+            rdbSaveInfo rsi;
             startLoadingFile(stdin, (char*)"stdin", 0);
             rioInitWithFile(&rdb,stdin);
             rdbLoadRio(&rdb,0,&rsi);

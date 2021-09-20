@@ -1983,6 +1983,22 @@ int main(int argc, const char **argv) {
             sdsfree(key_placeholder);
         }
 
+        if (test_is_selected("mget")) {
+            const char *cmd_argv[1002];
+            cmd_argv[0] = "MGET";
+            sds key_placeholder = sdscatprintf(sdsnew(""),"key%s:__rand_int__",tag);
+            for (int keys = 1; keys < 1002; keys += 100) {
+                for (i = 1; i < keys + 1; i++) {
+                    cmd_argv[i] = key_placeholder;
+                }
+                len = redisFormatCommandArgv(&cmd,keys+1,cmd_argv,NULL);
+                std::string title = "MGET (" + std::to_string(keys) + " keys)";
+                benchmark(title.data(),cmd,len);
+                free(cmd);
+            }
+            sdsfree(key_placeholder);
+        }
+
         if (!config.csv) printf("\n");
     } while(config.loop);
     zfree(data);

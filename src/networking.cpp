@@ -2710,7 +2710,8 @@ void readQueryFromClient(connection *conn) {
 
     if (cserver.cthreads > 1) {
         parseClientCommandBuffer(c);
-        processInputBuffer(c, false, CMD_CALL_SLOWLOG | CMD_CALL_STATS | CMD_CALL_ASYNC);
+        if (g_pserver->enable_async_commands)
+            processInputBuffer(c, false, CMD_CALL_SLOWLOG | CMD_CALL_STATS | CMD_CALL_ASYNC);
         if (!c->vecqueuedcmd.empty())
             serverTL->vecclientsProcess.push_back(c);
     } else {

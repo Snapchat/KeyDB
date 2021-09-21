@@ -2567,6 +2567,8 @@ struct redisServer {
     int target_replica_port; /* Failover target port */
     int failover_state; /* Failover state */
 
+    int enable_async_commands;
+
     long long repl_batch_offStart = -1;
     long long repl_batch_idxStart = -1;
 

@@ -473,6 +473,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CMD_CATEGORY_SCRIPTING (1ULL<<38)
 #define CMD_CATEGORY_REPLICATION (1ULL<<39)
 #define CMD_SKIP_PROPOGATE (1ULL<<40)  /* "noprop" flag */
+#define CMD_ASYNC_OK (1ULL<<41) /* This command is safe without a lock */
 
 /* AOF states */
 #define AOF_OFF 0             /* AOF is off */
@@ -721,6 +722,7 @@ typedef enum {
 #define CMD_CALL_FULL (CMD_CALL_SLOWLOG | CMD_CALL_STATS | CMD_CALL_PROPAGATE | CMD_CALL_NOWRAP)
 #define CMD_CALL_NOWRAP (1<<4)  /* Don't wrap also propagate array into
                                    MULTI/EXEC: the caller will handle it.  */
+#define CMD_CALL_ASYNC (1<<5)
 
 /* Command propagation flags, see propagate() function */
 #define PROPAGATE_NONE 0
@@ -2017,6 +2019,7 @@ struct redisServerThreadVars {
     long unsigned commandsExecuted = 0;
     GarbageCollectorCollection::Epoch gcEpoch;
     const redisDbPersistentDataSnapshot **rgdbSnapshot = nullptr;
+    long long stat_total_error_replies; /* Total number of issued error replies ( command + rejected errors ) */
     bool fRetrySetAofEvent = false;
     bool modulesEnabledThisAeLoop = false; /* In this loop of aeMain, were modules enabled before 
                                               the thread went to sleep? */
@@ -2241,7 +2244,6 @@ struct redisServer {
     double stat_module_progress;   /* Module save progress. */
     uint64_t stat_clients_type_memory[CLIENT_TYPE_COUNT];/* Mem usage by type */
     long long stat_unexpected_error_replies; /* Number of unexpected (aof-loading, replica to master, etc.) error replies */
-    long long stat_total_error_replies; /* Total number of issued error replies ( command + rejected errors ) */
     long long stat_dump_payload_sanitizations; /* Number deep dump payloads integrity validations. */
     std::atomic<long long> stat_total_reads_processed; /* Total number of read events processed */
     std::atomic<long long> stat_total_writes_processed; /* Total number of write events processed */
@@ -3311,6 +3313,7 @@ void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey);
 int expireIfNeeded(redisDb *db, robj *key);
 void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when);
 void setExpire(client *c, redisDb *db, robj *key, expireEntry &&entry);
+robj_roptr lookupKeyRead(redisDb *db, robj *key, uint64_t mvccCheckpoint);
 robj_roptr lookupKeyRead(redisDb *db, robj *key);
 int checkAlreadyExpired(long long when);
 robj *lookupKeyWrite(redisDb *db, robj *key);

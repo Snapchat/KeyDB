@@ -2576,6 +2576,8 @@ bool FAsyncCommand(parsed_command &cmd)
     if (serverTL->in_eval || serverTL->in_exec)
         return false;
     auto parsedcmd = lookupCommand(szFromObj(cmd.argv[0]));
+    if (parsedcmd == nullptr)
+        return false;
     static const long long expectedFlags = CMD_ASYNC_OK | CMD_READONLY;
     return (parsedcmd->flags & expectedFlags) == expectedFlags;
 }
@@ -2710,7 +2712,7 @@ void readQueryFromClient(connection *conn) {
 
     if (cserver.cthreads > 1) {
         parseClientCommandBuffer(c);
-        if (g_pserver->enable_async_commands)
+        if (g_pserver->enable_async_commands && (aeLockContention() || g_fTestMode))
             processInputBuffer(c, false, CMD_CALL_SLOWLOG | CMD_CALL_STATS | CMD_CALL_ASYNC);
         if (!c->vecqueuedcmd.empty())
             serverTL->vecclientsProcess.push_back(c);

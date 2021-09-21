@@ -541,18 +541,15 @@ void mgetCore(client *c, robj **keys, int count, const redisDbPersistentDataSnap
 }
 
 void mgetCommand(client *c) {
-    // Do async version for large number of arguments
-    if (c->argc > 100) {
-        if (c->asyncCommand(
-                [c] (const redisDbPersistentDataSnapshot *snapshot, const std::vector<robj_sharedptr> &keys) {
-                    mgetCore(c, (robj **)keys.data() + 1, keys.size() - 1, snapshot);
-                }
-            )) {
-            return;
+    addReplyArrayLen(c,c->argc-1);
+    for (int i = 1; i < c->argc; i++) {
+        robj_roptr o = lookupKeyRead(c->db,c->argv[i], c->mvccCheckpoint);
+        if (o == nullptr || o->type != OBJ_STRING) {
+            addReplyNull(c);
+        } else {
+            addReplyBulk(c,o);
         }
     }
-
-    mgetCore(c, c->argv + 1, c->argc - 1);
 }
 
 void msetGenericCommand(client *c, int nx) {

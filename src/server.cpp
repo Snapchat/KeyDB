@@ -221,7 +221,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"get",getCommand,2,
-     "read-only fast @string",
+     "read-only fast async @string",
      0,NULL,1,1,1,0,0,0},
 
     {"getex",getexCommand,-2,
@@ -315,7 +315,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"mget",mgetCommand,-2,
-     "read-only fast @string",
+     "read-only fast async @string",
      0,NULL,1,-1,1,0,0,0},
 
     {"rpush",rpushCommand,-3,
@@ -2407,7 +2407,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         stat_net_input_bytes = g_pserver->stat_net_input_bytes.load(std::memory_order_relaxed);
         stat_net_output_bytes = g_pserver->stat_net_output_bytes.load(std::memory_order_relaxed);
 
-        trackInstantaneousMetric(STATS_METRIC_COMMAND,g_pserver->stat_numcommands);
+        long long stat_numcommands;
+        __atomic_load(&g_pserver->stat_numcommands, &stat_numcommands, __ATOMIC_RELAXED);
+        trackInstantaneousMetric(STATS_METRIC_COMMAND,stat_numcommands);
         trackInstantaneousMetric(STATS_METRIC_NET_INPUT,
                 stat_net_input_bytes);
         trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT,
@@ -2780,6 +2782,13 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     int iel = ielFromEventLoop(eventLoop);
 
     locker.arm();
+
+    for (int idb = 0; idb < cserver.dbnum; ++idb) {
+        if (serverTL->rgdbSnapshot[idb] != nullptr) {
+            g_pserver->db[idb]->endSnapshot(serverTL->rgdbSnapshot[idb]);
+            serverTL->rgdbSnapshot[idb] = nullptr;
+        }
+    }
 
     size_t zmalloc_used = zmalloc_used_memory();
     if (zmalloc_used > g_pserver->stat_peak_memory)
@@ -3685,7 +3694,8 @@ void resetServerStats(void) {
     g_pserver->stat_net_input_bytes = 0;
     g_pserver->stat_net_output_bytes = 0;
     g_pserver->stat_unexpected_error_replies = 0;
-    g_pserver->stat_total_error_replies = 0;
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
+        g_pserver->rgthreadvar[iel].stat_total_error_replies = 0;
     g_pserver->stat_dump_payload_sanitizations = 0;
     g_pserver->aof_delayed_fsync = 0;
 }
@@ -4045,6 +4055,8 @@ int populateCommandTableParseFlags(struct redisCommand *c, const char *strflags)
             c->flags |= CMD_NO_AUTH;
         } else if (!strcasecmp(flag,"may-replicate")) {
             c->flags |= CMD_MAY_REPLICATE;
+        } else if (!strcasecmp(flag,"async")) {
+            c->flags |= CMD_ASYNC_OK;
         } else {
             /* Parse ACL categories here if the flag name starts with @. */
             uint64_t catflag;
@@ -4344,8 +4356,8 @@ void call(client *c, int flags) {
     monotime call_timer;
     int client_old_flags = c->flags;
     struct redisCommand *real_cmd = c->cmd;
-    serverAssert(GlobalLocksAcquired());
-    static long long prev_err_count;
+    serverAssert(((flags & CMD_CALL_ASYNC) && (c->cmd->flags & CMD_READONLY)) || GlobalLocksAcquired());
+    long long prev_err_count;
 
     serverTL->fixed_time_expire++;
 
@@ -4368,12 +4380,15 @@ void call(client *c, int flags) {
     /* Initialization: clear the flags that must be set by the command on
      * demand, and initialize the array for additional commands propagation. */
     c->flags &= ~(CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP);
-    redisOpArray prev_also_propagate = g_pserver->also_propagate;
-    redisOpArrayInit(&g_pserver->also_propagate);
+    redisOpArray prev_also_propagate;
+    if (!(flags & CMD_CALL_ASYNC)) {
+        prev_also_propagate = g_pserver->also_propagate;
+        redisOpArrayInit(&g_pserver->also_propagate);
+    }
 
     /* Call the command. */
     dirty = g_pserver->dirty;
-    prev_err_count = g_pserver->stat_total_error_replies;
+    prev_err_count = serverTL->stat_total_error_replies;
     incrementMvccTstamp();
     elapsedStart(&call_timer);
     try {
@@ -4398,7 +4413,7 @@ void call(client *c, int flags) {
      * We leverage a static variable (prev_err_count) to retain
      * the counter across nested function calls and avoid logging
      * the same error twice. */
-    if ((g_pserver->stat_total_error_replies - prev_err_count) > 0) {
+    if ((serverTL->stat_total_error_replies - prev_err_count) > 0) {
         real_cmd->failed_calls++;
     }
 
@@ -4439,8 +4454,13 @@ void call(client *c, int flags) {
 
     /* Log the command into the Slow log if needed.
      * If the client is blocked we will handle slowlog when it is unblocked. */
-    if ((flags & CMD_CALL_SLOWLOG) && !(c->flags & CLIENT_BLOCKED))
-        slowlogPushCurrentCommand(c, real_cmd, duration);
+    if ((flags & CMD_CALL_SLOWLOG) && !(c->flags & CLIENT_BLOCKED)) {
+        if (duration >= g_pserver->slowlog_log_slower_than) {
+            AeLocker locker;
+            locker.arm(c);
+            slowlogPushCurrentCommand(c, real_cmd, duration);
+        }
+    }
 
     /* Clear the original argv.
      * If the client is blocked we will handle slowlog when it is unblocked. */
@@ -4449,8 +4469,8 @@ void call(client *c, int flags) {
 
     /* populate the per-command statistics that we show in INFO commandstats. */
     if (flags & CMD_CALL_STATS) {
-        real_cmd->microseconds += duration;
-        real_cmd->calls++;
+        __atomic_fetch_add(&real_cmd->microseconds, duration, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&real_cmd->calls, 1, __ATOMIC_RELAXED);
     }
 
     /* Propagate the command into the AOF and replication link */
@@ -4494,48 +4514,50 @@ void call(client *c, int flags) {
     c->flags |= client_old_flags &
         (CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP);
 
-    /* Handle the alsoPropagate() API to handle commands that want to propagate
-     * multiple separated commands. Note that alsoPropagate() is not affected
-     * by CLIENT_PREVENT_PROP flag. */
-    if (g_pserver->also_propagate.numops) {
-        int j;
-        redisOp *rop;
+    if (!(flags & CMD_CALL_ASYNC)) {
+        /* Handle the alsoPropagate() API to handle commands that want to propagate
+        * multiple separated commands. Note that alsoPropagate() is not affected
+        * by CLIENT_PREVENT_PROP flag. */
+        if (g_pserver->also_propagate.numops) {
+            int j;
+            redisOp *rop;
 
-        if (flags & CMD_CALL_PROPAGATE) {
-            bool multi_emitted = false;
-            /* Wrap the commands in g_pserver->also_propagate array,
-             * but don't wrap it if we are already in MULTI context,
-             * in case the nested MULTI/EXEC.
-             *
-             * And if the array contains only one command, no need to
-             * wrap it, since the single command is atomic. */
-            if (g_pserver->also_propagate.numops > 1 &&
-                !(c->cmd->flags & CMD_MODULE) &&
-                !(c->flags & CLIENT_MULTI) &&
-                !(flags & CMD_CALL_NOWRAP))
-            {
-                execCommandPropagateMulti(c->db->id);
-                multi_emitted = true;
-            }
-            
-            for (j = 0; j < g_pserver->also_propagate.numops; j++) {
-                rop = &g_pserver->also_propagate.ops[j];
-                int target = rop->target;
-                /* Whatever the command wish is, we honor the call() flags. */
-                if (!(flags&CMD_CALL_PROPAGATE_AOF)) target &= ~PROPAGATE_AOF;
-                if (!(flags&CMD_CALL_PROPAGATE_REPL)) target &= ~PROPAGATE_REPL;
-                if (target)
-                    propagate(rop->cmd,rop->dbid,rop->argv,rop->argc,target);
-            }
+            if (flags & CMD_CALL_PROPAGATE) {
+                bool multi_emitted = false;
+                /* Wrap the commands in g_pserver->also_propagate array,
+                * but don't wrap it if we are already in MULTI context,
+                * in case the nested MULTI/EXEC.
+                *
+                * And if the array contains only one command, no need to
+                * wrap it, since the single command is atomic. */
+                if (g_pserver->also_propagate.numops > 1 &&
+                    !(c->cmd->flags & CMD_MODULE) &&
+                    !(c->flags & CLIENT_MULTI) &&
+                    !(flags & CMD_CALL_NOWRAP))
+                {
+                    execCommandPropagateMulti(c->db->id);
+                    multi_emitted = true;
+                }
+                
+                for (j = 0; j < g_pserver->also_propagate.numops; j++) {
+                    rop = &g_pserver->also_propagate.ops[j];
+                    int target = rop->target;
+                    /* Whatever the command wish is, we honor the call() flags. */
+                    if (!(flags&CMD_CALL_PROPAGATE_AOF)) target &= ~PROPAGATE_AOF;
+                    if (!(flags&CMD_CALL_PROPAGATE_REPL)) target &= ~PROPAGATE_REPL;
+                    if (target)
+                        propagate(rop->cmd,rop->dbid,rop->argv,rop->argc,target);
+                }
 
-            if (multi_emitted) {
-                execCommandPropagateExec(c->db->id);
+                if (multi_emitted) {
+                    execCommandPropagateExec(c->db->id);
+                }
             }
+            redisOpArrayFree(&g_pserver->also_propagate);
         }
-        redisOpArrayFree(&g_pserver->also_propagate);
+        
+        g_pserver->also_propagate = prev_also_propagate;
     }
-    
-    g_pserver->also_propagate = prev_also_propagate;
 
     /* Client pause takes effect after a transaction has finished. This needs
      * to be located after everything is propagated. */
@@ -4555,15 +4577,17 @@ void call(client *c, int flags) {
         }
     }
 
-    g_pserver->stat_numcommands++;
+    __atomic_fetch_add(&g_pserver->stat_numcommands, 1, __ATOMIC_RELAXED);
     serverTL->fixed_time_expire--;
-    prev_err_count = g_pserver->stat_total_error_replies;
+    prev_err_count = serverTL->stat_total_error_replies;
 
-    /* Record peak memory after each command and before the eviction that runs
-     * before the next command. */
-    size_t zmalloc_used = zmalloc_used_memory();
-    if (zmalloc_used > g_pserver->stat_peak_memory)
-        g_pserver->stat_peak_memory = zmalloc_used;
+    if (!(flags & CMD_CALL_ASYNC)) {
+        /* Record peak memory after each command and before the eviction that runs
+        * before the next command. */
+        size_t zmalloc_used = zmalloc_used_memory();
+        if (zmalloc_used > g_pserver->stat_peak_memory)
+            g_pserver->stat_peak_memory = zmalloc_used;
+    }
 }
 
 /* Used when a command that is ready for execution needs to be rejected, due to
@@ -4619,7 +4643,7 @@ static int cmdHasMovableKeys(struct redisCommand *cmd) {
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c, int callFlags) {
     AssertCorrectThread(c);
-    serverAssert(GlobalLocksAcquired());
+    serverAssert((callFlags & CMD_CALL_ASYNC) || GlobalLocksAcquired());
     if (!g_pserver->lua_timedout) {
         /* Both EXEC and EVAL call call() directly so there should be
          * no way in_exec or in_eval or propagate_in_transaction is 1.
@@ -5798,6 +5822,10 @@ sds genRedisInfoString(const char *section) {
         stat_net_input_bytes = g_pserver->stat_net_input_bytes.load(std::memory_order_relaxed);
         stat_net_output_bytes = g_pserver->stat_net_output_bytes.load(std::memory_order_relaxed);
 
+        long long stat_total_error_replies = 0;
+        for (int iel = 0; iel < cserver.cthreads; ++iel)
+            stat_total_error_replies += g_pserver->rgthreadvar[iel].stat_total_error_replies;
+
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info,
             "# Stats\r\n"
@@ -5873,7 +5901,7 @@ sds genRedisInfoString(const char *section) {
             (unsigned long long) trackingGetTotalItems(),
             (unsigned long long) trackingGetTotalPrefixes(),
             g_pserver->stat_unexpected_error_replies,
-            g_pserver->stat_total_error_replies,
+            stat_total_error_replies,
             g_pserver->stat_dump_payload_sanitizations,
             stat_total_reads_processed,
             stat_total_writes_processed,

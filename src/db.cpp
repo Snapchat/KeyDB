@@ -214,6 +214,8 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key, uint64_t mvccCheckpoint) {
         return lookupKeyReadWithFlags(db,key,LOOKUP_NONE);
     } else {
         // This is an async command
+        if (keyIsExpired(db,key))
+            return nullptr;
         int idb = db->id;
         if (serverTL->rgdbSnapshot[idb] == nullptr || serverTL->rgdbSnapshot[idb]->mvccCheckpoint() < mvccCheckpoint) {
             AeLocker locker;
@@ -227,10 +229,7 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key, uint64_t mvccCheckpoint) {
             }
         }
         if (serverTL->rgdbSnapshot[idb] != nullptr) {
-            if (keyIsExpired(serverTL->rgdbSnapshot[idb],key))
-                o = nullptr;
-            else
-                o = serverTL->rgdbSnapshot[idb]->find_cached_threadsafe(szFromObj(key)).val();
+            o = serverTL->rgdbSnapshot[idb]->find_cached_threadsafe(szFromObj(key)).val();
         }
     }
 

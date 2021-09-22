@@ -2307,7 +2307,7 @@ void readSyncBulkPayload(connection *conn) {
                 mi->staleKeyMap->clear();
             else
                 mi->staleKeyMap = new (MALLOC_LOCAL) std::map<int, std::vector<robj_sharedptr>>();
-            rsi.addMaster(mi);
+            rsi.addMaster(*mi);
         }
         if (rdbLoadFile(rdb_filename,&rsi,RDBFLAGS_REPLICATION) != C_OK) {
             serverLog(LL_WARNING,

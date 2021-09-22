@@ -1390,6 +1390,38 @@ struct redisMemOverhead {
     } *db;
 };
 
+struct redisMaster {
+    char *masteruser;               /* AUTH with this user and masterauth with master */
+    char *masterauth;               /* AUTH with this password with master */
+    char *masterhost;               /* Hostname of master */
+    int masterport;                 /* Port of master */
+    client *cached_master;          /* Cached master to be reused for PSYNC. */
+    client *master;
+    /* The following two fields is where we store master PSYNC replid/offset
+     * while the PSYNC is in progress. At the end we'll copy the fields into
+     * the server->master client structure. */
+    char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid. */
+    long long master_initial_offset;           /* Master PSYNC offset. */
+
+    bool isActive = false;
+    int repl_state;          /* Replication status if the instance is a replica */
+    off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
+    off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
+    off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
+    connection *repl_transfer_s;     /* Slave -> Master SYNC socket */
+    int repl_transfer_fd;    /* Slave -> Master SYNC temp file descriptor */
+    char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
+    time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
+    time_t repl_down_since; /* Unix time at which link with master went down */
+
+    unsigned char master_uuid[UUID_BINARY_LEN];  /* Used during sync with master, this is our master's UUID */
+                                                /* After we've connected with our master use the UUID in g_pserver->master */
+    uint64_t mvccLastSync;
+    /* During a handshake the server may have stale keys, we track these here to share once a reciprocal connection is made */
+    std::map<int, std::vector<robj_sharedptr>> *staleKeyMap;
+    int ielReplTransfer = -1;
+};
+
 /* This structure can be optionally passed to RDB save/load functions in
  * order to implement additional functionalities, by storing and loading
  * metadata to the RDB file.
@@ -1451,7 +1483,7 @@ public:
         else {
             masters = (struct redisMaster*)realloc(masters, sizeof(struct redisMaster) * masterCount);
         }
-        memcpy(masters + masterCount, &mi, sizeof(struct redisMaster));
+        memcpy(masters + masterCount - 1, &mi, sizeof(struct redisMaster));
     }
 
     /* Used saving and loading. */
@@ -1554,38 +1586,6 @@ struct redisServerThreadVars {
     bool modulesEnabledThisAeLoop = false; /* In this loop of aeMain, were modules enabled before 
                                               the thread went to sleep? */
     std::vector<client*> vecclientsProcess;
-};
-
-struct redisMaster {
-    char *masteruser;               /* AUTH with this user and masterauth with master */
-    char *masterauth;               /* AUTH with this password with master */
-    char *masterhost;               /* Hostname of master */
-    int masterport;                 /* Port of master */
-    client *cached_master;          /* Cached master to be reused for PSYNC. */
-    client *master;
-    /* The following two fields is where we store master PSYNC replid/offset
-     * while the PSYNC is in progress. At the end we'll copy the fields into
-     * the server->master client structure. */
-    char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid. */
-    long long master_initial_offset;           /* Master PSYNC offset. */
-
-    bool isActive = false;
-    int repl_state;          /* Replication status if the instance is a replica */
-    off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
-    off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
-    off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
-    connection *repl_transfer_s;     /* Slave -> Master SYNC socket */
-    int repl_transfer_fd;    /* Slave -> Master SYNC temp file descriptor */
-    char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
-    time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
-    time_t repl_down_since; /* Unix time at which link with master went down */
-
-    unsigned char master_uuid[UUID_BINARY_LEN];  /* Used during sync with master, this is our master's UUID */
-                                                /* After we've connected with our master use the UUID in g_pserver->master */
-    uint64_t mvccLastSync;
-    /* During a handshake the server may have stale keys, we track these here to share once a reciprocal connection is made */
-    std::map<int, std::vector<robj_sharedptr>> *staleKeyMap;
-    int ielReplTransfer = -1;
 };
 
 // Const vars are not changed after worker threads are launched

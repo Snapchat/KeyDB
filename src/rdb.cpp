@@ -2576,6 +2576,23 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                     memcpy(rsi->repl_id,ptrFromObj(auxval),CONFIG_RUN_ID_SIZE+1);
                     rsi->repl_id_is_set = 1;
                 }
+            } else if (!strcasecmp(szFromObj(auxkey),"repl-masters")) {
+                if (rsi) {
+                    struct redisMaster mi;
+                    char *masters = szFromObj(auxval);
+                    char *entry = strtok(masters, ":");
+                    while (entry != NULL) {
+                        memcpy(mi.master_replid, entry, sizeof(mi.master_replid));
+                        entry = strtok(NULL, ":");
+                        mi.master_initial_offset = atoi(entry);
+                        entry = strtok(NULL, ":");
+                        mi.masterhost = entry;
+                        entry = strtok(NULL, ";");
+                        mi.masterport = atoi(entry);
+                        entry = strtok(NULL, ":");
+                        rsi->addMaster(mi);
+                    }
+                }
             } else if (!strcasecmp(szFromObj(auxkey),"repl-offset")) {
                 if (rsi) rsi->repl_offset = strtoll(szFromObj(auxval),NULL,10);
             } else if (!strcasecmp(szFromObj(auxkey),"lua")) {
@@ -2725,11 +2742,11 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         initStaticStringObject(keyobj,key);
         bool fExpiredKey = iAmMaster() && !(rdbflags&RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now;
         if (fStaleMvccKey || fExpiredKey) {
-            if (fStaleMvccKey && !fExpiredKey && rsi != nullptr && rsi->masters != nullptr && rsi->masters[0]->staleKeyMap != nullptr && lookupKeyRead(db, &keyobj) == nullptr) {
+            if (fStaleMvccKey && !fExpiredKey && rsi != nullptr && rsi->masters != nullptr && rsi->masters[0].staleKeyMap != nullptr && lookupKeyRead(db, &keyobj) == nullptr) {
                 // We have a key that we've already deleted and is not back in our database.
                 //  We'll need to inform the sending master of the delete if it is also a replica of us
                 robj_sharedptr objKeyDup(createStringObject(key, sdslen(key)));
-                rsi->masters[0]->staleKeyMap->operator[](db - g_pserver->db).push_back(objKeyDup);                
+                rsi->masters[0].staleKeyMap->operator[](db - g_pserver->db).push_back(objKeyDup);                
             }
             fLastKeyExpired = true;
             sdsfree(key);

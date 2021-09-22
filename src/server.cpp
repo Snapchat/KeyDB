@@ -4777,7 +4777,7 @@ int processCommand(client *c, int callFlags) {
      * the event loop since there is a busy Lua script running in timeout
      * condition, to avoid mixing the propagation of scripts with the
      * propagation of DELs due to eviction. */
-    if (g_pserver->maxmemory && !g_pserver->lua_timedout) {
+    if (g_pserver->maxmemory && !g_pserver->lua_timedout && !(callFlags & CMD_CALL_ASYNC)) {
         int out_of_memory = (performEvictions(false /*fPreSnapshot*/) == EVICT_FAIL);
         /* freeMemoryIfNeeded may flush replica output buffers. This may result
          * into a replica, that may be the active client, to be freed. */

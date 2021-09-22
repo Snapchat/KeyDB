@@ -1601,23 +1601,22 @@ robj *deserializeStoredStringObject(const char *data, size_t cb)
         newObject = createObject(OBJ_STRING, nullptr);
         newObject->encoding = oT->encoding;
         newObject->m_ptr = oT->m_ptr;
-        return newObject;
+        break;
 
     case OBJ_ENCODING_EMBSTR:
         newObject = createEmbeddedStringObject(szFromObj(oT), sdslen(szFromObj(oT)));
-        return newObject;
+        break;
 
     case OBJ_ENCODING_RAW:
         newObject = createObject(OBJ_STRING, sdsnewlen(SDS_NOINIT,cb-sizeof(robj)-sizeof(uint64_t)));
         newObject->lru = oT->lru;
         memcpy(newObject->m_ptr, data+sizeof(robj)+sizeof(mvcc), cb-sizeof(robj)-sizeof(mvcc));
-        return newObject;
+        break;
 
     default:
         serverPanic("Unknown string object encoding from storage");
     }
     setMvccTstamp(newObject, mvcc);
-    newObject->setrefcount(1);
 
     return newObject;
 }

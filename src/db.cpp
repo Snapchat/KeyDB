@@ -227,7 +227,10 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key, uint64_t mvccCheckpoint) {
             }
         }
         if (serverTL->rgdbSnapshot[idb] != nullptr) {
-            o = serverTL->rgdbSnapshot[idb]->find_cached_threadsafe(szFromObj(key)).val();
+            if (keyIsExpired(serverTL->rgdbSnapshot[idb],key))
+                o = nullptr;
+            else
+                o = serverTL->rgdbSnapshot[idb]->find_cached_threadsafe(szFromObj(key)).val();
         }
     }
 

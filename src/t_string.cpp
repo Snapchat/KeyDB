@@ -524,26 +524,10 @@ void getrangeCommand(client *c) {
     }
 }
 
-void mgetCore(client *c, robj **keys, int count, const redisDbPersistentDataSnapshot *snapshot = nullptr) {
-    addReplyArrayLen(c,count);
-    for (int i = 0; i < count; i++) {
-        robj_roptr o;
-        if (snapshot)
-            o = snapshot->find_cached_threadsafe(szFromObj(keys[i])).val();
-        else
-            o = lookupKeyRead(c->db,keys[i]);
-        if (o == nullptr || o->type != OBJ_STRING) {
-            addReplyNull(c);
-        } else {
-            addReplyBulk(c,o);
-        }
-    }
-}
-
 void mgetCommand(client *c) {
     addReplyArrayLen(c,c->argc-1);
     for (int i = 1; i < c->argc; i++) {
-        robj_roptr o = lookupKeyRead(c->db,c->argv[i], c->mvccCheckpoint);
+        robj_roptr o = lookupKeyRead(c->db,c->argv[i],c->mvccCheckpoint);
         if (o == nullptr || o->type != OBJ_STRING) {
             addReplyNull(c);
         } else {

@@ -220,12 +220,16 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key, uint64_t mvccCheckpoint) {
         if (serverTL->rgdbSnapshot[idb] == nullptr || serverTL->rgdbSnapshot[idb]->mvccCheckpoint() < mvccCheckpoint) {
             AeLocker locker;
             locker.arm(serverTL->current_client);
-            if (serverTL->rgdbSnapshot[idb] != nullptr)
+            if (serverTL->rgdbSnapshot[idb] != nullptr) {
                 db->endSnapshot(serverTL->rgdbSnapshot[idb]);
-            serverTL->rgdbSnapshot[idb] = db->createSnapshot(mvccCheckpoint, true);
+                serverTL->rgdbSnapshot[idb] = nullptr;
+            } else {
+                serverTL->rgdbSnapshot[idb] = db->createSnapshot(mvccCheckpoint, true);
+            }
             if (serverTL->rgdbSnapshot[idb] == nullptr) {
                 // We still need to service the read
                 o = lookupKeyReadWithFlags(db,key,LOOKUP_NONE);
+                serverTL->disable_async_commands = true; // don't try this again
             }
         }
         if (serverTL->rgdbSnapshot[idb] != nullptr) {

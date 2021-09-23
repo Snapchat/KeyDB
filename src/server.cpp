@@ -2070,6 +2070,7 @@ int hash_spin_worker() {
  * rehashing. */
 void databasesCron(bool fMainThread) {
     serverAssert(GlobalLocksAcquired());
+
     if (fMainThread) {
         /* Expire keys by random sampling. Not required for slaves
         * as master will synthesize DELs for us. */
@@ -2783,6 +2784,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     locker.arm();
 
+    /* end any snapshots created by fast async commands */
     for (int idb = 0; idb < cserver.dbnum; ++idb) {
         if (serverTL->rgdbSnapshot[idb] != nullptr) {
             g_pserver->db[idb]->endSnapshot(serverTL->rgdbSnapshot[idb]);
@@ -2991,6 +2993,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
         serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
         for (int idb = 0; idb < cserver.dbnum; ++idb)
             g_pserver->db[idb]->trackChanges(false);
+
+        serverTL->disable_async_commands = false;
     }
 }
 
@@ -4402,7 +4406,10 @@ void call(client *c, int flags) {
     serverTL->commandsExecuted++;
     const long duration = elapsedUs(call_timer);
     c->duration = duration;
-    dirty = g_pserver->dirty-dirty;
+    if (flags & CMD_CALL_ASYNC)
+        dirty = 0;  // dirty is bogus in this case as there's no synchronization
+    else
+        dirty = g_pserver->dirty-dirty;
     if (dirty < 0) dirty = 0;
 
     if (dirty)

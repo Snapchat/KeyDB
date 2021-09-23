@@ -200,7 +200,7 @@ client *createClient(connection *conn, int iel) {
     c->paused_list_node = NULL;
     c->client_tracking_redirection = 0;
     c->casyncOpsPending = 0;
-    c->mvccCheckpoint = 0;
+    c->mvccCheckpoint = getMvccTstamp();
     c->master_error = 0;
     memset(c->uuid, 0, UUID_BINARY_LEN);
 

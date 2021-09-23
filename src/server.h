@@ -1263,6 +1263,8 @@ public:
     // These need to be fixed
     using redisDbPersistentData::size;
     using redisDbPersistentData::expireSize;
+
+    static const uint64_t msStaleThreshold = 500;
 };
 
 /* Redis database representation. There are multiple databases identified
@@ -1331,7 +1333,6 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::commitChanges;
     using redisDbPersistentData::setexpireUnsafe;
     using redisDbPersistentData::setexpire;
-    using redisDbPersistentData::createSnapshot;
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::restoreSnapshot;
     using redisDbPersistentData::removeAllCachedValues;
@@ -1342,6 +1343,13 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::FRehashing;
 
 public:
+    const redisDbPersistentDataSnapshot *createSnapshot(uint64_t mvccCheckpoint, bool fOptional) {
+        auto psnapshot = redisDbPersistentData::createSnapshot(mvccCheckpoint, fOptional);
+        if (psnapshot != nullptr)
+            mvccLastSnapshot = psnapshot->mvccCheckpoint();
+        return psnapshot;
+    }
+
     expireset::setiter expireitr;
     dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
     dict *ready_keys;           /* Blocked keys that received a PUSH */
@@ -1350,6 +1358,7 @@ public:
     long long last_expire_set;  /* when the last expire was set */
     double avg_ttl;             /* Average TTL, just for stats */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
+    uint64_t mvccLastSnapshot = 0;
 };
 
 /* Declare database backup that include redis main DBs and slots to keys map.
@@ -2024,6 +2033,7 @@ struct redisServerThreadVars {
     bool fRetrySetAofEvent = false;
     bool modulesEnabledThisAeLoop = false; /* In this loop of aeMain, were modules enabled before 
                                               the thread went to sleep? */
+    bool disable_async_commands = false; /* this is only valid for one cycle of the AE loop and is reset in afterSleep */
     std::vector<client*> vecclientsProcess;
     dictAsyncRehashCtl *rehashCtl = nullptr;
 

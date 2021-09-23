@@ -1333,7 +1333,6 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::commitChanges;
     using redisDbPersistentData::setexpireUnsafe;
     using redisDbPersistentData::setexpire;
-    using redisDbPersistentData::createSnapshot;
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::restoreSnapshot;
     using redisDbPersistentData::removeAllCachedValues;
@@ -1344,6 +1343,13 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::FRehashing;
 
 public:
+    const redisDbPersistentDataSnapshot *createSnapshot(uint64_t mvccCheckpoint, bool fOptional) {
+        auto psnapshot = redisDbPersistentData::createSnapshot(mvccCheckpoint, fOptional);
+        if (psnapshot != nullptr)
+            mvccLastSnapshot = psnapshot->mvccCheckpoint();
+        return psnapshot;
+    }
+
     expireset::setiter expireitr;
     dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
     dict *ready_keys;           /* Blocked keys that received a PUSH */
@@ -2026,6 +2032,7 @@ struct redisServerThreadVars {
     bool fRetrySetAofEvent = false;
     bool modulesEnabledThisAeLoop = false; /* In this loop of aeMain, were modules enabled before 
                                               the thread went to sleep? */
+    bool disable_async_commands = false; /* this is only valid for one cycle of the AE loop and is reset in afterSleep */
     std::vector<client*> vecclientsProcess;
     dictAsyncRehashCtl *rehashCtl = nullptr;
 

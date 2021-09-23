@@ -3160,6 +3160,8 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
         if (command.argc >= 2) {
             const char *cmd = szFromObj(command.argv[0]);
             if (!strcasecmp(cmd, "set") || !strcasecmp(cmd, "get")) {
+                if (c->db->m_spdbSnapshotHOLDER != nullptr)
+                    return; // this is dangerous enough without a snapshot around
                 auto h = dictSdsHash(szFromObj(command.argv[1]));
                 for (int iht = 0; iht < 2; ++iht) {
                     auto hT = h & c->db->m_pdict->ht[iht].sizemask;

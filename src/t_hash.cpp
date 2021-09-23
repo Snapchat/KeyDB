@@ -812,7 +812,7 @@ void hmgetCommand(client *c) {
 
     /* Don't abort when the key cannot be found. Non-existing keys are empty
      * hashes, where HMGET should respond with a series of null bulks. */
-    o = lookupKeyRead(c->db, c->argv[1]);
+    o = lookupKeyRead(c->db, c->argv[1], c->mvccCheckpoint);
     if (checkType(c,o,OBJ_HASH)) return;
 
     addReplyArrayLen(c, c->argc-2);

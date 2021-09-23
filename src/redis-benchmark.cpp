@@ -1999,6 +1999,38 @@ int main(int argc, const char **argv) {
             sdsfree(key_placeholder);
         }
 
+        if (test_is_selected("hmset")) {
+            const char *cmd_argv[22];
+            cmd_argv[0] = "HMSET";
+            cmd_argv[1] = "testhash";
+            sds key_placeholder = sdscatprintf(sdsnew(""),"key%s:__rand_int__",tag);
+            for (i = 2; i < 22; i += 2) {
+                cmd_argv[i] = key_placeholder;
+                cmd_argv[i+1] = data;
+            }
+            len = redisFormatCommandArgv(&cmd,22,cmd_argv,NULL);
+            benchmark("MSET (10 keys)",cmd,len);
+            free(cmd);
+            sdsfree(key_placeholder);
+        }
+
+        if (test_is_selected("hmget")) {
+            const char *cmd_argv[1003];
+            cmd_argv[0] = "HMGET";
+            cmd_argv[1] = "testhash";
+            sds key_placeholder = sdscatprintf(sdsnew(""),"key%s:__rand_int__",tag);
+            for (int keys = 1; keys < 1002; keys += 100) {
+                for (i = 2; i < keys + 2; i++) {
+                    cmd_argv[i] = key_placeholder;
+                }
+                len = redisFormatCommandArgv(&cmd,keys+2,cmd_argv,NULL);
+                std::string title = "HMGET (" + std::to_string(keys) + " keys)";
+                benchmark(title.data(),cmd,len);
+                free(cmd);
+            }
+            sdsfree(key_placeholder);
+        }
+
         if (!config.csv) printf("\n");
     } while(config.loop);
     zfree(data);

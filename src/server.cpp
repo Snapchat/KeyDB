@@ -2070,6 +2070,15 @@ int hash_spin_worker() {
  * rehashing. */
 void databasesCron(bool fMainThread) {
     serverAssert(GlobalLocksAcquired());
+
+    /* end any snapshots created by fast async commands */
+    for (int idb = 0; idb < cserver.dbnum; ++idb) {
+        if (serverTL->rgdbSnapshot[idb] != nullptr) {
+            g_pserver->db[idb]->endSnapshot(serverTL->rgdbSnapshot[idb]);
+            serverTL->rgdbSnapshot[idb] = nullptr;
+        }
+    }
+
     if (fMainThread) {
         /* Expire keys by random sampling. Not required for slaves
         * as master will synthesize DELs for us. */
@@ -2782,13 +2791,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     int iel = ielFromEventLoop(eventLoop);
 
     locker.arm();
-
-    for (int idb = 0; idb < cserver.dbnum; ++idb) {
-        if (serverTL->rgdbSnapshot[idb] != nullptr) {
-            g_pserver->db[idb]->endSnapshot(serverTL->rgdbSnapshot[idb]);
-            serverTL->rgdbSnapshot[idb] = nullptr;
-        }
-    }
 
     size_t zmalloc_used = zmalloc_used_memory();
     if (zmalloc_used > g_pserver->stat_peak_memory)

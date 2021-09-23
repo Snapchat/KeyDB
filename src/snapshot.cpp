@@ -654,9 +654,7 @@ int redisDbPersistentDataSnapshot::snapshot_depth() const
 
 bool redisDbPersistentDataSnapshot::FStale() const
 {
-    // 0.5 seconds considered stale;
-    static const uint64_t msStale = 500;
-    return ((getMvccTstamp() - m_mvccCheckpoint) >> MVCC_MS_SHIFT) >= msStale;
+    return ((getMvccTstamp() - m_mvccCheckpoint) >> MVCC_MS_SHIFT) >= redisDbPersistentDataSnapshot::msStaleThreshold;
 }
 
 void dictGCAsyncFree(dictAsyncRehashCtl *async) {

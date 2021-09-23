@@ -4405,7 +4405,10 @@ void call(client *c, int flags) {
     serverTL->commandsExecuted++;
     const long duration = elapsedUs(call_timer);
     c->duration = duration;
-    dirty = g_pserver->dirty-dirty;
+    if (flags & CMD_CALL_ASYNC)
+        dirty = 0;  // dirty is bogus in this case as there's no synchronization
+    else
+        dirty = g_pserver->dirty-dirty;
     if (dirty < 0) dirty = 0;
 
     if (dirty)

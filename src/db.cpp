@@ -219,12 +219,16 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key, uint64_t mvccCheckpoint) {
         if (serverTL->rgdbSnapshot[idb] == nullptr || serverTL->rgdbSnapshot[idb]->mvccCheckpoint() < mvccCheckpoint) {
             AeLocker locker;
             locker.arm(serverTL->current_client);
-            if (serverTL->rgdbSnapshot[idb] != nullptr)
+            if (serverTL->rgdbSnapshot[idb] != nullptr) {
                 db->endSnapshot(serverTL->rgdbSnapshot[idb]);
-            serverTL->rgdbSnapshot[idb] = db->createSnapshot(mvccCheckpoint, true);
+                serverTL->rgdbSnapshot[idb] = nullptr;
+            } else {
+                serverTL->rgdbSnapshot[idb] = db->createSnapshot(mvccCheckpoint, true);
+            }
             if (serverTL->rgdbSnapshot[idb] == nullptr) {
                 // We still need to service the read
                 o = lookupKeyReadWithFlags(db,key,LOOKUP_NONE);
+                serverTL->disable_async_commands = true; // don't try this again
             }
         }
         if (serverTL->rgdbSnapshot[idb] != nullptr) {
@@ -3159,6 +3163,8 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
         if (command.argc >= 2) {
             const char *cmd = szFromObj(command.argv[0]);
             if (!strcasecmp(cmd, "set") || !strcasecmp(cmd, "get")) {
+                if (c->db->m_spdbSnapshotHOLDER != nullptr)
+                    return; // this is dangerous enough without a snapshot around
                 auto h = dictSdsHash(szFromObj(command.argv[1]));
                 for (int iht = 0; iht < 2; ++iht) {
                     auto hT = h & c->db->m_pdict->ht[iht].sizemask;

@@ -631,15 +631,15 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hkeys",hkeysCommand,2,
-     "read-only to-sort @hash",
+     "read-only to-sort async @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hvals",hvalsCommand,2,
-     "read-only to-sort @hash",
+     "read-only to-sort async @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hgetall",hgetallCommand,2,
-     "read-only random @hash",
+     "read-only random async @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hexists",hexistsCommand,3,
@@ -651,7 +651,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hscan",hscanCommand,-3,
-     "read-only random @hash",
+     "read-only random async @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"incrby",incrbyCommand,3,

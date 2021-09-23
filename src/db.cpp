@@ -159,7 +159,6 @@ static robj_roptr lookupKeyConst(redisDb *db, robj *key, int flags) {
  * expiring our key via DELs in the replication link. */
 robj_roptr lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
     robj_roptr val;
-    //serverAssert(GlobalLocksAcquired());
 
     if (expireIfNeeded(db,key) == 1) {
         /* If we are in the context of a master, expireIfNeeded() returns 1

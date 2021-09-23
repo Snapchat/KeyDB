@@ -530,7 +530,7 @@ void addReplyErrorLength(client *c, const char *s, size_t len) {
 
 /* Do some actions after an error reply was sent (Log if needed, updates stats, etc.) */
 void afterErrorReply(client *c, const char *s, size_t len, int severity = ERR_CRITICAL) {
-    /* Increment the global error counter */
+    /* Increment the thread error counter */
     serverTL->stat_total_error_replies++;
     /* Increment the error stats
      * If the string already starts with "-..." then the error prefix

@@ -2020,6 +2020,7 @@ struct redisServerThreadVars {
     GarbageCollectorCollection::Epoch gcEpoch;
     const redisDbPersistentDataSnapshot **rgdbSnapshot = nullptr;
     long long stat_total_error_replies; /* Total number of issued error replies ( command + rejected errors ) */
+    long long prev_err_count; /* per thread marker of exisiting errors during a call */
     bool fRetrySetAofEvent = false;
     bool modulesEnabledThisAeLoop = false; /* In this loop of aeMain, were modules enabled before 
                                               the thread went to sleep? */

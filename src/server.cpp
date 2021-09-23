@@ -4357,7 +4357,6 @@ void call(client *c, int flags) {
     int client_old_flags = c->flags;
     struct redisCommand *real_cmd = c->cmd;
     serverAssert(((flags & CMD_CALL_ASYNC) && (c->cmd->flags & CMD_READONLY)) || GlobalLocksAcquired());
-    long long prev_err_count;
 
     serverTL->fixed_time_expire++;
 
@@ -4388,7 +4387,7 @@ void call(client *c, int flags) {
 
     /* Call the command. */
     dirty = g_pserver->dirty;
-    prev_err_count = serverTL->stat_total_error_replies;
+    serverTL->prev_err_count = serverTL->stat_total_error_replies;
     incrementMvccTstamp();
     elapsedStart(&call_timer);
     try {
@@ -4413,7 +4412,7 @@ void call(client *c, int flags) {
      * We leverage a static variable (prev_err_count) to retain
      * the counter across nested function calls and avoid logging
      * the same error twice. */
-    if ((serverTL->stat_total_error_replies - prev_err_count) > 0) {
+    if ((serverTL->stat_total_error_replies - serverTL->prev_err_count) > 0) {
         real_cmd->failed_calls++;
     }
 
@@ -4579,7 +4578,7 @@ void call(client *c, int flags) {
 
     __atomic_fetch_add(&g_pserver->stat_numcommands, 1, __ATOMIC_RELAXED);
     serverTL->fixed_time_expire--;
-    prev_err_count = serverTL->stat_total_error_replies;
+    serverTL->prev_err_count = serverTL->stat_total_error_replies;
 
     if (!(flags & CMD_CALL_ASYNC)) {
         /* Record peak memory after each command and before the eviction that runs

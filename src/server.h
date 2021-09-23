@@ -1263,6 +1263,8 @@ public:
     // These need to be fixed
     using redisDbPersistentData::size;
     using redisDbPersistentData::expireSize;
+
+    static const uint64_t msStaleThreshold = 500;
 };
 
 /* Redis database representation. There are multiple databases identified
@@ -1350,6 +1352,7 @@ public:
     long long last_expire_set;  /* when the last expire was set */
     double avg_ttl;             /* Average TTL, just for stats */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
+    uint64_t mvccLastSnapshot = 0;
 };
 
 /* Declare database backup that include redis main DBs and slots to keys map.

@@ -607,7 +607,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hmget",hmgetCommand,-3,
-     "read-only fast @hash",
+     "read-only fast async @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hincrby",hincrbyCommand,4,

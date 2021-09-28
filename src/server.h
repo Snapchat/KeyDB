@@ -950,7 +950,6 @@ struct redisObjectExtended {
 };
 
 typedef struct redisObject {
-    friend redisObject *createEmbeddedStringObject(const char *ptr, size_t len);
 protected:
     redisObject() {}
 

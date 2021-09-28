@@ -573,9 +573,9 @@ static void _dictRehashStep(dict *d) {
 }
 
 /* Add an element to the target hash table */
-int dictAdd(dict *d, void *key, void *val)
+int dictAdd(dict *d, void *key, void *val, dictEntry **existing)
 {
-    dictEntry *entry = dictAddRaw(d,key,NULL);
+    dictEntry *entry = dictAddRaw(d,key,existing);
 
     if (!entry) return DICT_ERR;
     dictSetVal(d, entry, val);

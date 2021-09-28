@@ -1209,6 +1209,10 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             listRewind(g_pserver->masters,&li);
             while ((ln = listNext(&li)) != NULL) {
                 mi = (redisMaster*)listNodeValue(ln);
+                if (mi->master_replid[0] == 0) {
+                    // if replid is null, there's no reason to save it
+                    continue;
+                }
                 val = val.catfmt("%s:%I:%s:%i;", mi->master_replid,
                     mi->master_initial_offset,
                     mi->masterhost,

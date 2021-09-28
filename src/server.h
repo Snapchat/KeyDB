@@ -1486,6 +1486,10 @@ public:
         memcpy(masters + masterCount - 1, &mi, sizeof(struct redisMaster));
     }
 
+    size_t numMasters() {
+        return masterCount;
+    }
+
     /* Used saving and loading. */
     int repl_stream_db;  /* DB to select in g_pserver->master client. */
 

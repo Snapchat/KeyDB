@@ -2554,7 +2554,7 @@ int slaveTryPartialResynchronization(redisMaster *mi, connection *conn, int read
          * client structure representing the master into g_pserver->master. */
         mi->master_initial_offset = -1;
 
-        if (mi->cached_master && !g_pserver->fActiveReplica) {
+        if (mi->cached_master) {
             psync_replid = mi->cached_master->replid;
             snprintf(psync_offset,sizeof(psync_offset),"%lld", mi->cached_master->reploff+1);
             serverLog(LL_NOTICE,"Trying a partial resynchronization (request %s:%s).", psync_replid, psync_offset);

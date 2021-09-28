@@ -242,7 +242,7 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
-bool dbAddCore(redisDb *db, sds key, robj *val, bool fUpdateMvcc, bool fAssumeNew = false) {
+bool dbAddCore(redisDb *db, sds key, robj *val, bool fUpdateMvcc, bool fAssumeNew = false, dict_iter *piterExisting = nullptr) {
     serverAssert(!val->FExpires());
     sds copy = sdsdupshared(key);
     
@@ -251,7 +251,7 @@ bool dbAddCore(redisDb *db, sds key, robj *val, bool fUpdateMvcc, bool fAssumeNe
         setMvccTstamp(val, mvcc);
     }
 
-    bool fInserted = db->insert(copy, val, fAssumeNew);
+    bool fInserted = db->insert(copy, val, fAssumeNew, piterExisting);
 
     if (fInserted)
     {
@@ -321,8 +321,12 @@ void redisDb::dbOverwriteCore(redisDb::iter itr, sds keySds, robj *val, bool fUp
  * This function does not modify the expire time of the existing key.
  *
  * The program is aborted if the key was not already present. */
-void dbOverwrite(redisDb *db, robj *key, robj *val, bool fRemoveExpire) {
-    auto itr = db->find(key);
+void dbOverwrite(redisDb *db, robj *key, robj *val, bool fRemoveExpire, dict_iter *pitrExisting) {
+    redisDb::iter itr;
+    if (pitrExisting != nullptr)
+        itr = *pitrExisting;
+    else
+        itr = db->find(key);
 
     serverAssertWithInfo(NULL,key,itr != nullptr);
     lookupKeyUpdateObj(itr.val(), LOOKUP_NONE);
@@ -366,8 +370,9 @@ int dbMerge(redisDb *db, sds key, robj *val, int fReplace)
  * in a context where there is no clear client performing the operation. */
 void genericSetKey(client *c, redisDb *db, robj *key, robj *val, int keepttl, int signal) {
     db->prepOverwriteForSnapshot(szFromObj(key));
-    if (!dbAddCore(db, szFromObj(key), val, true /* fUpdateMvcc */)) {
-        dbOverwrite(db, key, val, !keepttl);
+    dict_iter iter;
+    if (!dbAddCore(db, szFromObj(key), val, true /* fUpdateMvcc */, false /*fAssumeNew*/, &iter)) {
+        dbOverwrite(db, key, val, !keepttl, &iter);
     }
     incrRefCount(val);
     if (signal) signalModifiedKey(c,db,key);
@@ -2594,11 +2599,12 @@ void redisDb::storageProviderInitialize()
     }
 }
 
-bool redisDbPersistentData::insert(char *key, robj *o, bool fAssumeNew)
+bool redisDbPersistentData::insert(char *key, robj *o, bool fAssumeNew, dict_iter *piterExisting)
 {
     if (!fAssumeNew && (g_pserver->m_pstorageFactory != nullptr || m_pdbSnapshot != nullptr))
         ensure(key);
-    int res = dictAdd(m_pdict, key, o);
+    dictEntry *de;
+    int res = dictAdd(m_pdict, key, o, &de);
     serverAssert(FImplies(fAssumeNew, res == DICT_OK));
     if (res == DICT_OK)
     {
@@ -2609,6 +2615,11 @@ bool redisDbPersistentData::insert(char *key, robj *o, bool fAssumeNew)
         }
 #endif
         trackkey(key, false /* fUpdate */);
+    }
+    else
+    {
+        if (piterExisting)
+            *piterExisting = dict_iter(m_pdict, de);
     }
     return (res == DICT_OK);
 }

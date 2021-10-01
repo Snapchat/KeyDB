@@ -6332,7 +6332,7 @@ void loadDataFromDisk(void) {
                         for (size_t i = 0; i < rsi.numMasters(); i++) {
                             if (!strcmp(mi->masterhost, rsi.masters[i].masterhost) && mi->masterport == rsi.masters[i].masterport) {
                                 memcpy(mi->cached_master->replid, rsi.masters[i].master_replid, sizeof(mi->cached_master->replid));
-                                mi->cached_master->psync_initial_offset = rsi.masters[i].master_initial_offset;
+                                mi->cached_master->reploff = rsi.masters[i].master_initial_offset;
                                 serverLog(LL_NOTICE, "Cached master recovered from RDB for %s:%d", mi->masterhost, mi->masterport);
                             }
                         }

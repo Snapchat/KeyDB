@@ -2358,7 +2358,7 @@ void readSyncBulkPayload(connection *conn) {
     {
         mergeReplicationId(mi->master->replid);
     }
-    else
+    else if (!g_pserver->fActiveReplica)
     {
         /* After a full resynchroniziation we use the replication ID and
         * offset of the master. The secondary ID / offset are cleared since
@@ -2653,14 +2653,15 @@ int slaveTryPartialResynchronization(redisMaster *mi, connection *conn, int read
                     sizeof(g_pserver->replid2));
                 g_pserver->second_replid_offset = g_pserver->master_repl_offset+1;
 
-                /* Update the cached master ID and our own primary ID to the
-                 * new one. */
-                memcpy(g_pserver->replid,sznew,sizeof(g_pserver->replid));
-                memcpy(mi->cached_master->replid,sznew,sizeof(g_pserver->replid));
+                if (!g_pserver->fActiveReplica) {
+                    /* Update the cached master ID and our own primary ID to the
+                     * new one. */
+                    memcpy(g_pserver->replid,sznew,sizeof(g_pserver->replid));
+                    memcpy(mi->cached_master->replid,sznew,sizeof(g_pserver->replid));
 
-                /* Disconnect all the sub-slaves: they need to be notified. */
-                if (!g_pserver->fActiveReplica)
+                    /* Disconnect all the sub-slaves: they need to be notified. */
                     disconnectSlaves();
+                }
             }
         }
 
@@ -3020,18 +3021,6 @@ retry_connect:
     {
         disconnectSlavesExcept(mi->master_uuid); /* Force our slaves to resync with us as well. */
         freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
-    }
-    else
-    {
-        if (listLength(g_pserver->slaves))
-        {
-            changeReplicationId();
-            clearReplicationId2();
-        }
-        else
-        {
-            freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
-        }
     }
 
     /* Fall back to SYNC if needed. Otherwise psync_result == PSYNC_FULLRESYNC

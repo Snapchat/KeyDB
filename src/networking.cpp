@@ -1307,8 +1307,7 @@ void acceptOnThread(connection *conn, int flags, char *cip)
         int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [conn, flags, ielTarget, szT, fBootLoad] {
             connMarshalThread(conn);
             acceptCommonHandler(conn,flags,szT,ielTarget);
-            if (!g_fTestMode && !fBootLoad)
-                rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
+            rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
             zfree(szT);
         });
 
@@ -1316,8 +1315,7 @@ void acceptOnThread(connection *conn, int flags, char *cip)
             return;
         // If res != AE_OK we can still try to accept on the local thread
     }
-    if (!g_fTestMode && !fBootLoad)
-        rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
+    rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
 
     aeAcquireLock();
     acceptCommonHandler(conn,flags,cip,ielCur);

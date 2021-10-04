@@ -868,10 +868,15 @@ cant_free:
             redisDb *db = g_pserver->db[idb];
             if (db->FStorageProvider())
             {
-                serverLog(LL_WARNING, "Failed to evict keys, falling back to flushing entire cache.  Consider increasing maxmemory-samples.");
-                db->removeAllCachedValues();
-                if (((mem_reported - zmalloc_used_memory()) + mem_freed) >= mem_tofree)
-                    result = EVICT_OK;
+                if (db->size() != 0 && db->size(true /*fcachedOnly*/) == 0 && db->keycacheIsEnabled()) {
+                    serverLog(LL_WARNING, "Key cache exceeds maxmemory, freeing - performance may be affected increase maxmemory if possible");
+                    db->disableKeyCache();
+                } else if (db->size(true /*fCachedOnly*/)) {
+                    serverLog(LL_WARNING, "Failed to evict keys, falling back to flushing entire cache.  Consider increasing maxmemory-samples.");
+                    db->removeAllCachedValues();
+                    if (((mem_reported - zmalloc_used_memory()) + mem_freed) >= mem_tofree)
+                        result = EVICT_OK;
+                }
             }
         }
     }

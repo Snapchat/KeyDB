@@ -43,6 +43,8 @@ public:
     void bulkInsert(sds *rgkeys, sds *rgvals, size_t celem);
     void retrieve(sds key, IStorage::callbackSingle fn) const;
     bool erase(sds key);
+    void emergencyFreeCache();
+    bool keycacheIsEnabled() const { return m_pdict != nullptr; }
 
     bool enumerate(IStorage::callback fn) const { return m_spstorage->enumerate(fn); }
 

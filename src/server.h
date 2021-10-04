@@ -1182,6 +1182,8 @@ public:
     bool FStorageProvider() { return m_spstorage != nullptr; }
     bool removeCachedValue(const char *key, dictEntry **ppde = nullptr);
     void removeAllCachedValues();
+    void disableKeyCache();
+    bool keycacheIsEnabled();
 
     bool prefetchKeysAsync(client *c, struct parsed_command &command, bool fExecOK);
 
@@ -1337,6 +1339,8 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::restoreSnapshot;
     using redisDbPersistentData::removeAllCachedValues;
+    using redisDbPersistentData::disableKeyCache;
+    using redisDbPersistentData::keycacheIsEnabled;
     using redisDbPersistentData::dictUnsafeKeyOnly;
     using redisDbPersistentData::resortExpire;
     using redisDbPersistentData::prefetchKeysAsync;

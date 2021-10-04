@@ -3065,6 +3065,20 @@ void redisDbPersistentData::removeAllCachedValues()
     }
 }
 
+void redisDbPersistentData::disableKeyCache()
+{
+    if (m_spstorage == nullptr)
+        return;
+    m_spstorage->emergencyFreeCache();
+}
+
+bool redisDbPersistentData::keycacheIsEnabled()
+{
+    if (m_spstorage == nullptr)
+        return false;
+    return m_spstorage->keycacheIsEnabled();
+}
+
 void redisDbPersistentData::trackkey(const char *key, bool fUpdate)
 {
     if (m_fTrackingChanges && !m_fAllChanged && m_spstorage) {

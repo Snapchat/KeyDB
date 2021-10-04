@@ -3047,7 +3047,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 goto eoferr;
             if ((expires_size = rdbLoadLen(rdb,NULL)) == RDB_LENERR)
                 goto eoferr;
-            if (g_pserver->allowRdbResizeOp) {
+            if (g_pserver->allowRdbResizeOp && !g_pserver->m_pstorageFactory) {
                 wqueue.enqueue([dbCur, db_size]{
                     dbCur->expand(db_size);
                 });

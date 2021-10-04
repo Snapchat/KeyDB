@@ -2683,6 +2683,16 @@ public:
                 ProcessWhileBlocked();
                 resumeExecution();
             }
+
+            if ((getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK)) {
+                for (int idb = 0; idb < cserver.dbnum; ++idb) {
+                    redisDb *db = g_pserver->db[idb];
+                    if (db->size() > 0 && db->keycacheIsEnabled()) {
+                        serverLog(LL_WARNING, "Key cache %d exceeds maxmemory during load, freeing - performance may be affected increase maxmemory if possible", idb);
+                        db->disableKeyCache();
+                    }
+                }
+            }
         }
     }
 

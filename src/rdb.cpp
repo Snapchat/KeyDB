@@ -1201,7 +1201,7 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             == -1) return -1;
         if (rdbSaveAuxFieldStrInt(rdb,"repl-offset",g_pserver->master_repl_offset)
             == -1) return -1;
-        if (g_pserver->enable_multimaster && listLength(g_pserver->masters) > 0) {
+        if (g_pserver->fActiveReplica && listLength(g_pserver->masters) > 0) {
             sdsstring val = sdsstring(sdsempty());
             listNode *ln;
             listIter li;
@@ -1209,14 +1209,29 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             listRewind(g_pserver->masters,&li);
             while ((ln = listNext(&li)) != NULL) {
                 mi = (redisMaster*)listNodeValue(ln);
-                if (mi->master_replid[0] == 0) {
-                    // if replid is null, there's no reason to save it
-                    continue;
+                if (!mi->master) {
+                    // If master client is not available, use info from master struct - better than nothing
+                    serverLog(LL_NOTICE, "saving master %s", mi->master_replid);
+                    if (mi->master_replid[0] == 0) {
+                        // if replid is null, there's no reason to save it
+                        continue;
+                    }
+                    val = val.catfmt("%s:%I:%s:%i;", mi->master_replid,
+                        mi->master_initial_offset,
+                        mi->masterhost,
+                        mi->masterport);
                 }
-                val = val.catfmt("%s:%I:%s:%i;", mi->master_replid,
-                    mi->master_initial_offset,
-                    mi->masterhost,
-                    mi->masterport);
+                else {
+                    serverLog(LL_NOTICE, "saving master %s", mi->master->replid);
+                    if (mi->master->replid[0] == 0) {
+                        // if replid is null, there's no reason to save it
+                        continue;
+                    }
+                    val = val.catfmt("%s:%I:%s:%i;", mi->master->replid,
+                        mi->master->reploff,
+                        mi->masterhost,
+                        mi->masterport);
+                }
             }
             if (rdbSaveAuxFieldStrStr(rdb, "repl-masters",val.get()) == -1) return -1;
         }

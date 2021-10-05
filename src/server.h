@@ -2494,6 +2494,7 @@ void clearReplicationId2(void);
 void mergeReplicationId(const char *);
 void chopReplicationBacklog(void);
 void replicationCacheMasterUsingMyself(struct redisMaster *mi);
+void replicationCacheMasterUsingMaster(struct redisMaster *mi);
 void feedReplicationBacklog(const void *ptr, size_t len);
 void updateMasterAuth();
 void showLatestBacklog();

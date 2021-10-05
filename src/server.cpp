@@ -6322,20 +6322,22 @@ void loadDataFromDisk(void) {
                 while ((ln = listNext(&li)))
                 {
                     redisMaster *mi = (redisMaster*)listNodeValue(ln);
-                    /* If we are a replica, create a cached master from this
-                    * information, in order to allow partial resynchronizations
-                    * with masters. */
-                    replicationCacheMasterUsingMyself(mi);
-                    selectDb(mi->cached_master,rsi.repl_stream_db);
-
                     if (g_pserver->fActiveReplica) {
                         for (size_t i = 0; i < rsi.numMasters(); i++) {
                             if (!strcmp(mi->masterhost, rsi.masters[i].masterhost) && mi->masterport == rsi.masters[i].masterport) {
-                                memcpy(mi->cached_master->replid, rsi.masters[i].master_replid, sizeof(mi->cached_master->replid));
-                                mi->cached_master->reploff = rsi.masters[i].master_initial_offset;
+                                memcpy(mi->master_replid, rsi.masters[i].master_replid, sizeof(mi->master_replid));
+                                mi->master_initial_offset = rsi.masters[i].master_initial_offset;
+                                replicationCacheMasterUsingMaster(mi);
                                 serverLog(LL_NOTICE, "Cached master recovered from RDB for %s:%d", mi->masterhost, mi->masterport);
                             }
                         }
+                    }
+                    else {
+                        /* If we are a replica, create a cached master from this
+                        * information, in order to allow partial resynchronizations
+                        * with masters. */
+                        replicationCacheMasterUsingMyself(mi);
+                        selectDb(mi->cached_master,rsi.repl_stream_db);
                     }
                 }
             }

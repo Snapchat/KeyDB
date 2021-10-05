@@ -3667,6 +3667,26 @@ void replicationCacheMasterUsingMyself(redisMaster *mi) {
     mi->master = NULL;
 }
 
+/* This function is called when reloading master info from an RDB in Active Replica mode.
+ * It creates a cached master client using the info contained in the redisMaster struct.
+ *
+ * Assumes that the passed struct contains valid master info. */
+void replicationCacheMasterUsingMaster(redisMaster *mi) {
+    if (mi->cached_master) {
+        freeClient(mi->cached_master);
+    }
+
+    replicationCreateMasterClient(mi, NULL, -1);
+    std::lock_guard<decltype(mi->master->lock)> lock(mi->master->lock);
+
+    memcpy(mi->master->replid, mi->master_replid, sizeof(mi->master_replid));
+    mi->master->reploff = mi->master_initial_offset;
+
+    unlinkClient(mi->master);
+    mi->cached_master = mi->master;
+    mi->master = NULL;
+}
+
 /* Free a cached master, called when there are no longer the conditions for
  * a partial resync on reconnection. */
 void replicationDiscardCachedMaster(redisMaster *mi) {

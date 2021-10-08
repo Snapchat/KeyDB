@@ -2563,6 +2563,352 @@ void stopSaving(int success) {
                           NULL);
 }
 
+
+class JobBase
+{
+public:
+    enum class JobType {
+        Function,
+        Insert
+    };
+
+    JobType type;
+
+    JobBase(JobType type)
+        : type(type)
+    {}
+
+    virtual ~JobBase() = default;
+};
+
+struct rdbInsertJob : public JobBase
+{
+    redisDb *db = nullptr;
+    sds key = nullptr; 
+    robj *val = nullptr; 
+    long long lru_clock;
+    long long expiretime;
+    long long lru_idle;
+    long long lfu_freq;
+    std::vector<std::pair<robj_sharedptr, long long>> vecsubexpires;
+
+    void addSubexpireKey(robj *subkey, long long when) {
+        vecsubexpires.push_back(std::make_pair(robj_sharedptr(subkey), when));
+        decrRefCount(subkey);
+    }
+
+    rdbInsertJob()
+        : JobBase(JobBase::JobType::Insert)
+    {}
+
+    rdbInsertJob(rdbInsertJob &&src) 
+        : JobBase(JobBase::JobType::Insert)
+    {
+        db = src.db;
+        src.db = nullptr;
+        key = src.key;
+        src.key = nullptr;
+        val = src.val;
+        src.val = nullptr;
+        lru_clock = src.lru_clock;
+        expiretime = src.expiretime;
+        lru_idle = src.lru_idle;
+        lfu_freq = src.lfu_freq;
+        vecsubexpires = std::move(src.vecsubexpires);
+    }
+
+    ~rdbInsertJob() {
+        if (key)
+            sdsfree(key);
+        if (val)
+            decrRefCount(val);
+    }
+};
+
+struct rdbFunctionJob : public JobBase
+{
+public:
+    std::function<void()> m_fn;
+
+    rdbFunctionJob(std::function<void()> &&fn)
+        : JobBase(JobBase::JobType::Function), m_fn(fn)
+    {}
+};
+
+class rdbAsyncWorkThread
+{
+    rdbSaveInfo *rsi;
+    int rdbflags;
+    moodycamel::BlockingConcurrentQueue<JobBase*> queueJobs;
+    fastlock m_lockPause { "rdbAsyncWork-Pause"};
+    bool fLaunched = false;
+    std::atomic<int> fExit {false};
+    std::atomic<size_t> ckeysLoaded;
+    std::atomic<int> cstorageWritesInFlight;
+    std::atomic<bool> workerThreadDone;
+    std::thread m_thread;
+    std::vector<JobBase*> vecbatch;
+    long long now;
+    long long lastPing = -1;
+
+    static void listFreeMethod(const void *v) {
+        delete reinterpret_cast<const JobBase*>(v);
+    }
+
+public:
+    
+    rdbAsyncWorkThread(rdbSaveInfo *rsi, int rdbflags, long long now)
+        : rsi(rsi), rdbflags(rdbflags), now(now)
+    {
+        ckeysLoaded = 0;
+        cstorageWritesInFlight = 0;
+    }
+
+    ~rdbAsyncWorkThread() {
+        if (m_thread.joinable())
+            endWork();
+    }
+
+    void start() {
+        serverAssert(!fLaunched);
+        m_thread = std::thread(&rdbAsyncWorkThread::loadWorkerThreadMain, this);
+        fLaunched = true;
+    }
+
+    void throttle() {
+        if (g_pserver->m_pstorageFactory && (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK)) {
+            while ((cstorageWritesInFlight.load(std::memory_order_relaxed) || queueJobs.size_approx()) && (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK)) {
+                usleep(1);
+                pauseExecution();
+                ProcessWhileBlocked();
+                resumeExecution();
+            }
+
+            if ((getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK)) {
+                for (int idb = 0; idb < cserver.dbnum; ++idb) {
+                    redisDb *db = g_pserver->db[idb];
+                    if (db->size() > 0 && db->keycacheIsEnabled()) {
+                        serverLog(LL_WARNING, "Key cache %d exceeds maxmemory during load, freeing - performance may be affected increase maxmemory if possible", idb);
+                        db->disableKeyCache();
+                    }
+                }
+            }
+        }
+    }
+
+    void enqueue(std::unique_ptr<rdbInsertJob> &spjob) {        
+        vecbatch.push_back(spjob.release());
+        if (vecbatch.size() >= 64) {
+            queueJobs.enqueue_bulk(vecbatch.data(), vecbatch.size());
+            vecbatch.clear();
+            throttle();
+        }
+    }
+
+    void pauseExecution() {
+        m_lockPause.lock();
+    }
+
+    void resumeExecution() {
+        m_lockPause.unlock();
+    }
+
+    void enqueue(std::function<void()> &&fn) {
+        std::unique_ptr<JobBase> spjob = std::make_unique<rdbFunctionJob>(std::move(fn));
+        queueJobs.enqueue(spjob.release());
+        throttle();
+    }
+
+    void ProcessWhileBlocked() {
+        if ((mstime() - lastPing) > 1000) { // Ping if its been a second or longer
+            listIter li;
+            listNode *ln;
+            listRewind(g_pserver->masters, &li);
+            while ((ln = listNext(&li)))
+            {
+                struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
+                if (mi->masterhost && mi->repl_state == REPL_STATE_TRANSFER)
+                    replicationSendNewlineToMaster(mi);
+            }
+            lastPing = mstime();
+        }
+
+        processEventsWhileBlocked(serverTL - g_pserver->rgthreadvar);
+    }
+
+    size_t ckeys() { return ckeysLoaded; }
+
+    size_t endWork() {
+        if (!vecbatch.empty()) {
+            queueJobs.enqueue_bulk(vecbatch.data(), vecbatch.size());
+            vecbatch.clear();
+        }
+        std::atomic_thread_fence(std::memory_order_seq_cst);    // The queue must have transferred to the consumer before we call fExit
+        serverAssert(fLaunched);
+        fExit = true;
+        if (g_pserver->m_pstorageFactory) {
+            // If we have a storage provider it can take some time to complete and we want to process events in the meantime
+            while (!workerThreadDone) {
+                usleep(10);
+                pauseExecution();
+                ProcessWhileBlocked();
+                resumeExecution();
+            }
+        }
+        m_thread.join();
+        while (cstorageWritesInFlight.load(std::memory_order_seq_cst)) {
+            usleep(10);
+            ProcessWhileBlocked();
+        }
+        fLaunched = false;
+        fExit = false;
+        serverAssert(queueJobs.size_approx() == 0);
+        return ckeysLoaded;
+    }
+
+    void processJob(rdbInsertJob &job) {
+        redisObjectStack keyobj;
+        initStaticStringObject(keyobj,job.key);
+
+        bool f1024thKey = false;
+        bool fStaleMvccKey = (this->rsi) ? mvccFromObj(job.val) < this->rsi->mvccMinThreshold : false;
+
+        /* Check if the key already expired. This function is used when loading
+        * an RDB file from disk, either at startup, or when an RDB was
+        * received from the master. In the latter case, the master is
+        * responsible for key expiry. If we would expire keys here, the
+        * snapshot taken by the master may not be reflected on the replica. */
+        bool fExpiredKey = iAmMaster() && !(this->rdbflags&RDBFLAGS_AOF_PREAMBLE) && job.expiretime != -1 && job.expiretime < this->now;
+        if (fStaleMvccKey || fExpiredKey) {
+            if (fStaleMvccKey && !fExpiredKey && this->rsi != nullptr && this->rsi->mi != nullptr && this->rsi->mi->staleKeyMap != nullptr && lookupKeyRead(job.db, &keyobj) == nullptr) {
+                // We have a key that we've already deleted and is not back in our database.
+                //  We'll need to inform the sending master of the delete if it is also a replica of us
+                robj_sharedptr objKeyDup(createStringObject(job.key, sdslen(job.key)));
+                this->rsi->mi->staleKeyMap->operator[](job.db->id).push_back(objKeyDup);                
+            }
+            sdsfree(job.key);
+            job.key = nullptr;
+            decrRefCount(job.val);
+            job.val = nullptr;
+        } else {
+            /* Add the new object in the hash table */
+            int fInserted = dbMerge(job.db, job.key, job.val, (this->rsi && this->rsi->fForceSetKey) || (this->rdbflags & RDBFLAGS_ALLOW_DUP));   // Note: dbMerge will incrRef
+
+            if (fInserted)
+            {
+                auto ckeys = this->ckeysLoaded.fetch_add(1, std::memory_order_relaxed);
+                f1024thKey = (ckeys % 1024) == 0;
+
+                /* Set the expire time if needed */
+                if (job.expiretime != -1)
+                {
+                    setExpire(NULL,job.db,&keyobj,nullptr,job.expiretime);
+                }
+
+                /* Set usage information (for eviction). */
+                objectSetLRUOrLFU(job.val,job.lfu_freq,job.lru_idle,job.lru_clock,1000);
+
+                /* call key space notification on key loaded for modules only */
+                moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, job.db->id);
+
+                replicationNotifyLoadedKey(job.db, &keyobj, job.val, job.expiretime);
+
+                for (auto &pair : job.vecsubexpires) 
+                {
+                    setExpire(NULL, job.db, &keyobj, pair.first, pair.second);
+                    replicateSubkeyExpire(job.db, &keyobj, pair.first.get(), pair.second);
+                }
+
+                job.val = nullptr;  // don't free this as we moved ownership to the DB
+            }
+        }
+
+        /* If we have a storage provider check if we need to evict some keys to stay under our memory limit,
+        do this every 16 keys to limit the perf impact */
+        if (g_pserver->m_pstorageFactory && f1024thKey)
+        {
+            bool fHighMemory = (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK);
+            if (fHighMemory || f1024thKey)
+            {
+                for (int idb = 0; idb < cserver.dbnum; ++idb)
+                {
+                    if (g_pserver->m_pstorageFactory) {
+                        g_pserver->db[idb]->processChangesAsync(this->cstorageWritesInFlight);
+                        fHighMemory = false;
+                    }
+                }
+                if (fHighMemory)
+                    performEvictions(false /* fPreSnapshot*/);
+            }
+            g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
+            serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
+        }
+    }
+
+    static void loadWorkerThreadMain(rdbAsyncWorkThread *pqueue) {
+        rdbAsyncWorkThread &queue = *pqueue;
+        redisServerThreadVars vars = {};
+        vars.clients_pending_asyncwrite = listCreate();
+        serverTL = &vars;
+        aeSetThreadOwnsLockOverride(true);
+
+        // We will inheret the server thread's affinity mask, clear it as we want to run on a different core.
+        cpu_set_t *cpuset = CPU_ALLOC(std::thread::hardware_concurrency());
+        if (cpuset != nullptr) {
+            size_t size = CPU_ALLOC_SIZE(std::thread::hardware_concurrency());
+            CPU_ZERO_S(size, cpuset);
+            for (unsigned i = 0; i < std::thread::hardware_concurrency(); ++i) {
+                CPU_SET_S(i, size, cpuset);
+            }
+            pthread_setaffinity_np(pthread_self(), size, cpuset);
+            CPU_FREE(cpuset);
+        }
+
+        for (;;) {
+            if (queue.queueJobs.size_approx() == 0) {
+                if (queue.fExit.load(std::memory_order_relaxed))
+                    break;
+            }
+
+            if (queue.fExit.load(std::memory_order_seq_cst) && queue.queueJobs.size_approx() == 0)
+                break;
+
+            vars.gcEpoch = g_pserver->garbageCollector.startEpoch();
+            JobBase *rgjob[64];
+            int cjobs = 0;
+            while ((cjobs = pqueue->queueJobs.wait_dequeue_bulk_timed(rgjob, 64, std::chrono::milliseconds(5))) > 0) {
+                std::unique_lock<fastlock> ulPause(pqueue->m_lockPause);
+
+                for (int ijob = 0; ijob < cjobs; ++ijob) {
+                    JobBase *pjob = rgjob[ijob];
+                    switch (pjob->type)
+                    {
+                    case JobBase::JobType::Insert:
+                        pqueue->processJob(*static_cast<rdbInsertJob*>(pjob));
+                        break;
+
+                    case JobBase::JobType::Function:
+                        static_cast<rdbFunctionJob*>(pjob)->m_fn();
+                        break;
+                    }
+                    delete pjob;
+                }
+            }
+            g_pserver->garbageCollector.endEpoch(vars.gcEpoch);
+        }
+
+        if (g_pserver->m_pstorageFactory) {
+            for (int idb = 0; idb < cserver.dbnum; ++idb)
+                g_pserver->db[idb]->processChangesAsync(queue.cstorageWritesInFlight);
+        }
+
+        queue.workerThreadDone = true;
+        ProcessPendingAsyncWrites();
+        listRelease(vars.clients_pending_asyncwrite);
+        aeSetThreadOwnsLockOverride(false);
+    }
+};
+
 /* Track loading progress in order to serve client's from time to time
    and if needed calculate rdb checksum  */
 void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
@@ -2574,6 +2920,8 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         (g_pserver->loading_process_events_interval_keys &&
         (r->keys_since_last_callback >= g_pserver->loading_process_events_interval_keys)))
     {
+        rdbAsyncWorkThread *pwthread = reinterpret_cast<rdbAsyncWorkThread*>(r->chksum_arg);
+
         listIter li;
         listNode *ln;
         listRewind(g_pserver->masters, &li);
@@ -2584,7 +2932,13 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
                 replicationSendNewlineToMaster(mi);
         }
         loadingProgress(r->processed_bytes);
+
+        if (pwthread)
+            pwthread->pauseExecution();
         processEventsWhileBlocked(serverTL - g_pserver->rgthreadvar);
+        if (pwthread)
+            pwthread->resumeExecution();
+
         processModuleLoadingProgressEvent(0);
 
         robj *ping_argv[1];
@@ -2597,28 +2951,38 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
     }
 }
 
+
 /* Load an RDB file from the rio stream 'rdb'. On success C_OK is returned,
  * otherwise C_ERR is returned and 'errno' is set accordingly. */
 int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     uint64_t dbid = 0;
     int type, rdbver;
-    redisDb *db = g_pserver->db[dbid];
+    redisDb *dbCur = g_pserver->db[dbid];
     char buf[1024];
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now;
     long long lru_clock = 0;
+    unsigned long long ckeysLoaded = 0;
     uint64_t mvcc_tstamp = OBJ_MVCC_INVALID;
-    size_t ckeysLoaded = 0;
+    now = mstime();
+    rdbAsyncWorkThread wqueue(rsi, rdbflags, now);
     robj *subexpireKey = nullptr;
     sds key = nullptr;
     bool fLastKeyExpired = false;
+    std::unique_ptr<rdbInsertJob> spjob;
 
-    for (int idb = 0; idb < cserver.dbnum; ++idb)
-    {
-        g_pserver->db[idb]->trackChanges(true, 1024);
+    // If we're tracking changes we need to reset this
+    bool fTracking = g_pserver->db[0]->FTrackingChanges();
+    if (fTracking) {
+        // We don't want to track here because processChangesAsync is outside the normal scope handling
+        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+            if (g_pserver->db[idb]->processChanges(false))
+                g_pserver->db[idb]->commitChanges();
+        }
     }
 
     rdb->update_cksum = rdbLoadProgressCallback;
+    rdb->chksum_arg = &wqueue;
     rdb->max_processing_chunk = g_pserver->loading_process_events_interval_bytes;
     if (rioRead(rdb,buf,9) == 0) goto eoferr;
     buf[9] = '\0';
@@ -2634,8 +2998,8 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         return C_ERR;
     }
 
-    now = mstime();
     lru_clock = LRU_CLOCK();
+    wqueue.start();
 
     while(1) {
         robj *val;
@@ -2683,7 +3047,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                     "databases. Exiting\n", cserver.dbnum);
                 exit(1);
             }
-            db = g_pserver->db[dbid];
+            dbCur = g_pserver->db[dbid];
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_RESIZEDB) {
             /* RESIZEDB: Hint about the size of the keys in the currently
@@ -2693,7 +3057,11 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 goto eoferr;
             if ((expires_size = rdbLoadLen(rdb,NULL)) == RDB_LENERR)
                 goto eoferr;
-            db->expand(db_size);
+            if (g_pserver->allowRdbResizeOp && !g_pserver->m_pstorageFactory) {
+                wqueue.enqueue([dbCur, db_size]{
+                    dbCur->expand(db_size);
+                });
+            }
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB
@@ -2768,12 +3136,10 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                     }
                 }
                 else {
-                    redisObjectStack keyobj;
-                    initStaticStringObject(keyobj,key);
                     long long expireT = strtoll(szFromObj(auxval), nullptr, 10);
-                    setExpire(NULL, db, &keyobj, subexpireKey, expireT);
-                    replicateSubkeyExpire(db, &keyobj, subexpireKey, expireT);
-                    decrRefCount(subexpireKey);
+                    serverAssert(spjob != nullptr);
+                    serverAssert(sdscmp(key, spjob->key) == 0);
+                    spjob->addSubexpireKey(subexpireKey, expireT);
                     subexpireKey = nullptr;
                 }
             } else {
@@ -2846,7 +3212,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             key = nullptr;
         }
 
-        if ((key = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL)
+        if ((key = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS_SHARED,NULL)) == NULL)
             goto eoferr;
         /* Read value */
         if ((val = rdbLoadObject(type,rdb,key,mvcc_tstamp)) == NULL) {
@@ -2854,7 +3220,20 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             key = nullptr;
             goto eoferr;
         }
+
+
         bool fStaleMvccKey = (rsi) ? mvccFromObj(val) < rsi->mvccMinThreshold : false;
+        if (spjob != nullptr)
+            wqueue.enqueue(spjob);
+        spjob = std::make_unique<rdbInsertJob>();
+        spjob->db = dbCur;
+        spjob->key = sdsdupshared(key);
+        spjob->val = val;
+        spjob->lru_clock = lru_clock;
+        spjob->expiretime = expiretime;
+        spjob->lru_idle = lru_idle;
+        spjob->lfu_freq = lfu_freq;
+        val = nullptr;
 
         /* Check if the key already expired. This function is used when loading
          * an RDB file from disk, either at startup, or when an RDB was
@@ -2864,75 +3243,15 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
          * Similarly if the RDB is the preamble of an AOF file, we want to
          * load all the keys as they are, since the log of operations later
          * assume to work in an exact keyspace state. */
-        redisObjectStack keyobj;
-        initStaticStringObject(keyobj,key);
         bool fExpiredKey = iAmMaster() && !(rdbflags&RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now;
-        if (fStaleMvccKey || fExpiredKey) {
-            if (fStaleMvccKey && !fExpiredKey && rsi != nullptr && rsi->mi != nullptr && rsi->mi->staleKeyMap != nullptr && lookupKeyRead(db, &keyobj) == nullptr) {
-                // We have a key that we've already deleted and is not back in our database.
-                //  We'll need to inform the sending master of the delete if it is also a replica of us
-                robj_sharedptr objKeyDup(createStringObject(key, sdslen(key)));
-                rsi->mi->staleKeyMap->operator[](db->id).push_back(objKeyDup);                
-            }
-            fLastKeyExpired = true;
-            sdsfree(key);
-            key = nullptr;
-            decrRefCount(val);
-            val = nullptr;
-        } else {
-            /* If we have a storage provider check if we need to evict some keys to stay under our memory limit,
-                do this every 16 keys to limit the perf impact */
-            if (g_pserver->m_pstorageFactory && (ckeysLoaded % 128) == 0)
-            {
+        fLastKeyExpired = fStaleMvccKey || fExpiredKey;
+
+        ckeysLoaded++;
+        if (g_pserver->m_pstorageFactory && (ckeysLoaded % 128) == 0)
+        {
+            if (!serverTL->gcEpoch.isReset()) {
                 g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
                 serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
-                bool fHighMemory = (getMaxmemoryState(NULL,NULL,NULL,NULL) != C_OK);
-                if (fHighMemory || (ckeysLoaded % (1024)) == 0)
-                {
-                    for (int idb = 0; idb < cserver.dbnum; ++idb)
-                    {
-                        if (g_pserver->db[idb]->processChanges(false))
-                            g_pserver->db[idb]->commitChanges();
-                        if (fHighMemory && !(rsi && rsi->fForceSetKey)) {
-                            g_pserver->db[idb]->removeAllCachedValues();    // During load we don't go through the normal eviction unless we're merging (i.e. an active replica)
-                            fHighMemory = false;    // we took care of it
-                        }
-                        g_pserver->db[idb]->trackChanges(false, 1024);
-                    }
-                    if (fHighMemory)
-                        performEvictions(false /* fPreSnapshot*/);
-                }
-            }
-            
-            redisObjectStack keyobj;
-            initStaticStringObject(keyobj,key);
-
-            /* Add the new object in the hash table */
-            int fInserted = dbMerge(db, key, val, (rsi && rsi->fForceSetKey) || (rdbflags & RDBFLAGS_ALLOW_DUP));   // Note: dbMerge will incrRef
-            fLastKeyExpired = false;
-
-            if (fInserted)
-            {
-                ++ckeysLoaded;
-
-                /* Set the expire time if needed */
-                if (expiretime != -1)
-                {
-                    setExpire(NULL,db,&keyobj,nullptr,expiretime);
-                }
-
-                /* Set usage information (for eviction). */
-                objectSetLRUOrLFU(val,lfu_freq,lru_idle,lru_clock,1000);
-
-                /* call key space notification on key loaded for modules only */
-                moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, db->id);
-
-                replicationNotifyLoadedKey(db, &keyobj, val, expiretime);
-            }
-            else
-            {
-                decrRefCount(val);
-                val = nullptr;
             }
         }
 
@@ -2947,6 +3266,9 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         lfu_freq = -1;
         lru_idle = -1;
     }
+
+    if (spjob != nullptr)
+        wqueue.enqueue(spjob);
 
     if (key != nullptr)
     {
@@ -2980,11 +3302,14 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         }
     }
 
-    for (int idb = 0; idb < cserver.dbnum; ++idb)
-    {
-        if (g_pserver->db[idb]->processChanges(false))
-            g_pserver->db[idb]->commitChanges();
+    wqueue.endWork();
+    if (fTracking) {
+        // Reset track changes
+        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+            g_pserver->db[idb]->trackChanges(false);
+        }
     }
+
     return C_OK;
 
     /* Unexpected end of file is handled here calling rdbReportReadError():
@@ -2992,6 +3317,14 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
      * the RDB file from a socket during initial SYNC (diskless replica mode),
      * we'll report the error to the caller, so that we can retry. */
 eoferr:
+    if (fTracking) {
+        // Reset track changes
+        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+            g_pserver->db[idb]->trackChanges(false);
+        }
+    }
+
+    wqueue.endWork();
     if (key != nullptr)
     {
         sdsfree(key);

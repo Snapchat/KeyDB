@@ -149,3 +149,13 @@ void StorageCache::beginWriteBatch() {
     serverAssert(GlobalLocksAcquired());    // Otherwise we deadlock
     m_spstorage->beginWriteBatch(); 
 }
+
+void StorageCache::emergencyFreeCache() {
+    dict *d = m_pdict;
+    m_pdict = nullptr;
+    if (d != nullptr) {
+        g_pserver->asyncworkqueue->AddWorkFunction([d]{
+            dictRelease(d);
+        });
+    }
+}

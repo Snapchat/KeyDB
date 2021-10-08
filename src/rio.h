@@ -58,6 +58,7 @@ struct _rio {
      * and len fields pointing to the new block of data to add to the checksum
      * computation. */
     void (*update_cksum)(struct _rio *, const void *buf, size_t len);
+    void *chksum_arg;
 
     /* The current checksum and flags (see RIO_FLAG_*) */
     uint64_t cksum, flags;

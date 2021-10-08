@@ -787,6 +787,7 @@ void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *aftersleep, 
 }
 
 thread_local spin_worker tl_worker = nullptr;
+thread_local bool fOwnLockOverride = false;
 void setAeLockSetThreadSpinWorker(spin_worker worker)
 {
     tl_worker = worker;
@@ -807,9 +808,14 @@ void aeReleaseLock()
     g_lock.unlock();
 }
 
+void aeSetThreadOwnsLockOverride(int fOverride)
+{
+    fOwnLockOverride = fOverride;
+}
+
 int aeThreadOwnsLock()
 {
-    return g_lock.fOwnLock();
+    return fOwnLockOverride || g_lock.fOwnLock();
 }
 
 int aeLockContested(int threshold)

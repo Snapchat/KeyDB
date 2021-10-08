@@ -39,6 +39,9 @@
 #include "rio.h"
 #include "atomicvar.h"
 
+#include <concurrentqueue.h>
+#include <blockingconcurrentqueue.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <cmath>
@@ -1157,12 +1160,14 @@ public:
     void setStorageProvider(StorageCache *pstorage);
 
     void trackChanges(bool fBulk, size_t sizeHint = 0);
+    bool FTrackingChanges() const { return !!m_fTrackingChanges; }
 
     // Process and commit changes for secondary storage.  Note that process and commit are seperated
     //  to allow you to release the global lock before commiting.  To prevent deadlocks you *must*
     //  either release the global lock or keep the same global lock between the two functions as
     //  a second look is kept to ensure writes to secondary storage are ordered
     bool processChanges(bool fSnapshot);
+    void processChangesAsync(std::atomic<int> &pendingJobs);
     void commitChanges(const redisDbPersistentDataSnapshot **psnapshotFree = nullptr);
 
     // This should only be used if you look at the key, we do not fixup
@@ -1180,6 +1185,8 @@ public:
     bool FStorageProvider() { return m_spstorage != nullptr; }
     bool removeCachedValue(const char *key, dictEntry **ppde = nullptr);
     void removeAllCachedValues();
+    void disableKeyCache();
+    bool keycacheIsEnabled();
 
     bool prefetchKeysAsync(client *c, struct parsed_command &command, bool fExecOK);
 
@@ -1327,6 +1334,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::setExpire;
     using redisDbPersistentData::trackChanges;
     using redisDbPersistentData::processChanges;
+    using redisDbPersistentData::processChangesAsync;
     using redisDbPersistentData::commitChanges;
     using redisDbPersistentData::setexpireUnsafe;
     using redisDbPersistentData::setexpire;
@@ -1334,11 +1342,14 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::restoreSnapshot;
     using redisDbPersistentData::removeAllCachedValues;
+    using redisDbPersistentData::disableKeyCache;
+    using redisDbPersistentData::keycacheIsEnabled;
     using redisDbPersistentData::dictUnsafeKeyOnly;
     using redisDbPersistentData::resortExpire;
     using redisDbPersistentData::prefetchKeysAsync;
     using redisDbPersistentData::prepOverwriteForSnapshot;
     using redisDbPersistentData::FRehashing;
+    using redisDbPersistentData::FTrackingChanges;
 
 public:
     expireset::setiter expireitr;
@@ -2300,6 +2311,7 @@ struct redisServer {
     sds aof_child_diff;             /* AOF diff accumulator child side. */
     int aof_rewrite_pending = 0;    /* is a call to aofChildWriteDiffData already queued? */
     /* RDB persistence */
+    int allowRdbResizeOp;           /* Debug situations we may want rehash to be ocurring, so ignore resize */
     long long dirty;                /* Changes to DB from the last save */
     long long dirty_before_bgsave;  /* Used to restore dirty on failed BGSAVE */
     struct _rdbThreadVars

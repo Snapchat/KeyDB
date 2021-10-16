@@ -147,6 +147,7 @@ start_server {tags {"introspection"}} {
             supervised
             syslog-facility
             databases
+            databases-per-namespace
             io-threads
             logfile
             unixsocketperm

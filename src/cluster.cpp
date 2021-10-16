@@ -2196,24 +2196,32 @@ int clusterProcessPacket(clusterLink *link) {
         }
     } else if (type == CLUSTERMSG_TYPE_PUBLISH) {
         robj *channel, *message;
-        uint32_t channel_len, message_len;
+        sds ns_name;
+        redisNamespace *ns;
+        uint32_t ns_len, channel_len, message_len;
+
+        ns_len = ntohl(hdr->data.publish.msg.ns_len);
+        ns_name = sdsnewlen((char*)hdr->data.publish.msg.bulk_data,ns_len);
+        ns = getNamespace(ns_name);
 
         /* Don't bother creating useless objects if there are no
          * Pub/Sub subscribers. */
-        if (dictSize(g_pserver->pubsub_channels) ||
-           dictSize(g_pserver->pubsub_patterns))
+        if (!ns ||
+           dictSize(ns->pubsub_channels) ||
+           dictSize(ns->pubsub_patterns))
         {
             channel_len = ntohl(hdr->data.publish.msg.channel_len);
             message_len = ntohl(hdr->data.publish.msg.message_len);
             channel = createStringObject(
-                        (char*)hdr->data.publish.msg.bulk_data,channel_len);
+                        (char*)hdr->data.publish.msg.bulk_data+ns_len,channel_len);
             message = createStringObject(
-                        (char*)hdr->data.publish.msg.bulk_data+channel_len,
+                        (char*)hdr->data.publish.msg.bulk_data+ns_len+channel_len,
                         message_len);
-            pubsubPublishMessage(channel,message);
+            pubsubPublishMessage(ns,channel,message);
             decrRefCount(channel);
             decrRefCount(message);
         }
+        sdsfree(ns_name);
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST) {
         if (!sender) return 1;  /* We don't know that node. */
         clusterSendFailoverAuthIfNeeded(sender,hdr);
@@ -2754,22 +2762,24 @@ void clusterBroadcastPong(int target) {
 /* Send a PUBLISH message.
  *
  * If link is NULL, then the message is broadcasted to the whole cluster. */
-void clusterSendPublish(clusterLink *link, robj *channel, robj *message) {
+void clusterSendPublish(redisNamespace *ns, clusterLink *link, robj *channel, robj *message) {
     unsigned char *payload;
     clusterMsg buf[1];
     clusterMsg *hdr = (clusterMsg*) buf;
     uint32_t totlen;
-    uint32_t channel_len, message_len;
+    uint32_t channel_len, message_len, ns_len;
 
     channel = getDecodedObject(channel);
     message = getDecodedObject(message);
     channel_len = sdslen(szFromObj(channel));
     message_len = sdslen(szFromObj(message));
+    ns_len = sdslen(ns->name);
 
     clusterBuildMessageHdr(hdr,CLUSTERMSG_TYPE_PUBLISH);
     totlen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
-    totlen += sizeof(clusterMsgDataPublish) - 8 + channel_len + message_len;
+    totlen += sizeof(clusterMsgDataPublish) - 8 + channel_len + message_len + ns_len;
 
+    hdr->data.publish.msg.ns_len = htonl(ns_len);
     hdr->data.publish.msg.channel_len = htonl(channel_len);
     hdr->data.publish.msg.message_len = htonl(message_len);
     hdr->totlen = htonl(totlen);
@@ -2782,7 +2792,8 @@ void clusterSendPublish(clusterLink *link, robj *channel, robj *message) {
         memcpy(payload,hdr,sizeof(*hdr));
         hdr = (clusterMsg*) payload;
     }
-    memcpy(hdr->data.publish.msg.bulk_data,ptrFromObj(channel),sdslen(szFromObj(channel)));
+    memcpy(hdr->data.publish.msg.bulk_data,ns->name,ns_len);
+    memcpy(hdr->data.publish.msg.bulk_data+ns_len,ptrFromObj(channel),sdslen(szFromObj(channel)));
     memcpy(hdr->data.publish.msg.bulk_data+sdslen(szFromObj(channel)),
         ptrFromObj(message),sdslen(szFromObj(message)));
 
@@ -2888,8 +2899,8 @@ int clusterSendModuleMessageToTarget(const char *target, uint64_t module_id, uin
  * cluster. In the future we'll try to get smarter and avoiding propagating those
  * messages to hosts without receives for a given channel.
  * -------------------------------------------------------------------------- */
-void clusterPropagatePublish(robj *channel, robj *message) {
-    clusterSendPublish(NULL, channel, message);
+void clusterPropagatePublish(redisNamespace *ns, robj *channel, robj *message) {
+    clusterSendPublish(ns, NULL, channel, message);
 }
 
 /* -----------------------------------------------------------------------------

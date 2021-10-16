@@ -1316,7 +1316,12 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
         if (rdbSaveType(rdb,RDB_OPCODE_RESIZEDB) == -1) goto werr;
         if (rdbSaveLen(rdb,db_size) == -1) goto werr;
         if (rdbSaveLen(rdb,expires_size) == -1) goto werr;
-        
+
+        if (db->ns != NULL) {
+            if (rdbSaveAuxFieldStrStr(rdb,"keydb-namespace", db->ns->name) == -1) goto werr;
+            if (rdbSaveAuxFieldStrInt(rdb,"keydb-namespace-dbid", db->mapped_id) == -1) goto werr;
+        }
+
         /* Iterate this DB writing every entry */
         size_t ckeysExpired = 0;
         while((de = dictNext(di)) != NULL) {
@@ -2618,6 +2623,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 exit(1);
             }
             db = g_pserver->db+dbid;
+            db->ns = g_pserver->default_namespace;
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_RESIZEDB) {
             /* RESIZEDB: Hint about the size of the keys in the currently
@@ -2710,6 +2716,23 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                     decrRefCount(subexpireKey);
                     subexpireKey = nullptr;
                 }
+            } else if (!strcasecmp(szFromObj(auxkey), "keydb-namespace")) {
+                db->ns = getNamespace(szFromObj(auxval));
+            } else if (!strcasecmp(szFromObj(auxkey), "keydb-namespace-dbid")) {
+                long long max_db = std::min(cserver.dbnum,cserver.ns_dbnum);
+                long long mapped_id = strtoll(szFromObj(auxval),NULL,10);
+                serverAssert(db->ns);
+                serverAssert(mapped_id >= 0);
+                if (mapped_id >= max_db) {
+                    serverLog(LL_WARNING,
+                              "FATAL: Data file was created with a KeyDB "
+                              "server configured to handle more than %d "
+                              "namespaced databases. Exiting\n", cserver.ns_dbnum);
+                    exit(1);
+                }
+
+                db->mapped_id = (int) mapped_id;
+                db->ns->db[db->mapped_id] = db;
             } else {
                 /* We ignore fields we don't understand, as by AUX field
                  * contract. */

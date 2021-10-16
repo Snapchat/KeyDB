@@ -970,6 +970,8 @@ typedef struct clientReplyBlock {
 #endif
 } clientReplyBlock;
 
+struct redisNamespace;
+
 /* Redis database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
@@ -980,6 +982,7 @@ struct redisDb {
     
     ~redisDb();
 
+    redisNamespace *ns;
     ::dict *dict;                 /* The keyspace for this DB */
     expireset *setexpire;
     expireset::setiter expireitr;
@@ -987,10 +990,18 @@ struct redisDb {
     ::dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
     ::dict *ready_keys;           /* Blocked keys that received a PUSH */
     ::dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
-    int id;                     /* Database ID */
+    int id;                     /* Global database ID */
+    int mapped_id;              /* Namespaced database ID */
     long long last_expire_set;  /* when the last expire was set */
     double avg_ttl;             /* Average TTL, just for stats */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
+};
+
+struct redisNamespace {
+    sds name;
+    redisDb **db;
+    ::dict *pubsub_channels;  /* Map channels to list of subscribed clients */
+    ::dict *pubsub_patterns;  /* A dict of pubsub_patterns */
 };
 
 /* Declare database backup that include redis main DBs and slots to keys map.
@@ -1102,6 +1113,7 @@ typedef struct readyList {
 
 typedef struct {
     sds name;       /* The username as an SDS string. */
+    sds ns_name;    /* The namespace of this user as an SDS string. */
     uint64_t flags; /* See USER_FLAG_* */
 
     /* The bit in allowed_commands is set if this user has the right to
@@ -1141,6 +1153,7 @@ typedef struct client {
     connection *conn;
     int resp;               /* RESP protocol version. Can be 2 or 3. */
     redisDb *db;            /* Pointer to currently SELECTed DB. */
+    redisNamespace *ns;     /* Pointer to currently active namespace. */
     robj *name;             /* As set by CLIENT SETNAME. */
     sds querybuf;           /* Buffer we use to accumulate client queries. */
     size_t qb_pos;          /* The position we have read in querybuf. */
@@ -1571,6 +1584,7 @@ struct redisServerConst {
     unsigned long active_defrag_max_scan_fields; /* maximum number of fields of set/hash/zset/list to process from within the main dict scan */
     size_t client_max_querybuf_len; /* Limit for client query buffer length */
     int dbnum;                      /* Total number of configured DBs */
+    int ns_dbnum;                   /* Maximum number of configured databases per namespace */
     int supervised;                 /* 1 if supervised, 0 otherwise. */
     int supervised_mode;            /* See SUPERVISED_* */
     int daemonize;                  /* True if running as a daemon */
@@ -1600,6 +1614,8 @@ struct redisServer {
     std::atomic<int> hz;        /* serverCron() calls frequency in hertz */
     int in_fork_child;          /* indication that this is a fork child */
     redisDb *db;
+    redisNamespace *default_namespace;
+    ::dict *namespaces;
     ::dict *commands;             /* Command table */
     ::dict *orig_commands;        /* Command table before command renaming. */
 
@@ -1901,8 +1917,6 @@ struct redisServer {
     size_t blocking_op_nesting; /* Nesting level of blocking operation, used to reset blocked_last_cron. */
     long long blocked_last_cron; /* Indicate the mstime of the last time we did cron jobs from a blocking operation */
     /* Pubsub */
-    dict *pubsub_channels;  /* Map channels to list of subscribed clients */
-    dict *pubsub_patterns;  /* A dict of pubsub_patterns */
     int notify_keyspace_events; /* Events to propagate via Pub/Sub. This is an
                                    xor of NOTIFY_... flags. */
     /* Cluster */
@@ -2133,6 +2147,9 @@ extern dictType sdsReplyDictType;
 /*-----------------------------------------------------------------------------
  * Functions prototypes
  *----------------------------------------------------------------------------*/
+
+/* Namespaces */
+redisNamespace *getNamespace(const char* name);
 
 /* Modules */
 void moduleInitModulesSystem(void);
@@ -2700,7 +2717,7 @@ int hashZiplistValidateIntegrity(unsigned char *zl, size_t size, int deep);
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(client *c, int notify);
 int pubsubUnsubscribeAllPatterns(client *c, int notify);
-int pubsubPublishMessage(robj *channel, robj *message);
+int pubsubPublishMessage(redisNamespace *ns, robj *channel, robj *message);
 void addReplyPubsubMessage(client *c, robj *channel, robj *msg);
 
 /* Keyspace events notification */
@@ -2807,7 +2824,7 @@ void clusterInit(void);
 extern "C" unsigned short crc16(const char *buf, int len);
 unsigned int keyHashSlot(char *key, int keylen);
 void clusterCron(void);
-void clusterPropagatePublish(robj *channel, robj *message);
+void clusterPropagatePublish(redisNamespace *ns, robj *channel, robj *message);
 void migrateCloseTimedoutSockets(void);
 void clusterBeforeSleep(void);
 int clusterSendModuleMessageToTarget(const char *target, uint64_t module_id, uint8_t type, unsigned char *payload, uint32_t len);

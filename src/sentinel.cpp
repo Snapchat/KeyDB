@@ -734,7 +734,7 @@ void sentinelEvent(int level, const char *type, sentinelRedisInstance *ri,
     if (level != LL_DEBUG) {
         channel = createStringObject(type,strlen(type));
         payload = createStringObject(msg,strlen(msg));
-        pubsubPublishMessage(channel,payload);
+        pubsubPublishMessage(g_pserver->default_namespace, channel,payload);
         decrRefCount(channel);
         decrRefCount(payload);
     }

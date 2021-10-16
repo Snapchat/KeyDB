@@ -101,6 +101,7 @@ sds keyspaceEventsFlagsToString(int flags) {
 void notifyKeyspaceEvent(int type, const char *event, robj *key, int dbid) {
     sds chan;
     robj *chanobj, *eventobj;
+    redisDb *db = g_pserver->db + dbid;
     int len = -1;
     char buf[24];
 
@@ -108,7 +109,7 @@ void notifyKeyspaceEvent(int type, const char *event, robj *key, int dbid) {
      * This bypasses the notifications configuration, but the module engine
      * will only call event subscribers if the event type matches the types
      * they are interested in. */
-     moduleNotifyKeyspaceEvent(type, event, key, dbid);
+    moduleNotifyKeyspaceEvent(type, event, key, dbid);
 
     /* If notifications for this class of events are off, return ASAP. */
     if (!(g_pserver->notify_keyspace_events & type)) return;
@@ -118,24 +119,24 @@ void notifyKeyspaceEvent(int type, const char *event, robj *key, int dbid) {
     /* __keyspace@<db>__:<key> <event> notifications. */
     if (g_pserver->notify_keyspace_events & NOTIFY_KEYSPACE) {
         chan = sdsnewlen("__keyspace@",11);
-        len = ll2string(buf,sizeof(buf),dbid);
+        len = ll2string(buf,sizeof(buf), db->mapped_id);
         chan = sdscatlen(chan, buf, len);
         chan = sdscatlen(chan, "__:", 3);
         chan = sdscatsds(chan, szFromObj(key));
         chanobj = createObject(OBJ_STRING, chan);
-        pubsubPublishMessage(chanobj, eventobj);
+        pubsubPublishMessage(db->ns, chanobj, eventobj);
         decrRefCount(chanobj);
     }
 
     /* __keyevent@<db>__:<event> <key> notifications. */
     if (g_pserver->notify_keyspace_events & NOTIFY_KEYEVENT) {
         chan = sdsnewlen("__keyevent@",11);
-        if (len == -1) len = ll2string(buf,sizeof(buf),dbid);
+        if (len == -1) len = ll2string(buf,sizeof(buf),db->mapped_id);
         chan = sdscatlen(chan, buf, len);
         chan = sdscatlen(chan, "__:", 3);
         chan = sdscatsds(chan, szFromObj(eventobj));
         chanobj = createObject(OBJ_STRING, chan);
-        pubsubPublishMessage(chanobj, key);
+        pubsubPublishMessage(db->ns, chanobj, key);
         decrRefCount(chanobj);
     }
     decrRefCount(eventobj);

@@ -145,10 +145,10 @@ int pubsubSubscribeChannel(client *c, robj *channel) {
         retval = 1;
         incrRefCount(channel);
         /* Add the client to the channel -> list of clients hash table */
-        de = dictFind(g_pserver->pubsub_channels,channel);
+        de = dictFind(c->ns->pubsub_channels,channel);
         if (de == NULL) {
             clients = listCreate();
-            dictAdd(g_pserver->pubsub_channels,channel,clients);
+            dictAdd(c->ns->pubsub_channels,channel,clients);
             incrRefCount(channel);
         } else {
             clients = (list*)dictGetVal(de);
@@ -174,7 +174,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify) {
     if (dictDelete(c->pubsub_channels,channel) == DICT_OK) {
         retval = 1;
         /* Remove the client from the channel -> clients list hash table */
-        de = dictFind(g_pserver->pubsub_channels,channel);
+        de = dictFind(c->ns->pubsub_channels,channel);
         serverAssertWithInfo(c,NULL,de != NULL);
         clients = (list*)dictGetVal(de);
         ln = listSearchKey(clients,c);
@@ -184,7 +184,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify) {
             /* Free the list and associated hash entry at all if this was
              * the latest client, so that it will be possible to abuse
              * Redis PUBSUB creating millions of channels. */
-            dictDelete(g_pserver->pubsub_channels,channel);
+            dictDelete(c->ns->pubsub_channels,channel);
         }
     }
     /* Notify the client */
@@ -205,10 +205,10 @@ int pubsubSubscribePattern(client *c, robj *pattern) {
         listAddNodeTail(c->pubsub_patterns,pattern);
         incrRefCount(pattern);
         /* Add the client to the pattern -> list of clients hash table */
-        de = dictFind(g_pserver->pubsub_patterns,pattern);
+        de = dictFind(c->ns->pubsub_patterns,pattern);
         if (de == NULL) {
             clients = listCreate();
-            dictAdd(g_pserver->pubsub_patterns,pattern,clients);
+            dictAdd(c->ns->pubsub_patterns,pattern,clients);
             incrRefCount(pattern);
         } else {
             clients = (list*)dictGetVal(de);
@@ -233,7 +233,7 @@ int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
         retval = 1;
         listDelNode(c->pubsub_patterns,ln);
         /* Remove the client from the pattern -> clients list hash table */
-        de = dictFind(g_pserver->pubsub_patterns,pattern);
+        de = dictFind(c->ns->pubsub_patterns,pattern);
         serverAssertWithInfo(c,NULL,de != NULL);
         clients = (list*)dictGetVal(de);
         ln = listSearchKey(clients,c);
@@ -242,7 +242,7 @@ int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
         if (listLength(clients) == 0) {
             /* Free the list and associated hash entry at all if this was
              * the latest client. */
-            dictDelete(g_pserver->pubsub_patterns,pattern);
+            dictDelete(c->ns->pubsub_patterns,pattern);
         }
     }
     /* Notify the client */
@@ -291,8 +291,9 @@ int pubsubUnsubscribeAllPatterns(client *c, int notify) {
 }
 
 /* Publish a message */
-int pubsubPublishMessage(robj *channel, robj *message) {
+int pubsubPublishMessage(redisNamespace *ns, robj *channel, robj *message) {
     serverAssert(GlobalLocksAcquired());
+    serverAssert(ns);
     int receivers = 0;
     dictEntry *de;
     dictIterator *di;
@@ -300,7 +301,7 @@ int pubsubPublishMessage(robj *channel, robj *message) {
     listIter li;
 
     /* Send to clients listening for that channel */
-    de = dictFind(g_pserver->pubsub_channels,channel);
+    de = dictFind(ns->pubsub_channels,channel);
     if (de) {
         list *list = reinterpret_cast<::list*>(dictGetVal(de));
         listNode *ln;
@@ -320,7 +321,7 @@ int pubsubPublishMessage(robj *channel, robj *message) {
         }
     }
     /* Send to clients listening to matching channels */
-    di = dictGetIterator(g_pserver->pubsub_patterns);
+    di = dictGetIterator(ns->pubsub_patterns);
     if (di) {
         channel = getDecodedObject(channel);
         while((de = dictNext(di)) != NULL) {
@@ -423,9 +424,9 @@ void punsubscribeCommand(client *c) {
 
 /* PUBLISH <channel> <message> */
 void publishCommand(client *c) {
-    int receivers = pubsubPublishMessage(c->argv[1],c->argv[2]);
+    int receivers = pubsubPublishMessage(c->ns,c->argv[1],c->argv[2]);
     if (g_pserver->cluster_enabled)
-        clusterPropagatePublish(c->argv[1],c->argv[2]);
+        clusterPropagatePublish(c->ns,c->argv[1],c->argv[2]);
     else
         forceCommandPropagation(c,PROPAGATE_REPL);
     addReplyLongLong(c,receivers);
@@ -450,7 +451,7 @@ NULL
     {
         /* PUBSUB CHANNELS [<pattern>] */
         sds pat = (c->argc == 2) ? NULL : szFromObj(c->argv[2]);
-        dictIterator *di = dictGetIterator(g_pserver->pubsub_channels);
+        dictIterator *di = dictGetIterator(c->ns->pubsub_channels);
         dictEntry *de;
         long mblen = 0;
         void *replylen;
@@ -475,14 +476,14 @@ NULL
 
         addReplyArrayLen(c,(c->argc-2)*2);
         for (j = 2; j < c->argc; j++) {
-            list *l = (list*)dictFetchValue(g_pserver->pubsub_channels,c->argv[j]);
+            list *l = (list*)dictFetchValue(c->ns->pubsub_channels,c->argv[j]);
 
             addReplyBulk(c,c->argv[j]);
             addReplyLongLong(c,l ? listLength(l) : 0);
         }
     } else if (!strcasecmp(szFromObj(c->argv[1]),"numpat") && c->argc == 2) {
         /* PUBSUB NUMPAT */
-        addReplyLongLong(c,dictSize(g_pserver->pubsub_patterns));
+        addReplyLongLong(c,dictSize(c->ns->pubsub_patterns));
     } else {
         addReplySubcommandSyntaxError(c);
     }

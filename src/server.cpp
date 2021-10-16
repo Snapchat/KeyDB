@@ -1602,6 +1602,18 @@ dictType modulesDictType = {
     NULL                        /* allow to expand */
 };
 
+/* Namespaces dictionary type. Keys are namespace name,
+ * values are pointer to redisNamespace struct. */
+dictType namespaceDictType = {
+        dictSdsCaseHash,            /* hash function */
+        NULL,                       /* key dup */
+        NULL,                       /* val dup */
+        dictSdsKeyCaseCompare,      /* key compare */
+        dictSdsDestructor,          /* key destructor */
+        NULL,                       /* val destructor */
+        NULL                        /* allow to expand */
+};
+
 /* Migrate cache dict type. */
 dictType migrateCacheDictType = {
     dictSdsHash,                /* hash function */
@@ -3472,17 +3484,38 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     }
 }
 
+redisNamespace *getNamespace(const char* name) {
+    sds ns_name = sdsnew(name);
+    redisNamespace *ns = (redisNamespace *) dictFetchValue(g_pserver->namespaces, ns_name);
+    if (ns == NULL) {
+        ns = (redisNamespace *)zmalloc(sizeof(redisNamespace), MALLOC_LOCAL);
+        ns = new(ns) redisNamespace;
+        ns->name = sdsnew(ns_name);
+        ns->pubsub_channels = dictCreate(&keylistDictType,NULL);
+        ns->pubsub_patterns = dictCreate(&keylistDictType,NULL);
+        ns->db = (redisDb**)zmalloc(sizeof(redisDb*)*std::min(cserver.dbnum,cserver.ns_dbnum), MALLOC_LOCAL);
+        dictAdd(g_pserver->namespaces, sdsnew(ns_name), ns);
+    }
+    sdsfree(ns_name);
+
+    return ns;
+}
+
 void initServer(void) {
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
     makeThreadKillable();
 
+    g_pserver->namespaces = dictCreate(&namespaceDictType,NULL);
+    g_pserver->default_namespace = getNamespace("::");
+
     g_pserver->db = (redisDb*)zmalloc(sizeof(redisDb)*cserver.dbnum, MALLOC_LOCAL);
 
     /* Create the Redis databases, and initialize other internal state. */
     for (int j = 0; j < cserver.dbnum; j++) {
         new (&g_pserver->db[j]) redisDb;
+        g_pserver->db[j].ns = g_pserver->default_namespace;
         g_pserver->db[j].dict = dictCreate(&dbDictType,NULL);
         g_pserver->db[j].setexpire = new(MALLOC_LOCAL) expireset();
         g_pserver->db[j].expireitr = g_pserver->db[j].setexpire->end();
@@ -3490,6 +3523,7 @@ void initServer(void) {
         g_pserver->db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
         g_pserver->db[j].watched_keys = dictCreate(&keylistDictType,NULL);
         g_pserver->db[j].id = j;
+        g_pserver->db[j].mapped_id = j;
         g_pserver->db[j].avg_ttl = 0;
         g_pserver->db[j].last_expire_set = 0;
         g_pserver->db[j].defrag_later = listCreate();
@@ -3541,8 +3575,6 @@ void initServer(void) {
     serverLog(LL_NOTICE, "monotonic clock: %s", clk_msg);
 
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
-    g_pserver->pubsub_channels = dictCreate(&keylistDictType,NULL);
-    g_pserver->pubsub_patterns = dictCreate(&keylistDictType,NULL);
     g_pserver->cronloops = 0;
     g_pserver->propagate_in_transaction = 0;
     g_pserver->client_pause_in_transaction = 0;
@@ -5409,8 +5441,8 @@ sds genRedisInfoString(const char *section) {
             g_pserver->stat_evictedkeys,
             g_pserver->stat_keyspace_hits,
             g_pserver->stat_keyspace_misses,
-            dictSize(g_pserver->pubsub_channels),
-            dictSize(g_pserver->pubsub_patterns),
+            dictSize(g_pserver->default_namespace->pubsub_channels),
+            dictSize(g_pserver->default_namespace->pubsub_patterns),
             g_pserver->stat_fork_time,
             g_pserver->stat_total_forks,
             dictSize(g_pserver->migrate_cached_sockets),

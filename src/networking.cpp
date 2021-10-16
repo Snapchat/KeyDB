@@ -146,6 +146,7 @@ client *createClient(connection *conn, int iel) {
     c->iel = iel;
     fastlock_init(&c->lock, "client");
     c->id = client_id;
+    c->ns = g_pserver->default_namespace;
     c->resp = 2;
     c->conn = conn;
     c->name = NULL;
@@ -2732,7 +2733,7 @@ sds catClientInfoString(sds s, client *client) {
         total_mem += zmalloc_size(client->argv);
 
     return sdscatfmt(s,
-        "id=%U addr=%s laddr=%s %s name=%s age=%I idle=%I flags=%s db=%i sub=%i psub=%i multi=%i qbuf=%U qbuf-free=%U argv-mem=%U obl=%U oll=%U omem=%U tot-mem=%U events=%s cmd=%s user=%s redir=%I",
+        "id=%U addr=%s laddr=%s %s name=%s age=%I idle=%I flags=%s db=%i sub=%i psub=%i multi=%i qbuf=%U qbuf-free=%U argv-mem=%U obl=%U oll=%U omem=%U tot-mem=%U events=%s cmd=%s user=%s redir=%I ns=%s",
         (unsigned long long) client->id,
         getClientPeerId(client),
         getClientSockname(client),
@@ -2741,7 +2742,7 @@ sds catClientInfoString(sds s, client *client) {
         (long long)(g_pserver->unixtime - client->ctime),
         (long long)(g_pserver->unixtime - client->lastinteraction),
         flags,
-        client->db->id,
+        client->db->mapped_id,
         (int) dictSize(client->pubsub_channels),
         (int) listLength(client->pubsub_patterns),
         (client->flags & CLIENT_MULTI) ? client->mstate.count : -1,
@@ -2755,7 +2756,8 @@ sds catClientInfoString(sds s, client *client) {
         events,
         client->lastcmd ? client->lastcmd->name : "NULL",
         client->user ? client->user->name : "(superuser)",
-        (client->flags & CLIENT_TRACKING) ? (long long) client->client_tracking_redirection : -1);
+        (client->flags & CLIENT_TRACKING) ? (long long) client->client_tracking_redirection : -1,
+        client->ns->name);
 }
 
 sds getAllClientsInfoString(int type) {
@@ -2845,6 +2847,8 @@ void resetCommand(client *c) {
 
     pubsubUnsubscribeAllChannels(c,0);
     pubsubUnsubscribeAllPatterns(c,0);
+
+    c->ns = g_pserver->default_namespace;
 
     if (c->name) {
         decrRefCount(c->name);

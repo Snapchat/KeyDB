@@ -2097,10 +2097,9 @@ int RM_GetClientInfoById(void *ci, uint64_t id) {
 
 /* Publish a message to subscribers (see PUBLISH command). */
 int RM_PublishMessage(RedisModuleCtx *ctx, RedisModuleString *channel, RedisModuleString *message) {
-    UNUSED(ctx);
-    int receivers = pubsubPublishMessage(channel, message);
+    int receivers = pubsubPublishMessage(ctx->client->ns, channel, message);
     if (g_pserver->cluster_enabled)
-        clusterPropagatePublish(channel, message);
+        clusterPropagatePublish(ctx->client->ns, channel, message);
     return receivers;
 }
 

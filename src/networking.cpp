@@ -2694,7 +2694,7 @@ void readQueryFromClient(connection *conn) {
         return;
     }
 
-    if (cserver.cthreads > 1) {
+    if (cserver.cthreads > 1 || g_pserver->m_pstorageFactory) {
         parseClientCommandBuffer(c);
         serverTL->vecclientsProcess.push_back(c);
     } else {

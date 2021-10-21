@@ -2547,7 +2547,7 @@ void parseClientCommandBuffer(client *c) {
         }
 
         /* Prefetch outside the lock for better perf */
-        if (g_pserver->prefetch_enabled && cserver.cthreads > 1 && cqueriesStart < c->vecqueuedcmd.size() &&
+        if (g_pserver->prefetch_enabled && (cserver.cthreads > 1 || g_pserver->m_pstorageFactory) && cqueriesStart < c->vecqueuedcmd.size() &&
             (g_pserver->m_pstorageFactory || aeLockContested(cserver.cthreads/2) || cserver.cthreads == 1) && !GlobalLocksAcquired()) {
             auto &query = c->vecqueuedcmd.back();
             if (query.argc > 0 && query.argc == query.argcMax) {
@@ -2694,7 +2694,7 @@ void readQueryFromClient(connection *conn) {
         return;
     }
 
-    if (cserver.cthreads > 1) {
+    if (cserver.cthreads > 1 || g_pserver->m_pstorageFactory) {
         parseClientCommandBuffer(c);
         serverTL->vecclientsProcess.push_back(c);
     } else {

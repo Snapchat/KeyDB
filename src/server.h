@@ -471,8 +471,11 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                                            and AOF client */
 #define CLIENT_REPL_RDBONLY (1ULL<<42) /* This client is a replica that only wants
                                           RDB without replication buffer. */
+<<<<<<< HEAD
 #define CLIENT_PREVENT_LOGGING (1ULL<<43)  /* Prevent logging of command to slowlog */
 #define CLIENT_FORCE_REPLY (1ULL<<44) /* Should addReply be forced to write the text? */
+=======
+>>>>>>> 6.2.6
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -1285,9 +1288,14 @@ struct sharedObjectsStruct {
     *emptyscan, *multi, *exec, *left, *right, *hset, *srem, *xgroup, *xclaim,  
     *script, *replconf, *eval, *persist, *set, *pexpireat, *pexpire, 
     *time, *pxat, *px, *retrycount, *force, *justid, 
+<<<<<<< HEAD
     *lastid, *ping, *replping, *setid, *keepttl, *load, *createconsumer,
     *getack, *special_asterick, *special_equals, *default_username,
     *hdel, *zrem, *mvccrestore, *pexpirememberat,
+=======
+    *lastid, *ping, *setid, *keepttl, *load, *createconsumer,
+    *getack, *special_asterick, *special_equals, *default_username, *redacted,
+>>>>>>> 6.2.6
     *select[PROTO_SHARED_SELECT_CMDS],
     *integers[OBJ_SHARED_INTEGERS],
     *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
@@ -2165,6 +2173,7 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data);
 void processModuleLoadingProgressEvent(int is_aof);
 int moduleTryServeClientBlockedOnKey(client *c, robj *key);
 void moduleUnblockClient(client *c);
+int moduleBlockedClientMayTimeout(client *c);
 int moduleClientIsBlockedOnKeys(client *c);
 void moduleNotifyUserChanged(client *c);
 void moduleNotifyKeyUnlink(robj *key, robj *val);
@@ -2180,9 +2189,15 @@ extern "C" void getRandomHexChars(char *p, size_t len);
 extern "C" void getRandomBytes(unsigned char *p, size_t len);
 uint64_t crc64(uint64_t crc, const unsigned char *s, uint64_t l);
 void exitFromChild(int retcode);
+<<<<<<< HEAD
 size_t redisPopcount(const void *s, long count);
 int redisSetProcTitle(const char *title);
 int validateProcTitleTemplate(const char *_template);
+=======
+long long redisPopcount(void *s, long count);
+int redisSetProcTitle(char *title);
+int validateProcTitleTemplate(const char *template);
+>>>>>>> 6.2.6
 int redisCommunicateSystemd(const char *sd_notify_msg);
 void redisSetCpuAffinity(const char *cpulist);
 
@@ -2226,6 +2241,7 @@ void addReplyErrorSds(client *c, sds err);
 void addReplyError(client *c, const char *err);
 void addReplyStatus(client *c, const char *status);
 void addReplyDouble(client *c, double d);
+void addReplyBigNum(client *c, const char* num, size_t len);
 void addReplyHumanLongDouble(client *c, long double d);
 void addReplyLongLong(client *c, long long ll);
 #ifdef __cplusplus
@@ -2253,9 +2269,15 @@ sds getAllClientsInfoString(int type);
 void rewriteClientCommandVector(client *c, int argc, ...);
 void rewriteClientCommandArgument(client *c, int i, robj *newval);
 void replaceClientCommandVector(client *c, int argc, robj **argv);
+void redactClientCommandArgument(client *c, int argc);
 unsigned long getClientOutputBufferMemoryUsage(client *c);
+<<<<<<< HEAD
 int freeClientsInAsyncFreeQueue(int iel);
 void asyncCloseClientOnOutputBufferLimitReached(client *c);
+=======
+int freeClientsInAsyncFreeQueue(void);
+int closeClientOnOutputBufferLimitReached(client *c, int async);
+>>>>>>> 6.2.6
 int getClientType(client *c);
 int getClientTypeByName(const char *name);
 const char *getClientTypeName(int cclass);
@@ -2282,6 +2304,7 @@ void unprotectClient(client *c);
 
 void ProcessPendingAsyncWrites(void);
 client *lookupClientByID(uint64_t id);
+int authRequired(client *c);
 
 #ifdef __GNUC__
 void addReplyErrorFormat(client *c, const char *fmt, ...)
@@ -2332,6 +2355,7 @@ void initClientMultiState(client *c);
 void freeClientMultiState(client *c);
 void queueMultiCommand(client *c);
 void touchWatchedKey(redisDb *db, robj *key);
+int isWatchedKeyExpired(client *c);
 void touchAllWatchedKeysInDb(redisDb *emptied, redisDb *replaced_with);
 void discardTransaction(client *c);
 void flagTransaction(client *c);
@@ -2357,6 +2381,8 @@ robj *createObject(int type, void *ptr);
 robj *createStringObject(const char *ptr, size_t len);
 robj *createRawStringObject(const char *ptr, size_t len);
 robj *createEmbeddedStringObject(const char *ptr, size_t len);
+robj *tryCreateRawStringObject(const char *ptr, size_t len);
+robj *tryCreateStringObject(const char *ptr, size_t len);
 robj *dupStringObject(const robj *o);
 int isSdsRepresentableAsLongLong(const char *s, long long *llval);
 int isObjectRepresentableAsLongLong(robj *o, long long *llongval);
@@ -2566,8 +2592,13 @@ unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range);
 unsigned char *zzlLastInRange(unsigned char *zl, zrangespec *range);
 unsigned long zsetLength(robj_roptr zobj);
 void zsetConvert(robj *zobj, int encoding);
+<<<<<<< HEAD
 void zsetConvertToZiplistIfNeeded(robj *zobj, size_t maxelelen);
 int zsetScore(robj_roptr zobj, sds member, double *score);
+=======
+void zsetConvertToZiplistIfNeeded(robj *zobj, size_t maxelelen, size_t totelelen);
+int zsetScore(robj *zobj, sds member, double *score);
+>>>>>>> 6.2.6
 unsigned long zslGetRank(zskiplist *zsl, double score, sds o);
 int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, double *newscore);
 long zsetRank(robj_roptr zobj, sds ele, int reverse);
@@ -2610,7 +2641,6 @@ void redisOpArrayInit(redisOpArray *oa);
 void redisOpArrayFree(redisOpArray *oa);
 void forceCommandPropagation(client *c, int flags);
 void preventCommandPropagation(client *c);
-void preventCommandLogging(client *c);
 void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
 void slowlogPushCurrentCommand(client *c, struct redisCommand *cmd, ustime_t duration);
@@ -2715,10 +2745,16 @@ void initConfigValues();
 
 /* db.c -- Keyspace access API */
 int removeExpire(redisDb *db, robj *key);
+<<<<<<< HEAD
 int removeExpireCore(redisDb *db, robj *key, dictEntry *de);
 int removeSubkeyExpire(redisDb *db, robj *key, robj *subkey);
 void propagateExpire(redisDb *db, robj *key, int lazy);
 void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey);
+=======
+void deleteExpiredKeyAndPropagate(redisDb *db, robj *keyobj);
+void propagateExpire(redisDb *db, robj *key, int lazy);
+int keyIsExpired(redisDb *db, robj *key);
+>>>>>>> 6.2.6
 int expireIfNeeded(redisDb *db, robj *key);
 expireEntry *getExpire(redisDb *db, robj_roptr key);
 void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when);
@@ -2730,8 +2766,14 @@ robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply);
 robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply);
 robj_roptr lookupKeyReadWithFlags(redisDb *db, robj *key, int flags);
 robj *lookupKeyWriteWithFlags(redisDb *db, robj *key, int flags);
+<<<<<<< HEAD
 robj_roptr objectCommandLookup(client *c, robj *key);
 robj_roptr objectCommandLookupOrReply(client *c, robj *key, robj *reply);
+=======
+robj *objectCommandLookup(client *c, robj *key);
+robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply);
+void SentReplyOnKeyMiss(client *c, robj *reply);
+>>>>>>> 6.2.6
 int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
                        long long lru_clock, int lru_multiplier);
 #define LOOKUP_NONE 0

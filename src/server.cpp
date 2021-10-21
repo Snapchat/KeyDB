@@ -743,7 +743,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"auth",authCommand,-2,
-     "no-auth no-script ok-loading ok-stale fast no-monitor no-slowlog @connection",
+     "no-auth no-script ok-loading ok-stale fast @connection",
      0,NULL,0,0,0,0,0,0},
 
     /* We don't allow PING during loading since in Redis PING is used as
@@ -790,7 +790,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"exec",execCommand,1,
-     "no-script no-monitor no-slowlog ok-loading ok-stale @transaction",
+     "no-script no-slowlog ok-loading ok-stale @transaction",
      0,NULL,0,0,0,0,0,0},
 
     {"discard",discardCommand,1,
@@ -911,7 +911,7 @@ struct redisCommand redisCommandTable[] = {
 
     {"migrate",migrateCommand,-6,
      "write random @keyspace @dangerous",
-     0,migrateGetKeys,0,0,0,0,0,0},
+     0,migrateGetKeys,3,3,1,0,0,0},
 
     {"asking",askingCommand,1,
      "fast @keyspace",
@@ -942,17 +942,21 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"hello",helloCommand,-1,
-     "no-auth no-script fast no-monitor ok-loading ok-stale @connection",
+     "no-auth no-script fast ok-loading ok-stale @connection",
      0,NULL,0,0,0,0,0,0},
 
     /* EVAL can modify the dataset, however it is not flagged as a write
-     * command since we do the check while running commands from Lua. */
+     * command since we do the check while running commands from Lua.
+     * 
+     * EVAL and EVALSHA also feed monitors before the commands are executed,
+     * as opposed to after.
+      */
     {"eval",evalCommand,-3,
-     "no-script may-replicate @scripting",
+     "no-script no-monitor may-replicate @scripting",
      0,evalGetKeys,0,0,0,0,0,0},
 
     {"evalsha",evalShaCommand,-3,
-     "no-script may-replicate @scripting",
+     "no-script no-monitor may-replicate @scripting",
      0,evalGetKeys,0,0,0,0,0,0},
 
     {"slowlog",slowlogCommand,-2,
@@ -1904,6 +1908,7 @@ void clientsCron(int iel) {
         /* Rotate the list, take the current head, process.
          * This way if the client must be removed from the list it's the
          * first element and we don't incur into O(N) computation. */
+<<<<<<< HEAD:src/server.cpp
         listRotateTailToHead(g_pserver->clients);
         head = (listNode*)listFirst(g_pserver->clients);
         c = (client*)listNodeValue(head);
@@ -1920,6 +1925,19 @@ void clientsCron(int iel) {
         LContinue:
             fastlock_unlock(&c->lock);
         }        
+=======
+        listRotateTailToHead(server.clients);
+        head = listFirst(server.clients);
+        c = listNodeValue(head);
+        /* The following functions do different service checks on the client.
+         * The protocol is that they return non-zero if the client was
+         * terminated. */
+        if (clientsCronHandleTimeout(c,now)) continue;
+        if (clientsCronResizeQueryBuffer(c)) continue;
+        if (clientsCronTrackExpansiveClients(c, curr_peak_mem_usage_slot)) continue;
+        if (clientsCronTrackClientsMemUsage(c)) continue;
+        if (closeClientOnOutputBufferLimitReached(c, 0)) continue;
+>>>>>>> 6.2.6:src/server.c
     }
 
     /* Free any pending clients */
@@ -2761,6 +2779,7 @@ void createSharedObjects(void) {
     shared.eval = makeObjectShared("EVAL",4);
 
     /* Shared command argument */
+<<<<<<< HEAD:src/server.cpp
     shared.left = makeObjectShared("left",4);
     shared.right = makeObjectShared("right",5);
     shared.pxat = makeObjectShared("PXAT", 4);
@@ -2786,6 +2805,27 @@ void createSharedObjects(void) {
     shared.zrem = makeObjectShared(createStringObject("ZREM", 4));
     shared.mvccrestore = makeObjectShared(createStringObject("KEYDB.MVCCRESTORE", 17));
     shared.pexpirememberat = makeObjectShared(createStringObject("PEXPIREMEMBERAT",15));
+=======
+    shared.left = createStringObject("left",4);
+    shared.right = createStringObject("right",5);
+    shared.pxat = createStringObject("PXAT", 4);
+    shared.px = createStringObject("PX",2);
+    shared.time = createStringObject("TIME",4);
+    shared.retrycount = createStringObject("RETRYCOUNT",10);
+    shared.force = createStringObject("FORCE",5);
+    shared.justid = createStringObject("JUSTID",6);
+    shared.lastid = createStringObject("LASTID",6);
+    shared.default_username = createStringObject("default",7);
+    shared.ping = createStringObject("ping",4);
+    shared.setid = createStringObject("SETID",5);
+    shared.keepttl = createStringObject("KEEPTTL",7);
+    shared.load = createStringObject("LOAD",4);
+    shared.createconsumer = createStringObject("CREATECONSUMER",14);
+    shared.getack = createStringObject("GETACK",6);
+    shared.special_asterick = createStringObject("*",1);
+    shared.special_equals = createStringObject("=",1);
+    shared.redacted = makeObjectShared(createStringObject("(redacted)",10));
+>>>>>>> 6.2.6:src/server.c
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =
@@ -2962,6 +3002,7 @@ void initServerConfig(void) {
 
     /* By default we want scripts to be always replicated by effects
      * (single commands executed by the script), and not by sending the
+<<<<<<< HEAD:src/server.cpp
      * script to the replica / AOF. This is the new way starting from
      * Redis 5. However it is possible to revert it via keydb.conf. */
     g_pserver->lua_always_replicate_commands = 1;
@@ -2970,6 +3011,16 @@ void initServerConfig(void) {
     cserver.cthreads = CONFIG_DEFAULT_THREADS;
     cserver.fThreadAffinity = CONFIG_DEFAULT_THREAD_AFFINITY;
     cserver.threadAffinityOffset = 0;
+=======
+     * script to the slave / AOF. This is the new way starting from
+     * Redis 5. However it is possible to revert it via redis.conf. */
+    server.lua_always_replicate_commands = 1;
+
+    /* Client Pause related */
+    server.client_pause_type = CLIENT_PAUSE_OFF;
+    server.client_pause_end_time = 0;   
+
+>>>>>>> 6.2.6:src/server.c
     initConfigValues();
 }
 
@@ -3910,12 +3961,6 @@ void preventCommandPropagation(client *c) {
     c->flags |= CLIENT_PREVENT_PROP;
 }
 
-/* Avoid logging any information about this client's arguments
- * since they contain sensitive information. */
-void preventCommandLogging(client *c) {
-    c->flags |= CLIENT_PREVENT_LOGGING;
-}
-
 /* AOF specific version of preventCommandPropagation(). */
 void preventCommandAOF(client *c) {
     c->flags |= CLIENT_PREVENT_AOF_PROP;
@@ -3929,7 +3974,7 @@ void preventCommandReplication(client *c) {
 /* Log the last command a client executed into the slowlog. */
 void slowlogPushCurrentCommand(client *c, struct redisCommand *cmd, ustime_t duration) {
     /* Some commands may contain sensitive data that should not be available in the slowlog. */
-    if ((c->flags & CLIENT_PREVENT_LOGGING) || (cmd->flags & CMD_SKIP_SLOWLOG))
+    if (cmd->flags & CMD_SKIP_SLOWLOG)
         return;
 
     /* If command argument vector was rewritten, use the original
@@ -3984,6 +4029,7 @@ void call(client *c, int flags) {
     serverAssert(GlobalLocksAcquired());
     static long long prev_err_count;
 
+<<<<<<< HEAD:src/server.cpp
     serverTL->fixed_time_expire++;
 
     /* Send the command to clients in MONITOR mode if applicable.
@@ -4002,6 +4048,8 @@ void call(client *c, int flags) {
         ProcessPendingAsyncWrites();
     }
 
+=======
+>>>>>>> 6.2.6:src/server.c
     /* Initialization: clear the flags that must be set by the command on
      * demand, and initialize the array for additional commands propagation. */
     c->flags &= ~(CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP);
@@ -4009,10 +4057,22 @@ void call(client *c, int flags) {
     redisOpArrayInit(&g_pserver->also_propagate);
 
     /* Call the command. */
+<<<<<<< HEAD:src/server.cpp
     dirty = g_pserver->dirty;
     prev_err_count = g_pserver->stat_total_error_replies;
     updateCachedTime(0);
     incrementMvccTstamp();
+=======
+    dirty = server.dirty;
+    prev_err_count = server.stat_total_error_replies;
+
+    /* Update cache time, in case we have nested calls we want to
+     * update only on the first call*/
+    if (server.fixed_time_expire++ == 0) {
+        updateCachedTime(0);
+    }
+
+>>>>>>> 6.2.6:src/server.c
     elapsedStart(&call_timer);
     try {
         c->cmd->proc(c);
@@ -4076,6 +4136,14 @@ void call(client *c, int flags) {
      * If the client is blocked we will handle slowlog when it is unblocked. */
     if ((flags & CMD_CALL_SLOWLOG) && !(c->flags & CLIENT_BLOCKED))
         slowlogPushCurrentCommand(c, real_cmd, duration);
+
+    /* Send the command to clients in MONITOR mode if applicable.
+     * Administrative commands are considered too dangerous to be shown. */
+    if (!(c->cmd->flags & (CMD_SKIP_MONITOR|CMD_ADMIN))) {
+        robj **argv = c->original_argv ? c->original_argv : c->argv;
+        int argc = c->original_argv ? c->original_argc : c->argc;
+        replicationFeedMonitors(c,server.monitors,c->db->id,argv,argc);
+    }
 
     /* Clear the original argv.
      * If the client is blocked we will handle slowlog when it is unblocked. */
@@ -4312,13 +4380,8 @@ int processCommand(client *c, int callFlags) {
     int is_may_replicate_command = (c->cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE)) ||
                                    (c->cmd->proc == execCommand && (c->mstate.cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE)));
 
-    /* Check if the user is authenticated. This check is skipped in case
-     * the default user is flagged as "nopass" and is active. */
-    int auth_required = (!(DefaultUser->flags & USER_FLAG_NOPASS) ||
-                          (DefaultUser->flags & USER_FLAG_DISABLED)) &&
-                        !c->authenticated;
-    if (auth_required) {
-        /* AUTH and HELLO and no auth modules are valid even in
+    if (authRequired(c)) {
+        /* AUTH and HELLO and no auth commands are valid even in
          * non-authenticated state. */
         if (!(c->cmd->flags & CMD_NO_AUTH)) {
             rejectCommand(c,shared.noautherr);
@@ -5437,6 +5500,7 @@ sds genRedisInfoString(const char *section) {
         info = sdscatprintf(info,
             "# Replication\r\n"
             "role:%s\r\n",
+<<<<<<< HEAD:src/server.cpp
             listLength(g_pserver->masters) == 0 ? "master" 
                 : g_pserver->fActiveReplica ? "active-replica" : "slave");
         if (listLength(g_pserver->masters)) {
@@ -5456,6 +5520,39 @@ sds genRedisInfoString(const char *section) {
                     slave_repl_offset = mi->master->reploff;
                 else if (mi->cached_master)
                     slave_repl_offset = mi->cached_master->reploff;
+=======
+            server.masterhost == NULL ? "master" : "slave");
+        if (server.masterhost) {
+            long long slave_repl_offset = 1;
+            long long slave_read_repl_offset = 1;
+
+            if (server.master) {
+                slave_repl_offset = server.master->reploff;
+                slave_read_repl_offset = server.master->read_reploff;
+            } else if (server.cached_master) {
+                slave_repl_offset = server.cached_master->reploff;
+                slave_read_repl_offset = server.cached_master->read_reploff;
+            }
+
+            info = sdscatprintf(info,
+                "master_host:%s\r\n"
+                "master_port:%d\r\n"
+                "master_link_status:%s\r\n"
+                "master_last_io_seconds_ago:%d\r\n"
+                "master_sync_in_progress:%d\r\n"
+                "slave_read_repl_offset:%lld\r\n"
+                "slave_repl_offset:%lld\r\n"
+                ,server.masterhost,
+                server.masterport,
+                (server.repl_state == REPL_STATE_CONNECTED) ?
+                    "up" : "down",
+                server.master ?
+                ((int)(server.unixtime-server.master->lastinteraction)) : -1,
+                server.repl_state == REPL_STATE_TRANSFER,
+                slave_read_repl_offset,
+                slave_repl_offset
+            );
+>>>>>>> 6.2.6:src/server.c
 
                 char master_prefix[128] = "";
                 if (cmasters != 0) {

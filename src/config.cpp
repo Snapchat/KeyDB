@@ -800,7 +800,7 @@ void configSetCommand(client *c) {
             (config->alias && !strcasecmp(szFromObj(c->argv[2]),config->alias))))
         {
             if (config->flags & SENSITIVE_CONFIG) {
-                preventCommandLogging(c);
+                redactClientCommandArgument(c,3);
             }
             if (!config->interface.set(config->data,szFromObj(o),1,&errstr)) {
                 goto badfmt;

@@ -3793,8 +3793,6 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     pvar->in_eval = 0;
     pvar->in_exec = 0;
     pvar->el = aeCreateEventLoop(g_pserver->maxclients+CONFIG_FDSET_INCR);
-    aeSetBeforeSleepProc(pvar->el, beforeSleep, AE_SLEEP_THREADSAFE);
-    aeSetAfterSleepProc(pvar->el, afterSleep, AE_SLEEP_THREADSAFE);
     pvar->current_client = nullptr;
     pvar->fRetrySetAofEvent = false;
     if (pvar->el == NULL) {
@@ -3803,6 +3801,8 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
             strerror(errno));
         exit(1);
     }
+    aeSetBeforeSleepProc(pvar->el, beforeSleep, AE_SLEEP_THREADSAFE);
+    aeSetAfterSleepProc(pvar->el, afterSleep, AE_SLEEP_THREADSAFE);
 
     fastlock_init(&pvar->lockPendingWrite, "lockPendingWrite");
 

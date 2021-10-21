@@ -682,7 +682,7 @@ void bitopCommand(client *c) {
 
     if (fShiftOp)
     {
-        long newlen = (long)maxlen + shift/CHAR_BIT;
+        long long newlen = (long long)maxlen + shift/CHAR_BIT;
         if (shift > 0 && (shift % CHAR_BIT) != 0)
             newlen++;
 
@@ -694,14 +694,14 @@ void bitopCommand(client *c) {
             res = (unsigned char*) sdsnewlen(NULL,newlen);
             if (shift >= 0)
             {   // left shift
-                long byteoffset = shift/CHAR_BIT;
+                long long byteoffset = shift/CHAR_BIT;
                 memset(res, 0, byteoffset);
-                long srcLen = newlen - byteoffset - ((shift % CHAR_BIT) ? 1 : 0);
+                long long srcLen = newlen - byteoffset - ((shift % CHAR_BIT) ? 1 : 0);
 
                 // now the bitshift+copy
                 unsigned bitshift = shift % CHAR_BIT;
                 unsigned char carry = 0;
-                for (long iSrc = 0; iSrc < srcLen; ++iSrc)
+                for (long long iSrc = 0; iSrc < srcLen; ++iSrc)
                 {
                     res[byteoffset+iSrc] = (src[0][iSrc] << bitshift) | carry;
                     carry = src[0][iSrc] >> (CHAR_BIT - bitshift);
@@ -711,14 +711,14 @@ void bitopCommand(client *c) {
             } 
             else 
             {   // right shift
-                long byteoffset = -shift/CHAR_BIT;
+                long long byteoffset = -shift/CHAR_BIT;
                 unsigned bitshift = -shift % CHAR_BIT;
                 if (bitshift)
                     ++byteoffset;
                 res[0] = (src[0][byteoffset] << (CHAR_BIT-bitshift));
                 if (byteoffset > 0)
                     res[0] |= (src[0][byteoffset-1] >> bitshift);
-                for (long idx = 1; idx < newlen; ++idx)
+                for (long long idx = 1; idx < newlen; ++idx)
                 {
                     res[idx] = (src[0][byteoffset+idx] << (CHAR_BIT-bitshift)) | (src[0][byteoffset+idx-1] >> bitshift);
                 }

@@ -468,7 +468,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
      * can't be bigger than 32bit length. */
     size_t totelelen = 0;
     for (int64_t i = 0; i < numfields*2; i++) {
-        sds ele = argv[i]->ptr;
+        sds ele = szFromObj(argv[i]);
         totelelen += sdslen(ele);
     }
     if (totelelen > STREAM_LISTPACK_MAX_SIZE) {
@@ -533,16 +533,10 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
      * if we need to switch to the next one. 'lp' will be set to NULL if
      * the current node is full. */
     if (lp != NULL) {
-<<<<<<< HEAD:src/t_stream.cpp
-        if (g_pserver->stream_node_max_bytes &&
-            lp_bytes >= g_pserver->stream_node_max_bytes)
-        {
-=======
-        size_t node_max_bytes = server.stream_node_max_bytes;
+        size_t node_max_bytes = g_pserver->stream_node_max_bytes;
         if (node_max_bytes == 0 || node_max_bytes > STREAM_LISTPACK_MAX_SIZE)
             node_max_bytes = STREAM_LISTPACK_MAX_SIZE;
         if (lp_bytes + totelelen >= node_max_bytes) {
->>>>>>> 6.2.6:src/t_stream.c
             lp = NULL;
         } else if (g_pserver->stream_node_max_entries) {
             unsigned char *lp_ele = lpFirst(lp);

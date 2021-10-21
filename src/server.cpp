@@ -1908,7 +1908,6 @@ void clientsCron(int iel) {
         /* Rotate the list, take the current head, process.
          * This way if the client must be removed from the list it's the
          * first element and we don't incur into O(N) computation. */
-<<<<<<< HEAD:src/server.cpp
         listRotateTailToHead(g_pserver->clients);
         head = (listNode*)listFirst(g_pserver->clients);
         c = (client*)listNodeValue(head);
@@ -1922,22 +1921,10 @@ void clientsCron(int iel) {
             if (clientsCronResizeQueryBuffer(c)) goto LContinue;
             if (clientsCronTrackExpansiveClients(c, curr_peak_mem_usage_slot)) goto LContinue;
             if (clientsCronTrackClientsMemUsage(c)) goto LContinue;
+            if (closeClientOnOutputBufferLimitReached(c, 0)) continue; // Client also free'd
         LContinue:
             fastlock_unlock(&c->lock);
         }        
-=======
-        listRotateTailToHead(server.clients);
-        head = listFirst(server.clients);
-        c = listNodeValue(head);
-        /* The following functions do different service checks on the client.
-         * The protocol is that they return non-zero if the client was
-         * terminated. */
-        if (clientsCronHandleTimeout(c,now)) continue;
-        if (clientsCronResizeQueryBuffer(c)) continue;
-        if (clientsCronTrackExpansiveClients(c, curr_peak_mem_usage_slot)) continue;
-        if (clientsCronTrackClientsMemUsage(c)) continue;
-        if (closeClientOnOutputBufferLimitReached(c, 0)) continue;
->>>>>>> 6.2.6:src/server.c
     }
 
     /* Free any pending clients */
@@ -2779,7 +2766,6 @@ void createSharedObjects(void) {
     shared.eval = makeObjectShared("EVAL",4);
 
     /* Shared command argument */
-<<<<<<< HEAD:src/server.cpp
     shared.left = makeObjectShared("left",4);
     shared.right = makeObjectShared("right",5);
     shared.pxat = makeObjectShared("PXAT", 4);
@@ -2799,33 +2785,13 @@ void createSharedObjects(void) {
     shared.getack = makeObjectShared("GETACK",6);
     shared.special_asterick = makeObjectShared("*",1);
     shared.special_equals = makeObjectShared("=",1);
+    shared.redacted = makeObjectShared("(redacted)",10);
 
     /* KeyDB Specific */
     shared.hdel = makeObjectShared(createStringObject("HDEL", 4));
     shared.zrem = makeObjectShared(createStringObject("ZREM", 4));
     shared.mvccrestore = makeObjectShared(createStringObject("KEYDB.MVCCRESTORE", 17));
     shared.pexpirememberat = makeObjectShared(createStringObject("PEXPIREMEMBERAT",15));
-=======
-    shared.left = createStringObject("left",4);
-    shared.right = createStringObject("right",5);
-    shared.pxat = createStringObject("PXAT", 4);
-    shared.px = createStringObject("PX",2);
-    shared.time = createStringObject("TIME",4);
-    shared.retrycount = createStringObject("RETRYCOUNT",10);
-    shared.force = createStringObject("FORCE",5);
-    shared.justid = createStringObject("JUSTID",6);
-    shared.lastid = createStringObject("LASTID",6);
-    shared.default_username = createStringObject("default",7);
-    shared.ping = createStringObject("ping",4);
-    shared.setid = createStringObject("SETID",5);
-    shared.keepttl = createStringObject("KEEPTTL",7);
-    shared.load = createStringObject("LOAD",4);
-    shared.createconsumer = createStringObject("CREATECONSUMER",14);
-    shared.getack = createStringObject("GETACK",6);
-    shared.special_asterick = createStringObject("*",1);
-    shared.special_equals = createStringObject("=",1);
-    shared.redacted = makeObjectShared(createStringObject("(redacted)",10));
->>>>>>> 6.2.6:src/server.c
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =
@@ -3002,7 +2968,6 @@ void initServerConfig(void) {
 
     /* By default we want scripts to be always replicated by effects
      * (single commands executed by the script), and not by sending the
-<<<<<<< HEAD:src/server.cpp
      * script to the replica / AOF. This is the new way starting from
      * Redis 5. However it is possible to revert it via keydb.conf. */
     g_pserver->lua_always_replicate_commands = 1;
@@ -3011,16 +2976,10 @@ void initServerConfig(void) {
     cserver.cthreads = CONFIG_DEFAULT_THREADS;
     cserver.fThreadAffinity = CONFIG_DEFAULT_THREAD_AFFINITY;
     cserver.threadAffinityOffset = 0;
-=======
-     * script to the slave / AOF. This is the new way starting from
-     * Redis 5. However it is possible to revert it via redis.conf. */
-    server.lua_always_replicate_commands = 1;
 
     /* Client Pause related */
-    server.client_pause_type = CLIENT_PAUSE_OFF;
-    server.client_pause_end_time = 0;   
-
->>>>>>> 6.2.6:src/server.c
+    g_pserver->client_pause_type = CLIENT_PAUSE_OFF;
+    g_pserver->client_pause_end_time = 0; 
     initConfigValues();
 }
 
@@ -4029,18 +3988,6 @@ void call(client *c, int flags) {
     serverAssert(GlobalLocksAcquired());
     static long long prev_err_count;
 
-<<<<<<< HEAD:src/server.cpp
-    serverTL->fixed_time_expire++;
-
-    /* Send the command to clients in MONITOR mode if applicable.
-     * Administrative commands are considered too dangerous to be shown. */
-    if (listLength(g_pserver->monitors) &&
-        !g_pserver->loading.load(std::memory_order_relaxed) &&
-        !(c->cmd->flags & (CMD_SKIP_MONITOR|CMD_ADMIN)))
-    {
-        replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
-    }
-
     /* We need to transfer async writes before a client's repl state gets changed.  Otherwise
         we won't be able to propogate them correctly. */
     if (c->cmd->flags & CMD_CATEGORY_REPLICATION) {
@@ -4048,8 +3995,6 @@ void call(client *c, int flags) {
         ProcessPendingAsyncWrites();
     }
 
-=======
->>>>>>> 6.2.6:src/server.c
     /* Initialization: clear the flags that must be set by the command on
      * demand, and initialize the array for additional commands propagation. */
     c->flags &= ~(CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP);
@@ -4057,22 +4002,15 @@ void call(client *c, int flags) {
     redisOpArrayInit(&g_pserver->also_propagate);
 
     /* Call the command. */
-<<<<<<< HEAD:src/server.cpp
     dirty = g_pserver->dirty;
     prev_err_count = g_pserver->stat_total_error_replies;
-    updateCachedTime(0);
-    incrementMvccTstamp();
-=======
-    dirty = server.dirty;
-    prev_err_count = server.stat_total_error_replies;
 
     /* Update cache time, in case we have nested calls we want to
      * update only on the first call*/
-    if (server.fixed_time_expire++ == 0) {
+    if (g_pserver->fixed_time_expire++ == 0) {
         updateCachedTime(0);
     }
-
->>>>>>> 6.2.6:src/server.c
+    incrementMvccTstamp();
     elapsedStart(&call_timer);
     try {
         c->cmd->proc(c);
@@ -4142,7 +4080,7 @@ void call(client *c, int flags) {
     if (!(c->cmd->flags & (CMD_SKIP_MONITOR|CMD_ADMIN))) {
         robj **argv = c->original_argv ? c->original_argv : c->argv;
         int argc = c->original_argv ? c->original_argc : c->argc;
-        replicationFeedMonitors(c,server.monitors,c->db->id,argv,argc);
+        replicationFeedMonitors(c,g_pserver->monitors,c->db->id,argv,argc);
     }
 
     /* Clear the original argv.
@@ -5500,7 +5438,6 @@ sds genRedisInfoString(const char *section) {
         info = sdscatprintf(info,
             "# Replication\r\n"
             "role:%s\r\n",
-<<<<<<< HEAD:src/server.cpp
             listLength(g_pserver->masters) == 0 ? "master" 
                 : g_pserver->fActiveReplica ? "active-replica" : "slave");
         if (listLength(g_pserver->masters)) {
@@ -5514,45 +5451,16 @@ sds genRedisInfoString(const char *section) {
             while ((ln = listNext(&li)))
             {
                 long long slave_repl_offset = 1;
+                long long slave_read_repl_offset = 1;
                 redisMaster *mi = (redisMaster*)listNodeValue(ln);
 
-                if (mi->master)
+                if (mi->master){
                     slave_repl_offset = mi->master->reploff;
-                else if (mi->cached_master)
+                    slave_read_repl_offset = mi->master->read_reploff;
+                } else if (mi->cached_master){
                     slave_repl_offset = mi->cached_master->reploff;
-=======
-            server.masterhost == NULL ? "master" : "slave");
-        if (server.masterhost) {
-            long long slave_repl_offset = 1;
-            long long slave_read_repl_offset = 1;
-
-            if (server.master) {
-                slave_repl_offset = server.master->reploff;
-                slave_read_repl_offset = server.master->read_reploff;
-            } else if (server.cached_master) {
-                slave_repl_offset = server.cached_master->reploff;
-                slave_read_repl_offset = server.cached_master->read_reploff;
-            }
-
-            info = sdscatprintf(info,
-                "master_host:%s\r\n"
-                "master_port:%d\r\n"
-                "master_link_status:%s\r\n"
-                "master_last_io_seconds_ago:%d\r\n"
-                "master_sync_in_progress:%d\r\n"
-                "slave_read_repl_offset:%lld\r\n"
-                "slave_repl_offset:%lld\r\n"
-                ,server.masterhost,
-                server.masterport,
-                (server.repl_state == REPL_STATE_CONNECTED) ?
-                    "up" : "down",
-                server.master ?
-                ((int)(server.unixtime-server.master->lastinteraction)) : -1,
-                server.repl_state == REPL_STATE_TRANSFER,
-                slave_read_repl_offset,
-                slave_repl_offset
-            );
->>>>>>> 6.2.6:src/server.c
+                    slave_read_repl_offset = mi->cached_master->read_reploff;
+                }
 
                 char master_prefix[128] = "";
                 if (cmasters != 0) {
@@ -5565,6 +5473,7 @@ sds genRedisInfoString(const char *section) {
                     "master%s_link_status:%s\r\n"
                     "master%s_last_io_seconds_ago:%d\r\n"
                     "master%s_sync_in_progress:%d\r\n"
+                    "slave_read_repl_offset:%lld\r\n"
                     "slave_repl_offset:%lld\r\n"
                     ,master_prefix, mi->masterhost,
                     master_prefix, mi->masterport,
@@ -5573,6 +5482,7 @@ sds genRedisInfoString(const char *section) {
                     master_prefix, mi->master ?
                     ((int)(g_pserver->unixtime-mi->master->lastinteraction)) : -1,
                     master_prefix, mi->repl_state == REPL_STATE_TRANSFER,
+                    slave_read_repl_offset, 
                     slave_repl_offset
                 );
 

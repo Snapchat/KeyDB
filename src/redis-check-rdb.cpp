@@ -308,11 +308,7 @@ int redis_check_rdb(const char *rdbfilename, FILE *fp) {
         rdbstate.keys++;
         /* Read value */
         rdbstate.doing = RDB_CHECK_DOING_READ_OBJECT_VALUE;
-<<<<<<< HEAD:src/redis-check-rdb.cpp
-        if ((val = rdbLoadObject(type,&rdb,szFromObj(key),OBJ_MVCC_INVALID)) == NULL) goto eoferr;
-=======
-        if ((val = rdbLoadObject(type,&rdb,key->ptr,NULL)) == NULL) goto eoferr;
->>>>>>> 6.2.6:src/redis-check-rdb.c
+        if ((val = rdbLoadObject(type,&rdb,szFromObj(key),NULL,OBJ_MVCC_INVALID)) == NULL) goto eoferr;
         /* Check if the key already expired. */
         if (expiretime != -1 && expiretime < now)
             rdbstate.already_expired++;

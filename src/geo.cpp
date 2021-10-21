@@ -518,16 +518,8 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     int storedist = 0; /* 0 for STORE, 1 for STOREDIST. */
 
     /* Look up the requested zset */
-<<<<<<< HEAD:src/geo.cpp
-    robj_roptr zobj = nullptr;
-    if ((zobj = lookupKeyReadOrReply(c, c->argv[srcKeyIndex], shared.emptyarray)) == nullptr ||
-        checkType(c, zobj, OBJ_ZSET)) {
-        return;
-    }
-=======
-    robj *zobj = lookupKeyRead(c->db, c->argv[srcKeyIndex]);
+    robj_roptr zobj = lookupKeyRead(c->db, c->argv[srcKeyIndex]);
     if (checkType(c, zobj, OBJ_ZSET)) return;
->>>>>>> 6.2.6:src/geo.c
 
     /* Find long/lat to use for radius or box search based on inquiry type */
     int base_args;
@@ -621,7 +613,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                       !fromloc)
             {
                 /* No source key, proceed with argument parsing and return an error when done. */
-                if (zobj == NULL) {
+                if (!zobj) {
                     frommember = 1;
                     i++;
                     continue;
@@ -696,13 +688,13 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     }
 
     /* Return ASAP when src key does not exist. */
-    if (zobj == NULL) {
+    if (!zobj) {
         if (storekey) {
             /* store key is not NULL, try to delete it and return 0. */
             if (dbDelete(c->db, storekey)) {
                 signalModifiedKey(c, c->db, storekey);
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", storekey, c->db->id);
-                server.dirty++;
+                g_pserver->dirty++;
             }
             addReply(c, shared.czero);
         } else {

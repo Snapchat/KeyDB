@@ -72,102 +72,7 @@
 redisContext *context;
 struct config config;
 
-<<<<<<< HEAD
 int g_fTestMode = 0;
-=======
-static uint64_t dictSdsHash(const void *key);
-static int dictSdsKeyCompare(void *privdata, const void *key1,
-    const void *key2);
-static void dictSdsDestructor(void *privdata, void *val);
-static void dictListDestructor(void *privdata, void *val);
-
-/* Cluster Manager Command Info */
-typedef struct clusterManagerCommand {
-    char *name;
-    int argc;
-    char **argv;
-    int flags;
-    int replicas;
-    char *from;
-    char *to;
-    char **weight;
-    int weight_argc;
-    char *master_id;
-    int slots;
-    int timeout;
-    int pipeline;
-    float threshold;
-    char *backup_dir;
-    char *from_user;
-    char *from_pass;
-    int from_askpass;
-} clusterManagerCommand;
-
-static void createClusterManagerCommand(char *cmdname, int argc, char **argv);
-
-
-static redisContext *context;
-static struct config {
-    char *hostip;
-    int hostport;
-    char *hostsocket;
-    int tls;
-    cliSSLconfig sslconfig;
-    long repeat;
-    long interval;
-    int dbnum; /* db num currently selected */
-    int input_dbnum; /* db num user input */
-    int interactive;
-    int shutdown;
-    int monitor_mode;
-    int pubsub_mode;
-    int latency_mode;
-    int latency_dist_mode;
-    int latency_history;
-    int lru_test_mode;
-    long long lru_test_sample_size;
-    int cluster_mode;
-    int cluster_reissue_command;
-    int cluster_send_asking;
-    int slave_mode;
-    int pipe_mode;
-    int pipe_timeout;
-    int getrdb_mode;
-    int stat_mode;
-    int scan_mode;
-    int intrinsic_latency_mode;
-    int intrinsic_latency_duration;
-    sds pattern;
-    char *rdb_filename;
-    int bigkeys;
-    int memkeys;
-    unsigned memkeys_samples;
-    int hotkeys;
-    int stdinarg; /* get last arg from stdin. (-x option) */
-    char *auth;
-    int askpass;
-    char *user;
-    int quoted_input;   /* Force input args to be treated as quoted strings */
-    int output; /* output mode, see OUTPUT_* defines */
-    int push_output; /* Should we display spontaneous PUSH replies */
-    sds mb_delim;
-    sds cmd_delim;
-    char prompt[128];
-    char *eval;
-    int eval_ldb;
-    int eval_ldb_sync;  /* Ask for synchronous mode of the Lua debugger. */
-    int eval_ldb_end;   /* Lua debugging session ended. */
-    int enable_ldb_on_eval; /* Handle manual SCRIPT DEBUG + EVAL commands. */
-    int last_cmd_type;
-    int verbose;
-    int set_errcode;
-    clusterManagerCommand cluster_manager_command;
-    int no_auth_warning;
-    int resp3;
-    int in_multi;
-    int pre_multi_dbnum;
-} config;
->>>>>>> 6.2.6
 
 /* User preferences. */
 static struct pref {
@@ -1853,12 +1758,8 @@ static void usage(void) {
 "  --lru-test <keys>  Simulate a cache workload with an 80-20 distribution.\n"
 "  --replica          Simulate a replica showing commands received from the master.\n"
 "  --rdb <filename>   Transfer an RDB dump from remote server to local file.\n"
-<<<<<<< HEAD
-"  --pipe             Transfer raw KeyDB protocol from stdin to server.\n"
-=======
 "                     Use filename of \"-\" to write to stdout.\n"
-"  --pipe             Transfer raw Redis protocol from stdin to server.\n"
->>>>>>> 6.2.6
+"  --pipe             Transfer raw KeyDB protocol from stdin to server.\n"
 "  --pipe-timeout <n> In --pipe mode, abort with error if after sending all data.\n"
 "                     no reply is received within <n> seconds.\n"
 "                     Default timeout: %d. Use 0 to wait forever.\n",

@@ -2112,12 +2112,11 @@ void databasesCron(bool fMainThread) {
         if (g_pserver->activerehashing) {
             for (j = 0; j < dbs_per_call; j++) {
                 if (serverTL->rehashCtl != nullptr) {
-                    if (dictRehashSomeAsync(serverTL->rehashCtl, 5)) {
+                    if (dictRehashSomeAsync(serverTL->rehashCtl, rehashes_per_ms)) {
                         break;
-                    } else {
-                        dictCompleteRehashAsync(serverTL->rehashCtl, true /*fFree*/);
-                        serverTL->rehashCtl = nullptr;
-                    }
+                    } 
+                    dictCompleteRehashAsync(serverTL->rehashCtl, true /*fFree*/);
+                    serverTL->rehashCtl = nullptr;
                 }
 
                 serverAssert(serverTL->rehashCtl == nullptr);

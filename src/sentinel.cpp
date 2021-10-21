@@ -3187,21 +3187,13 @@ void sentinelConfigSetCommand(client *c) {
         sentinel.announce_port = numval;
     } else if (!strcasecmp(szFromObj(o), "sentinel-user")) {
         sdsfree(sentinel.sentinel_auth_user);
-<<<<<<< HEAD:src/sentinel.cpp
-        sentinel.sentinel_auth_user = sdsnew(szFromObj(val));
-=======
-        sentinel.sentinel_auth_user = sdslen(val->ptr) == 0 ?
-            NULL : sdsdup(val->ptr);
->>>>>>> 6.2.6:src/sentinel.c
+        sentinel.sentinel_auth_user = sdslen(szFromObj(val)) == 0 ?
+            NULL : sdsdup(szFromObj(val));
         drop_conns = 1;
     } else if (!strcasecmp(szFromObj(o), "sentinel-pass")) {
         sdsfree(sentinel.sentinel_auth_pass);
-<<<<<<< HEAD:src/sentinel.cpp
-        sentinel.sentinel_auth_pass = sdsnew(szFromObj(val));
-=======
-        sentinel.sentinel_auth_pass = sdslen(val->ptr) == 0 ?
-            NULL : sdsdup(val->ptr);
->>>>>>> 6.2.6:src/sentinel.c
+        sentinel.sentinel_auth_pass = sdslen(szFromObj(val)) == 0 ?
+            NULL : sdsdup(szFromObj(val));
         drop_conns = 1;
     } else {
         addReplyErrorFormat(c, "Invalid argument '%s' to SENTINEL CONFIG SET",

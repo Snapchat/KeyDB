@@ -30,11 +30,8 @@
 #include "server.h"
 #include "cluster.h"
 #include "atomicvar.h"
-<<<<<<< HEAD:src/db.cpp
 #include "aelocker.h"
-=======
 #include "latency.h"
->>>>>>> 6.2.6:src/db.c
 
 #include <signal.h>
 #include <ctype.h>
@@ -1678,16 +1675,17 @@ expireEntry *getExpire(redisDb *db, robj_roptr key) {
 void deleteExpiredKeyAndPropagate(redisDb *db, robj *keyobj) {
     mstime_t expire_latency;
     latencyStartMonitor(expire_latency);
-    if (server.lazyfree_lazy_expire)
+    if (g_pserver->lazyfree_lazy_expire) {
         dbAsyncDelete(db,keyobj);
-    else
+    } else {
         dbSyncDelete(db,keyobj);
+    }
     latencyEndMonitor(expire_latency);
     latencyAddSampleIfNeeded("expire-del",expire_latency);
     notifyKeyspaceEvent(NOTIFY_EXPIRED,"expired",keyobj,db->id);
-    signalModifiedKey(NULL, db, keyobj);
-    propagateExpire(db,keyobj,server.lazyfree_lazy_expire);
-    server.stat_expiredkeys++;
+    signalModifiedKey(NULL,db,keyobj);
+    propagateExpire(db,keyobj,g_pserver->lazyfree_lazy_expire);
+    g_pserver->stat_expiredkeys++;
 }
 
 /* Propagate expires into slaves and the AOF file.
@@ -1843,20 +1841,7 @@ int expireIfNeeded(redisDb *db, robj *key) {
     if (checkClientPauseTimeoutAndReturnIfPaused()) return 1;
 
     /* Delete the key */
-<<<<<<< HEAD:src/db.cpp
-    if (g_pserver->lazyfree_lazy_expire) {
-        dbAsyncDelete(db,key);
-    } else {
-        dbSyncDelete(db,key);
-    }
-    g_pserver->stat_expiredkeys++;
-    propagateExpire(db,key,g_pserver->lazyfree_lazy_expire);
-    notifyKeyspaceEvent(NOTIFY_EXPIRED,
-        "expired",key,db->id);
-    signalModifiedKey(NULL,db,key);
-=======
     deleteExpiredKeyAndPropagate(db,key);
->>>>>>> 6.2.6:src/db.c
     return 1;
 }
 

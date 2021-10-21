@@ -462,10 +462,7 @@ clean:
 distclean: clean
 	-(cd ../deps && $(MAKE) distclean)
 	-(cd modules && $(MAKE) clean)
-<<<<<<< HEAD
-=======
 	-(cd ../tests/modules && $(MAKE) clean)
->>>>>>> 6.2.6
 	-(rm -f .make-*)
 
 .PHONY: distclean

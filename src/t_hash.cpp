@@ -44,22 +44,16 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
     if (o->encoding != OBJ_ENCODING_ZIPLIST) return;
 
     for (i = start; i <= end; i++) {
-<<<<<<< HEAD:src/t_hash.cpp
-        if (sdsEncodedObject(argv[i]) &&
-            sdslen(szFromObj(argv[i])) > g_pserver->hash_max_ziplist_value)
-        {
-=======
         if (!sdsEncodedObject(argv[i]))
             continue;
-        size_t len = sdslen(argv[i]->ptr);
-        if (len > server.hash_max_ziplist_value) {
->>>>>>> 6.2.6:src/t_hash.c
+        size_t len = sdslen(szFromObj(argv[i]));
+        if (len > g_pserver->hash_max_ziplist_value) {
             hashTypeConvert(o, OBJ_ENCODING_HT);
             return;
         }
         sum += len;
     }
-    if (!ziplistSafeToAdd(o->ptr, sum))
+    if (!ziplistSafeToAdd((unsigned char *)ptrFromObj(o), sum))
         hashTypeConvert(o, OBJ_ENCODING_HT);
 }
 
@@ -1026,13 +1020,8 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     int uniq = 1;
     robj_roptr hash;
 
-<<<<<<< HEAD:src/t_hash.cpp
-    if ((hash = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp]))
-        == nullptr || checkType(c,hash,OBJ_HASH)) return;
-=======
     if ((hash = lookupKeyReadOrReply(c,c->argv[1],shared.emptyarray))
-        == NULL || checkType(c,hash,OBJ_HASH)) return;
->>>>>>> 6.2.6:src/t_hash.c
+        == nullptr || checkType(c,hash,OBJ_HASH)) return;
     size = hashTypeLength(hash);
 
     if(l >= 0) {

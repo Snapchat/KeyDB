@@ -2632,11 +2632,7 @@ int RM_StringTruncate(RedisModuleKey *key, size_t newlen) {
         if (newlen > curlen) {
             key->value->m_ptr = sdsgrowzero(szFromObj(key->value),newlen);
         } else if (newlen < curlen) {
-<<<<<<< HEAD:src/module.cpp
-            sdsrange(szFromObj(key->value),0,newlen-1);
-=======
-            sdssubstr(key->value->ptr,0,newlen);
->>>>>>> 6.2.6:src/module.c
+            sdssubstr(szFromObj(key->value),0,newlen);
             /* If the string is too wasteful, reallocate it. */
             if (sdslen(szFromObj(key->value)) < sdsavail(szFromObj(key->value)))
                 key->value->m_ptr = sdsRemoveFreeSpace(szFromObj(key->value));
@@ -5790,7 +5786,7 @@ int moduleBlockedClientMayTimeout(client *c) {
     if (c->btype != BLOCKED_MODULE)
         return 1;
 
-    RedisModuleBlockedClient *bc = c->bpop.module_blocked_handle;
+    RedisModuleBlockedClient *bc = (RedisModuleBlockedClient*)c->bpop.module_blocked_handle;
     return (bc && bc->timeout_callback != NULL);
 }
 

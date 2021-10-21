@@ -112,11 +112,6 @@ static void clientSetDefaultAuth(client *c) {
                        !(c->user->flags & USER_FLAG_DISABLED);
 }
 
-<<<<<<< HEAD:src/networking.cpp
-client *createClient(connection *conn, int iel) {
-    client *c = (client*)zmalloc(sizeof(client), MALLOC_LOCAL);
-    serverAssert(conn == nullptr || (iel == (serverTL - g_pserver->rgthreadvar)));
-=======
 int authRequired(client *c) {
     /* Check if the user is authenticated. This check is skipped in case
      * the default user is flagged as "nopass" and is active. */
@@ -126,9 +121,9 @@ int authRequired(client *c) {
     return auth_required;
 }
 
-client *createClient(connection *conn) {
-    client *c = zmalloc(sizeof(client));
->>>>>>> 6.2.6:src/networking.c
+client *createClient(connection *conn, int iel) {
+    client *c = (client*)zmalloc(sizeof(client), MALLOC_LOCAL);
+    serverAssert(conn == nullptr || (iel == (serverTL - g_pserver->rgthreadvar)));
 
     c->iel = iel;
     /* passing NULL as conn it is possible to create a non connected client.
@@ -1932,7 +1927,7 @@ void ProcessPendingAsyncWrites()
          (c->replstate == SLAVE_STATE_ONLINE && !c->repl_put_online_on_ack))))
             continue;
 
-        asyncCloseClientOnOutputBufferLimitReached(c);
+        closeClientOnOutputBufferLimitReached(c, 1);
         if (c->flags & CLIENT_CLOSE_ASAP)
             continue;   // we will never write this so don't post an op
         
@@ -2366,14 +2361,11 @@ int processMultibulkBuffer(client *c) {
 
 /* Perform necessary tasks after a command was executed:
  *
- * 1. The client is reset unless there are reasons to avoid doing it.
+ * 1. The client is reset unless there are reasons to avoid doing it. 
  * 2. In the case of master clients, the replication offset is updated.
  * 3. Propagate commands we got from our master to replicas down the line. */
-<<<<<<< HEAD:src/networking.cpp
 void commandProcessed(client *c, int flags) {
-=======
-void commandProcessed(client *c) {
-    /* If client is blocked(including paused), just return avoid reset and replicate.
+        /* If client is blocked(including paused), just return avoid reset and replicate.
      *
      * 1. Don't reset the client structure for blocked clients, so that the reply
      *    callback will still be able to access the client argv and argc fields.
@@ -2384,7 +2376,6 @@ void commandProcessed(client *c) {
 
     resetClient(c);
 
->>>>>>> 6.2.6:src/networking.c
     long long prev_offset = c->reploff;
     if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
         /* Update the applied replication offset of our master. */
@@ -3122,12 +3113,8 @@ NULL
         if (getLongLongFromObjectOrReply(c,c->argv[2],&id,NULL)
             != C_OK) return;
         struct client *target = lookupClientByID(id);
-<<<<<<< HEAD:src/networking.cpp
-        if (target && target->flags & CLIENT_BLOCKED) {
-            std::unique_lock<fastlock> ul(target->lock);
-=======
         if (target && target->flags & CLIENT_BLOCKED && moduleBlockedClientMayTimeout(target)) {
->>>>>>> 6.2.6:src/networking.c
+            std::unique_lock<fastlock> ul(target->lock);
             if (unblock_error)
                 addReplyError(target,
                     "-UNBLOCKED client unblocked via CLIENT UNBLOCK");
@@ -3832,12 +3819,8 @@ void unpauseClients(void) {
     listIter li;
     client *c;
     
-<<<<<<< HEAD:src/networking.cpp
     g_pserver->client_pause_type = CLIENT_PAUSE_OFF;
-=======
-    server.client_pause_type = CLIENT_PAUSE_OFF;
-    server.client_pause_end_time = 0;
->>>>>>> 6.2.6:src/networking.c
+    g_pserver->client_pause_end_time = 0;
 
     /* Unblock all of the clients so they are reprocessed. */
     listRewind(g_pserver->paused_clients,&li);
@@ -3901,7 +3884,6 @@ void processEventsWhileBlocked(int iel) {
             vecclients.push_back(c);
         }
     }
-<<<<<<< HEAD:src/networking.cpp
     
     /* Since we're about to release our lock we need to flush the repl backlog queue */
     bool fReplBacklog = g_pserver->repl_batch_offStart >= 0;
@@ -3915,25 +3897,6 @@ void processEventsWhileBlocked(int iel) {
     aeReleaseLock();
     serverAssert(!GlobalLocksAcquired());
     try
-=======
-    listEmpty(server.clients_pending_write);
-
-    /* Update processed count on server */
-    server.stat_io_writes_processed += processed;
-
-    return processed;
-}
-
-/* Return 1 if we want to handle the client read later using threaded I/O.
- * This is called by the readable handler of the event loop.
- * As a side effect of calling this function the client is put in the
- * pending read clients and flagged as such. */
-int postponeClientRead(client *c) {
-    if (server.io_threads_active &&
-        server.io_threads_do_reads &&
-        !ProcessingEventsWhileBlocked &&
-        !(c->flags & (CLIENT_MASTER|CLIENT_SLAVE|CLIENT_PENDING_READ|CLIENT_BLOCKED))) 
->>>>>>> 6.2.6:src/networking.c
     {
         ProcessingEventsWhileBlocked = 1;
         while (iterations--) {
@@ -3965,40 +3928,7 @@ int postponeClientRead(client *c) {
     locker.arm(nullptr);
     locker.release();
 
-<<<<<<< HEAD:src/networking.cpp
     g_pserver->events_processed_while_blocked += eventsCount;
-=======
-    /* Also use the main thread to process a slice of clients. */
-    listRewind(io_threads_list[0],&li);
-    while((ln = listNext(&li))) {
-        client *c = listNodeValue(ln);
-        readQueryFromClient(c->conn);
-    }
-    listEmpty(io_threads_list[0]);
-
-    /* Wait for all the other threads to end their work. */
-    while(1) {
-        unsigned long pending = 0;
-        for (int j = 1; j < server.io_threads_num; j++)
-            pending += getIOPendingCount(j);
-        if (pending == 0) break;
-    }
-
-    /* Run the list of clients again to process the new buffers. */
-    while(listLength(server.clients_pending_read)) {
-        ln = listFirst(server.clients_pending_read);
-        client *c = listNodeValue(ln);
-        c->flags &= ~CLIENT_PENDING_READ;
-        listDelNode(server.clients_pending_read,ln);
-
-        serverAssert(!(c->flags & CLIENT_BLOCKED));
-        if (processPendingCommandsAndResetClient(c) == C_ERR) {
-            /* If the client is no longer valid, we avoid
-             * processing the client later. So we just go
-             * to the next. */
-            continue;
-        }
->>>>>>> 6.2.6:src/networking.c
 
     whileBlockedCron();
 

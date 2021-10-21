@@ -156,12 +156,7 @@ void execCommandAbort(client *c, sds error) {
     /* Send EXEC to clients waiting data from MONITOR. We did send a MULTI
      * already, and didn't send any of the queued commands, now we'll just send
      * EXEC so it is clear that the transaction is over. */
-<<<<<<< HEAD:src/multi.cpp
-    if (listLength(g_pserver->monitors) && !g_pserver->loading)
-        replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
-=======
-    replicationFeedMonitors(c,server.monitors,c->db->id,c->argv,c->argc);
->>>>>>> 6.2.6:src/multi.c
+    replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
 }
 
 void execCommand(client *c) {
@@ -198,7 +193,6 @@ void execCommand(client *c) {
         return;
     }
 
-{   // GOTO Protectect Variable Scope
     uint64_t old_flags = c->flags;
 
     /* we do not want to allow blocking commands inside multi */
@@ -285,21 +279,7 @@ void execCommand(client *c) {
         afterPropagateExec();
     }
 
-<<<<<<< HEAD:src/multi.cpp
     serverTL->in_exec = 0;
-} // END Goto Variable Protection Scope
-
-handle_monitor:
-    /* Send EXEC to clients waiting data from MONITOR. We do it here
-     * since the natural order of commands execution is actually:
-     * MUTLI, EXEC, ... commands inside transaction ...
-     * Instead EXEC is flagged as CMD_SKIP_MONITOR in the command
-     * table, and we do it here with correct ordering. */
-    if (listLength(g_pserver->monitors) && !g_pserver->loading)
-        replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
-=======
-    server.in_exec = 0;
->>>>>>> 6.2.6:src/multi.c
 }
 
 /* ===================== WATCH (CAS alike for MULTI/EXEC) ===================
@@ -386,7 +366,7 @@ int isWatchedKeyExpired(client *c) {
     if (listLength(c->watched_keys) == 0) return 0;
     listRewind(c->watched_keys,&li);
     while ((ln = listNext(&li))) {
-        wk = listNodeValue(ln);
+        wk = (watchedKey*)listNodeValue(ln);
         if (keyIsExpired(wk->db, wk->key)) return 1;
     }
 

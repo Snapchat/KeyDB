@@ -1895,15 +1895,7 @@ void addACLLogEntry(client *c, int reason, int argpos, sds username) {
 void aclCommand(client *c) {
     char *sub = szFromObj(c->argv[1]);
     if (!strcasecmp(sub,"setuser") && c->argc >= 3) {
-<<<<<<< HEAD:src/acl.cpp
-        /* Consider information about passwords or permissions
-         * to be sensitive, which will be the arguments for this
-         * subcommand. */
-        preventCommandLogging(c); 
         sds username = szFromObj(c->argv[2]);
-=======
-        sds username = c->argv[2]->ptr;
->>>>>>> 6.2.6:src/acl.c
         /* Check username validity. */
         if (ACLStringHasSpaces(username,sdslen(username))) {
             addReplyErrorFormat(c,

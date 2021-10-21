@@ -37,15 +37,9 @@
 /* Count number of bits set in the binary array pointed by 's' and long
  * 'count' bytes. The implementation of this function is required to
  * work with an input string length up to 512 MB or more (server.proto_max_bulk_len) */
-<<<<<<< HEAD:src/bitops.cpp
-size_t redisPopcount(const void *s, long count) {
-    size_t bits = 0;
-    unsigned char *p = (unsigned char*)s;
-=======
-long long redisPopcount(void *s, long count) {
+long long redisPopcount(const void *s, long count) {
     long long bits = 0;
-    unsigned char *p = s;
->>>>>>> 6.2.6:src/bitops.c
+    unsigned char *p = (unsigned char*)s;
     uint32_t *p4;
     static const unsigned char bitsinbyte[256] = {0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4,1,2,2,3,2,3,3,4,2,3,3,4,3,4,4,5,1,2,2,3,2,3,3,4,2,3,3,4,3,4,4,5,2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6,1,2,2,3,2,3,3,4,2,3,3,4,3,4,4,5,2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6,2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6,3,4,4,5,4,5,5,6,4,5,5,6,5,6,6,7,1,2,2,3,2,3,3,4,2,3,3,4,3,4,4,5,2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6,2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6,3,4,4,5,4,5,5,6,4,5,5,6,5,6,6,7,2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6,3,4,4,5,4,5,5,6,4,5,5,6,5,6,6,7,3,4,4,5,4,5,5,6,4,5,5,6,5,6,6,7,4,5,5,6,5,6,6,7,5,6,6,7,6,7,7,8};
 
@@ -104,11 +98,7 @@ long long redisPopcount(void *s, long count) {
  * no zero bit is found, it returns count*8 assuming the string is zero
  * padded on the right. However if 'bit' is 1 it is possible that there is
  * not a single set bit in the bitmap. In this special case -1 is returned. */
-<<<<<<< HEAD:src/bitops.cpp
-long redisBitpos(const void *s, unsigned long count, int bit) {
-=======
-long long redisBitpos(void *s, unsigned long count, int bit) {
->>>>>>> 6.2.6:src/bitops.c
+long long redisBitpos(const void *s, unsigned long count, int bit) {
     unsigned long *l;
     unsigned char *c;
     unsigned long skipval, word = 0, one;
@@ -538,13 +528,8 @@ const unsigned char *getObjectReadOnlyString(robj_roptr o, long *len, char *llbu
 /* SETBIT key offset bitvalue */
 void setbitCommand(client *c) {
     robj *o;
-<<<<<<< HEAD:src/bitops.cpp
     const char *err = "bit is not an integer or out of range";
-    size_t bitoffset;
-=======
-    char *err = "bit is not an integer or out of range";
     uint64_t bitoffset;
->>>>>>> 6.2.6:src/bitops.c
     ssize_t byte, bit;
     int byteval, bitval;
     long on;
@@ -1020,13 +1005,8 @@ struct bitfieldOp {
  * when flags is set to BITFIELD_FLAG_READONLY: in this case only the
  * GET subcommand is allowed, other subcommands will return an error. */
 void bitfieldGeneric(client *c, int flags) {
-<<<<<<< HEAD:src/bitops.cpp
     robj_roptr o;
-    size_t bitoffset;
-=======
-    robj *o;
     uint64_t bitoffset;
->>>>>>> 6.2.6:src/bitops.c
     int j, numops = 0, changes = 0;
     struct bitfieldOp *ops = NULL; /* Array of ops to execute at end. */
     int owtype = BFOVERFLOW_WRAP; /* Overflow type. */

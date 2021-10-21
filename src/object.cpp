@@ -975,13 +975,8 @@ size_t objectComputeSize(robj *o, size_t sample_size) {
             serverPanic("Unknown hash encoding");
         }
     } else if (o->type == OBJ_STREAM) {
-<<<<<<< HEAD:src/object.cpp
         stream *s = (stream*)ptrFromObj(o);
-        asize = sizeof(*o);
-=======
-        stream *s = o->ptr;
         asize = sizeof(*o)+sizeof(*s);
->>>>>>> 6.2.6:src/object.c
         asize += streamRadixTreeMemoryUsage(s->rax);
 
         /* Now we have to add the listpacks. The last listpack is often non
@@ -1330,16 +1325,9 @@ robj_roptr objectCommandLookup(client *c, robj *key) {
     return lookupKeyReadWithFlags(c->db,key,LOOKUP_NOTOUCH|LOOKUP_NONOTIFY);
 }
 
-<<<<<<< HEAD:src/object.cpp
 robj_roptr objectCommandLookupOrReply(client *c, robj *key, robj *reply) {
     robj_roptr o = objectCommandLookup(c,key);
-
-    if (!o) addReply(c, reply);
-=======
-robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply) {
-    robj *o = objectCommandLookup(c,key);
     if (!o) SentReplyOnKeyMiss(c, reply);
->>>>>>> 6.2.6:src/object.c
     return o;
 }
 

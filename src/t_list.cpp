@@ -227,7 +227,7 @@ void pushGenericCommand(client *c, int where, int xx) {
     int j;
 
     for (j = 2; j < c->argc; j++) {
-        if (sdslen(c->argv[j]->ptr) > LIST_MAX_ITEM_SIZE) {
+        if (sdslen(szFromObj(c->argv[j])) > LIST_MAX_ITEM_SIZE) {
             addReplyError(c, "Element too large");
             return;
         }
@@ -296,7 +296,7 @@ void linsertCommand(client *c) {
         return;
     }
 
-    if (sdslen(c->argv[4]->ptr) > LIST_MAX_ITEM_SIZE) {
+    if (sdslen(szFromObj(c->argv[4])) > LIST_MAX_ITEM_SIZE) {
         addReplyError(c, "Element too large");
         return;
     }
@@ -368,7 +368,7 @@ void lsetCommand(client *c) {
     long index;
     robj *value = c->argv[3];
 
-    if (sdslen(value->ptr) > LIST_MAX_ITEM_SIZE) {
+    if (sdslen(szFromObj(value)) > LIST_MAX_ITEM_SIZE) {
         addReplyError(c, "Element too large");
         return;
     }
@@ -595,7 +595,7 @@ void lposCommand(client *c) {
     int direction = LIST_TAIL;
     long rank = 1, count = -1, maxlen = 0; /* Count -1: option not given. */
 
-    if (sdslen(ele->ptr) > LIST_MAX_ITEM_SIZE) {
+    if (sdslen(szFromObj(ele)) > LIST_MAX_ITEM_SIZE) {
         addReplyError(c, "Element too large");
         return;
     }
@@ -695,7 +695,7 @@ void lremCommand(client *c) {
     long toremove;
     long removed = 0;
 
-    if (sdslen(obj->ptr) > LIST_MAX_ITEM_SIZE) {
+    if (sdslen(szFromObj(obj)) > LIST_MAX_ITEM_SIZE) {
         addReplyError(c, "Element too large");
         return;
     }

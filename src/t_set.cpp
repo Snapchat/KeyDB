@@ -66,14 +66,10 @@ int setTypeAdd(robj *subject, const char *value) {
             if (success) {
                 /* Convert to regular set when the intset contains
                  * too many entries. */
-<<<<<<< HEAD:src/t_set.cpp
-                if (intsetLen((intset*)subject->m_ptr) > g_pserver->set_max_intset_entries)
-=======
-                size_t max_entries = server.set_max_intset_entries;
+                size_t max_entries = g_pserver->set_max_intset_entries;
                 /* limit to 1G entries due to intset internals. */
                 if (max_entries >= 1<<30) max_entries = 1<<30;
-                if (intsetLen(subject->ptr) > max_entries)
->>>>>>> 6.2.6:src/t_set.c
+                if (intsetLen((intset*)subject->m_ptr) > max_entries)
                     setTypeConvert(subject,OBJ_ENCODING_HT);
                 return 1;
             }
@@ -404,21 +400,12 @@ void smoveCommand(client *c) {
     }
 
     signalModifiedKey(c,c->db,c->argv[1]);
-<<<<<<< HEAD:src/t_set.cpp
-    signalModifiedKey(c,c->db,c->argv[2]);
     g_pserver->dirty++;
 
     /* An extra key has changed when ele was successfully added to dstset */
     if (setTypeAdd(dstset,szFromObj(ele))) {
         g_pserver->dirty++;
-=======
-    server.dirty++;
-
-    /* An extra key has changed when ele was successfully added to dstset */
-    if (setTypeAdd(dstset,ele->ptr)) {
-        server.dirty++;
         signalModifiedKey(c,c->db,c->argv[2]);
->>>>>>> 6.2.6:src/t_set.c
         notifyKeyspaceEvent(NOTIFY_SET,"sadd",c->argv[2],c->db->id);
     }
     addReply(c,shared.cone);
@@ -886,24 +873,10 @@ void sinterGenericCommand(client *c, robj **setkeys,
             lookupKeyWrite(c->db,setkeys[j]) :
             lookupKeyRead(c->db,setkeys[j]).unsafe_robjcast();
         if (!setobj) {
-<<<<<<< HEAD:src/t_set.cpp
-            zfree(sets);
-            if (dstkey) {
-                if (dbDelete(c->db,dstkey)) {
-                    signalModifiedKey(c,c->db,dstkey);
-                    g_pserver->dirty++;
-                }
-                addReply(c,shared.czero);
-            } else {
-                addReply(c,shared.emptyset[c->resp]);
-            }
-            return;
-=======
             /* A NULL is considered an empty set */
             empty += 1;
             sets[j] = NULL;
             continue;
->>>>>>> 6.2.6:src/t_set.c
         }
         if (checkType(c,setobj,OBJ_SET)) {
             zfree(sets);
@@ -920,7 +893,7 @@ void sinterGenericCommand(client *c, robj **setkeys,
             if (dbDelete(c->db,dstkey)) {
                 signalModifiedKey(c,c->db,dstkey);
                 notifyKeyspaceEvent(NOTIFY_GENERIC,"del",dstkey,c->db->id);
-                server.dirty++;
+                g_pserver->dirty++;
             }
             addReply(c,shared.czero);
         } else {

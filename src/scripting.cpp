@@ -1739,7 +1739,7 @@ void evalGenericCommand(client *c, int evalsha) {
 void evalCommand(client *c) {
     /* Explicitly feed monitor here so that lua commands appear after their
      * script command. */
-    replicationFeedMonitors(c,server.monitors,c->db->id,c->argv,c->argc);
+    replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
     if (!(c->flags & CLIENT_LUA_DEBUG))
         evalGenericCommand(c,0);
     else
@@ -1747,14 +1747,10 @@ void evalCommand(client *c) {
 }
 
 void evalShaCommand(client *c) {
-<<<<<<< HEAD:src/scripting.cpp
-    if (sdslen((sds)ptrFromObj(c->argv[1])) != 40) {
-=======
     /* Explicitly feed monitor here so that lua commands appear after their
      * script command. */
-    replicationFeedMonitors(c,server.monitors,c->db->id,c->argv,c->argc);
-    if (sdslen(c->argv[1]->ptr) != 40) {
->>>>>>> 6.2.6:src/scripting.c
+    replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
+    if (sdslen((sds)ptrFromObj(c->argv[1])) != 40) {
         /* We know that a match is not possible if the provided SHA is
          * not the right length. So we return an error ASAP, this way
          * evalGenericCommand() can be implemented without string length
@@ -2133,7 +2129,7 @@ int ldbDelBreakpoint(int line) {
  * On success the command is parsed and returned as an array of SDS strings,
  * otherwise NULL is returned and there is to read more buffer. */
 sds *ldbReplParseCommand(int *argcp, char** err) {
-    static char* protocol_error = "protocol error";
+    static sds protocol_error = sdsnew("protocol error");
     sds *argv = NULL;
     int argc = 0;
     char *plen = NULL;
@@ -2150,13 +2146,8 @@ sds *ldbReplParseCommand(int *argcp, char** err) {
 
     /* Seek and parse *<count>\r\n. */
     p = strchr(p,'*'); if (!p) goto protoerr;
-<<<<<<< HEAD:src/scripting.cpp
     plen = p+1; /* Multi bulk len pointer. */
-    p = strstr(p,"\r\n"); if (!p) goto protoerr;
-=======
-    char *plen = p+1; /* Multi bulk len pointer. */
     p = strstr(p,"\r\n"); if (!p) goto keep_reading;
->>>>>>> 6.2.6:src/scripting.c
     *p = '\0'; p += 2;
     *argcp = atoi(plen);
     if (*argcp <= 0 || *argcp > 1024) goto protoerr;
@@ -2625,7 +2616,9 @@ void ldbRedis(lua_State *lua, sds *argv, int argc) {
          * given by the user (without the first argument) and we also push the 'redis' global table and
          * 'redis.call' function so:
          * (1 (redis table)) + (1 (redis.call function)) + (argc - 1 (all arguments without the first)) = argc + 1*/
-        ldbLogRedisReply("max lua stack reached");
+        sds reply = sdsnew("max lua stack reached");
+        ldbLogRedisReply(reply);
+        sdsfree(reply);
         return;
     }
 

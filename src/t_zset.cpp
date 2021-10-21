@@ -1248,18 +1248,10 @@ void zsetConvertToZiplistIfNeeded(robj *zobj, size_t maxelelen, size_t totelelen
     if (zobj->encoding == OBJ_ENCODING_ZIPLIST) return;
     zset *set = (zset*)zobj->m_ptr;
 
-<<<<<<< HEAD:src/t_zset.cpp
     if (set->zsl->length <= g_pserver->zset_max_ziplist_entries &&
-        maxelelen <= g_pserver->zset_max_ziplist_value)
-            zsetConvert(zobj,OBJ_ENCODING_ZIPLIST);
-=======
-    if (zset->zsl->length <= server.zset_max_ziplist_entries &&
-        maxelelen <= server.zset_max_ziplist_value &&
+        maxelelen <= g_pserver->zset_max_ziplist_value &&
         ziplistSafeToAdd(NULL, totelelen))
-    {
-        zsetConvert(zobj,OBJ_ENCODING_ZIPLIST);
-    }
->>>>>>> 6.2.6:src/t_zset.c
+            zsetConvert(zobj,OBJ_ENCODING_ZIPLIST);
 }
 
 /* Return (by reference) the score of the specified member of the sorted set
@@ -1381,19 +1373,13 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
         } else if (!xx) {
             /* check if the element is too large or the list
              * becomes too long *before* executing zzlInsert. */
-<<<<<<< HEAD:src/t_zset.cpp
-            zobj->m_ptr = zzlInsert((unsigned char*)zobj->m_ptr,ele,score);
-            if (zzlLength((unsigned char*)zobj->m_ptr) > g_pserver->zset_max_ziplist_entries ||
-                sdslen(ele) > g_pserver->zset_max_ziplist_value)
-=======
-            if (zzlLength(zobj->ptr)+1 > server.zset_max_ziplist_entries ||
-                sdslen(ele) > server.zset_max_ziplist_value ||
-                !ziplistSafeToAdd(zobj->ptr, sdslen(ele)))
+            if (zzlLength((unsigned char*)ptrFromObj(zobj))+1 > g_pserver->zset_max_ziplist_entries ||
+                sdslen(ele) > g_pserver->zset_max_ziplist_value ||
+                !ziplistSafeToAdd((unsigned char *)ptrFromObj(zobj), sdslen(ele)))
             {
->>>>>>> 6.2.6:src/t_zset.c
                 zsetConvert(zobj,OBJ_ENCODING_SKIPLIST);
             } else {
-                zobj->ptr = zzlInsert(zobj->ptr,ele,score);
+                zobj->m_ptr = zzlInsert((unsigned char *)ptrFromObj(zobj),ele,score);
                 if (newscore) *newscore = score;
                 *out_flags |= ZADD_OUT_ADDED;
                 return 1;
@@ -1402,17 +1388,12 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
             *out_flags |= ZADD_OUT_NOP;
             return 1;
         }
-<<<<<<< HEAD:src/t_zset.cpp
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = (zset*)zobj->m_ptr;
-=======
     }
 
     /* Note that the above block handling ziplist would have either returned or
      * converted the key to skiplist. */
     if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = zobj->ptr;
->>>>>>> 6.2.6:src/t_zset.c
+        zset *zs = (zset*)zobj->m_ptr;
         zskiplistNode *znode;
         dictEntry *de;
 
@@ -3694,18 +3675,13 @@ void zrangeGenericCommand(zrange_result_handler *handler, int argc_start, int st
     zobj = handler->dstkey ?
         lookupKeyWrite(c->db,key) :
         lookupKeyRead(c->db,key);
-<<<<<<< HEAD:src/t_zset.cpp
     if (zobj == nullptr) {
-        addReply(c,shared.emptyarray);
-=======
-    if (zobj == NULL) {
         if (store) {
             handler->beginResultEmission(handler);
             handler->finalizeResultEmission(handler, 0);
         } else {
             addReply(c, shared.emptyarray);
         }
->>>>>>> 6.2.6:src/t_zset.c
         goto cleanup;
     }
 
@@ -3913,13 +3889,8 @@ void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey
         serverAssertWithInfo(c,zobj,zsetDel(zobj,ele));
         g_pserver->dirty++;
 
-<<<<<<< HEAD:src/t_zset.cpp
-        if (arraylen == 0) { /* Do this only for the first iteration. */
-            const char *events[2] = {"zpopmin","zpopmax"};
-=======
         if (result_count == 0) { /* Do this only for the first iteration. */
-            char *events[2] = {"zpopmin","zpopmax"};
->>>>>>> 6.2.6:src/t_zset.c
+            const char *events[2] = {"zpopmin","zpopmax"};
             notifyKeyspaceEvent(NOTIFY_ZSET,events[where],key,c->db->id);
             signalModifiedKey(c,c->db,key);
         }
@@ -4044,13 +4015,8 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
     int uniq = 1;
     robj_roptr zsetobj;
 
-<<<<<<< HEAD:src/t_zset.cpp
-    if ((zsetobj = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp]))
-        == nullptr || checkType(c, zsetobj, OBJ_ZSET)) return;
-=======
     if ((zsetobj = lookupKeyReadOrReply(c, c->argv[1], shared.emptyarray))
-        == NULL || checkType(c, zsetobj, OBJ_ZSET)) return;
->>>>>>> 6.2.6:src/t_zset.c
+        == nullptr || checkType(c, zsetobj, OBJ_ZSET)) return;
     size = zsetLength(zsetobj);
 
     if(l >= 0) {

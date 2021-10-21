@@ -75,7 +75,7 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
         return -1;
     }
     anetCloexec(state->kqfd);
-    state->eventsMask = zmalloc(EVENT_MASK_MALLOC_SIZE(eventLoop->setsize));
+    state->eventsMask = zmalloc(EVENT_MASK_MALLOC_SIZE(eventLoop->setsize), MALLOC_LOCAL);
     memset(state->eventsMask, 0, EVENT_MASK_MALLOC_SIZE(eventLoop->setsize));
     eventLoop->apidata = state;
     return 0;
@@ -84,13 +84,9 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
 static int aeApiResize(aeEventLoop *eventLoop, int setsize) {
     aeApiState *state = (aeApiState*)eventLoop->apidata;
 
-<<<<<<< HEAD
-    state->events = (struct kevent*)zrealloc(state->events, sizeof(struct kevent)*setsize, MALLOC_LOCAL);
-=======
-    state->events = zrealloc(state->events, sizeof(struct kevent)*setsize);
-    state->eventsMask = zrealloc(state->eventsMask, EVENT_MASK_MALLOC_SIZE(setsize));
+    state->events = (struct kevent*)zrealloc(state->events, sizeof(struct kevent)*setsize, MALLOC_LOCAL);    
+    state->eventsMask = (char*)zrealloc(state->eventsMask, EVENT_MASK_MALLOC_SIZE(setsize), MALLOC_LOCAL);
     memset(state->eventsMask, 0, EVENT_MASK_MALLOC_SIZE(setsize));
->>>>>>> 6.2.6
     return 0;
 }
 

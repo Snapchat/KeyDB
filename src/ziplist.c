@@ -720,14 +720,9 @@ unsigned char *ziplistNew(void) {
 }
 
 /* Resize the ziplist. */
-<<<<<<< HEAD
-unsigned char *ziplistResize(unsigned char *zl, unsigned int len) {
-    zl = zrealloc(zl,len, MALLOC_SHARED);
-=======
 unsigned char *ziplistResize(unsigned char *zl, size_t len) {
     assert(len < UINT32_MAX);
-    zl = zrealloc(zl,len);
->>>>>>> 6.2.6
+    zl = zrealloc(zl,len, MALLOC_SHARED);
     ZIPLIST_BYTES(zl) = intrev32ifbe(len);
     zl[len-1] = ZIP_END;
     return zl;

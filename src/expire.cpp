@@ -44,6 +44,7 @@
  *
  * The parameter 'now' is the current time in milliseconds as is passed
  * to the function to avoid too many gettimeofday() syscalls. */
+<<<<<<< HEAD:src/expire.cpp
 void activeExpireCycleExpireFullKey(redisDb *db, const char *key) {
     robj *keyobj = createStringObject(key,sdslen(key));
     mstime_t expire_latency;
@@ -77,6 +78,15 @@ int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, size_t &
     {
         activeExpireCycleExpireFullKey(db, e.key());
         ++tried;
+=======
+int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
+    long long t = dictGetSignedIntegerVal(de);
+    if (now > t) {
+        sds key = dictGetKey(de);
+        robj *keyobj = createStringObject(key,sdslen(key));
+        deleteExpiredKeyAndPropagate(db,keyobj);
+        decrRefCount(keyobj);
+>>>>>>> 6.2.6:src/expire.c
         return 1;
     }
 

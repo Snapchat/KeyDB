@@ -112,9 +112,23 @@ static void clientSetDefaultAuth(client *c) {
                        !(c->user->flags & USER_FLAG_DISABLED);
 }
 
+<<<<<<< HEAD:src/networking.cpp
 client *createClient(connection *conn, int iel) {
     client *c = (client*)zmalloc(sizeof(client), MALLOC_LOCAL);
     serverAssert(conn == nullptr || (iel == (serverTL - g_pserver->rgthreadvar)));
+=======
+int authRequired(client *c) {
+    /* Check if the user is authenticated. This check is skipped in case
+     * the default user is flagged as "nopass" and is active. */
+    int auth_required = (!(DefaultUser->flags & USER_FLAG_NOPASS) ||
+                          (DefaultUser->flags & USER_FLAG_DISABLED)) &&
+                        !c->authenticated;
+    return auth_required;
+}
+
+client *createClient(connection *conn) {
+    client *c = zmalloc(sizeof(client));
+>>>>>>> 6.2.6:src/networking.c
 
     c->iel = iel;
     /* passing NULL as conn it is possible to create a non connected client.
@@ -403,7 +417,7 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
         listAddNodeTail(c->reply, tail);
         c->reply_bytes += tail->size;
 
-        asyncCloseClientOnOutputBufferLimitReached(c);
+        closeClientOnOutputBufferLimitReached(c, 1);
     }
 }
 
@@ -735,7 +749,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         listNodeValue(ln) = buf;
         c->reply_bytes += buf->size;
 
-        asyncCloseClientOnOutputBufferLimitReached(c);
+        closeClientOnOutputBufferLimitReached(c, 1);
     }
 }
 
@@ -789,14 +803,13 @@ void setDeferredSetLen(client *c, void *node, long length) {
 }
 
 void setDeferredAttributeLen(client *c, void *node, long length) {
-    int prefix = c->resp == 2 ? '*' : '|';
-    if (c->resp == 2) length *= 2;
-    setDeferredAggregateLen(c,node,length,prefix);
+    serverAssert(c->resp >= 3);
+    setDeferredAggregateLen(c,node,length,'|');
 }
 
 void setDeferredPushLen(client *c, void *node, long length) {
-    int prefix = c->resp == 2 ? '*' : '>';
-    setDeferredAggregateLen(c,node,length,prefix);
+    serverAssert(c->resp >= 3);
+    setDeferredAggregateLen(c,node,length,'>');
 }
 
 /* Add a double as a bulk reply */
@@ -822,6 +835,16 @@ void addReplyDouble(client *c, double d) {
             dlen = snprintf(dbuf,sizeof(dbuf),",%.17g\r\n",d);
             addReplyProto(c,dbuf,dlen);
         }
+    }
+}
+
+void addReplyBigNum(client *c, const char* num, size_t len) {
+    if (c->resp == 2) {
+        addReplyBulkCBuffer(c, num, len);
+    } else {
+        addReplyProto(c,"(",1);
+        addReplyProto(c,num,len);
+        addReply(c,shared.crlf);
     }
 }
 
@@ -896,14 +919,13 @@ void addReplySetLen(client *c, long length) {
 }
 
 void addReplyAttributeLen(client *c, long length) {
-    int prefix = c->resp == 2 ? '*' : '|';
-    if (c->resp == 2) length *= 2;
-    addReplyAggregateLen(c,length,prefix);
+    serverAssert(c->resp >= 3);
+    addReplyAggregateLen(c,length,'|');
 }
 
 void addReplyPushLen(client *c, long length) {
-    int prefix = c->resp == 2 ? '*' : '>';
-    addReplyAggregateLen(c,length,prefix);
+    serverAssert(c->resp >= 3);
+    addReplyAggregateLen(c,length,'>');
 }
 
 void addReplyNull(client *c) {
@@ -1093,7 +1115,7 @@ void AddReplyFromClient(client *dst, client *src) {
     src->bufpos = 0;
 
     /* Check output buffer limits */
-    asyncCloseClientOnOutputBufferLimitReached(dst);
+    closeClientOnOutputBufferLimitReached(dst, 1);
 }
 
 /* Copy 'src' client output buffers into 'dst' client output buffers.
@@ -2035,9 +2057,6 @@ void resetClient(client *c) {
         c->flags |= CLIENT_REPLY_SKIP;
         c->flags &= ~CLIENT_REPLY_SKIP_NEXT;
     }
-
-    /* Always clear the prevent logging field. */
-    c->flags &= ~CLIENT_PREVENT_LOGGING;
 }
 
 /* This function is used when we want to re-enter the event loop but there
@@ -2229,6 +2248,10 @@ int processMultibulkBuffer(client *c) {
             addReplyError(c,"Protocol error: invalid multibulk length");
             setProtocolError("invalid mbulk count",c);
             return C_ERR;
+        } else if (ll > 10 && authRequired(c)) {
+            addReplyError(c, "Protocol error: unauthenticated multibulk length");
+            setProtocolError("unauth mbulk count", c);
+            return C_ERR;
         }
 
         c->qb_pos = (newline-c->querybuf)+2;
@@ -2275,6 +2298,10 @@ int processMultibulkBuffer(client *c) {
                 (!(c->flags & CLIENT_MASTER) && ll > g_pserver->proto_max_bulk_len)) {
                 addReplyError(c,"Protocol error: invalid bulk length");
                 setProtocolError("invalid bulk length",c);
+                return C_ERR;
+            } else if (ll > 16384 && authRequired(c)) {
+                addReplyError(c, "Protocol error: unauthenticated bulk length");
+                setProtocolError("unauth bulk length", c);
                 return C_ERR;
             }
 
@@ -2342,18 +2369,26 @@ int processMultibulkBuffer(client *c) {
  * 1. The client is reset unless there are reasons to avoid doing it.
  * 2. In the case of master clients, the replication offset is updated.
  * 3. Propagate commands we got from our master to replicas down the line. */
+<<<<<<< HEAD:src/networking.cpp
 void commandProcessed(client *c, int flags) {
+=======
+void commandProcessed(client *c) {
+    /* If client is blocked(including paused), just return avoid reset and replicate.
+     *
+     * 1. Don't reset the client structure for blocked clients, so that the reply
+     *    callback will still be able to access the client argv and argc fields.
+     *    The client will be reset in unblockClient().
+     * 2. Don't update replication offset or propagate commands to replicas,
+     *    since we have not applied the command. */
+    if (c->flags & CLIENT_BLOCKED) return;
+
+    resetClient(c);
+
+>>>>>>> 6.2.6:src/networking.c
     long long prev_offset = c->reploff;
     if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
         /* Update the applied replication offset of our master. */
         c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
-    }
-
-    /* Don't reset the client structure for blocked clients, so that the reply
-     * callback will still be able to access the client argv and argc fields.
-     * The client will be reset in unblockClient(). */
-    if (!(c->flags & CLIENT_BLOCKED)) {
-        resetClient(c);
     }
 
     /* If the client is a master we need to compute the difference
@@ -3087,8 +3122,12 @@ NULL
         if (getLongLongFromObjectOrReply(c,c->argv[2],&id,NULL)
             != C_OK) return;
         struct client *target = lookupClientByID(id);
+<<<<<<< HEAD:src/networking.cpp
         if (target && target->flags & CLIENT_BLOCKED) {
             std::unique_lock<fastlock> ul(target->lock);
+=======
+        if (target && target->flags & CLIENT_BLOCKED && moduleBlockedClientMayTimeout(target)) {
+>>>>>>> 6.2.6:src/networking.c
             if (unblock_error)
                 addReplyError(target,
                     "-UNBLOCKED client unblocked via CLIENT UNBLOCK");
@@ -3413,7 +3452,8 @@ void helloCommand(client *c) {
         int moreargs = (c->argc-1) - j;
         const char *opt = (const char*)ptrFromObj(c->argv[j]);
         if (!strcasecmp(opt,"AUTH") && moreargs >= 2) {
-            preventCommandLogging(c);
+            redactClientCommandArgument(c, j+1);
+            redactClientCommandArgument(c, j+2);
             if (ACLAuthenticateUser(c, c->argv[j+1], c->argv[j+2]) == C_ERR) {
                 addReplyError(c,"-WRONGPASS invalid username-password pair or user is disabled.");
                 return;
@@ -3500,6 +3540,15 @@ static void retainOriginalCommandVector(client *c) {
         c->original_argv[j] = c->argv[j];
         incrRefCount(c->argv[j]);
     }
+}
+
+/* Redact a given argument to prevent it from being shown
+ * in the slowlog. This information is stored in the
+ * original_argv array. */
+void redactClientCommandArgument(client *c, int argc) {
+    retainOriginalCommandVector(c);
+    decrRefCount(c->argv[argc]);
+    c->original_argv[argc] = shared.redacted;
 }
 
 /* Rewrite the command vector of the client. All the new objects ref count
@@ -3671,18 +3720,33 @@ int checkClientOutputBufferLimits(client *c) {
  *
  * Note: we need to close the client asynchronously because this function is
  * called from contexts where the client can't be freed safely, i.e. from the
- * lower level functions pushing data inside the client output buffers. */
-void asyncCloseClientOnOutputBufferLimitReached(client *c) {
-    if (!c->conn) return; /* It is unsafe to free fake clients. */
+ * lower level functions pushing data inside the client output buffers.
+ * When `async` is set to 0, we close the client immediately, this is
+ * useful when called from cron.
+ *
+ * Returns 1 if client was (flagged) closed. */
+int closeClientOnOutputBufferLimitReached(client *c, int async) {
+    if (!c->conn) return 0; /* It is unsafe to free fake clients. */
     serverAssert(c->reply_bytes < SIZE_MAX-(1024*64));
-    if (c->reply_bytes == 0 || c->flags & CLIENT_CLOSE_ASAP) return;
+    if (c->reply_bytes == 0 || c->flags & CLIENT_CLOSE_ASAP) return 0;
     if (checkClientOutputBufferLimits(c)) {
         sds client = catClientInfoString(sdsempty(),c);
 
-        freeClientAsync(c);
-        serverLog(LL_WARNING,"Client %s scheduled to be closed ASAP for overcoming of output buffer limits.", client);
+        if (async) {
+            freeClientAsync(c);
+            serverLog(LL_WARNING,
+                      "Client %s scheduled to be closed ASAP for overcoming of output buffer limits.",
+                      client);
+        } else {
+            freeClient(c);
+            serverLog(LL_WARNING,
+                      "Client %s closed for overcoming of output buffer limits.",
+                      client);
+        }
         sdsfree(client);
+        return  1;
     }
+    return 0;
 }
 
 /* Helper function used by performEvictions() in order to flush slaves
@@ -3768,7 +3832,12 @@ void unpauseClients(void) {
     listIter li;
     client *c;
     
+<<<<<<< HEAD:src/networking.cpp
     g_pserver->client_pause_type = CLIENT_PAUSE_OFF;
+=======
+    server.client_pause_type = CLIENT_PAUSE_OFF;
+    server.client_pause_end_time = 0;
+>>>>>>> 6.2.6:src/networking.c
 
     /* Unblock all of the clients so they are reprocessed. */
     listRewind(g_pserver->paused_clients,&li);
@@ -3832,6 +3901,7 @@ void processEventsWhileBlocked(int iel) {
             vecclients.push_back(c);
         }
     }
+<<<<<<< HEAD:src/networking.cpp
     
     /* Since we're about to release our lock we need to flush the repl backlog queue */
     bool fReplBacklog = g_pserver->repl_batch_offStart >= 0;
@@ -3845,6 +3915,25 @@ void processEventsWhileBlocked(int iel) {
     aeReleaseLock();
     serverAssert(!GlobalLocksAcquired());
     try
+=======
+    listEmpty(server.clients_pending_write);
+
+    /* Update processed count on server */
+    server.stat_io_writes_processed += processed;
+
+    return processed;
+}
+
+/* Return 1 if we want to handle the client read later using threaded I/O.
+ * This is called by the readable handler of the event loop.
+ * As a side effect of calling this function the client is put in the
+ * pending read clients and flagged as such. */
+int postponeClientRead(client *c) {
+    if (server.io_threads_active &&
+        server.io_threads_do_reads &&
+        !ProcessingEventsWhileBlocked &&
+        !(c->flags & (CLIENT_MASTER|CLIENT_SLAVE|CLIENT_PENDING_READ|CLIENT_BLOCKED))) 
+>>>>>>> 6.2.6:src/networking.c
     {
         ProcessingEventsWhileBlocked = 1;
         while (iterations--) {
@@ -3876,7 +3965,40 @@ void processEventsWhileBlocked(int iel) {
     locker.arm(nullptr);
     locker.release();
 
+<<<<<<< HEAD:src/networking.cpp
     g_pserver->events_processed_while_blocked += eventsCount;
+=======
+    /* Also use the main thread to process a slice of clients. */
+    listRewind(io_threads_list[0],&li);
+    while((ln = listNext(&li))) {
+        client *c = listNodeValue(ln);
+        readQueryFromClient(c->conn);
+    }
+    listEmpty(io_threads_list[0]);
+
+    /* Wait for all the other threads to end their work. */
+    while(1) {
+        unsigned long pending = 0;
+        for (int j = 1; j < server.io_threads_num; j++)
+            pending += getIOPendingCount(j);
+        if (pending == 0) break;
+    }
+
+    /* Run the list of clients again to process the new buffers. */
+    while(listLength(server.clients_pending_read)) {
+        ln = listFirst(server.clients_pending_read);
+        client *c = listNodeValue(ln);
+        c->flags &= ~CLIENT_PENDING_READ;
+        listDelNode(server.clients_pending_read,ln);
+
+        serverAssert(!(c->flags & CLIENT_BLOCKED));
+        if (processPendingCommandsAndResetClient(c) == C_ERR) {
+            /* If the client is no longer valid, we avoid
+             * processing the client later. So we just go
+             * to the next. */
+            continue;
+        }
+>>>>>>> 6.2.6:src/networking.c
 
     whileBlockedCron();
 

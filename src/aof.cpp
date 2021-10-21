@@ -180,7 +180,16 @@ void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
 
     /* Install a file event to send data to the rewrite child if there is
      * not one already. */
+<<<<<<< HEAD:src/aof.cpp
     installAofRewriteEvent();
+=======
+    if (!server.aof_stop_sending_diff &&
+        aeGetFileEvents(server.el,server.aof_pipe_write_data_to_child) == 0)
+    {
+        aeCreateFileEvent(server.el, server.aof_pipe_write_data_to_child,
+            AE_WRITABLE, aofChildWriteDiffData, NULL);
+    }
+>>>>>>> 6.2.6:src/aof.c
 }
 
 /* Write the buffer (possibly composed of multiple blocks) into the specified

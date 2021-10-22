@@ -405,6 +405,10 @@ void printBits(unsigned char *p, unsigned long count) {
 #define BITFIELDOP_SET 1
 #define BITFIELDOP_INCRBY 2
 
+/* Make sure we don't bit shift too many bits at a time.
+ * Even this amount is probably way too large. */
+#define BITOP_SHIFT_MAX (1<<30)
+
 /* This helper function used by GETBIT / SETBIT parses the bit offset argument
  * making sure an error is returned if it is negative or if it overflows
  * Redis 512 MB limit for the string value or more (server.proto_max_bulk_len).
@@ -642,6 +646,11 @@ void bitopCommand(client *c) {
             addReplyError(c, "BITOP SHIFT's last parameter must be an integer");
             return;
         }
+        if (shift > BITOP_SHIFT_MAX) {
+            addReplyError(c, "BITOP SHIFT value is too large.");
+            return;
+        }
+
         if (op == BITOP_RSHIFT)
             shift = -shift;
     }

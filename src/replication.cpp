@@ -889,6 +889,7 @@ int masterTryPartialResynchronization(client *c) {
     c->repl_ack_time = g_pserver->unixtime;
     c->repl_put_online_on_ack = 0;
     listAddNodeTail(g_pserver->slaves,c);
+    g_pserver->rgthreadvar[c->iel].cclientsReplica++;
 
     /* We can't use the connection buffers since they are used to accumulate
      * new commands at this stage. But we are sure the socket send buffer is
@@ -992,6 +993,7 @@ int startBgsaveForReplication(int mincapa) {
                 replica->replstate = REPL_STATE_NONE;
                 replica->flags &= ~CLIENT_SLAVE;
                 listDelNode(g_pserver->slaves,ln);
+                g_pserver->rgthreadvar[replica->iel].cclientsReplica--;
                 addReplyError(replica,
                     "BGSAVE failed, replication can't continue");
                 replica->flags |= CLIENT_CLOSE_AFTER_REPLY;
@@ -1121,6 +1123,7 @@ void syncCommand(client *c) {
     c->repldbfd = -1;
     c->flags |= CLIENT_SLAVE;
     listAddNodeTail(g_pserver->slaves,c);
+    g_pserver->rgthreadvar[c->iel].cclientsReplica++;
 
     /* Create the replication backlog if needed. */
     if (listLength(g_pserver->slaves) == 1 && g_pserver->repl_backlog == NULL) {

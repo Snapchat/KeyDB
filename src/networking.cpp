@@ -140,7 +140,6 @@ client *createClient(connection *conn, int iel) {
         connSetPrivateData(conn, c);
     }
 
-    selectDb(c,0);
     uint64_t client_id;
     client_id = g_pserver->next_client_id.fetch_add(1);
     c->iel = iel;
@@ -173,6 +172,7 @@ client *createClient(connection *conn, int iel) {
     /* If the default user does not require authentication, the user is
      * directly authenticated. */
     clientSetDefaultAuth(c);
+    selectDbNamespaced(c,0);
     c->replstate = REPL_STATE_NONE;
     c->repl_put_online_on_ack = 0;
     c->reploff = 0;
@@ -2838,7 +2838,7 @@ void resetCommand(client *c) {
     }
 
     if (c->flags & CLIENT_TRACKING) disableTracking(c);
-    selectDb(c,0);
+
     c->resp = 2;
 
     clientSetDefaultAuth(c);
@@ -2849,6 +2849,7 @@ void resetCommand(client *c) {
     pubsubUnsubscribeAllPatterns(c,0);
 
     c->ns = g_pserver->default_namespace;
+    selectDbNamespaced(c,0);
 
     if (c->name) {
         decrRefCount(c->name);

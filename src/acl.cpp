@@ -248,6 +248,7 @@ user *ACLCreateUser(const char *name, size_t namelen) {
     if (raxFind(Users,(unsigned char*)name,namelen) != raxNotFound) return NULL;
     user *u = (user*)zmalloc(sizeof(*u), MALLOC_LOCAL);
     u->name = sdsnewlen(name,namelen);
+    u->ns_name = sdsnew("::");
     u->flags = USER_FLAG_DISABLED | g_pserver->acl_pubsub_default;
     u->allowed_subcommands = NULL;
     u->passwords = listCreate();
@@ -288,6 +289,7 @@ user *ACLCreateUnlinkedUser(void) {
  * will not remove the user from the Users global radix tree. */
 void ACLFreeUser(user *u) {
     sdsfree(u->name);
+    sdsfree(u->ns_name);
     listRelease(u->passwords);
     listRelease(u->patterns);
     listRelease(u->channels);
@@ -338,6 +340,8 @@ void ACLCopyUser(user *dst, user *src) {
     memcpy(dst->allowed_commands,src->allowed_commands,
            sizeof(dst->allowed_commands));
     dst->flags = src->flags;
+    sdsfree(dst->ns_name);
+    dst->ns_name = sdsdup(src->ns_name);
     ACLResetSubcommands(dst);
     /* Copy the allowed subcommands array of array of SDS strings. */
     if (src->allowed_subcommands) {
@@ -669,6 +673,13 @@ sds ACLDescribeUser(user *u) {
     sds rules = ACLDescribeUserCommandRules(u);
     res = sdscatsds(res,rules);
     sdsfree(rules);
+
+    /* namespace */
+    if (strcmp(u->ns_name, DefaultUser->ns_name) != 0) {
+        res = sdscatlen(res, " ", 1);
+        res = sdscatsds(res, u->ns_name);
+    }
+
     return res;
 }
 
@@ -801,6 +812,10 @@ void ACLAddAllowedSubcommand(user *u, unsigned long id, const char *sub) {
  * reset        Performs the following actions: resetpass, resetkeys, off,
  *              -@all. The user returns to the same state it has immediately
  *              after its creation.
+ * ::<ns>       Sets the namespace for the user.
+ *              :: is the default namespace
+ *              ::auto will generate a new namespace with a random uuid
+ *              (only if the current user is still in the default namespace)
  *
  * The 'op' string must be null terminated. The 'oplen' argument should
  * specify the length of the 'op' string in case the caller requires to pass
@@ -1000,6 +1015,11 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
             errno = ENOENT;
             return C_ERR;
         }
+    } else if (op[0] == ':' && op[1] == ':') {
+        //TODO: implement ::auto
+        sds ns = sdsnewlen(op,oplen);
+        sdsfree(u->ns_name);
+        u->ns_name = ns;
     } else if (!strcasecmp(op,"reset")) {
         serverAssert(ACLSetUser(u,"resetpass",-1) == C_OK);
         serverAssert(ACLSetUser(u,"resetkeys",-1) == C_OK);
@@ -1969,7 +1989,7 @@ void aclCommand(client *c) {
             return;
         }
 
-        addReplyMapLen(c,5);
+        addReplyMapLen(c,6);
 
         /* Flags */
         addReplyBulkCString(c,"flags");
@@ -2030,6 +2050,10 @@ void aclCommand(client *c) {
                 addReplyBulkCBuffer(c,thispat,sdslen(thispat));
             }
         }
+
+        /* namespace */
+        addReplyBulkCString(c,"namespace");
+        addReplyBulkCString(c, u->ns_name);
     } else if ((!strcasecmp(sub,"list") || !strcasecmp(sub,"users")) &&
                c->argc == 2)
     {

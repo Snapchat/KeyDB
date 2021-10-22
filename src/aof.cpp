@@ -731,7 +731,7 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
 
     /* The DB this command was targeting is not the same as the last command
      * we appended. To issue a SELECT command is needed. */
-    if (dictid != g_pserver->aof_selected_db) {
+    if (dictid != -1 && dictid != g_pserver->aof_selected_db) {
         char seldb[64];
 
         snprintf(seldb,sizeof(seldb),"%d",dictid);
@@ -768,6 +768,7 @@ struct client *createAOFClient(void) {
     struct client *c =(client*) zmalloc(sizeof(*c), MALLOC_LOCAL);
 
     selectDb(c,0);
+    c->ns = g_pserver->default_namespace;
     c->id = CLIENT_ID_AOF; /* So modules can identify it's the AOF client. */
     c->conn = NULL;
     c->iel = IDX_EVENT_LOOP_MAIN;
@@ -1546,11 +1547,21 @@ int rewriteAppendOnlyFileRio(rio *aof) {
     long long updated_time = 0;
 
     for (j = 0; j < cserver.dbnum; j++) {
+        char allocatecmd[] = "*4\r\n$8\r\nALLOCATE\r\n";
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
         redisDb *db = g_pserver->db+j;
         dict *d = db->dict;
         if (dictSize(d) == 0) continue;
+        serverAssert(db->ns);
+        serverAssert(db->mapped_id >= 0);
+
         di = dictGetSafeIterator(d);
+
+        /* ALLOCATE DB */
+        if (rioWrite(aof,allocatecmd,sizeof(allocatecmd)-1) == 0) goto werr;
+        if (rioWriteBulkString(aof,db->ns->name, sdslen(db->ns->name)) == 0) goto werr;
+        if (rioWriteBulkLongLong(aof,db->id) == 0) goto werr;
+        if (rioWriteBulkLongLong(aof,db->mapped_id) == 0) goto werr;
 
         /* SELECT the new DB */
         if (rioWrite(aof,selectcmd,sizeof(selectcmd)-1) == 0) goto werr;

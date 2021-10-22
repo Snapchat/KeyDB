@@ -2292,7 +2292,7 @@ int RM_AvoidReplicaTraffic() {
  * returns back to the original one, it should call RedisModule_GetSelectedDb()
  * before in order to restore the old DB number before returning. */
 int RM_SelectDb(RedisModuleCtx *ctx, int newid) {
-    int retval = selectDb(ctx->client,newid);
+    int retval = selectDbNamespaced(ctx->client,newid);
     return (retval == C_OK) ? REDISMODULE_OK : REDISMODULE_ERR;
 }
 
@@ -8526,7 +8526,7 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
              * up to the specific event setup to change it when it makes
              * sense. For instance for FLUSHDB events we select the correct
              * DB automatically. */
-            selectDb(ctx.client, 0);
+            selectDbNamespaced(ctx.client, 0);
 
             /* Event specific context and data pointer setup. */
             if (eid == REDISMODULE_EVENT_CLIENT_CHANGE) {

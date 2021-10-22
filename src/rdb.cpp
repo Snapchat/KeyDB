@@ -1303,6 +1303,9 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
         redisDb *db = g_pserver->db+j;
         dict *d = db->dict;
         if (dictSize(d) == 0) continue;
+        serverAssert(db->ns);
+        serverAssert(db->mapped_id >= 0);
+
         di = dictGetSafeIterator(d);
 
         /* Write the SELECT DB opcode */

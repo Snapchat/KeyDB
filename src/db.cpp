@@ -646,6 +646,60 @@ int selectDb(client *c, int id) {
     return C_OK;
 }
 
+void mapDb(redisNamespace *ns, int global_db, int ns_db) {
+    serverAssert(global_db >= 0 && global_db < cserver.dbnum);
+    serverAssert(ns_db >= 0 &&  ns_db < std::min(cserver.dbnum, cserver.ns_dbnum));
+    serverAssert(!g_pserver->db[global_db].ns);
+    //TODO: locking?
+    g_pserver->db[global_db].ns = ns;
+    g_pserver->db[global_db].mapped_id = ns_db;
+    ns->db[ns_db] = &g_pserver->db[global_db];
+}
+
+redisDb *allocateDb(client *c, int id) {
+    if (id < 0 || id >= std::min(cserver.dbnum, cserver.ns_dbnum)) return nullptr;
+
+    if (!c->ns->db[id]) {
+        /* allocate database from global pool */
+
+        //TODO: optimize this by remembering the latest allocated database and starting from there
+        int found=0;
+        for (int i=0;i<cserver.dbnum; i++) {
+            if (!g_pserver->db[i].ns) {
+                mapDb(c->ns, i, id);
+
+                /* propagate allocation to make sure mapping is the same on all nodes */
+                robj *argv[4];
+                argv[0] = shared.allocate;
+                argv[1] = createObject(OBJ_STRING, sdsdup(c->ns->name));
+                argv[2] = createObject(OBJ_STRING, sdsfromlonglong(i));
+                argv[3] = createObject(OBJ_STRING, sdsfromlonglong(id));
+
+                serverLog(LL_WARNING, "propagate %s %d %d", c->ns->name, i, id);
+                propagate(cserver.allocateCommand, -1, argv, 4, PROPAGATE_AOF|PROPAGATE_REPL);
+
+                found=1;
+                break;
+            }
+        }
+
+        if (!found) {
+            serverLog(LL_WARNING, "We ran out of databases!!");
+            return nullptr;
+        }
+    }
+
+    return c->ns->db[id];
+}
+
+int selectDbNamespaced(client *c, int id) {
+    redisDb *db = allocateDb(c, id);
+    if (db == nullptr) return C_ERR;
+
+    c->db = db;
+    return C_OK;
+}
+
 long long dbTotalServerKeyCount() {
     long long total = 0;
     int j;
@@ -825,11 +879,34 @@ void selectCommand(client *c) {
         addReplyError(c,"SELECT is not allowed in cluster mode");
         return;
     }
-    if (selectDb(c,id) == C_ERR) {
+
+    bool is_replication = ((c->flags & CLIENT_MASTER) || c->id == CLIENT_ID_AOF);
+    if (is_replication && selectDb(c, id) == C_ERR) {
+        addReplyError(c,"DB index is out of range");
+    } else if (!is_replication && selectDbNamespaced(c, id) == C_ERR) {
         addReplyError(c,"DB index is out of range");
     } else {
         addReply(c,shared.ok);
     }
+}
+
+void allocateCommand(client *c) {
+    int global_db, ns_db;
+
+    //TODO: validate namespace name
+    redisNamespace *ns = getNamespace(szFromObj(c->argv[1]));
+
+    if (getIntFromObjectOrReply(c, c->argv[2], &global_db, NULL) != C_OK)
+        return;
+
+    if (getIntFromObjectOrReply(c, c->argv[3], &ns_db, NULL) != C_OK)
+        return;
+
+    serverLog(LL_WARNING, "allocate %s %d %d", ns->name, global_db, ns_db);
+
+    //TODO: error handling
+    mapDb(ns, global_db, ns_db);
+    addReply(c,shared.ok);
 }
 
 void randomkeyCommand(client *c) {
@@ -1259,7 +1336,7 @@ void moveCommand(client *c) {
     if (getIntFromObjectOrReply(c, c->argv[2], &dbid, NULL) != C_OK)
         return;
 
-    if (selectDb(c,dbid) == C_ERR) {
+    if (selectDbNamespaced(c, dbid) == C_ERR) {
         addReplyError(c,"DB index is out of range");
         return;
     }
@@ -1334,7 +1411,7 @@ void copyCommand(client *c) {
             if (getIntFromObjectOrReply(c, c->argv[j+1], &dbid, NULL) != C_OK)
                 return;
 
-            if (selectDb(c, dbid) == C_ERR) {
+            if (selectDbNamespaced(c, dbid) == C_ERR) {
                 addReplyError(c,"DB index is out of range");
                 return;
             }
@@ -1438,11 +1515,13 @@ void scanDatabaseForReadyLists(redisDb *db) {
  *
  * Returns C_ERR if at least one of the DB ids are out of range, otherwise
  * C_OK is returned. */
-int dbSwapDatabases(int id1, int id2) {
-    if (id1 < 0 || id1 >= cserver.dbnum ||
-        id2 < 0 || id2 >= cserver.dbnum) return C_ERR;
+int dbSwapDatabases(client *c, int id1, int id2) {
+    if (id1 < 0 || id1 >= std::min(cserver.dbnum, cserver.ns_dbnum) ||
+        id2 < 0 || id2 >= std::min(cserver.dbnum, cserver.ns_dbnum)) return C_ERR;
     if (id1 == id2) return C_OK;
-    redisDb *db1 = &g_pserver->db[id1], *db2 = &g_pserver->db[id2];
+
+    redisDb *db1 = allocateDb(c, id1);
+    redisDb *db2 = allocateDb(c, id2);
 
     /* Swap hash tables. Note that we don't swap blocking_keys,
      * ready_keys and watched_keys, since we want clients to
@@ -1492,7 +1571,7 @@ void swapdbCommand(client *c) {
         return;
 
     /* Swap... */
-    if (dbSwapDatabases(id1,id2) == C_ERR) {
+    if (dbSwapDatabases(c, id1,id2) == C_ERR) {
         addReplyError(c,"DB index is out of range");
         return;
     } else {

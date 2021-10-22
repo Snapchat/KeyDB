@@ -1299,7 +1299,7 @@ struct sharedObjectsStruct {
     *time, *pxat, *px, *retrycount, *force, *justid, 
     *lastid, *ping, *replping, *setid, *keepttl, *load, *createconsumer,
     *getack, *special_asterick, *special_equals, *default_username,
-    *hdel, *zrem, *mvccrestore, *pexpirememberat, *redacted,
+    *hdel, *zrem, *mvccrestore, *pexpirememberat, *redacted, *allocate,
     *select[PROTO_SHARED_SELECT_CMDS],
     *integers[OBJ_SHARED_INTEGERS],
     *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
@@ -1564,7 +1564,7 @@ struct redisServerConst {
                         *zpopmaxCommand, *sremCommand, *execCommand,
                         *expireCommand, *pexpireCommand, *xclaimCommand,
                         *xgroupCommand, *rreplayCommand, *rpoplpushCommand,
-                        *hdelCommand, *zremCommand, *lmoveCommand;
+                        *hdelCommand, *zremCommand, *lmoveCommand, *allocateCommand;
 
     /* Configuration */
     char *default_masteruser;               /* AUTH with this user and masterauth with master */
@@ -2785,6 +2785,7 @@ void discardDbBackup(dbBackup *buckup, int flags, void(callback)(void*));
 
 
 int selectDb(client *c, int id);
+int selectDbNamespaced(client *c, int id);
 void signalModifiedKey(client *c, redisDb *db, robj *key);
 void signalFlushedDb(int dbid, int async);
 unsigned int getKeysInSlot(unsigned int hashslot, robj **keys, unsigned int count);
@@ -2939,6 +2940,7 @@ void incrbyCommand(client *c);
 void decrbyCommand(client *c);
 void incrbyfloatCommand(client *c);
 void selectCommand(client *c);
+void allocateCommand(client *c);
 void swapdbCommand(client *c);
 void randomkeyCommand(client *c);
 void keysCommand(client *c);

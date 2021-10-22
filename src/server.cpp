@@ -1169,7 +1169,11 @@ struct redisCommand redisCommandTable[] = {
 
     {"failover",failoverCommand,-1,
      "admin no-script ok-stale",
-     0,NULL,0,0,0,0,0,0}
+     0,NULL,0,0,0,0,0,0},
+
+     {"allocate",allocateCommand,4,
+      "ok-loading fast ok-stale @keyspace",
+      0,NULL,0,0,0,0,0,0},
 };
 
 /*============================ Utility functions ============================ */
@@ -2745,6 +2749,7 @@ void createSharedObjects(void) {
                 "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n",
                 dictid_len, dictid_str)));
     }
+
     shared.messagebulk = makeObjectShared("$7\r\nmessage\r\n",13);
     shared.pmessagebulk = makeObjectShared("$8\r\npmessage\r\n",14);
     shared.subscribebulk = makeObjectShared("$9\r\nsubscribe\r\n",15);
@@ -2753,6 +2758,7 @@ void createSharedObjects(void) {
     shared.punsubscribebulk = makeObjectShared("$12\r\npunsubscribe\r\n",19);
 
     /* Shared command names */
+    shared.allocate = makeObjectShared("ALLOCATE", 8);
     shared.del = makeObjectShared("DEL",3);
     shared.unlink = makeObjectShared("UNLINK",6);
     shared.rpop = makeObjectShared("RPOP",4);
@@ -2974,6 +2980,7 @@ void initServerConfig(void) {
     cserver.hdelCommand = lookupCommandByCString("hdel");
     cserver.zremCommand = lookupCommandByCString("zrem");
     cserver.lmoveCommand = lookupCommandByCString("lmove");
+    cserver.allocateCommand = lookupCommandByCString("allocate");
 
     /* Debugging */
     g_pserver->watchdog_period = 0;
@@ -3515,7 +3522,6 @@ void initServer(void) {
     /* Create the Redis databases, and initialize other internal state. */
     for (int j = 0; j < cserver.dbnum; j++) {
         new (&g_pserver->db[j]) redisDb;
-        g_pserver->db[j].ns = g_pserver->default_namespace;
         g_pserver->db[j].dict = dictCreate(&dbDictType,NULL);
         g_pserver->db[j].setexpire = new(MALLOC_LOCAL) expireset();
         g_pserver->db[j].expireitr = g_pserver->db[j].setexpire->end();
@@ -3523,7 +3529,7 @@ void initServer(void) {
         g_pserver->db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
         g_pserver->db[j].watched_keys = dictCreate(&keylistDictType,NULL);
         g_pserver->db[j].id = j;
-        g_pserver->db[j].mapped_id = j;
+        g_pserver->db[j].mapped_id = -1;
         g_pserver->db[j].avg_ttl = 0;
         g_pserver->db[j].last_expire_set = 0;
         g_pserver->db[j].defrag_later = listCreate();

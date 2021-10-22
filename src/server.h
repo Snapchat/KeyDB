@@ -2022,6 +2022,7 @@ struct redisServerThreadVars {
     list *unblocked_clients;     /* list of clients to unblock before next loop NOT THREADSAFE */
     list *clients_pending_asyncwrite;
     int cclients;
+    int cclientsReplica = 0;
     client *current_client; /* Current client */
     long fixed_time_expire = 0;     /* If > 0, expire keys against server.mstime. */
     client *lua_client = nullptr;   /* The "fake client" to query Redis from Lua */

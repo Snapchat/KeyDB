@@ -732,9 +732,13 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
     /* The DB this command was targeting is not the same as the last command
      * we appended. To issue a SELECT command is needed. */
     if (dictid != -1 && dictid != g_pserver->aof_selected_db) {
-        char seldb[64];
-
+        char seldb[64], mappeddb[64];
         snprintf(seldb,sizeof(seldb),"%d",dictid);
+        snprintf(mappeddb,sizeof(seldb),"%d",g_pserver->db[dictid].mapped_id);
+
+        buf = sdscatprintf(buf, "*4\r\n$8\r\nALLOCATE\r\n$%lu\r\n%s\r\n$%lu\r\n%s\r\n$%lu\r\n%s\r\n",
+            sdslen(g_pserver->db[dictid].ns->name), g_pserver->db[dictid].ns->name, strlen(seldb), seldb, strlen(mappeddb), mappeddb);
+
         buf = sdscatprintf(buf,"*2\r\n$6\r\nSELECT\r\n$%lu\r\n%s\r\n",
             (unsigned long)strlen(seldb),seldb);
         g_pserver->aof_selected_db = dictid;

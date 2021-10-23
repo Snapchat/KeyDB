@@ -649,7 +649,7 @@ int selectDb(client *c, int id) {
 void mapDb(redisNamespace *ns, int global_db, int ns_db) {
     serverAssert(global_db >= 0 && global_db < cserver.dbnum);
     serverAssert(ns_db >= 0 &&  ns_db < std::min(cserver.dbnum, cserver.ns_dbnum));
-    serverAssert(!g_pserver->db[global_db].ns);
+    serverAssert(!g_pserver->db[global_db].ns || (g_pserver->db[global_db].ns == ns && g_pserver->db[global_db].mapped_id == ns_db));
     //TODO: locking?
     g_pserver->db[global_db].ns = ns;
     g_pserver->db[global_db].mapped_id = ns_db;

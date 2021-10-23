@@ -848,18 +848,18 @@ NULL
             sdsfree(stats);
             return;
         }
-        if (dbid < 0 || dbid >= cserver.dbnum) {
+        if (dbid < 0 || dbid >= std::min(cserver.dbnum, cserver.ns_dbnum)) {
             sdsfree(stats);
             addReplyError(c,"Out of range database");
             return;
         }
 
         stats = sdscatprintf(stats,"[Dictionary HT]\n");
-        dictGetStats(buf,sizeof(buf),g_pserver->db[dbid].dict);
+        dictGetStats(buf,sizeof(buf),c->ns->db[dbid]->dict);
         stats = sdscat(stats,buf);
 
         stats = sdscatprintf(stats,"[Expires set]\n");
-        g_pserver->db[dbid].setexpire->getstats(buf, sizeof(buf));
+        c->ns->db[dbid]->setexpire->getstats(buf, sizeof(buf));
         stats = sdscat(stats, buf);
 
         addReplyVerbatim(c,stats,sdslen(stats),"txt");

@@ -4697,6 +4697,7 @@ void replicaReplayCommand(client *c)
     cFake->lock.lock();
     cFake->authenticated = c->authenticated;
     cFake->user = c->user;
+    cFake->ns = c->ns;
     cFake->querybuf = sdscatsds(cFake->querybuf,(sds)ptrFromObj(c->argv[2]));
     selectDb(cFake, c->db->id);
     auto ccmdPrev = serverTL->commandsExecuted;

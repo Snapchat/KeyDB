@@ -1134,6 +1134,8 @@ int ACLAuthenticateUser(client *c, robj *username, robj *password) {
     if (ACLCheckUserCredentials(username,password) == C_OK) {
         c->authenticated = 1;
         c->user = ACLGetUserByName((sds)ptrFromObj(username),sdslen((sds)ptrFromObj(username)));
+        c->ns = getNamespace(c->user->ns_name);
+        selectDbNamespaced(c, c->db->mapped_id);
         moduleNotifyUserChanged(c);
         return C_OK;
     } else {

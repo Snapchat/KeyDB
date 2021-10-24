@@ -1,0 +1,4 @@
+user alice on ~* +@all -@dangerous -@admin >alice ::ns1
+user bob on ~* +@all -@dangerous -@admin >bob ::ns2
+user b2 on ~* +@all -@dangerous -@admin >b2 ::ns2
+user default on nopass ~* +@all ::

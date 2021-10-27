@@ -2798,6 +2798,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 key = nullptr;
             } else {
                 sdsfree(key);
+                key = nullptr;
                 goto eoferr;
             }
         } else {

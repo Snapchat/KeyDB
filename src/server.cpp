@@ -4004,12 +4004,9 @@ void call(client *c, int flags) {
     /* Call the command. */
     dirty = g_pserver->dirty;
     prev_err_count = g_pserver->stat_total_error_replies;
+    g_pserver->fixed_time_expire++;
 
-    /* Update cache time, in case we have nested calls we want to
-     * update only on the first call*/
-    if (g_pserver->fixed_time_expire++ == 0) {
-        updateCachedTime(0);
-    }
+    updateCachedTime(0);
     incrementMvccTstamp();
     elapsedStart(&call_timer);
     try {

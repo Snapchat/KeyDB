@@ -75,7 +75,7 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
         return -1;
     }
     anetCloexec(state->kqfd);
-    state->eventsMask = zmalloc(EVENT_MASK_MALLOC_SIZE(eventLoop->setsize), MALLOC_LOCAL);
+    state->eventsMask = (char*)zmalloc(EVENT_MASK_MALLOC_SIZE(eventLoop->setsize), MALLOC_LOCAL);
     memset(state->eventsMask, 0, EVENT_MASK_MALLOC_SIZE(eventLoop->setsize));
     eventLoop->apidata = state;
     return 0;

@@ -231,7 +231,7 @@ int ACLListMatchSds(void *a, void *b) {
 
 /* Method for password comparison used for the user->passwords list
  * Like the above, but uses a time independant compare for security reasons */
-int ACLListMatchSdsTimeIndependent(void *a, void* b) {
+int ACLListMatchSdsSecure(void *a, void* b) {
     return time_independent_strcmp((sds)a,(sds)b) == 0;
 }
 
@@ -259,7 +259,7 @@ user *ACLCreateUser(const char *name, size_t namelen) {
     u->passwords = listCreate();
     u->patterns = listCreate();
     u->channels = listCreate();
-    listSetMatchMethod(u->passwords,ACLListMatchSdsTimeIndependent);
+    listSetMatchMethod(u->passwords,ACLListMatchSdsSecure);
     listSetFreeMethod(u->passwords,ACLListFreeSds);
     listSetDupMethod(u->passwords,ACLListDupSds);
     listSetMatchMethod(u->patterns,ACLListMatchSds);

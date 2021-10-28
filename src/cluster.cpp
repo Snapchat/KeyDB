@@ -746,6 +746,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
         connNonBlock(conn);
         connEnableTcpNoDelay(conn);
+        connKeepAlive(conn,g_pserver->cluster_node_timeout * 2);
 
         /* Use non-blocking I/O for cluster messages. */
         serverLog(LL_VERBOSE,"Accepting cluster node connection from %s:%d", cip, cport);
@@ -5190,7 +5191,7 @@ void mvccrestoreCommand(client *c) {
     rio payload;
     rioInitWithBuffer(&payload,szFromObj(c->argv[4]));
     if (((type = rdbLoadObjectType(&payload)) == -1) ||
-        ((obj = rdbLoadObject(type,&payload,szFromObj(key), OBJ_MVCC_INVALID)) == NULL))
+        ((obj = rdbLoadObject(type,&payload,szFromObj(key),NULL,OBJ_MVCC_INVALID)) == NULL))
     {
         addReplyError(c,"Bad data format");
         return;
@@ -5276,7 +5277,7 @@ void restoreCommand(client *c) {
 
     rioInitWithBuffer(&payload,szFromObj(c->argv[3]));
     if (((type = rdbLoadObjectType(&payload)) == -1) ||
-        ((obj = rdbLoadObject(type,&payload,szFromObj(key), OBJ_MVCC_INVALID)) == NULL))
+        ((obj = rdbLoadObject(type,&payload,szFromObj(key),NULL,OBJ_MVCC_INVALID)) == NULL))
     {
         addReplyError(c,"Bad data format");
         return;
@@ -5460,13 +5461,16 @@ void migrateCommand(client *c) {
             }
             j++;
             password = szFromObj(c->argv[j]);
+            redactClientCommandArgument(c,j);
         } else if (!strcasecmp(szFromObj(c->argv[j]),"auth2")) {
             if (moreargs < 2) {
                 addReply(c,shared.syntaxerr);
                 return;
             }
             username = szFromObj(c->argv[++j]);
+            redactClientCommandArgument(c,j);
             password = szFromObj(c->argv[++j]);
+            redactClientCommandArgument(c,j);
         } else if (!strcasecmp(szFromObj(c->argv[j]),"keys")) {
             if (sdslen(szFromObj(c->argv[3])) != 0) {
                 addReplyError(c,

@@ -89,6 +89,11 @@ typedef struct bkinfo {
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
     serverAssert(GlobalLocksAcquired());
+    /* Master client should never be blocked unless pause or module */
+    serverAssert(!(c->flags & CLIENT_MASTER &&
+                   btype != BLOCKED_MODULE &&
+                   btype != BLOCKED_PAUSE));
+
     c->flags |= CLIENT_BLOCKED;
     c->btype = btype;
     g_pserver->blocked_clients++;

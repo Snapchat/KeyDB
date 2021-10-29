@@ -3285,7 +3285,8 @@ void freeMasterInfo(redisMaster *mi)
     zfree(mi->masteruser);
     if (mi->repl_transfer_tmpfile)
         zfree(mi->repl_transfer_tmpfile);
-    delete mi->staleKeyMap;
+    if (mi->staleKeyMap != nullptr)
+        delete mi->staleKeyMap;
     if (mi->cached_master != nullptr)
         freeClientAsync(mi->cached_master);
     if (mi->master != nullptr)

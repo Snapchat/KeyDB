@@ -542,7 +542,11 @@ void loadServerConfigFromString(char *config) {
             if (port < 0 || port > 65535 || *ptr != '\0') {
                 err= "Invalid master port"; goto loaderr;
             }
-            replicationAddMaster(argv[1], port);
+
+            redisMasterConnInfo *masterInfo = (redisMasterConnInfo*)zmalloc(sizeof(redisMasterConnInfo), MALLOC_LOCAL);
+            masterInfo->ip = sdsnew(argv[1]);
+            masterInfo->port = port;
+            listAddNodeTail(g_pserver->repl_init_masters, masterInfo);
         } else if (!strcasecmp(argv[0],"requirepass") && argc == 2) {
             if (strlen(argv[1]) > CONFIG_AUTHPASS_MAX_LEN) {
                 err = "Password is longer than CONFIG_AUTHPASS_MAX_LEN";

@@ -1512,6 +1512,11 @@ struct redisServerThreadVars {
     std::vector<client*> vecclientsProcess;
 };
 
+struct redisMasterConnInfo {
+    char *ip;
+    int port;
+};
+
 struct redisMaster {
     char *masteruser;               /* AUTH with this user and masterauth with master */
     char *masterauth;               /* AUTH with this password with master */
@@ -1850,7 +1855,8 @@ struct redisServer {
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
     /* Replication (replica) */
     list *masters;
-    int enable_multimaster; 
+    list *repl_init_masters;        /* temp variable to hold the master ip/port pairs to init after config parsing */
+    int enable_multimaster;
     int repl_timeout;               /* Timeout after N seconds of master idle */
     int repl_syncio_timeout; /* Timeout for synchronous I/O calls */
     int repl_disable_tcp_nodelay;   /* Disable TCP_NODELAY after SYNC? */

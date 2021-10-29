@@ -2924,6 +2924,7 @@ void initServerConfig(void) {
 
     /* Replication related */
     g_pserver->masters = listCreate();
+    g_pserver->repl_init_masters = listCreate();
     g_pserver->enable_multimaster = CONFIG_DEFAULT_ENABLE_MULTIMASTER;
     g_pserver->repl_syncio_timeout = CONFIG_REPL_SYNCIO_TIMEOUT;
     g_pserver->master_repl_offset = 0;
@@ -3508,15 +3509,9 @@ redisNamespace *getNamespace(const char* name) {
     return ns;
 }
 
-void initServer(void) {
-    signal(SIGHUP, SIG_IGN);
-    signal(SIGPIPE, SIG_IGN);
-    setupSignalHandlers();
-    makeThreadKillable();
-
+void initDb(void) {
     g_pserver->namespaces = dictCreate(&namespaceDictType,NULL);
     g_pserver->default_namespace = getNamespace("::");
-
     g_pserver->db = (redisDb*)zmalloc(sizeof(redisDb)*cserver.dbnum, MALLOC_LOCAL);
 
     /* Create the Redis databases, and initialize other internal state. */
@@ -3535,6 +3530,13 @@ void initServer(void) {
         g_pserver->db[j].defrag_later = listCreate();
         listSetFreeMethod(g_pserver->db[j].defrag_later,(void (*)(const void*))sdsfree);
     }
+}
+
+void initServer(void) {
+    signal(SIGHUP, SIG_IGN);
+    signal(SIGPIPE, SIG_IGN);
+    setupSignalHandlers();
+    makeThreadKillable();
 
     /* Fixup Master Client Database */
     listIter li;
@@ -6854,6 +6856,24 @@ int main(int argc, char **argv) {
     }
 
     validateConfiguration();
+
+    initDb();
+
+    if (listLength(g_pserver->repl_init_masters)) {
+        listIter li;
+        listNode *ln;
+        listRewind(g_pserver->repl_init_masters, &li);
+        while ((ln = listNext(&li)))
+        {
+            struct redisMasterConnInfo *mi = (struct redisMasterConnInfo*)listNodeValue(ln);
+
+            replicationAddMaster(mi->ip, mi->port);
+            sdsfree(mi->ip);
+            zfree(mi);
+            listDelNode(g_pserver->repl_init_masters, ln);
+        }
+    }
+    listRelease(g_pserver->repl_init_masters);
 
     for (int iel = 0; iel < cserver.cthreads; ++iel)
     {

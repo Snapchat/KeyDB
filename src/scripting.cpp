@@ -605,6 +605,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     c->argv = argv;
     c->argc = argc;
     c->user = g_pserver->lua_caller->user;
+    c->ns = g_pserver->lua_caller->ns;
 
     /* Process module hooks */
     moduleCallCommandFilters(c);

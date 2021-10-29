@@ -1302,10 +1302,8 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     for (j = 0; j < cserver.dbnum; j++) {
         redisDb *db = g_pserver->db+j;
         dict *d = db->dict;
-        if (dictSize(d) == 0) continue;
+        if (db->mapped_id < 0) continue;
         serverAssert(db->ns);
-        serverAssert(db->mapped_id >= 0);
-
         di = dictGetSafeIterator(d);
 
         /* Write the SELECT DB opcode */
@@ -1320,10 +1318,10 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
         if (rdbSaveLen(rdb,db_size) == -1) goto werr;
         if (rdbSaveLen(rdb,expires_size) == -1) goto werr;
 
-        if (db->ns != NULL) {
-            if (rdbSaveAuxFieldStrStr(rdb,"keydb-namespace", db->ns->name) == -1) goto werr;
-            if (rdbSaveAuxFieldStrInt(rdb,"keydb-namespace-dbid", db->mapped_id) == -1) goto werr;
-        }
+        if (rdbSaveAuxFieldStrStr(rdb,"keydb-namespace", db->ns->name) == -1) goto werr;
+        if (rdbSaveAuxFieldStrInt(rdb,"keydb-namespace-dbid", db->mapped_id) == -1) goto werr;
+
+        if (db_size == 0) continue;
 
         /* Iterate this DB writing every entry */
         size_t ckeysExpired = 0;
@@ -2730,7 +2728,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                     serverLog(LL_WARNING,
                               "FATAL: Data file was created with a KeyDB "
                               "server configured to handle more than %d "
-                              "namespaced databases. Exiting\n", cserver.ns_dbnum);
+                              "namespaced databases. Exiting\n", (int)max_db);
                     exit(1);
                 }
 

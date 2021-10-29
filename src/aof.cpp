@@ -771,8 +771,8 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
 struct client *createAOFClient(void) {
     struct client *c =(client*) zmalloc(sizeof(*c), MALLOC_LOCAL);
 
-    selectDb(c,0);
     c->ns = g_pserver->default_namespace;
+    selectDbNamespaced(c, 0);
     c->id = CLIENT_ID_AOF; /* So modules can identify it's the AOF client. */
     c->conn = NULL;
     c->iel = IDX_EVENT_LOOP_MAIN;

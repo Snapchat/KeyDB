@@ -3501,7 +3501,7 @@ redisNamespace *getNamespace(const char* name) {
         ns->name = sdsnew(ns_name);
         ns->pubsub_channels = dictCreate(&keylistDictType,NULL);
         ns->pubsub_patterns = dictCreate(&keylistDictType,NULL);
-        ns->db = (redisDb**)zmalloc(sizeof(redisDb*)*std::min(cserver.dbnum,cserver.ns_dbnum), MALLOC_LOCAL);
+        ns->db = (redisDb**)zcalloc(sizeof(void *)*std::min(cserver.dbnum,cserver.ns_dbnum), MALLOC_LOCAL);
         dictAdd(g_pserver->namespaces, sdsnew(ns_name), ns);
     }
     sdsfree(ns_name);

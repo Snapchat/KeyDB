@@ -44,6 +44,11 @@ start_server {tags {"introspection"}} {
         set e
     } {ERR*}
 
+    test {replica-weighting-factor does not accept values less than 1} {
+        catch {r config set replica-weighting-factor 0} e
+        set e
+    } {ERR*}
+
     test {CLIENT SETNAME can assign a name to this connection} {
         assert_equal [r client setname myname] {OK}
         r client list

@@ -1144,7 +1144,8 @@ int chooseBestThreadForAccept()
         int cclientsThread;
         atomicGet(g_pserver->rgthreadvar[iel].cclients, cclientsThread);
         cclientsThread += rgacceptsInFlight[iel].load(std::memory_order_relaxed);
-        cclientsThread *= (g_pserver->rgthreadvar[iel].cclientsReplica+1);
+        // Note: Its repl factor less one because cclients also includes replicas, so we don't want to double count
+        cclientsThread += (g_pserver->rgthreadvar[iel].cclientsReplica) * (g_pserver->replicaIsolationFactor-1);
         if (cclientsThread < cserver.thread_min_client_threshold)
             return iel;
         if (cclientsThread < cclientsMin)

@@ -2512,7 +2512,7 @@ int RM_SetAbsExpire(RedisModuleKey *key, mstime_t expire) {
  * When async is set to true, db contents will be freed by a background thread. */
 void RM_ResetDataset(int restart_aof, int async) {
     if (restart_aof && g_pserver->aof_state != AOF_OFF) stopAppendOnly();
-    flushAllDataAndResetRDB(async? EMPTYDB_ASYNC: EMPTYDB_NO_FLAGS);
+    flushAllDataAndResetRDB(NULL, async? EMPTYDB_ASYNC: EMPTYDB_NO_FLAGS);
     if (g_pserver->aof_enabled && restart_aof) restartAOFAfterSYNC();
 }
 
@@ -4214,6 +4214,7 @@ RedisModuleCallReply *RM_Call(RedisModuleCtx *ctx, const char *cmdname, const ch
     /* We do not want to allow block, the module do not expect it */
     c->flags |= CLIENT_DENY_BLOCKING;
     c->db = ctx->client->db;
+    c->ns = ctx->client->ns;
     c->argv = argv;
     c->argc = argc;
     if (ctx->module) ctx->module->in_call++;

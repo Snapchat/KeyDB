@@ -571,13 +571,7 @@ NULL
         if (g_pserver->aof_state != AOF_OFF) flushAppendOnlyFile(1);
         emptyDb(-1,EMPTYDB_NO_FLAGS,NULL);
         protectClient(c);
-        for (int i=0; i<cserver.dbnum; i++) {
-            if (g_pserver->db[i].ns) {
-                g_pserver->db[i].ns->db[g_pserver->db[i].mapped_id] = nullptr;
-                g_pserver->db[i].mapped_id = -1;
-                g_pserver->db[i].ns = nullptr;
-            }
-        }
+
         int ret = loadAppendOnlyFile(g_pserver->aof_filename);
         unprotectClient(c);
         if (ret != C_OK) {

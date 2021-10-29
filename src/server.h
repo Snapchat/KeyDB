@@ -2783,7 +2783,7 @@ robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o);
 #define EMPTYDB_ASYNC (1<<0)    /* Reclaim memory in another thread. */
 long long emptyDb(int dbnum, int flags, void(callback)(void*));
 long long emptyDbStructure(redisDb *dbarray, int dbnum, int async, void(callback)(void*));
-void flushAllDataAndResetRDB(int flags);
+void flushAllDataAndResetRDB(redisNamespace *ns, int flags);
 long long dbTotalServerKeyCount();
 dbBackup *backupDb(void);
 void restoreDbBackup(dbBackup *buckup);

@@ -2216,6 +2216,8 @@ struct redisServer {
 
     int active_expire_enabled;      /* Can be disabled for testing purposes. */
 
+    int replicaIsolationFactor = 1;
+
     /* Fields used only for stats */
     long long stat_numcommands;     /* Number of processed commands */
     long long stat_numconnections;  /* Number of connections received */

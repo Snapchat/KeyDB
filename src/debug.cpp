@@ -974,6 +974,7 @@ void _serverAssertPrintClientInfo(const client *c) {
 
     bugReportStart();
     serverLog(LL_WARNING,"=== ASSERTION FAILED CLIENT CONTEXT ===");
+    serverLog(LL_WARNING,"client->id = %llu", (unsigned long long) c->id);
     serverLog(LL_WARNING,"client->flags = %llu", (unsigned long long) c->flags);
     serverLog(LL_WARNING,"client->conn = %s", connGetInfo(c->conn, conninfo, sizeof(conninfo)));
     serverLog(LL_WARNING,"client->argc = %d", c->argc);
@@ -1037,6 +1038,7 @@ void _serverAssertPrintObject(robj_roptr o) {
 void _serverAssertWithInfo(const client *c, robj_roptr o, const char *estr, const char *file, int line) {
     if (c) _serverAssertPrintClientInfo(c);
     if (o) _serverAssertPrintObject(o);
+    printDbMap();
     _serverAssert(estr,file,line);
 }
 

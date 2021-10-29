@@ -681,6 +681,24 @@ void mapDb(redisNamespace *ns, int global_db, int ns_db, int do_propagate) {
     }
 }
 
+void printDbMap() {
+    serverLog(LL_NOTICE, "------ database mapping ------");
+    for (int i=0; i<cserver.dbnum;i++) {
+        serverLog(LL_NOTICE, "%d => %d (%s) @ %d keys", i, g_pserver->db[i].mapped_id,
+                  g_pserver->db[i].ns ? g_pserver->db[i].ns->name : "<none>", (int) dictSize(g_pserver->db[i].dict));
+    }
+    serverLog(LL_NOTICE, "------ default ns mapping ------");
+    for (int i=0; i<std::min(cserver.dbnum,cserver.ns_dbnum);i++) {
+        if (g_pserver->default_namespace->db[i]) {
+            serverLog(LL_NOTICE, "%d => %d (%s) @ %d keys", i, g_pserver->default_namespace->db[i]->mapped_id,
+                      g_pserver->default_namespace->db[i]->ns ? g_pserver->default_namespace->db[i]->ns->name
+                                                              : "<none>",
+                      (int) dictSize(g_pserver->default_namespace->db[i]->dict));
+        }
+    }
+    serverLog(LL_NOTICE, "---- end database mapping ----");
+}
+
 redisDb *allocateDb(client *c, int id) {
     if (id < 0 || id >= std::min(cserver.dbnum, cserver.ns_dbnum)) return nullptr;
 

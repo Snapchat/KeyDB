@@ -2792,6 +2792,7 @@ void discardDbBackup(dbBackup *buckup, int flags, void(callback)(void*));
 
 int selectDb(client *c, int id);
 int selectDbNamespaced(client *c, int id);
+void printDbMap();
 void signalModifiedKey(client *c, redisDb *db, robj *key);
 void signalFlushedDb(int dbid, int async);
 unsigned int getKeysInSlot(unsigned int hashslot, robj **keys, unsigned int count);

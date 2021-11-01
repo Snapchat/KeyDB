@@ -14,6 +14,7 @@ public:
     ~RocksDBStorageFactory();
 
     virtual IStorage *create(int db, key_load_iterator iter, void *privdata) override;
+    virtual IStorage *createMetadataDb() override;
     virtual const char *name() const override;
 
     virtual size_t totalDiskspaceUsed() const override;

@@ -5,6 +5,7 @@
 class TestStorageFactory : public IStorageFactory
 {
     virtual class IStorage *create(int db, key_load_iterator itr, void *privdata) override;
+    virtual class IStorage *createMetadataDb() override;
     virtual const char *name() const override;
     virtual size_t totalDiskspaceUsed() const override { return 0; }
     virtual bool FSlow() const { return false; }

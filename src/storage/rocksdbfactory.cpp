@@ -32,6 +32,7 @@ IStorageFactory *CreateRocksDBStorageFactory(const char *path, int dbnum, const 
 RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, const char *rgchConfig, size_t cchConfig)
     : m_path(dbfile)
 {
+    dbnum++; // create an extra db for metadata
     // Get the count of column families in the actual database
     std::vector<std::string> vecT;
     auto status = rocksdb::DB::ListColumnFamilies(rocksdb::Options(), dbfile, &vecT);
@@ -132,6 +133,11 @@ std::string RocksDBStorageFactory::getTempFolder()
             m_fCreatedTempFolder = true;
     }
     return path;
+}
+
+IStorage *RocksDBStorageFactory::createMetadataDb()
+{
+    return this->create(-1, nullptr, nullptr);
 }
 
 IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *privdata)

@@ -3492,6 +3492,19 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     }
 }
 
+sds generateAutoNamespaceName() {
+    char uuid[37];
+    uuid_t uuid_bin;
+    uuid_generate(uuid_bin);
+    uuid_unparse(uuid_bin, uuid);
+
+    //TODO: for readability we might want to add username
+    //      but because we are operating on a fake user here
+    //      the actual user name is not available.
+    sds auto_ns = sdsempty();
+    return sdscatfmt(auto_ns, "::%s", uuid);
+}
+
 redisNamespace *getNamespace(const char* name) {
     sds ns_name = sdsnew(name);
     redisNamespace *ns = (redisNamespace *) dictFetchValue(g_pserver->namespaces, ns_name);

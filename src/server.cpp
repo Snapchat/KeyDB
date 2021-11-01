@@ -3984,6 +3984,10 @@ void initServer(void) {
     slowlogInit();
     latencyMonitorInit();
 
+    if (g_pserver->m_pstorageFactory) {
+        g_pserver->metadataDb = g_pserver->m_pstorageFactory->createMetadataDb();
+    }
+
     /* We have to initialize storage providers after the cluster has been initialized */
     for (int idb = 0; idb < cserver.dbnum; ++idb)
     {

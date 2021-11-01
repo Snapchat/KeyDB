@@ -161,6 +161,7 @@ start_server {tags {"introspection"}} {
             active-replica
             bind
             set-proc-title
+            acl-namespace-default
         }
 
         if {!$::tls} {

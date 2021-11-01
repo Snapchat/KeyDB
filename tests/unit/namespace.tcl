@@ -6,6 +6,16 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user-namespaces
     # user b2 on ~* +@all -@dangerous -@admin >b2 ::ns2
     # user default on nopass ~* +@all ::
 
+    test {::auto generates unique namespace} {
+        r ACL setuser auto1 on ~* +@all -@dangerous -@admin >auto ::auto
+        set ns1 [dict get [r ACL getuser auto1] namespace]
+        assert_match "::*-*-*-*" $ns1
+        r ACL setuser auto2 on ~* +@all -@dangerous -@admin >auto ::auto
+        set ns2 [dict get [r ACL getuser auto2] namespace]
+        assert_match "::*-*-*-*" $ns2
+        assert {$ns1 != $ns2}
+    }
+
     test {alice can set keys in multiple databases} {
         r AUTH alice alice
         r SELECT 0
@@ -51,7 +61,7 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user-namespaces
         assert_equal "bob2" [r GET name]
     }
 
-    test {b2 can see bob's keys are not overwritten by alice} {
+    test {b2 can see bob's keys} {
         r AUTH b2 b2
         r SELECT 0
         assert_equal "bob0" [r GET name]
@@ -60,5 +70,7 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user-namespaces
         r SELECT 2
         assert_equal "bob2" [r GET name]
     }
+
+
 }
 

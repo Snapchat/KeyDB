@@ -1574,6 +1574,7 @@ struct redisServerConst {
     /* Configuration */
     char *default_masteruser;               /* AUTH with this user and masterauth with master */
     char *default_masterauth;               /* AUTH with this password with master */
+    char *default_user_namespace;           /* default user namespace */
     int verbosity;                  /* Loglevel in keydb.conf */
     int maxidletime;                /* Client timeout in seconds */
     int tcpkeepalive;               /* Set SO_KEEPALIVE if non-zero. */
@@ -2156,6 +2157,7 @@ extern dictType sdsReplyDictType;
 
 /* Namespaces */
 redisNamespace *getNamespace(const char* name);
+sds generateAutoNamespaceName();
 
 /* Modules */
 void moduleInitModulesSystem(void);

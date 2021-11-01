@@ -33,6 +33,7 @@ extern "C" {
 }
 #include <fcntl.h>
 #include <ctype.h>
+#include <uuid/uuid.h>
 
 /* =============================================================================
  * Global state for ACLs
@@ -248,7 +249,13 @@ user *ACLCreateUser(const char *name, size_t namelen) {
     if (raxFind(Users,(unsigned char*)name,namelen) != raxNotFound) return NULL;
     user *u = (user*)zmalloc(sizeof(*u), MALLOC_LOCAL);
     u->name = sdsnewlen(name,namelen);
-    u->ns_name = sdsnew("::");
+
+    if (!strcasecmp(cserver.default_user_namespace, "::auto")) {
+        u->ns_name = generateAutoNamespaceName();
+    } else {
+        u->ns_name = sdsnew(cserver.default_user_namespace);
+    }
+
     u->flags = USER_FLAG_DISABLED | g_pserver->acl_pubsub_default;
     u->allowed_subcommands = NULL;
     u->passwords = listCreate();
@@ -675,7 +682,7 @@ sds ACLDescribeUser(user *u) {
     sdsfree(rules);
 
     /* namespace */
-    if (strcmp(u->ns_name, DefaultUser->ns_name) != 0) {
+    if (strcmp(u->ns_name, cserver.default_user_namespace) != 0) {
         res = sdscatlen(res, " ", 1);
         res = sdscatsds(res, u->ns_name);
     }
@@ -815,7 +822,6 @@ void ACLAddAllowedSubcommand(user *u, unsigned long id, const char *sub) {
  * ::<ns>       Sets the namespace for the user.
  *              :: is the default namespace
  *              ::auto will generate a new namespace with a random uuid
- *              (only if the current user is still in the default namespace)
  *
  * The 'op' string must be null terminated. The 'oplen' argument should
  * specify the length of the 'op' string in case the caller requires to pass
@@ -1016,10 +1022,13 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
             return C_ERR;
         }
     } else if (op[0] == ':' && op[1] == ':') {
-        //TODO: implement ::auto
-        sds ns = sdsnewlen(op,oplen);
-        sdsfree(u->ns_name);
-        u->ns_name = ns;
+        if (!strcasecmp(op, "::auto")) {
+            u->ns_name = generateAutoNamespaceName();
+        } else {
+            sds ns = sdsnewlen(op,oplen);
+            sdsfree(u->ns_name);
+            u->ns_name = ns;
+        }
     } else if (!strcasecmp(op,"reset")) {
         serverAssert(ACLSetUser(u,"resetpass",-1) == C_OK);
         serverAssert(ACLSetUser(u,"resetkeys",-1) == C_OK);

@@ -1158,6 +1158,7 @@ public:
     bool FRehashing() const { return dictIsRehashing(m_pdict) || dictIsRehashing(m_pdictTombstone); }
 
     void setStorageProvider(StorageCache *pstorage);
+    void endStorageProvider();
 
     void trackChanges(bool fBulk, size_t sizeHint = 0);
     bool FTrackingChanges() const { return !!m_fTrackingChanges; }
@@ -1301,6 +1302,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
 
     void initialize(int id);
     void storageProviderInitialize();
+    void storageProviderDelete();
     virtual ~redisDb();
 
     void dbOverwriteCore(redisDb::iter itr, sds keySds, robj *val, bool fUpdateMvcc, bool fRemoveExpire);

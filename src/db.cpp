@@ -2571,6 +2571,12 @@ void redisDbPersistentData::setStorageProvider(StorageCache *pstorage)
     m_spstorage = std::unique_ptr<StorageCache>(pstorage);
 }
 
+void redisDbPersistentData::endStorageProvider()
+{
+    serverAssert(m_spstorage != nullptr);
+    m_spstorage.reset();
+}
+
 void clusterStorageLoadCallback(const char *rgchkey, size_t cch, void *)
 {
     slotToKeyUpdateKeyCore(rgchkey, cch, true /*add*/);
@@ -2596,6 +2602,14 @@ void redisDb::storageProviderInitialize()
     {
         IStorageFactory::key_load_iterator itr = (g_pserver->cluster_enabled) ? clusterStorageLoadCallback : nullptr;
         this->setStorageProvider(StorageCache::create(g_pserver->m_pstorageFactory, id, itr, nullptr));
+    }
+}
+
+void redisDb::storageProviderDelete()
+{
+    if (g_pserver->m_pstorageFactory != nullptr)
+    {
+        this->endStorageProvider();
     }
 }
 

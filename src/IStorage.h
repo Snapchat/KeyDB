@@ -2,6 +2,8 @@
 #include <functional>
 #include "sds.h"
 
+#define METADATA_DB_IDENTIFIER "c299fde0-6d42-4ec4-b939-34f680ffe39f"
+
 class IStorageFactory
 {
 public:

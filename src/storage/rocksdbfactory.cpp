@@ -137,7 +137,9 @@ std::string RocksDBStorageFactory::getTempFolder()
 
 IStorage *RocksDBStorageFactory::createMetadataDb()
 {
-    return this->create(-1, nullptr, nullptr);
+    IStorage *metadataDb = this->create(-1, nullptr, nullptr);
+    metadataDb->insert("KEYDB_METADATA_ID", strlen("KEYDB_METADATA_ID"), (void*)METADATA_DB_IDENTIFIER, strlen(METADATA_DB_IDENTIFIER), false);
+    return metadataDb;
 }
 
 IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *privdata)

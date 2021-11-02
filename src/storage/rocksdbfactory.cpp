@@ -23,6 +23,7 @@ public:
     virtual size_t totalDiskspaceUsed() const override;
 
     virtual bool FSlow() const override { return true; }
+    virtual size_t filedsRequired() const override;
 
 private:
     void setVersion(rocksdb::ColumnFamilyHandle*);
@@ -55,6 +56,7 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
 
     options.max_background_compactions = 4;
     options.max_background_flushes = 2;
+    options.max_open_files = filedsRequired();
     options.bytes_per_sync = 1048576;
     options.compaction_pri = rocksdb::kMinOverlappingRatio;
     options.compression = rocksdb::kNoCompression;
@@ -128,6 +130,10 @@ void RocksDBStorageFactory::setVersion(rocksdb::ColumnFamilyHandle *handle)
     auto status = m_spdb->Put(rocksdb::WriteOptions(), handle, rocksdb::Slice(version_key, sizeof(version_key)), rocksdb::Slice(KEYDB_REAL_VERSION, strlen(KEYDB_REAL_VERSION)+1));
     if (!status.ok())
         throw status.ToString();
+}
+
+size_t RocksDBStorageFactory::filedsRequired() const {
+    return 256;
 }
 
 IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *privdata)

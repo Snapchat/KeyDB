@@ -7080,13 +7080,6 @@ void *workerThreadMain(void *parg)
     serverAssert(!GlobalLocksAcquired());
     aeDeleteEventLoop(el);
 
-    aeAcquireLock();
-    for (int idb = 0; idb < cserver.dbnum; ++idb) {
-        if (g_pserver->rgthreadvar[iel].rgdbSnapshot[idb] != nullptr)
-            g_pserver->db[idb]->endSnapshot(g_pserver->rgthreadvar[iel].rgdbSnapshot[idb]);
-    }
-    aeReleaseLock();
-
     return NULL;
 }
 
@@ -7508,8 +7501,7 @@ int main(int argc, char **argv) {
     if (!fLockAcquired)
         g_fInCrash = true;  // We don't actually crash right away, because we want to sync any storage providers
     for (int idb = 0; idb < cserver.dbnum; ++idb) {
-        delete g_pserver->db[idb];
-        g_pserver->db[idb] = nullptr;
+        g_pserver->db[idb]->storageProviderDelete();
     }
     // If we couldn't acquire the global lock it means something wasn't shutdown and we'll probably deadlock
     serverAssert(fLockAcquired);

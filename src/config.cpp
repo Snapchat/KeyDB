@@ -357,6 +357,7 @@ bool initializeStorageProvider(const char **err)
         {
             // Create The Storage Factory (if necessary)
             serverLog(LL_NOTICE, "Initializing FLASH storage provider (this may take a long time)");
+            adjustOpenFilesLimit();
             g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(g_sdsArgs, cserver.dbnum, cserver.storage_conf, cserver.storage_conf ? strlen(cserver.storage_conf) : 0);
         }
         else if (!strcasecmp(g_sdsProvider, "test") && g_sdsArgs == nullptr)

@@ -1144,6 +1144,8 @@ int chooseBestThreadForAccept()
         int cclientsThread;
         atomicGet(g_pserver->rgthreadvar[iel].cclients, cclientsThread);
         cclientsThread += rgacceptsInFlight[iel].load(std::memory_order_relaxed);
+        // Note: Its repl factor less one because cclients also includes replicas, so we don't want to double count
+        cclientsThread += (g_pserver->rgthreadvar[iel].cclientsReplica) * (g_pserver->replicaIsolationFactor-1);
         if (cclientsThread < cserver.thread_min_client_threshold)
             return iel;
         if (cclientsThread < cclientsMin)
@@ -1668,6 +1670,7 @@ bool freeClient(client *c) {
         ln = listSearchKey(l,c);
         serverAssert(ln != NULL);
         listDelNode(l,ln);
+        g_pserver->rgthreadvar[c->iel].cclientsReplica--;
         /* We need to remember the time when we started to have zero
          * attached slaves, as after some time we'll free the replication
          * backlog. */
@@ -1790,36 +1793,43 @@ int writeToClient(client *c, int handler_installed) {
        is a replica, so only attempt to do so if that's the case. */
     if (c->flags & CLIENT_SLAVE && !(c->flags & CLIENT_MONITOR)) {
         std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
-        long long repl_end_idx = getReplIndexFromOffset(c->repl_end_off);
-        serverAssert(c->repl_curr_off != -1);
 
-        if (c->repl_curr_off != c->repl_end_off){
-            long long repl_curr_idx = getReplIndexFromOffset(c->repl_curr_off); 
-            long long nwritten2ndStage = 0; /* How much was written from the start of the replication backlog
-                                             * in the event of a wrap around write */
-            /* normal case with no wrap around */
-            if (repl_end_idx >= repl_curr_idx){
-                nwritten = connWrite(c->conn, g_pserver->repl_backlog + repl_curr_idx, repl_end_idx - repl_curr_idx);
-            /* wrap around case */
+        while (clientHasPendingReplies(c)) {
+            long long repl_end_idx = getReplIndexFromOffset(c->repl_end_off);
+            serverAssert(c->repl_curr_off != -1);
+
+            if (c->repl_curr_off != c->repl_end_off){
+                long long repl_curr_idx = getReplIndexFromOffset(c->repl_curr_off); 
+                long long nwritten2ndStage = 0; /* How much was written from the start of the replication backlog
+                                                * in the event of a wrap around write */
+                /* normal case with no wrap around */
+                if (repl_end_idx >= repl_curr_idx){
+                    nwritten = connWrite(c->conn, g_pserver->repl_backlog + repl_curr_idx, repl_end_idx - repl_curr_idx);
+                /* wrap around case */
+                } else {
+                    nwritten = connWrite(c->conn, g_pserver->repl_backlog + repl_curr_idx, g_pserver->repl_backlog_size - repl_curr_idx);
+                    /* only attempt wrapping if we write the correct number of bytes */
+                    if (nwritten == g_pserver->repl_backlog_size - repl_curr_idx){
+                        nwritten2ndStage = connWrite(c->conn, g_pserver->repl_backlog, repl_end_idx);
+                        if (nwritten2ndStage != -1)
+                            nwritten += nwritten2ndStage;
+                    }                
+                }
+
+                /* only increment bytes if an error didn't occur */
+                if (nwritten > 0){
+                    totwritten += nwritten;
+                    c->repl_curr_off += nwritten;
+                    serverAssert(c->repl_curr_off <= c->repl_end_off);
+                }
+
+                /* If the second part of a write didn't go through, we still need to register that */
+                if (nwritten2ndStage == -1) nwritten = -1;
+                if (nwritten == -1)
+                    break;
             } else {
-                nwritten = connWrite(c->conn, g_pserver->repl_backlog + repl_curr_idx, g_pserver->repl_backlog_size - repl_curr_idx);
-                /* only attempt wrapping if we write the correct number of bytes */
-                if (nwritten == g_pserver->repl_backlog_size - repl_curr_idx){
-                    nwritten2ndStage = connWrite(c->conn, g_pserver->repl_backlog, repl_end_idx);
-                    if (nwritten2ndStage != -1)
-                        nwritten += nwritten2ndStage;
-                }                
+                break;
             }
-
-            /* only increment bytes if an error didn't occur */
-            if (nwritten > 0){
-                totwritten += nwritten;
-                c->repl_curr_off += nwritten;
-                serverAssert(c->repl_curr_off <= c->repl_end_off);
-            }
-
-            /* If the second part of a write didn't go through, we still need to register that */
-            if (nwritten2ndStage == -1) nwritten = -1;
         }
     } else {
         while(clientHasPendingReplies(c)) {
@@ -2060,7 +2070,7 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
         /* Don't write to clients that are going to be closed anyway. */
         if (c->flags & CLIENT_CLOSE_ASAP) continue;
 
-        /* Try to write buffers to the client socket. */
+        /* Try to write buffers to the client socket, unless its a replica in multithread mode */
         if (writeToClient(c,0) == C_ERR) 
         {
             if (c->flags & CLIENT_CLOSE_ASAP)
@@ -2547,7 +2557,7 @@ void parseClientCommandBuffer(client *c) {
         }
 
         /* Prefetch outside the lock for better perf */
-        if (g_pserver->prefetch_enabled && cserver.cthreads > 1 && cqueriesStart < c->vecqueuedcmd.size() &&
+        if (g_pserver->prefetch_enabled && (cserver.cthreads > 1 || g_pserver->m_pstorageFactory) && cqueriesStart < c->vecqueuedcmd.size() &&
             (g_pserver->m_pstorageFactory || aeLockContested(cserver.cthreads/2) || cserver.cthreads == 1) && !GlobalLocksAcquired()) {
             auto &query = c->vecqueuedcmd.back();
             if (query.argc > 0 && query.argc == query.argcMax) {
@@ -2694,7 +2704,7 @@ void readQueryFromClient(connection *conn) {
         return;
     }
 
-    if (cserver.cthreads > 1) {
+    if (cserver.cthreads > 1 || g_pserver->m_pstorageFactory) {
         parseClientCommandBuffer(c);
         serverTL->vecclientsProcess.push_back(c);
     } else {

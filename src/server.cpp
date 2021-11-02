@@ -3476,6 +3476,8 @@ int setOOMScoreAdj(int process_class) {
  * g_pserver->maxclients to the value that we can actually handle. */
 void adjustOpenFilesLimit(void) {
     rlim_t maxfiles = g_pserver->maxclients+CONFIG_MIN_RESERVED_FDS;
+    if (g_pserver->m_pstorageFactory)
+        maxfiles += g_pserver->m_pstorageFactory->filedsRequired();
     struct rlimit limit;
 
     if (getrlimit(RLIMIT_NOFILE,&limit) == -1) {

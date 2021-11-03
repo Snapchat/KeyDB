@@ -8,6 +8,7 @@
 #define INTERNAL_KEY_PREFIX "\x00\x04\x03\x00\x05\x02\x04"
 static const char count_key[] = INTERNAL_KEY_PREFIX "__keydb__count\1";
 static const char version_key[] = INTERNAL_KEY_PREFIX "__keydb__version\1";
+static const char meta_key[] = INTERNAL_KEY_PREFIX "__keydb__metadata\1";
 class RocksDBStorageFactory;
 
 class RocksDBStorageProvider : public IStorage

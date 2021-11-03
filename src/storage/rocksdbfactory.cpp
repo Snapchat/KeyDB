@@ -90,6 +90,13 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
     m_spdb = std::shared_ptr<rocksdb::DB>(db);
     for (auto handle : handles)
     {
+        std::string metaId;
+
+        auto idStatus = m_spdb->Get(rocksdb::ReadOptions(), handle, rocksdb::Slice(meta_key, sizeof(meta_key)), &metaId);
+        if (status.ok() && !strcmp(metaId.c_str(), METADATA_DB_IDENTIFIER)) {
+            printf("Recognized metadata table\r\n");
+        }
+
         std::string strVersion;
         auto status = m_spdb->Get(rocksdb::ReadOptions(), handle, rocksdb::Slice(version_key, sizeof(version_key)), &strVersion);
         if (!status.ok())
@@ -138,7 +145,7 @@ std::string RocksDBStorageFactory::getTempFolder()
 IStorage *RocksDBStorageFactory::createMetadataDb()
 {
     IStorage *metadataDb = this->create(-1, nullptr, nullptr);
-    metadataDb->insert("KEYDB_METADATA_ID", strlen("KEYDB_METADATA_ID"), (void*)METADATA_DB_IDENTIFIER, strlen(METADATA_DB_IDENTIFIER), false);
+    metadataDb->insert(meta_key, sizeof(meta_key), (void*)METADATA_DB_IDENTIFIER, strlen(METADATA_DB_IDENTIFIER), false);
     return metadataDb;
 }
 

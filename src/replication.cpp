@@ -3783,6 +3783,45 @@ void disconnectMaster(redisMaster *mi)
     }
 }
 
+void saveMasterStatusToStorage()
+{
+    if (!g_pserver->m_pstorageFactory || !g_pserver->metadataDb) return;
+    if (listLength(g_pserver->masters) == 0) {
+        g_pserver->metadataDb->insert("repl_masters", 12, (void*)"", 0, true);
+        return;
+    }
+    sds val = sds(sdsempty());
+    listNode *ln;
+    listIter li;
+    redisMaster *mi;
+    listRewind(g_pserver->masters,&li);
+    while((ln = listNext(&li)) != NULL) {
+        mi = (redisMaster*)listNodeValue(ln);
+        if (!mi->master) {
+            // If master client is not available, use info from master struct - better than nothing
+            if (mi->master_replid[0] == 0) {
+                // if replid is null, there's no reason to save it
+                continue;
+            }
+            val = sdscatfmt(val, "%s:%I:%s:%i;", mi->master_replid,
+                mi->master_initial_offset,
+                mi->masterhost,
+                mi->masterport);
+        }
+        else {
+            if (mi->master->replid[0] == 0) {
+                // if replid is null, there's no reason to save it
+                continue;
+            }
+            val = sdscatfmt(val, "%s:%I:%s:%i;", mi->master->replid,
+                mi->master->reploff,
+                mi->masterhost,
+                mi->masterport);
+        }
+    }
+    g_pserver->metadataDb->insert("repl_masters", 12, (void*)val, sdslen(val), true);
+}
+
 /* Set replication to the specified master address and port. */
 struct redisMaster *replicationAddMaster(char *ip, int port) {
     // pre-reqs: We must not already have a replica in the list with the same tuple
@@ -3855,6 +3894,7 @@ struct redisMaster *replicationAddMaster(char *ip, int port) {
             mi->masterhost, mi->masterport);
         connectWithMaster(mi);
     }
+    saveMasterStatusToStorage();
     return mi;
 }
 
@@ -3938,6 +3978,8 @@ void replicationUnsetMaster(redisMaster *mi) {
     /* Restart the AOF subsystem in case we shut it down during a sync when
      * we were still a slave. */
     if (g_pserver->aof_enabled && g_pserver->aof_state == AOF_OFF) restartAOFAfterSYNC();
+
+    saveMasterStatusToStorage();
 }
 
 /* This function is called when the replica lose the connection with the
@@ -3969,6 +4011,8 @@ void replicationHandleMasterDisconnection(redisMaster *mi) {
                 mi->masterhost, mi->masterport);
             connectWithMaster(mi);
         }
+
+        saveMasterStatusToStorage();
     }
 }
 

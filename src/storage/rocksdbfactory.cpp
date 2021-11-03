@@ -93,8 +93,9 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
         std::string metaId;
 
         auto idStatus = m_spdb->Get(rocksdb::ReadOptions(), handle, rocksdb::Slice(meta_key, sizeof(meta_key)), &metaId);
-        if (status.ok() && !strcmp(metaId.c_str(), METADATA_DB_IDENTIFIER)) {
-            printf("Recognized metadata table\r\n");
+        if (idStatus.ok() && !strcmp(metaId.c_str(), METADATA_DB_IDENTIFIER)) {
+            auto metaStatus = m_spdb->Get(rocksdb::ReadOptions(), handle, rocksdb::Slice("repl-masters", 12), &this->metadata);
+            if (!metaStatus.ok()) this->metadata = "";
         }
 
         std::string strVersion;
@@ -188,6 +189,11 @@ IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *pr
         }
     }
     return new RocksDBStorageProvider(this, m_spdb, spcolfamily, nullptr, count);
+}
+
+std::string RocksDBStorageFactory::getMetadata() const
+{
+    return metadata;
 }
 
 const char *RocksDBStorageFactory::name() const

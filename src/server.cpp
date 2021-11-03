@@ -3985,6 +3985,10 @@ void initServer(void) {
     latencyMonitorInit();
 
     if (g_pserver->m_pstorageFactory) {
+        std::string repl_masters = g_pserver->m_pstorageFactory->getMetadata();
+        if (!repl_masters.empty()) {
+            serverLog(LL_NOTICE, "Loaded repl-masters from storage provider: %s", repl_masters);
+        }
         g_pserver->metadataDb = g_pserver->m_pstorageFactory->createMetadataDb();
     }
 

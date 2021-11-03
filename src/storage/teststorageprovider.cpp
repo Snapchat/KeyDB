@@ -13,6 +13,11 @@ IStorage *TestStorageFactory::createMetadataDb()
     return metadataDb;
 }
 
+std::string TestStorageFactory::getMetadata() const
+{
+    return "";
+}
+
 const char *TestStorageFactory::name() const
 {
     return "TEST Storage Provider";

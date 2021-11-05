@@ -63,6 +63,7 @@
 #include <algorithm>
 #include <uuid/uuid.h>
 #include <mutex>
+#include <condition_variable>
 #include "aelocker.h"
 #include "motd.h"
 #include "t_nhash.h"
@@ -94,6 +95,10 @@ struct redisServer server; /* Server global state */
 redisServer *g_pserver = &GlobalHidden::server;
 struct redisServerConst cserver;
 __thread struct redisServerThreadVars *serverTL = NULL;   // thread local server vars
+std::mutex time_thread_mutex;
+std::condition_variable time_thread_cv;
+int sleeping_threads = 0;
+void wakeTimeThread();
 
 /* Our command table.
  *
@@ -2007,7 +2012,7 @@ void databasesCron(bool fMainThread) {
  * info or not using the 'update_daylight_info' argument. Normally we update
  * such info only when calling this function from serverCron() but not when
  * calling it from call(). */
-void updateCachedTime(int update_daylight_info) {
+void updateCachedTime() {
     long long t = ustime();
     __atomic_store(&g_pserver->ustime, &t, __ATOMIC_RELAXED);
     t /= 1000;
@@ -2020,12 +2025,10 @@ void updateCachedTime(int update_daylight_info) {
      * context is safe since we will never fork() while here, in the main
      * thread. The logging function will call a thread safe version of
      * localtime that has no locks. */
-    if (update_daylight_info) {
-        struct tm tm;
-        time_t ut = g_pserver->unixtime;
-        localtime_r(&ut,&tm);
-        __atomic_store(&g_pserver->daylight_active, &tm.tm_isdst, __ATOMIC_RELAXED);
-    }
+    struct tm tm;
+    time_t ut = g_pserver->unixtime;
+    localtime_r(&ut,&tm);
+    __atomic_store(&g_pserver->daylight_active, &tm.tm_isdst, __ATOMIC_RELAXED);
 }
 
 void checkChildrenDone(void) {
@@ -2151,9 +2154,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Software watchdog: deliver the SIGALRM that will reach the signal
      * handler if we don't return here fast enough. */
     if (g_pserver->watchdog_period) watchdogScheduleSignal(g_pserver->watchdog_period);
-
-    /* Update the time cache. */
-    updateCachedTime(1);
 
     g_pserver->hz = g_pserver->config_hz;
     /* Adapt the g_pserver->hz value to the number of configured clients. If we have
@@ -2412,7 +2412,6 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
 
 void blockingOperationStarts() {
     if(!g_pserver->blocking_op_nesting++){
-        updateCachedTime(0);
         g_pserver->blocked_last_cron = g_pserver->mstime;
     }
 }
@@ -2623,6 +2622,14 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     locker.disarm();
     if (!fSentReplies)
         handleClientsWithPendingWrites(iel, aof_state);
+
+    // Scope lock_guard
+    {
+        std::lock_guard<std::mutex> lock(time_thread_mutex);
+        sleeping_threads++;
+        serverAssert(sleeping_threads <= cserver.cthreads);
+    }
+    
     /* Determine whether the modules are enabled before sleeping, and use that result
        both here, and after wakeup to avoid double acquire or release of the GIL */
     serverTL->modulesEnabledThisAeLoop = !!moduleCount();
@@ -2642,6 +2649,7 @@ void afterSleep(struct aeEventLoop *eventLoop) {
        Don't check here that modules are enabled, rather use the result from beforeSleep
        Otherwise you may double acquire the GIL and cause deadlocks in the module */
     if (!ProcessingEventsWhileBlocked) {
+        wakeTimeThread();
         if (serverTL->modulesEnabledThisAeLoop) moduleAcquireGIL(TRUE /*fServerThread*/);
     }
 }
@@ -2839,7 +2847,7 @@ void initMasterInfo(redisMaster *master)
 void initServerConfig(void) {
     int j;
 
-    updateCachedTime(true);
+    updateCachedTime();
     getRandomHexChars(g_pserver->runid,CONFIG_RUN_ID_SIZE);
     g_pserver->runid[CONFIG_RUN_ID_SIZE] = '\0';
     changeReplicationId();
@@ -4006,7 +4014,6 @@ void call(client *c, int flags) {
     prev_err_count = g_pserver->stat_total_error_replies;
     g_pserver->fixed_time_expire++;
 
-    updateCachedTime(0);
     incrementMvccTstamp();
     elapsedStart(&call_timer);
     try {
@@ -6534,6 +6541,31 @@ void OnTerminate()
     serverPanic("std::teminate() called");
 }
 
+void wakeTimeThread() {
+    updateCachedTime();
+    std::lock_guard<std::mutex> lock(time_thread_mutex);
+    if (sleeping_threads >= cserver.cthreads)
+        time_thread_cv.notify_one();
+    sleeping_threads--;
+    serverAssert(sleeping_threads >= 0);
+}
+
+void *timeThreadMain(void*) {
+    timespec delay;
+    delay.tv_sec = 0;
+    delay.tv_nsec = 100;
+    while (true) {
+        {
+            std::unique_lock<std::mutex> lock(time_thread_mutex);
+            if (sleeping_threads >= cserver.cthreads) {
+                time_thread_cv.wait(lock);
+            }
+        }
+        updateCachedTime();
+        clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, NULL);
+    }
+}
+
 void *workerThreadMain(void *parg)
 {
     int iel = (int)((int64_t)parg);
@@ -6929,6 +6961,8 @@ int main(int argc, char **argv) {
     
     setOOMScoreAdj(-1);
     serverAssert(cserver.cthreads > 0 && cserver.cthreads <= MAX_EVENT_LOOPS);
+
+    pthread_create(&cserver.time_thread_id, nullptr, timeThreadMain, nullptr);
 
     pthread_attr_t tattr;
     pthread_attr_init(&tattr);

@@ -3869,10 +3869,6 @@ void processEventsWhileBlocked(int iel) {
     listNode *ln;
     listRewind(g_pserver->clients, &li);
 
-    /* Update our cached time since it is used to create and update the last
-     * interaction time with clients and for other important things. */
-    updateCachedTime(0);
-
     // All client locks must be acquired *after* the global lock is reacquired to prevent deadlocks
     //  so unlock here, and save them for reacquisition later
     while ((ln = listNext(&li)) != nullptr)

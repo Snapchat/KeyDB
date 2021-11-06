@@ -1174,6 +1174,10 @@ struct redisCommand redisCommandTable[] = {
      {"allocate",allocateCommand,4,
       "ok-loading fast ok-stale @keyspace",
       0,NULL,0,0,0,0,0,0},
+
+    {"selectns",selectNsCommand,3,
+     "admin ok-loading fast ok-stale @keyspace",
+     0,NULL,0,0,0,0,0,0},
 };
 
 /*============================ Utility functions ============================ */

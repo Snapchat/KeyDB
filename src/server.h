@@ -2949,6 +2949,7 @@ void incrbyCommand(client *c);
 void decrbyCommand(client *c);
 void incrbyfloatCommand(client *c);
 void selectCommand(client *c);
+void selectNsCommand(client *c);
 void allocateCommand(client *c);
 void swapdbCommand(client *c);
 void randomkeyCommand(client *c);

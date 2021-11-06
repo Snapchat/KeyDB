@@ -930,6 +930,12 @@ void selectCommand(client *c) {
     }
 }
 
+void selectNsCommand(client *c) {
+    //TODO: validate namespace name
+    c->ns = getNamespace(szFromObj(c->argv[2]));
+    selectCommand(c);
+}
+
 void allocateCommand(client *c) {
     int global_db, ns_db;
 

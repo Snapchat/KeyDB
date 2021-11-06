@@ -71,6 +71,16 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user-namespaces
         assert_equal "bob2" [r GET name]
     }
 
-
+    test {admin can select databases in different namespaces} {
+        r AUTH default ""
+        r SELECTNS 0 ::ns1
+        assert_equal "alice0" [r GET name]
+        r SELECTNS 1 ::ns1
+        assert_equal "alice1" [r GET name]
+        r SELECTNS 0 ::ns2
+        assert_equal "bob0" [r GET name]
+        r SELECTNS 1 ::ns2
+        assert_equal "bob1" [r GET name]
+    }
 }
 

@@ -499,6 +499,7 @@ long long emptyDbStructure(redisDb *dbarray, int dbnum, int async,
             dbarray[j].ns->db[dbarray[j].mapped_id] = nullptr;
             dbarray[j].mapped_id = -1;
             dbarray[j].ns = nullptr;
+            g_pserver->last_allocated_db = -1;
         }
     }
 

@@ -3786,8 +3786,24 @@ void disconnectMaster(redisMaster *mi)
 void saveMasterStatusToStorage()
 {
     if (!g_pserver->m_pstorageFactory || !g_pserver->metadataDb) return;
+
+    g_pserver->metadataDb->insert("repl-id", 7, g_pserver->replid, sizeof(g_pserver->replid), true);
+    if (g_pserver->fActiveReplica || (!listLength(g_pserver->masters) && g_pserver->repl_backlog)) {
+        g_pserver->metadataDb->insert("repl-stream-db", 14, g_pserver->replicaseldb == -1 ? 0 : &g_pserver->replicaseldb,
+                                        g_pserver->replicaseldb == -1 ? 0 : sizeof(g_pserver->replicaseldb), true);
+    }
+
+    struct redisMaster *miFirst = (redisMaster*)(listLength(g_pserver->masters) ? listNodeValue(listFirst(g_pserver->masters)) : NULL);
+
+    if (miFirst && miFirst->master) {
+        g_pserver->metadataDb->insert("repl-stream-db", 14, &miFirst->master->db->id, sizeof(miFirst->master->db->id), true);
+    }
+    else if (miFirst && miFirst->cached_master) {
+        g_pserver->metadataDb->insert("repl-stream-db", 14, &miFirst->cached_master->db->id, sizeof(miFirst->cached_master->db->id), true);
+    }
+
     if (listLength(g_pserver->masters) == 0) {
-        g_pserver->metadataDb->insert("repl_masters", 12, (void*)"", 0, true);
+        g_pserver->metadataDb->insert("repl-masters", 12, (void*)"", 0, true);
         return;
     }
     sds val = sds(sdsempty());
@@ -3819,7 +3835,7 @@ void saveMasterStatusToStorage()
                 mi->masterport);
         }
     }
-    g_pserver->metadataDb->insert("repl_masters", 12, (void*)val, sdslen(val), true);
+    g_pserver->metadataDb->insert("repl-masters", 12, (void*)val, sdslen(val), true);
 }
 
 /* Set replication to the specified master address and port. */

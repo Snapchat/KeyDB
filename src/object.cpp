@@ -1112,15 +1112,26 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
     mh->aof_buffer = mem;
     mem_total+=mem;
 
-    mem = g_pserver->lua_scripts_mem;
-    mem += dictSize(g_pserver->lua_scripts) * sizeof(dictEntry) +
-        dictSlots(g_pserver->lua_scripts) * sizeof(dictEntry*);
-    mem += dictSize(g_pserver->repl_scriptcache_dict) * sizeof(dictEntry) +
-        dictSlots(g_pserver->repl_scriptcache_dict) * sizeof(dictEntry*);
-    if (listLength(g_pserver->repl_scriptcache_fifo) > 0) {
-        mem += listLength(g_pserver->repl_scriptcache_fifo) * (sizeof(listNode) + 
-            sdsZmallocSize((sds)listNodeValue(listFirst(g_pserver->repl_scriptcache_fifo))));
+    mem = 0;
+
+    redisNamespace *ns;
+    dictEntry *de;
+    dictIterator *di;
+    di = dictGetSafeIterator(g_pserver->namespaces);
+    while((de = dictNext(di)) != NULL) {
+        ns = (struct redisNamespace *) dictGetVal(de);
+        mem += ns->lua_scripts_mem;
+        mem += dictSize(ns->lua_scripts) * sizeof(dictEntry) +
+               dictSlots(ns->lua_scripts) * sizeof(dictEntry*);
+        mem += dictSize(ns->repl_scriptcache_dict) * sizeof(dictEntry) +
+               dictSlots(ns->repl_scriptcache_dict) * sizeof(dictEntry*);
+        if (listLength(ns->repl_scriptcache_fifo) > 0) {
+            mem += listLength(ns->repl_scriptcache_fifo) * (sizeof(listNode) +
+                    sdsZmallocSize((sds)listNodeValue(listFirst(ns->repl_scriptcache_fifo))));
+        }
     }
+    dictReleaseIterator(di);
+
     mh->lua_caches = mem;
     mem_total+=mem;
 
@@ -1234,7 +1245,8 @@ sds getMemoryDoctorReport(void) {
         }
 
         /* Too many scripts are cached? */
-        if (dictSize(g_pserver->lua_scripts) > 1000) {
+        //TODO: all namespaces
+        if (dictSize(g_pserver->default_namespace->lua_scripts) > 1000) {
             many_scripts = 1;
             num_reports++;
         }

@@ -82,5 +82,20 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user-namespaces
         r SELECTNS 1 ::ns2
         assert_equal "bob1" [r GET name]
     }
+
+    test {Scripts commands should not affect other namespaces} {
+        r AUTH alice alice
+        set sha [r SCRIPT LOAD "return true"]
+        assert_equal "1" [r SCRIPT EXISTS $sha]
+        r AUTH bob bob
+        assert_equal "0" [r SCRIPT EXISTS $sha]
+        set sha2 [r SCRIPT LOAD "return true"]
+        assert_equal $sha $sha2
+        r SCRIPT FLUSH
+        assert_equal "0" [r SCRIPT EXISTS $sha]
+        r AUTH alice alice
+        assert_equal "1" [r SCRIPT EXISTS $sha]
+        r EVALSHA $sha 0
+    }
 }
 

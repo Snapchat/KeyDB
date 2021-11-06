@@ -1000,8 +1000,14 @@ struct redisDb {
 struct redisNamespace {
     sds name;
     redisDb **db;
-    ::dict *pubsub_channels;  /* Map channels to list of subscribed clients */
-    ::dict *pubsub_patterns;  /* A dict of pubsub_patterns */
+    ::dict *pubsub_channels;             /* Map channels to list of subscribed clients */
+    ::dict *pubsub_patterns;             /* A dict of pubsub_patterns */
+    ::dict *lua_scripts;                 /* A dictionary of SHA1 -> Lua scripts */
+    lua_State *lua;                      /* The Lua interpreter. We use one per namespace */
+    unsigned long long lua_scripts_mem;  /* Cached scripts' memory + oh */
+    ::dict *repl_scriptcache_dict;       /* SHA1 all slaves are aware of. */
+    list *repl_scriptcache_fifo;         /* First in, first out LRU eviction. */
+    unsigned int repl_scriptcache_size;  /* Max number of elements. */
 };
 
 /* Declare database backup that include redis main DBs and slots to keys map.
@@ -1871,10 +1877,6 @@ struct redisServer {
     int slave_announce_port;        /* Give the master this listening port. */
     char *slave_announce_ip;        /* Give the master this ip address. */
     int repl_slave_lazy_flush;          /* Lazy FLUSHALL before loading DB? */
-    /* Replication script cache. */
-    ::dict *repl_scriptcache_dict;        /* SHA1 all slaves are aware of. */
-    list *repl_scriptcache_fifo;        /* First in, first out LRU eviction. */
-    unsigned int repl_scriptcache_size; /* Max number of elements. */
     /* Synchronous replication. */
     list *clients_waiting_acks;         /* Clients waiting in WAIT command. */
     int get_ack_from_slaves;            /* If true we send REPLCONF GETACK. */
@@ -1951,11 +1953,8 @@ struct redisServer {
                                         is down? */
     int cluster_config_file_lock_fd;   /* cluster config fd, will be flock */
     /* Scripting */
-    lua_State *lua; /* The Lua interpreter. We use just one for all clients */
     client *lua_caller = nullptr;   /* The client running EVAL right now, or NULL */
     char* lua_cur_script = nullptr; /* SHA1 of the script currently running, or NULL */
-    ::dict *lua_scripts;         /* A dictionary of SHA1 -> Lua scripts */
-    unsigned long long lua_scripts_mem;  /* Cached scripts' memory + oh */
     mstime_t lua_time_limit;  /* Script timeout in milliseconds */
     monotime lua_time_start;  /* monotonic timer to detect timed-out script */
     mstime_t lua_time_snapshot; /* Snapshot of mstime when script is started */
@@ -2449,10 +2448,10 @@ void resizeReplicationBacklog(long long newsize);
 struct redisMaster *replicationAddMaster(char *ip, int port);
 void replicationUnsetMaster(struct redisMaster *mi);
 void refreshGoodSlavesCount(void);
-void replicationScriptCacheInit(void);
+void replicationScriptCacheInit(redisNamespace *ns);
 void replicationScriptCacheFlush(void);
-void replicationScriptCacheAdd(sds sha1);
-int replicationScriptCacheExists(sds sha1);
+void replicationScriptCacheAdd(redisNamespace *ns, sds sha1);
+int replicationScriptCacheExists(redisNamespace *ns, sds sha1);
 void processClientsWaitingReplicas(void);
 void unblockClientWaitingReplicas(client *c);
 int replicationCountAcksByOffset(long long offset);
@@ -2857,7 +2856,8 @@ int redis_check_rdb_main(int argc, const char **argv, FILE *fp);
 int redis_check_aof_main(int argc, char **argv);
 
 /* Scripting */
-void scriptingInit(int setup);
+void scriptingSetup();
+void scriptingInit(redisNamespace *ns);
 int ldbRemoveChild(pid_t pid);
 void ldbKillForkedSessions(void);
 int ldbPendingChildren(void);

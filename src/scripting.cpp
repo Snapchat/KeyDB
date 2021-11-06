@@ -1145,31 +1145,31 @@ void scriptingEnableGlobalsProtection(lua_State *lua) {
  * in order to reset the Lua scripting environment.
  *
  * However it is simpler to just call scriptingReset() that does just that. */
-void scriptingInit(int setup) {
-    lua_State *lua = lua_open();
+void scriptingSetup() {
 
-    if (setup) {
-        for (int iel = 0; iel < cserver.cthreads; ++iel)
-        {
-            g_pserver->rgthreadvar[iel].lua_client = createClient(nullptr, iel);
-            g_pserver->rgthreadvar[iel].lua_client->flags |= CLIENT_LUA;
-            /* We do not want to allow blocking commands inside Lua */
-            g_pserver->rgthreadvar[iel].lua_client->flags |= CLIENT_DENY_BLOCKING;
-        }
-        g_pserver->lua_timedout = 0;
-        g_pserver->lua_caller = NULL;
-        g_pserver->lua_cur_script = NULL;
-        ldbInit();
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
+    {
+        g_pserver->rgthreadvar[iel].lua_client = createClient(nullptr, iel);
+        g_pserver->rgthreadvar[iel].lua_client->flags |= CLIENT_LUA;
+        /* We do not want to allow blocking commands inside Lua */
+        g_pserver->rgthreadvar[iel].lua_client->flags |= CLIENT_DENY_BLOCKING;
     }
+    g_pserver->lua_timedout = 0;
+    g_pserver->lua_caller = NULL;
+    g_pserver->lua_cur_script = NULL;
+    ldbInit();
+}
 
+void scriptingInit(redisNamespace *ns) {
+    lua_State *lua = lua_open();
     luaLoadLibraries(lua);
     luaRemoveUnsupportedFunctions(lua);
 
     /* Initialize a dictionary we use to map SHAs to scripts.
      * This is useful for replication, as we need to replicate EVALSHA
      * as EVAL, so we need to remember the associated script. */
-    g_pserver->lua_scripts = dictCreate(&shaScriptObjectDictType,NULL);
-    g_pserver->lua_scripts_mem = 0;
+    ns->lua_scripts = dictCreate(&shaScriptObjectDictType,NULL);
+    ns->lua_scripts_mem = 0;
 
     /* Register the redis commands table and fields */
     lua_newtable(lua);
@@ -1317,23 +1317,23 @@ void scriptingInit(int setup) {
      * to global variables. */
     scriptingEnableGlobalsProtection(lua);
 
-    g_pserver->lua = lua;
+    ns->lua = lua;
 }
 
 /* Release resources related to Lua scripting.
  * This function is used in order to reset the scripting environment. */
-void scriptingRelease(int async) {
+void scriptingRelease(redisNamespace *ns, int async) {
     if (async)
-        freeLuaScriptsAsync(g_pserver->lua_scripts);
+        freeLuaScriptsAsync(ns->lua_scripts);
     else
-        dictRelease(g_pserver->lua_scripts);
-    g_pserver->lua_scripts_mem = 0;
-    lua_close(g_pserver->lua);
+        dictRelease(ns->lua_scripts);
+    ns->lua_scripts_mem = 0;
+    lua_close(ns->lua);
 }
 
-void scriptingReset(int async) {
-    scriptingRelease(async);
-    scriptingInit(0);
+void scriptingReset(redisNamespace *ns, int async) {
+    scriptingRelease(ns, async);
+    scriptingInit(ns);
 }
 
 /* Set an array of Redis String Objects as a Lua array (table) stored into a
@@ -1422,7 +1422,7 @@ sds luaCreateFunction(client *c, lua_State *lua, robj *body) {
     sha1hex(funcname+2,(char*)ptrFromObj(body),sdslen((sds)ptrFromObj(body)));
 
     sds sha = sdsnewlen(funcname+2,40);
-    if ((de = dictFind(g_pserver->lua_scripts,sha)) != NULL) {
+    if ((de = dictFind(c->ns->lua_scripts,sha)) != NULL) {
         sdsfree(sha);
         return (sds)dictGetKey(de);
     }
@@ -1460,9 +1460,9 @@ sds luaCreateFunction(client *c, lua_State *lua, robj *body) {
     /* We also save a SHA1 -> Original script map in a dictionary
      * so that we can replicate / write in the AOF all the
      * EVALSHA commands as EVAL using the original script. */
-    int retval = dictAdd(g_pserver->lua_scripts,sha,body);
+    int retval = dictAdd(c->ns->lua_scripts,sha,body);
     serverAssertWithInfo(c ? c : serverTL->lua_client,NULL,retval == DICT_OK);
-    g_pserver->lua_scripts_mem += sdsZmallocSize(sha) + getStringObjectSdsUsedMemory(body);
+    c->ns->lua_scripts_mem += sdsZmallocSize(sha) + getStringObjectSdsUsedMemory(body);
     incrRefCount(body);
     return sha;
 }
@@ -1523,7 +1523,7 @@ void resetLuaClient(void) {
 }
 
 void evalGenericCommand(client *c, int evalsha) {
-    lua_State *lua = g_pserver->lua;
+    lua_State *lua = c->ns->lua;
     char funcname[43];
     long long numkeys;
     long long initial_server_dirty = g_pserver->dirty;
@@ -1627,7 +1627,7 @@ void evalGenericCommand(client *c, int evalsha) {
         lua_sethook(lua,luaMaskCountHook,LUA_MASKCOUNT,100000);
         delhook = 1;
     } else if (ldb.active) {
-        lua_sethook(g_pserver->lua,luaLdbLineHook,LUA_MASKLINE|LUA_MASKCOUNT,100000);
+        lua_sethook(c->ns->lua,luaLdbLineHook,LUA_MASKLINE|LUA_MASKCOUNT,100000);
         delhook = 1;
     }
 
@@ -1710,13 +1710,13 @@ void evalGenericCommand(client *c, int evalsha) {
      * flush our cache of scripts that can be replicated as EVALSHA, while
      * for AOF we need to do so every time we rewrite the AOF file. */
     if (evalsha && !g_pserver->lua_replicate_commands) {
-        if (!replicationScriptCacheExists((sds)ptrFromObj(c->argv[1]))) {
+        if (!replicationScriptCacheExists(c->ns, (sds)ptrFromObj(c->argv[1]))) {
             /* This script is not in our script cache, replicate it as
              * EVAL, then add it into the script cache, as from now on
              * slaves and AOF know about it. */
-            robj *script = (robj*)dictFetchValue(g_pserver->lua_scripts,ptrFromObj(c->argv[1]));
+            robj *script = (robj*)dictFetchValue(c->ns->lua_scripts,ptrFromObj(c->argv[1]));
 
-            replicationScriptCacheAdd((sds)ptrFromObj(c->argv[1]));
+            replicationScriptCacheAdd(c->ns, (sds)ptrFromObj(c->argv[1]));
             serverAssertWithInfo(c,NULL,script != NULL);
 
             /* If the script did not produce any changes in the dataset we want
@@ -1799,7 +1799,7 @@ NULL
             addReplyError(c,"SCRIPT FLUSH only support SYNC|ASYNC option");
             return;
         }
-        scriptingReset(async);
+        scriptingReset(c->ns, async);
         addReply(c,shared.ok);
         replicationScriptCacheFlush();
         g_pserver->dirty++; /* Propagating this command is a good idea. */
@@ -1808,13 +1808,13 @@ NULL
 
         addReplyArrayLen(c, c->argc-2);
         for (j = 2; j < c->argc; j++) {
-            if (dictFind(g_pserver->lua_scripts,ptrFromObj(c->argv[j])))
+            if (dictFind(c->ns->lua_scripts,ptrFromObj(c->argv[j])))
                 addReply(c,shared.cone);
             else
                 addReply(c,shared.czero);
         }
     } else if (c->argc == 3 && !strcasecmp((const char*)ptrFromObj(c->argv[1]),"load")) {
-        sds sha = luaCreateFunction(c,g_pserver->lua,c->argv[2]);
+        sds sha = luaCreateFunction(c, c->ns->lua,c->argv[2]);
         if (sha == NULL) return; /* The error was sent by luaCreateFunction(). */
         addReplyBulkCBuffer(c,sha,40);
         forceCommandPropagation(c,PROPAGATE_REPL|PROPAGATE_AOF);
@@ -1823,6 +1823,8 @@ NULL
             addReplyError(c,"-NOTBUSY No scripts in execution right now.");
         } else if (g_pserver->lua_caller->flags & CLIENT_MASTER) {
             addReplyError(c,"-UNKILLABLE The busy script was sent by a master instance in the context of replication and cannot be killed.");
+        } else if (g_pserver->lua_caller->ns != c->ns) {
+            addReplyError(c,"-UNKILLABLE Script is not yours to kill");
         } else if (g_pserver->lua_write_dirty) {
             addReplyError(c,"-UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command.");
         } else {

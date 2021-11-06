@@ -2124,8 +2124,17 @@ void cronUpdateMemoryStats() {
             /* LUA memory isn't part of zmalloc_used, but it is part of the process RSS,
              * so we must deduct it in order to be able to calculate correct
              * "allocator fragmentation" ratio */
-            size_t lua_memory = lua_gc(g_pserver->lua,LUA_GCCOUNT,0)*1024LL;
-            g_pserver->cron_malloc_stats.allocator_resident = g_pserver->cron_malloc_stats.process_rss - lua_memory;
+            g_pserver->cron_malloc_stats.allocator_resident = g_pserver->cron_malloc_stats.process_rss;
+
+            redisNamespace *ns;
+            dictEntry *de;
+            dictIterator *di;
+            di = dictGetSafeIterator(g_pserver->namespaces);
+            while((de = dictNext(di)) != NULL) {
+                ns = (struct redisNamespace *) dictGetVal(de);
+                g_pserver->cron_malloc_stats.allocator_resident -= lua_gc(ns->lua,LUA_GCCOUNT,0)*1024LL;
+            }
+            dictReleaseIterator(di);
         }
         if (!g_pserver->cron_malloc_stats.allocator_active)
             g_pserver->cron_malloc_stats.allocator_active = g_pserver->cron_malloc_stats.allocator_resident;
@@ -3519,6 +3528,10 @@ redisNamespace *getNamespace(const char* name) {
         ns->pubsub_channels = dictCreate(&keylistDictType,NULL);
         ns->pubsub_patterns = dictCreate(&keylistDictType,NULL);
         ns->db = (redisDb**)zcalloc(sizeof(void *)*std::min(cserver.dbnum,cserver.ns_dbnum), MALLOC_LOCAL);
+
+        scriptingInit(ns);
+        replicationScriptCacheInit(ns);
+
         dictAdd(g_pserver->namespaces, sdsnew(ns_name), ns);
     }
     sdsfree(ns_name);
@@ -3683,8 +3696,7 @@ void initServer(void) {
     uuid_generate((unsigned char*)cserver.uuid);
 
     if (g_pserver->cluster_enabled) clusterInit();
-    replicationScriptCacheInit();
-    scriptingInit(1);
+    scriptingSetup();
     slowlogInit();
     latencyMonitorInit();
     
@@ -5168,7 +5180,7 @@ sds genRedisInfoString(const char *section) {
         size_t zmalloc_used = zmalloc_used_memory();
         size_t total_system_mem = cserver.system_memory_size;
         const char *evict_policy = evictPolicyToString();
-        long long memory_lua = g_pserver->lua ? (long long)lua_gc(g_pserver->lua,LUA_GCCOUNT,0)*1024 : 0;
+        long long memory_lua = g_pserver->default_namespace->lua ? (long long)lua_gc(g_pserver->default_namespace->lua,LUA_GCCOUNT,0)*1024 : 0; //TODO: all namespaces
         struct redisMemOverhead *mh = getMemoryOverheadData();
 
         /* Peak memory is updated from time to time by serverCron() so it
@@ -5250,7 +5262,7 @@ sds genRedisInfoString(const char *section) {
             used_memory_lua_hmem,
             (long long) mh->lua_caches,
             used_memory_scripts_hmem,
-            dictSize(g_pserver->lua_scripts),
+            dictSize(g_pserver->default_namespace->lua_scripts),
             g_pserver->maxmemory,
             maxmemory_hmem,
             evict_policy,
@@ -5467,8 +5479,8 @@ sds genRedisInfoString(const char *section) {
             g_pserver->stat_evictedkeys,
             g_pserver->stat_keyspace_hits,
             g_pserver->stat_keyspace_misses,
-            dictSize(g_pserver->default_namespace->pubsub_channels),
-            dictSize(g_pserver->default_namespace->pubsub_patterns),
+            dictSize(g_pserver->default_namespace->pubsub_channels), //TODO: all namespaces
+            dictSize(g_pserver->default_namespace->pubsub_patterns), //TODO: all namespaces
             g_pserver->stat_fork_time,
             g_pserver->stat_total_forks,
             dictSize(g_pserver->migrate_cached_sockets),

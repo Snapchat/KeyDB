@@ -3793,10 +3793,10 @@ void refreshGoodSlavesCount(void) {
  */
 
 /* Initialize the script cache, only called at startup. */
-void replicationScriptCacheInit(void) {
-    g_pserver->repl_scriptcache_size = 10000;
-    g_pserver->repl_scriptcache_dict = dictCreate(&replScriptCacheDictType,NULL);
-    g_pserver->repl_scriptcache_fifo = listCreate();
+void replicationScriptCacheInit(redisNamespace *ns) {
+    ns->repl_scriptcache_size = 10000;
+    ns->repl_scriptcache_dict = dictCreate(&replScriptCacheDictType,NULL);
+    ns->repl_scriptcache_fifo = listCreate();
 }
 
 /* Empty the script cache. Should be called every time we are no longer sure
@@ -3811,38 +3811,49 @@ void replicationScriptCacheInit(void) {
  *    to reclaim otherwise unused memory.
  */
 void replicationScriptCacheFlush(void) {
-    dictEmpty(g_pserver->repl_scriptcache_dict,NULL);
-    listRelease(g_pserver->repl_scriptcache_fifo);
-    g_pserver->repl_scriptcache_fifo = listCreate();
+    redisNamespace *ns;
+    dictEntry *de;
+    dictIterator *di;
+
+    di = dictGetSafeIterator(g_pserver->namespaces);
+    while((de = dictNext(di)) != NULL) {
+        ns = (struct redisNamespace *) dictGetVal(de);
+        if (listLength(ns->repl_scriptcache_fifo) != 0) {
+            dictEmpty(ns->repl_scriptcache_dict, NULL);
+            listRelease(ns->repl_scriptcache_fifo);
+            ns->repl_scriptcache_fifo = listCreate();
+        }
+    }
+    dictReleaseIterator(di);
 }
 
 /* Add an entry into the script cache, if we reach max number of entries the
  * oldest is removed from the list. */
-void replicationScriptCacheAdd(sds sha1) {
+void replicationScriptCacheAdd(redisNamespace *ns, sds sha1) {
     int retval;
     sds key = sdsdup(sha1);
 
     /* Evict oldest. */
-    if (listLength(g_pserver->repl_scriptcache_fifo) == g_pserver->repl_scriptcache_size)
+    if (listLength(ns->repl_scriptcache_fifo) == ns->repl_scriptcache_size)
     {
-        listNode *ln = listLast(g_pserver->repl_scriptcache_fifo);
+        listNode *ln = listLast(ns->repl_scriptcache_fifo);
         sds oldest = (sds)listNodeValue(ln);
 
-        retval = dictDelete(g_pserver->repl_scriptcache_dict,oldest);
+        retval = dictDelete(ns->repl_scriptcache_dict,oldest);
         serverAssert(retval == DICT_OK);
-        listDelNode(g_pserver->repl_scriptcache_fifo,ln);
+        listDelNode(ns->repl_scriptcache_fifo,ln);
     }
 
     /* Add current. */
-    retval = dictAdd(g_pserver->repl_scriptcache_dict,key,NULL);
-    listAddNodeHead(g_pserver->repl_scriptcache_fifo,key);
+    retval = dictAdd(ns->repl_scriptcache_dict,key,NULL);
+    listAddNodeHead(ns->repl_scriptcache_fifo,key);
     serverAssert(retval == DICT_OK);
 }
 
 /* Returns non-zero if the specified entry exists inside the cache, that is,
  * if all the slaves are aware of this script SHA1. */
-int replicationScriptCacheExists(sds sha1) {
-    return dictFind(g_pserver->repl_scriptcache_dict,sha1) != NULL;
+int replicationScriptCacheExists(redisNamespace *ns, sds sha1) {
+    return dictFind(ns->repl_scriptcache_dict,sha1) != NULL;
 }
 
 /* ----------------------- SYNCHRONOUS REPLICATION --------------------------
@@ -4216,8 +4227,7 @@ void replicationCron(void) {
     * free our Replication Script Cache as there is no need to propagate
     * EVALSHA at all. */
     if (listLength(g_pserver->slaves) == 0 &&
-        g_pserver->aof_state == AOF_OFF &&
-        listLength(g_pserver->repl_scriptcache_fifo) != 0)
+        g_pserver->aof_state == AOF_OFF)
     {
         replicationScriptCacheFlush();
     }

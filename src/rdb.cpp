@@ -1283,6 +1283,7 @@ ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt) {
  * error. */
 int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     dictIterator *di = NULL;
+    dictIterator *di_ns = NULL;
     dictEntry *de;
     char magic[10];
     uint64_t cksum;
@@ -1355,15 +1356,27 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
      * the script cache as well: on successful PSYNC after a restart, we need
      * to be able to process any EVALSHA inside the replication backlog the
      * master will send us. */
-    if (rsi && dictSize(g_pserver->lua_scripts)) {
-        di = dictGetIterator(g_pserver->lua_scripts);
-        while((de = dictNext(di)) != NULL) {
-            robj *body = (robj*)dictGetVal(de);
-            if (rdbSaveAuxField(rdb,"lua",3,szFromObj(body),sdslen(szFromObj(body))) == -1)
-                goto werr;
+    if (rsi) {
+        redisNamespace *ns;
+        dictEntry *de_ns;
+        di_ns = dictGetSafeIterator(g_pserver->namespaces);
+        while((de_ns = dictNext(di_ns)) != NULL) {
+            ns = (struct redisNamespace *) dictGetVal(de_ns);
+            if (dictSize(ns->lua_scripts)) {
+                di = dictGetIterator(ns->lua_scripts);
+                while ((de = dictNext(di)) != NULL) {
+                    robj *body = (robj *) dictGetVal(de);
+                    if (rdbSaveAuxField(rdb, "keydb-namespace-lua", 19, ns->name, sdslen(ns->name)) == -1)
+                        goto werr;
+                    if (rdbSaveAuxField(rdb, "lua", 3, szFromObj(body), sdslen(szFromObj(body))) == -1)
+                        goto werr;
+                }
+                dictReleaseIterator(di);
+                di = NULL; /* So that we don't release it again on error. */
+            }
         }
-        dictReleaseIterator(di);
-        di = NULL; /* So that we don't release it again on error. */
+        dictReleaseIterator(di_ns);
+        di_ns = NULL;
     }
 
     if (rdbSaveModulesAux(rdb, REDISMODULE_AUX_AFTER_RDB) == -1) goto werr;
@@ -1381,6 +1394,7 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
 werr:
     if (error) *error = errno;
     if (di) dictReleaseIterator(di);
+    if (di_ns) dictReleaseIterator(di_ns);
     return C_ERR;
 }
 
@@ -2557,6 +2571,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     bool fLastKeyExpired = false;
     int error;
     long long empty_keys_skipped = 0, expired_keys_skipped = 0, keys_loaded = 0;
+    client *lua_client = createClient(nullptr, IDX_EVENT_LOOP_MAIN);
 
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = g_pserver->loading_process_events_interval_bytes;
@@ -2664,7 +2679,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 if (rsi) rsi->repl_offset = strtoll(szFromObj(auxval),NULL,10);
             } else if (!strcasecmp(szFromObj(auxkey),"lua")) {
                 /* Load the script back in memory. */
-                if (luaCreateFunction(NULL,g_pserver->lua,auxval) == NULL) {
+                if (luaCreateFunction(lua_client, lua_client->ns->lua, auxval) == NULL) {
                     rdbReportCorruptRDB(
                         "Can't load Lua script from RDB file! "
                         "BODY: %s", (char*)ptrFromObj(auxval));
@@ -2719,6 +2734,8 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 }
             } else if (!strcasecmp(szFromObj(auxkey), "keydb-namespace")) {
                 db->ns = getNamespace(szFromObj(auxval));
+            } else if (!strcasecmp(szFromObj(auxkey), "keydb-namespace-lua")) {
+                lua_client->ns = getNamespace(szFromObj(auxval));
             } else if (!strcasecmp(szFromObj(auxkey), "keydb-namespace-dbid")) {
                 long long max_db = std::min(cserver.dbnum,cserver.ns_dbnum);
                 long long mapped_id = strtoll(szFromObj(auxval),NULL,10);

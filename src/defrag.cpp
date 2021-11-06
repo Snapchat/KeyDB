@@ -981,8 +981,19 @@ long defragOtherGlobals() {
     /* there are many more pointers to defrag (e.g. client argv, output / aof buffers, etc.
      * but we assume most of these are short lived, we only need to defrag allocations
      * that remain static for a long time */
-    defragged += activeDefragSdsDict(g_pserver->lua_scripts, DEFRAG_SDS_DICT_VAL_IS_STROB);
-    defragged += activeDefragSdsListAndDict(g_pserver->repl_scriptcache_fifo, g_pserver->repl_scriptcache_dict, DEFRAG_SDS_DICT_NO_VAL);
+
+    redisNamespace *ns;
+    dictEntry *de;
+    dictIterator *di;
+    di = dictGetSafeIterator(g_pserver->namespaces);
+    while((de = dictNext(di)) != NULL) {
+        ns = (struct redisNamespace *) dictGetVal(de);
+        defragged += activeDefragSdsDict(ns->lua_scripts, DEFRAG_SDS_DICT_VAL_IS_STROB);
+        defragged += activeDefragSdsListAndDict(ns->repl_scriptcache_fifo, ns->repl_scriptcache_dict, DEFRAG_SDS_DICT_NO_VAL);
+    }
+    dictReleaseIterator(di);
+
+    defragged += activeDefragSdsDict(g_pserver->namespaces, DEFRAG_SDS_DICT_VAL_VOID_PTR);
     defragged += moduleDefragGlobals();
     return defragged;
 }

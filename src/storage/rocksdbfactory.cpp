@@ -191,11 +191,6 @@ IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *pr
     return new RocksDBStorageProvider(this, m_spdb, spcolfamily, nullptr, count);
 }
 
-std::string RocksDBStorageFactory::getMetadata() const
-{
-    return metadata;
-}
-
 const char *RocksDBStorageFactory::name() const
 {
     return "flash";

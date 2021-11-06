@@ -1619,6 +1619,7 @@ struct redisServer {
     mode_t umask;               /* The umask value of the process on startup */
     std::atomic<int> hz;        /* serverCron() calls frequency in hertz */
     int in_fork_child;          /* indication that this is a fork child */
+    int last_allocated_db;      /* store last allocated db, to speed up allocation */
     redisDb *db;
     redisNamespace *default_namespace;
     ::dict *namespaces;

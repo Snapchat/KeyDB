@@ -3530,6 +3530,7 @@ void initDb(void) {
     g_pserver->namespaces = dictCreate(&namespaceDictType,NULL);
     g_pserver->default_namespace = getNamespace("::");
     g_pserver->db = (redisDb*)zmalloc(sizeof(redisDb)*cserver.dbnum, MALLOC_LOCAL);
+    g_pserver->last_allocated_db = -1;
 
     /* Create the Redis databases, and initialize other internal state. */
     for (int j = 0; j < cserver.dbnum; j++) {

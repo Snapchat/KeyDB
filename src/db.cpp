@@ -661,6 +661,7 @@ void mapDb(redisNamespace *ns, int global_db, int ns_db, int do_propagate) {
     serverAssertWithInfo(NULL, NULL, ns_db >= 0 &&  ns_db < std::min(cserver.dbnum, cserver.ns_dbnum));
     serverAssertWithInfo(NULL, NULL, !g_pserver->db[global_db].ns || (g_pserver->db[global_db].ns == ns && g_pserver->db[global_db].mapped_id == ns_db));
 
+    g_pserver->last_allocated_db = std::max(g_pserver->last_allocated_db, global_db);
     g_pserver->db[global_db].ns = ns;
     g_pserver->db[global_db].mapped_id = ns_db;
     ns->db[ns_db] = &g_pserver->db[global_db];
@@ -704,10 +705,8 @@ redisDb *allocateDb(client *c, int id) {
 
     if (!c->ns->db[id]) {
         /* allocate database from global pool */
-
-        //TODO: optimize this by remembering the latest allocated database and starting from there
-        int found=0;
-        for (int i=0;i<cserver.dbnum; i++) {
+        int found = 0;
+        for (int i=g_pserver->last_allocated_db+1;i<cserver.dbnum; i++) {
             if (!g_pserver->db[i].ns) {
                 mapDb(c->ns, i, id, 1);
                 found=1;

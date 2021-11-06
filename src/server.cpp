@@ -3985,11 +3985,15 @@ void initServer(void) {
     latencyMonitorInit();
 
     if (g_pserver->m_pstorageFactory) {
-        std::string repl_masters = g_pserver->m_pstorageFactory->getMetadata();
-        if (!repl_masters.empty()) {
-            serverLog(LL_NOTICE, "Loaded repl-masters from storage provider: %s", repl_masters);
-        }
         g_pserver->metadataDb = g_pserver->m_pstorageFactory->createMetadataDb();
+        if (g_pserver->metadataDb) {
+            g_pserver->metadataDb->retrieve("repl-id", 7, [&](const char *, size_t, const void *data, size_t cb){
+                if (cb == sizeof(g_pserver->replid)) {
+                    serverLog(LL_NOTICE, "Retrieved repl-id: %s", (const char*)data);
+                    memcpy(g_pserver->replid, data, cb);
+                }
+            });
+        }
     }
 
     /* We have to initialize storage providers after the cluster has been initialized */

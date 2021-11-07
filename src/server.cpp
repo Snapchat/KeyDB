@@ -3381,6 +3381,16 @@ void resetServerStats(void) {
     g_pserver->stat_total_error_replies = 0;
     g_pserver->stat_dump_payload_sanitizations = 0;
     g_pserver->aof_delayed_fsync = 0;
+
+    redisNamespace *ns;
+    dictEntry *de;
+    dictIterator *di;
+    di = dictGetSafeIterator(g_pserver->namespaces);
+    while((de = dictNext(di)) != NULL) {
+        ns = (struct redisNamespace *) dictGetVal(de);
+        ns->stat_numcommands = 0;
+    }
+    dictReleaseIterator(di);
 }
 
 /* Make the thread killable at any time, so that kill threads functions
@@ -3528,7 +3538,9 @@ redisNamespace *getNamespace(const char* name) {
         ns->pubsub_channels = dictCreate(&keylistDictType,NULL);
         ns->pubsub_patterns = dictCreate(&keylistDictType,NULL);
         ns->db = (redisDb**)zcalloc(sizeof(void *)*std::min(cserver.dbnum,cserver.ns_dbnum), MALLOC_LOCAL);
-
+        ns->stat_numcommands = 0;
+        ns->stat_commands = (redisNamespaceCommandStats*)zcalloc(sizeof(redisNamespaceCommandStats)*dictSize(g_pserver->commands), MALLOC_LOCAL);
+        resetCommandTableStatsNs(ns);
         scriptingInit(ns);
         replicationScriptCacheInit(ns);
 
@@ -3808,6 +3820,7 @@ void populateCommandTable(void) {
 
 void resetCommandTableStats(void) {
     struct redisCommand *c;
+    redisNamespace *ns;
     dictEntry *de;
     dictIterator *di;
 
@@ -3821,6 +3834,28 @@ void resetCommandTableStats(void) {
     }
     dictReleaseIterator(di);
 
+    di = dictGetSafeIterator(g_pserver->namespaces);
+    while((de = dictNext(di)) != NULL) {
+        ns = (redisNamespace *) dictGetVal(de);
+        resetCommandTableStatsNs(ns);
+    }
+    dictReleaseIterator(di);
+}
+
+void resetCommandTableStatsNs(redisNamespace *ns) {
+    struct redisCommand *c;
+    dictEntry *de;
+    dictIterator *di;
+
+    di = dictGetSafeIterator(g_pserver->commands);
+    while((de = dictNext(di)) != NULL) {
+        c = (struct redisCommand *) dictGetVal(de);
+        ns->stat_commands[c->id].microseconds = 0;
+        ns->stat_commands[c->id].calls = 0;
+        ns->stat_commands[c->id].rejected_calls = 0;
+        ns->stat_commands[c->id].failed_calls = 0;
+    }
+    dictReleaseIterator(di);
 }
 
 static void zfree_noconst(void *p) {
@@ -4100,6 +4135,7 @@ void call(client *c, int flags) {
      * the same error twice. */
     if ((g_pserver->stat_total_error_replies - prev_err_count) > 0) {
         real_cmd->failed_calls++;
+        c->ns->stat_commands[real_cmd->id].failed_calls++;
     }
 
     /* After executing command, we will close the client after writing entire
@@ -4159,6 +4195,8 @@ void call(client *c, int flags) {
     if (flags & CMD_CALL_STATS) {
         real_cmd->microseconds += duration;
         real_cmd->calls++;
+        c->ns->stat_commands[real_cmd->id].microseconds += duration;
+        c->ns->stat_commands[real_cmd->id].calls++;
     }
 
     /* Propagate the command into the AOF and replication link */
@@ -4264,6 +4302,7 @@ void call(client *c, int flags) {
     }
 
     g_pserver->stat_numcommands++;
+    c->ns->stat_numcommands++;
     serverTL->fixed_time_expire--;
     prev_err_count = g_pserver->stat_total_error_replies;
 
@@ -5727,6 +5766,31 @@ sds genRedisInfoString(const char *section) {
             if (tmpsafe != NULL) zfree(tmpsafe);
         }
         dictReleaseIterator(di);
+
+        dictIterator *di_ns;
+        dictEntry *de_ns;
+        di_ns = dictGetSafeIterator(g_pserver->namespaces);
+        while((de_ns = dictNext(di_ns)) != NULL) {
+            redisNamespace *ns = (redisNamespace *) dictGetVal(de_ns);
+            if (sections++) info = sdscat(info, "\r\n");
+            info = sdscatprintf(info, "# Commandstats %s\r\n", ns->name);
+            di = dictGetSafeIterator(g_pserver->commands);
+            while ((de = dictNext(di)) != NULL) {
+                char *tmpsafe;
+                c = (struct redisCommand *) dictGetVal(de);
+                if (!c->calls && !c->failed_calls && !c->rejected_calls)
+                    continue;
+                info = sdscatprintf(info,
+                                    "cmdstat_%s:calls=%lld,usec=%lld,usec_per_call=%.2f"
+                                    ",rejected_calls=%lld,failed_calls=%lld\r\n",
+                                    getSafeInfoString(c->name, strlen(c->name), &tmpsafe), c->calls, c->microseconds,
+                                    (c->calls == 0) ? 0 : ((float) c->microseconds / c->calls),
+                                    c->rejected_calls, c->failed_calls);
+                if (tmpsafe != NULL) zfree(tmpsafe);
+            }
+            dictReleaseIterator(di);
+        }
+        dictReleaseIterator(di_ns);
     }
     /* Error statistics */
     if (allsections || defsections || !strcasecmp(section,"errorstats")) {

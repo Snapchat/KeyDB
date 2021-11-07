@@ -997,6 +997,10 @@ struct redisDb {
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
 };
 
+struct redisNamespaceCommandStats {
+    long long microseconds, calls, rejected_calls, failed_calls;
+};
+
 struct redisNamespace {
     sds name;
     redisDb **db;
@@ -1008,6 +1012,9 @@ struct redisNamespace {
     ::dict *repl_scriptcache_dict;       /* SHA1 all slaves are aware of. */
     list *repl_scriptcache_fifo;         /* First in, first out LRU eviction. */
     unsigned int repl_scriptcache_size;  /* Max number of elements. */
+
+    redisNamespaceCommandStats *stat_commands;
+    long long stat_numcommands;
 };
 
 /* Declare database backup that include redis main DBs and slots to keys map.
@@ -2658,6 +2665,7 @@ void updateDictResizePolicy(void);
 int htNeedsResize(dict *dict);
 void populateCommandTable(void);
 void resetCommandTableStats(void);
+void resetCommandTableStatsNs(redisNamespace *ns);
 void resetErrorTableStats(void);
 void adjustOpenFilesLimit(void);
 void incrementErrorCount(const char *fullerr, size_t namelen);

@@ -3989,10 +3989,30 @@ void initServer(void) {
         if (g_pserver->metadataDb) {
             g_pserver->metadataDb->retrieve("repl-id", 7, [&](const char *, size_t, const void *data, size_t cb){
                 if (cb == sizeof(g_pserver->replid)) {
-                    serverLog(LL_NOTICE, "Retrieved repl-id: %s", (const char*)data);
                     memcpy(g_pserver->replid, data, cb);
                 }
             });
+            g_pserver->metadataDb->retrieve("repl-offset", 11, [&](const char *, size_t, const void *data, size_t cb){
+                if (cb == sizeof(g_pserver->replid)) {
+                    g_pserver->master_repl_offset = *(long long*)data;
+                }
+            });
+
+            listIter li;
+            listNode *ln;
+                
+            listRewind(g_pserver->masters, &li);
+            while ((ln = listNext(&li)))
+            {
+                redisMaster *mi = (redisMaster*)listNodeValue(ln);
+                /* If we are a replica, create a cached master from this
+                * information, in order to allow partial resynchronizations
+                * with masters. */
+                replicationCacheMasterUsingMyself(mi);
+                g_pserver->metadataDb->retrieve("repl-stream-db", 14, [&](const char *, size_t, const void *data, size_t cb){
+                    selectDb(mi->cached_master, *(int*)data);
+                });
+            }
         }
     }
 

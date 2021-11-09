@@ -40,11 +40,12 @@ public:
 
     void clear();
     void insert(sds key, const void *data, size_t cbdata, bool fOverwrite);
-    void bulkInsert(sds *rgkeys, sds *rgvals, size_t celem);
+    void bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem);
     void retrieve(sds key, IStorage::callbackSingle fn) const;
     bool erase(sds key);
     void emergencyFreeCache();
     bool keycacheIsEnabled() const { return m_pdict != nullptr; }
+    void expand(uint64_t slots);
 
     bool enumerate(IStorage::callback fn) const { return m_spstorage->enumerate(fn); }
 

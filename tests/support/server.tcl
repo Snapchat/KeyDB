@@ -1,4 +1,5 @@
 set ::global_overrides {}
+set ::global_storage_provider {}
 set ::tags {}
 set ::valgrind_errors {}
 
@@ -391,6 +392,9 @@ proc start_server {options {code undefined}} {
     # apply overrides from global space and arguments
     foreach {directive arguments} [concat $::global_overrides $overrides] {
         dict set config $directive $arguments
+    }
+    foreach {directive argument1 argument2} $::global_storage_provider {
+        dict set config $directive $argument1 $argument2
     }
 
     # remove directives that are marked to be omitted

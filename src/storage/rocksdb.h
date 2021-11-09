@@ -8,9 +8,11 @@
 #define INTERNAL_KEY_PREFIX "\x00\x04\x03\x00\x05\x02\x04"
 static const char count_key[] = INTERNAL_KEY_PREFIX "__keydb__count\1";
 static const char version_key[] = INTERNAL_KEY_PREFIX "__keydb__version\1";
+class RocksDBStorageFactory;
 
 class RocksDBStorageProvider : public IStorage
 {
+    RocksDBStorageFactory *m_pfactory;
     std::shared_ptr<rocksdb::DB> m_spdb;    // Note: This must be first so it is deleted last
     std::unique_ptr<rocksdb::WriteBatch> m_spbatch;
     const rocksdb::Snapshot *m_psnapshot = nullptr;
@@ -20,7 +22,7 @@ class RocksDBStorageProvider : public IStorage
     mutable fastlock m_lock {"RocksDBStorageProvider"};
 
 public:
-    RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count);
+    RocksDBStorageProvider(RocksDBStorageFactory *pfactory, std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count);
     ~RocksDBStorageProvider();
 
     virtual void insert(const char *key, size_t cchKey, void *data, size_t cb, bool fOverwrite) override;
@@ -34,7 +36,7 @@ public:
     virtual void beginWriteBatch() override;
     virtual void endWriteBatch() override;
 
-    virtual void bulkInsert(sds *rgkeys, sds *rgvals, size_t celem) override;
+    virtual void bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem) override;
 
     virtual void batch_lock() override;
     virtual void batch_unlock() override;

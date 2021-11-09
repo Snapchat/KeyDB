@@ -237,7 +237,7 @@ void clientInstallWriteHandler(client *c) {
      * writes at this stage. */
 
     if (!(c->flags & CLIENT_PENDING_WRITE) &&
-        (c->replstate == REPL_STATE_NONE ||
+        (c->replstate == REPL_STATE_NONE || c->replstate == SLAVE_STATE_FASTSYNC_TX || c->replstate == SLAVE_STATE_FASTSYNC_DONE ||
          (c->replstate == SLAVE_STATE_ONLINE && !c->repl_put_online_on_ack)))
     {
         AssertCorrectThread(c);
@@ -1566,7 +1566,7 @@ bool freeClient(client *c) {
 
     /* If a client is protected, yet we need to free it right now, make sure
      * to at least use asynchronous freeing. */
-    if (c->flags & CLIENT_PROTECTED || c->casyncOpsPending) {
+    if (c->flags & CLIENT_PROTECTED || c->casyncOpsPending || c->replstate == SLAVE_STATE_FASTSYNC_TX) {
         freeClientAsync(c);
         return false;
     }
@@ -1791,7 +1791,7 @@ int writeToClient(client *c, int handler_installed) {
 
     /* We can only directly read from the replication backlog if the client 
        is a replica, so only attempt to do so if that's the case. */
-    if (c->flags & CLIENT_SLAVE && !(c->flags & CLIENT_MONITOR)) {
+    if (c->flags & CLIENT_SLAVE && !(c->flags & CLIENT_MONITOR) && c->replstate == SLAVE_STATE_ONLINE) {
         std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
 
         while (clientHasPendingReplies(c)) {
@@ -1833,9 +1833,11 @@ int writeToClient(client *c, int handler_installed) {
         }
     } else {
         while(clientHasPendingReplies(c)) {
-            serverAssert(!(c->flags & CLIENT_SLAVE) || c->flags & CLIENT_MONITOR);
             if (c->bufpos > 0) {
-                nwritten = connWrite(c->conn,c->buf+c->sentlen,c->bufpos-c->sentlen);
+                auto bufpos = c->bufpos;
+                lock.unlock();
+                nwritten = connWrite(c->conn,c->buf+c->sentlen,bufpos-c->sentlen);
+                lock.lock();
                 if (nwritten <= 0) break;
                 c->sentlen += nwritten;
                 totwritten += nwritten;
@@ -1854,7 +1856,10 @@ int writeToClient(client *c, int handler_installed) {
                     continue;
                 }
 
-                nwritten = connWrite(c->conn, o->buf() + c->sentlen, o->used - c->sentlen);
+                auto used = o->used;
+                lock.unlock();
+                nwritten = connWrite(c->conn, o->buf() + c->sentlen, used - c->sentlen);
+                lock.lock();
                 if (nwritten <= 0) break;
                 c->sentlen += nwritten;
                 totwritten += nwritten;
@@ -1993,7 +1998,7 @@ void ProcessPendingAsyncWrites()
             ae_flags |= AE_BARRIER;
         }
 
-        if (!((c->replstate == REPL_STATE_NONE ||
+        if (!((c->replstate == REPL_STATE_NONE || c->replstate == SLAVE_STATE_FASTSYNC_TX ||
          (c->replstate == SLAVE_STATE_ONLINE && !c->repl_put_online_on_ack))))
             continue;
         
@@ -2063,9 +2068,9 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
 
         /* If a client is protected, don't do anything,
         * that may trigger write error or recreate handler. */
-        if (flags & CLIENT_PROTECTED) continue;
+        if ((flags & CLIENT_PROTECTED) && !(flags & CLIENT_SLAVE)) continue;
 
-        std::unique_lock<decltype(c->lock)> lock(c->lock);
+        //std::unique_lock<decltype(c->lock)> lock(c->lock);
 
         /* Don't write to clients that are going to be closed anyway. */
         if (c->flags & CLIENT_CLOSE_ASAP) continue;
@@ -2075,11 +2080,9 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
         {
             if (c->flags & CLIENT_CLOSE_ASAP)
             {
-                lock.release(); // still locked
                 AeLocker ae;
-                ae.arm(c);
-                if (!freeClient(c))  // writeToClient will only async close, but there's no need to wait
-                    c->lock.unlock();   // if we just got put on the async close list, then we need to remove the lock
+                ae.arm(nullptr);
+                freeClient(c); // writeToClient will only async close, but there's no need to wait
             }
             continue;
         }
@@ -3829,7 +3832,7 @@ void asyncCloseClientOnOutputBufferLimitReached(client *c) {
     if (!c->conn) return; /* It is unsafe to free fake clients. */
     serverAssert(c->reply_bytes < SIZE_MAX-(1024*64));
     if (c->reply_bytes == 0 || c->flags & CLIENT_CLOSE_ASAP) return;
-    if (checkClientOutputBufferLimits(c)) {
+    if (checkClientOutputBufferLimits(c) && c->replstate != SLAVE_STATE_FASTSYNC_TX) {
         sds client = catClientInfoString(sdsempty(),c);
 
         freeClientAsync(c);

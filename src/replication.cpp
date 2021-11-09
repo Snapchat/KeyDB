@@ -34,6 +34,7 @@
 #include "cluster.h"
 #include "bio.h"
 #include "aelocker.h"
+#include "SnapshotPayloadParseState.h"
 
 #include <sys/time.h>
 #include <unistd.h>
@@ -929,6 +930,224 @@ need_full_resync:
     return C_ERR;
 }
 
+int checkClientOutputBufferLimits(client *c);
+class replicationBuffer {
+    std::vector<client *> replicas;
+    clientReplyBlock *reply = nullptr;
+    size_t writtenBytesTracker = 0;
+
+public:
+    replicationBuffer() {
+        reply = (clientReplyBlock*)zmalloc(sizeof(clientReplyBlock) + (PROTO_REPLY_CHUNK_BYTES*2));
+        reply->size = zmalloc_usable_size(reply) - sizeof(clientReplyBlock);
+        reply->used = 0;
+    }
+
+    ~replicationBuffer() {
+        zfree(reply);
+    }
+
+    void addReplica(client *replica) {
+        replicas.push_back(replica);
+        replicationSetupSlaveForFullResync(replica,getPsyncInitialOffset());
+        // Optimize the socket for bulk transfer
+        //connDisableTcpNoDelay(replica->conn);
+    }
+
+    bool isActive() const { return !replicas.empty(); }
+
+    void flushData() {
+        if (reply == nullptr)
+            return;
+        size_t written = reply->used;
+        aeAcquireLock();
+        for (size_t ireplica = 0; ireplica < replicas.size(); ++ireplica) {
+            auto replica = replicas[ireplica];
+            if (replica->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_ASAP) {
+                replica->replstate = REPL_STATE_NONE;
+                continue;
+            }
+
+            while (checkClientOutputBufferLimits(replica)
+                && (replica->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_ASAP) == 0) {
+                aeReleaseLock();
+                usleep(10);
+                aeAcquireLock();
+            }
+            
+            if (ireplica == replicas.size()-1 && replica->replyAsync == nullptr) {
+                if (prepareClientToWrite(replica) == C_OK) {
+                    replica->replyAsync = reply;
+                    reply = nullptr;
+                }
+            } else {
+                addReplyProto(replica, reply->buf(), reply->size);
+            }
+        }
+        ProcessPendingAsyncWrites();
+        replicas.erase(std::remove_if(replicas.begin(), replicas.end(), [](const client *c)->bool{ return c->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_ASAP;}), replicas.end());
+        aeReleaseLock();
+        if (reply != nullptr) {
+            reply->used = 0;
+        }
+        writtenBytesTracker += written;
+    }
+
+    void addData(const char *data, unsigned long size) {
+        if (reply != nullptr && (size + reply->used) > reply->size)
+            flushData();
+
+        if (reply != nullptr && reply->size < size) {
+            serverAssert(reply->used == 0); // flush should have happened
+            zfree(reply);
+            reply = nullptr;
+        }
+        
+        if (reply == nullptr) {
+            reply = (clientReplyBlock*)zmalloc(sizeof(clientReplyBlock) + std::max(size, (unsigned long)(PROTO_REPLY_CHUNK_BYTES*2)));
+            reply->size = zmalloc_usable_size(reply) - sizeof(clientReplyBlock);
+            reply->used = 0;
+        }
+
+        serverAssert((reply->size - reply->used) >= size);
+        memcpy(reply->buf() + reply->used, data, size);
+        reply->used += size;
+    }
+
+    void addLongWithPrefix(long val, char prefix) {
+        char buf[128];
+        int len;
+
+        buf[0] = prefix;
+        len = ll2string(buf+1,sizeof(buf)-1,val);
+        buf[len+1] = '\r';
+        buf[len+2] = '\n';
+        addData(buf, len+3);
+    }
+
+    void addArrayLen(int len) {
+        addLongWithPrefix(len, '*');
+    }
+
+    void addLong(long val) {
+        addLongWithPrefix(val, ':');
+    }
+
+    void addString(const char *s, unsigned long len) {
+        addLongWithPrefix(len, '$');
+        addData(s, len);
+        addData("\r\n", 2);
+    }
+
+    size_t cbWritten() const { return writtenBytesTracker; }
+
+    void end() {
+        flushData();
+        for (auto replica : replicas) {
+            // Return to original settings
+            //if (!g_pserver->repl_disable_tcp_nodelay)
+            //    connEnableTcpNoDelay(replica->conn);
+        }
+    }
+
+    void putSlavesOnline() {
+        for (auto replica : replicas) {
+            replica->replstate = SLAVE_STATE_FASTSYNC_DONE;
+            replica->repl_put_online_on_ack = 1;
+        }
+    }
+};
+
+int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
+    // TODO: This needs to be on a background thread
+    int retval = C_OK;
+    serverAssert(GlobalLocksAcquired());
+    serverLog(LL_NOTICE, "Starting storage provider fast full sync with target: %s", "disk");
+
+    std::shared_ptr<replicationBuffer> spreplBuf = std::make_shared<replicationBuffer>();
+    listNode *ln;
+    listIter li;
+    client *replica = nullptr;
+    listRewind(g_pserver->slaves, &li);
+    while (replica == nullptr && (ln = listNext(&li))) {
+        client *replicaCur = (client*)listNodeValue(ln);
+        if ((replicaCur->slave_capa & SLAVE_CAPA_ROCKSDB_SNAPSHOT) && (replicaCur->replstate == SLAVE_STATE_WAIT_BGSAVE_START)) {
+            replica = replicaCur;
+            spreplBuf->addReplica(replica);
+            replicaCur->replstate = SLAVE_STATE_FASTSYNC_TX;
+        }
+    }
+    serverAssert(replica != nullptr);
+
+    g_pserver->asyncworkqueue->AddWorkFunction([repl_stream_db = rsi->repl_stream_db, spreplBuf = std::move(spreplBuf)]{
+        int retval = C_OK;
+        auto timeStart = ustime();
+        auto lastLogTime = timeStart;
+        size_t cbData = 0;
+        size_t cbLastUpdate = 0;
+        auto &replBuf = *spreplBuf;
+
+        replBuf.addArrayLen(2);   // Two sections: Metadata and databases
+
+        // MetaData
+        replBuf.addArrayLen(1);
+            replBuf.addArrayLen(2);
+                replBuf.addString("repl-stream-db", 14);
+                replBuf.addLong(repl_stream_db);
+
+        // Databases
+        replBuf.addArrayLen(cserver.dbnum);
+        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+            std::unique_ptr<const StorageCache> spsnapshot = g_pserver->db[idb]->CloneStorageCache();
+            size_t snapshotDeclaredCount = spsnapshot->count();
+            replBuf.addArrayLen(snapshotDeclaredCount);
+            size_t count = 0;
+            bool result = spsnapshot->enumerate([&replBuf, &count, &cbData, &lastLogTime, timeStart, &cbLastUpdate](const char *rgchKey, size_t cchKey, const void *rgchVal, size_t cchVal) -> bool{
+                replBuf.addArrayLen(2);
+
+                replBuf.addString(rgchKey, cchKey);
+                replBuf.addString((const char *)rgchVal, cchVal);
+                ++count;
+                if ((count % 8092) == 0) {
+                    auto curTime = ustime();
+                    if ((curTime - lastLogTime) > 60000000) {
+                        auto usec = curTime - lastLogTime;
+                        serverLog(LL_NOTICE, "Replication status: Transferred %zuMB (%.2fGbit/s)", replBuf.cbWritten()/1024/1024, ((replBuf.cbWritten()-cbLastUpdate)*8.0)/(usec/1000000.0)/1000000000.0);
+                        cbLastUpdate = replBuf.cbWritten();
+                        lastLogTime = ustime();
+                    }
+                }
+                cbData += cchKey + cchVal;
+                return replBuf.isActive();
+            });
+
+            if (!result) {
+                retval = C_ERR;
+                break;
+            }
+            serverAssert(count == snapshotDeclaredCount);
+        }
+        
+        replBuf.end();
+
+        if (!replBuf.isActive()) {
+            retval = C_ERR;
+        }
+
+        serverLog(LL_NOTICE, "Snapshot replication done: %s", (retval == C_OK) ? "success" : "failed");
+        auto usec = ustime() - timeStart;
+        serverLog(LL_NOTICE, "Transferred %zuMB total (%zuMB data) in %.2f seconds.  (%.2fGbit/s)", spreplBuf->cbWritten()/1024/1024, cbData/1024/1024, usec/1000000.0, (spreplBuf->cbWritten()*8.0)/(usec/1000000.0)/1000000000.0);
+        if (retval == C_OK) {
+            aeAcquireLock();
+            replicationScriptCacheFlush();
+            replBuf.putSlavesOnline();
+            aeReleaseLock();
+        }
+    });
+
+    return retval;
+}
+
 /* Start a BGSAVE for replication goals, which is, selecting the disk or
  * socket target depending on the configuration, and making sure that
  * the script cache is flushed before to start.
@@ -962,7 +1181,9 @@ int startBgsaveForReplication(int mincapa) {
     /* Only do rdbSave* when rsiptr is not NULL,
      * otherwise replica will miss repl-stream-db. */
     if (rsiptr) {
-        if (socket_target)
+        if (mincapa & SLAVE_CAPA_ROCKSDB_SNAPSHOT && g_pserver->m_pstorageFactory)
+            retval = rdbSaveSnapshotForReplication(rsiptr);
+        else if (socket_target)
             retval = rdbSaveToSlavesSockets(rsiptr);
         else
             retval = rdbSaveBackground(rsiptr);
@@ -1334,6 +1555,8 @@ void replconfCommand(client *c) {
                 c->slave_capa |= SLAVE_CAPA_PSYNC2;
             else if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]), "activeExpire"))
                 c->slave_capa |= SLAVE_CAPA_ACTIVE_EXPIRE;
+            else if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]), "rocksdb-snapshot-load"))
+                c->slave_capa |= SLAVE_CAPA_ROCKSDB_SNAPSHOT;
 
             fCapaCommand = true;
         } else if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"ack")) {
@@ -1358,7 +1581,7 @@ void replconfCommand(client *c) {
              * quick check first (instead of waiting for the next ACK. */
             if (g_pserver->child_type == CHILD_TYPE_RDB && c->replstate == SLAVE_STATE_WAIT_BGSAVE_END)
                 checkChildrenDone();
-            if (c->repl_put_online_on_ack && c->replstate == SLAVE_STATE_ONLINE)
+            if (c->repl_put_online_on_ack && (c->replstate == SLAVE_STATE_ONLINE || c->replstate == SLAVE_STATE_FASTSYNC_DONE))
                 putSlaveOnline(c);
             /* Note: this command does not reply anything! */
             return;
@@ -1400,6 +1623,8 @@ void replconfCommand(client *c) {
         sds reply = sdsnew("+OK");
         if (g_pserver->fActiveReplica)
             reply = sdscat(reply, " active-replica");
+        if (g_pserver->m_pstorageFactory && (c->slave_capa & SLAVE_CAPA_ROCKSDB_SNAPSHOT) && !g_pserver->fActiveReplica)
+            reply = sdscat(reply, " rocksdb-snapshot-save");
         reply = sdscat(reply, "\r\n");
         addReplySds(c, reply);
     } else {
@@ -2074,25 +2299,163 @@ void disklessLoadDiscardBackup(const dbBackup *buckup, int flag) {
     discardDbBackup(buckup, flag, replicationEmptyDbCallback);
 }
 
+size_t parseCount(const char *rgch, size_t cch, long long *pvalue) {
+    size_t cchNumeral = 0;
+
+    while ((cch > (cchNumeral+1)) && isdigit(rgch[1 + cchNumeral])) ++cchNumeral;
+
+    if (cch < (cchNumeral+1+2)) { // +2 is for the \r\n we expect
+        throw true; // continuable
+    }
+
+    if (rgch[cchNumeral+1] != '\r' || rgch[cchNumeral+2] != '\n') {
+        serverLog(LL_WARNING, "Bad protocol from MASTER: %s", rgch);
+        throw false;
+    }
+
+    if (!string2ll(rgch+1, cchNumeral, pvalue) || *pvalue < 0) {
+        serverLog(LL_WARNING, "Bad protocol from MASTER: %s", rgch);
+        throw false;
+    }
+
+    return cchNumeral + 3;
+}
+
+bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi) {
+    int fUpdate = g_pserver->fActiveReplica || g_pserver->enable_multimaster;
+    serverAssert(GlobalLocksAcquired());
+    serverAssert(mi->master == nullptr);
+    bool fFinished = false;
+
+    if (mi->bulkreadBuffer == nullptr) {
+        mi->bulkreadBuffer = sdsempty();
+        mi->parseState = new SnapshotPayloadParseState();
+        if (!fUpdate) {
+            int empty_db_flags = g_pserver->repl_slave_lazy_flush ? EMPTYDB_ASYNC :
+                EMPTYDB_NO_FLAGS;
+            serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Flushing old data");
+            emptyDb(-1,empty_db_flags,replicationEmptyDbCallback);
+        }
+    }
+
+    for (int iter = 0; iter < 10; ++iter) {
+        if (mi->parseState->shouldThrottle())
+            return false;
+
+        auto readlen = PROTO_IOBUF_LEN;
+        auto qblen = sdslen(mi->bulkreadBuffer);
+        mi->bulkreadBuffer = sdsMakeRoomFor(mi->bulkreadBuffer, readlen);
+
+        auto nread = connRead(conn, mi->bulkreadBuffer+qblen, readlen);
+        if (nread <= 0) {
+            if (connGetState(conn) != CONN_STATE_CONNECTED)
+                cancelReplicationHandshake(mi, true);
+            return false;
+        }
+        mi->repl_transfer_lastio = g_pserver->unixtime;
+        sdsIncrLen(mi->bulkreadBuffer,nread);
+
+        size_t offset = 0;
+
+        try {
+            if (sdslen(mi->bulkreadBuffer) > cserver.client_max_querybuf_len) {
+                throw "Full Sync Streaming Buffer Exceeded (increase client_max_querybuf_len)";
+            }
+
+            while (sdslen(mi->bulkreadBuffer) > offset) {
+                // Pop completed items
+                mi->parseState->trimState();
+
+                if (mi->bulkreadBuffer[offset] == '*') {
+                    // Starting an array
+                    long long arraySize;
+
+                    // Lets read the array length
+                    offset += parseCount(mi->bulkreadBuffer + offset, sdslen(mi->bulkreadBuffer) - offset, &arraySize);
+
+                    mi->parseState->pushArray(arraySize);
+                } else if (mi->bulkreadBuffer[offset] == '$') {
+                    // Loading in a string
+                    long long payloadsize = 0;
+
+                    // Lets read the string length
+                    size_t offsetCount = parseCount(mi->bulkreadBuffer + offset, sdslen(mi->bulkreadBuffer) - offset, &payloadsize);
+
+                    // OK we know how long the string is, now lets make sure the payload is here.
+                    if (sdslen(mi->bulkreadBuffer) < (offset + offsetCount + payloadsize + 2)) {
+                        goto LContinue; // wait for more data (note: we could throw true here, but throw is way more expensive)
+                    }
+
+                    mi->parseState->pushValue(mi->bulkreadBuffer + offset + offsetCount, payloadsize);
+
+                    // On to the next one
+                    offset += offsetCount + payloadsize + 2;
+                } else if (mi->bulkreadBuffer[offset] == ':') {
+                    // Numeral
+                    long long value;
+
+                    size_t offsetValue = parseCount(mi->bulkreadBuffer + offset, sdslen(mi->bulkreadBuffer) - offset, &value);
+
+                    mi->parseState->pushValue(value);
+                    offset += offsetValue;
+                } else {
+                    serverLog(LL_WARNING, "Bad protocol from MASTER: %s", mi->bulkreadBuffer+offset);
+                    cancelReplicationHandshake(mi, true);
+                    return false;
+                }
+            }
+
+            sdsrange(mi->bulkreadBuffer, offset, -1);
+            offset = 0;
+
+            // Cleanup the remaining stack
+            mi->parseState->trimState();
+
+            if (mi->parseState->depth() != 0)
+                return false;
+
+            rsi.repl_stream_db = mi->parseState->getMetaDataLongLong("repl-stream-db");
+            fFinished = true;
+            break;  // We're done!!!
+        }
+        catch (const char *sz) {
+            serverLog(LL_WARNING, "%s", sz);
+            cancelReplicationHandshake(mi, true);
+            return false;
+        } catch (bool fContinue) {
+            if (!fContinue) {
+                cancelReplicationHandshake(mi, true);
+                return false;
+            }
+        }
+    LContinue:
+        sdsrange(mi->bulkreadBuffer, offset, -1);
+    }
+
+    if (!fFinished)
+        return false;
+
+    serverLog(LL_NOTICE, "Fast sync complete");
+    sdsfree(mi->bulkreadBuffer);
+    mi->bulkreadBuffer = nullptr;
+    delete mi->parseState;
+    mi->parseState = nullptr;
+    return true;
+}
+
 /* Asynchronously read the SYNC payload we receive from a master */
 #define REPL_MAX_WRITTEN_BEFORE_FSYNC (1024*1024*8) /* 8 MB */
-void readSyncBulkPayload(connection *conn) {
+bool readSyncBulkPayloadRdb(connection *conn, redisMaster *mi, rdbSaveInfo &rsi, int &usemark) {
     char buf[PROTO_IOBUF_LEN];
     ssize_t nread, readlen, nwritten;
     int use_diskless_load = useDisklessLoad();
     const dbBackup *diskless_load_backup = NULL;
-    rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
     rsi.fForceSetKey = !!g_pserver->fActiveReplica;
     int empty_db_flags = g_pserver->repl_slave_lazy_flush ? EMPTYDB_ASYNC :
                                                         EMPTYDB_NO_FLAGS;
     off_t left;
     // Should we update our database, or create from scratch?
     int fUpdate = g_pserver->fActiveReplica || g_pserver->enable_multimaster;
-    redisMaster *mi = (redisMaster*)connGetPrivateData(conn);
-    if (mi == nullptr) {
-        // We're about to be free'd so bail out
-        return;
-    }
 
     serverAssert(GlobalLocksAcquired());
     serverAssert(mi->master == nullptr);
@@ -2101,7 +2464,6 @@ void readSyncBulkPayload(connection *conn) {
      * from the server: when they match, we reached the end of the transfer. */
     static char eofmark[CONFIG_RUN_ID_SIZE];
     static char lastbytes[CONFIG_RUN_ID_SIZE];
-    static int usemark = 0;
 
     /* If repl_transfer_size == -1 we still have to read the bulk length
      * from the master reply. */
@@ -2123,7 +2485,7 @@ void readSyncBulkPayload(connection *conn) {
              * the connection live. So we refresh our last interaction
              * timestamp. */
             mi->repl_transfer_lastio = g_pserver->unixtime;
-            return;
+            return false;
         } else if (buf[0] != '$') {
             serverLog(LL_WARNING,"Bad protocol from MASTER, the first byte is not '$' (we received '%s'), are you sure the host and port are right?", buf);
             goto error;
@@ -2157,7 +2519,7 @@ void readSyncBulkPayload(connection *conn) {
                 (long long) mi->repl_transfer_size,
                 use_diskless_load? "to parser":"to disk");
         }
-        return;
+        return false;
     }
 
     if (!use_diskless_load) {
@@ -2174,12 +2536,12 @@ void readSyncBulkPayload(connection *conn) {
         if (nread <= 0) {
             if (connGetState(conn) == CONN_STATE_CONNECTED) {
                 /* equivalent to EAGAIN */
-                return;
+                return false;
             }
             serverLog(LL_WARNING,"I/O error trying to sync with MASTER: %s",
                 (nread == -1) ? strerror(errno) : "connection lost");
             cancelReplicationHandshake(mi, true);
-            return;
+            return false;
         }
         g_pserver->stat_net_input_bytes += nread;
 
@@ -2248,7 +2610,7 @@ void readSyncBulkPayload(connection *conn) {
 
         /* If the transfer is yet not complete, we need to read more, so
          * return ASAP and wait for the handler to be called again. */
-        if (!eof_reached) return;
+        if (!eof_reached) return false;
     }
 
     /* We reach this point in one of the following cases:
@@ -2320,7 +2682,7 @@ void readSyncBulkPayload(connection *conn) {
             /* Note that there's no point in restarting the AOF on SYNC
              * failure, it'll be restarted when sync succeeds or the replica
              * gets promoted. */
-            return;
+            return false;
         }
 
         /* RDB loading succeeded if we reach this point. */
@@ -2340,7 +2702,7 @@ void readSyncBulkPayload(connection *conn) {
                 serverLog(LL_WARNING,"Replication stream EOF marker is broken");
                 cancelReplicationHandshake(mi,true);
                 rioFreeConn(&rdb, NULL);
-                return;
+                return false;
             }
         }
 
@@ -2372,7 +2734,7 @@ void readSyncBulkPayload(connection *conn) {
                 "MASTER <-> REPLICA synchronization: %s",
                 strerror(errno));
             cancelReplicationHandshake(mi,true);
-            return;
+            return false;
         }
 
         /* Rename rdb like renaming rewrite aof asynchronously. */
@@ -2385,7 +2747,7 @@ void readSyncBulkPayload(connection *conn) {
                     g_pserver->rdb_filename, strerror(errno));
                 cancelReplicationHandshake(mi,true);
                 if (old_rdb_fd != -1) close(old_rdb_fd);
-                return;
+                return false;
             }
             rdb_filename = g_pserver->rdb_filename;
             
@@ -2415,7 +2777,7 @@ void readSyncBulkPayload(connection *conn) {
             }
             /* Note that there's no point in restarting the AOF on sync failure,
                it'll be restarted when sync succeeds or replica promoted. */
-            return;
+            return false;
         }
 
         /* Cleanup. */
@@ -2432,6 +2794,32 @@ void readSyncBulkPayload(connection *conn) {
         mi->repl_transfer_fd = -1;
         mi->repl_transfer_tmpfile = NULL;
     }
+
+    return true;
+error:
+    cancelReplicationHandshake(mi,true);
+    return false;
+}
+
+void readSyncBulkPayload(connection *conn) {
+    rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+    redisMaster *mi = (redisMaster*)connGetPrivateData(conn);
+    static int usemark = 0;
+    if (mi == nullptr) {
+        // We're about to be free'd so bail out
+        return;
+    }
+
+    if (mi->isRocksdbSnapshotRepl) {
+        if (!readSnapshotBulkPayload(conn, mi, rsi))
+            return;
+    } else {
+        if (!readSyncBulkPayloadRdb(conn, mi, rsi, usemark))
+            return;
+    }
+
+    // Should we update our database, or create from scratch?
+    int fUpdate = g_pserver->fActiveReplica || g_pserver->enable_multimaster;
 
     /* Final setup of the connected slave <- master link */
     replicationCreateMasterClient(mi,mi->repl_transfer_s,rsi.repl_stream_db);
@@ -2475,16 +2863,12 @@ void readSyncBulkPayload(connection *conn) {
     }
 
     /* Send the initial ACK immediately to put this replica in online state. */
-    if (usemark) replicationSendAck(mi);
+    if (usemark || mi->isRocksdbSnapshotRepl) replicationSendAck(mi);
 
     /* Restart the AOF subsystem now that we finished the sync. This
      * will trigger an AOF rewrite, and when done will start appending
      * to the new file. */
     if (g_pserver->aof_enabled) restartAOFAfterSYNC();
-    return;
-
-error:
-    cancelReplicationHandshake(mi,true);
     return;
 }
 
@@ -2808,12 +3192,15 @@ void parseMasterCapa(redisMaster *mi, sds strcapa)
     char *pchEnd = szStart;
 
     mi->isActive = false;
+    mi->isRocksdbSnapshotRepl = false;
     for (;;)
     {
         if (*pchEnd == ' ' || *pchEnd == '\0') {
             // Parse the word
             if (strncmp(szStart, "active-replica", pchEnd - szStart) == 0) {
                 mi->isActive = true;
+            } else if (strncmp(szStart, "rocksdb-snapshot-save", pchEnd - szStart) == 0) {
+                mi->isRocksdbSnapshotRepl = true;
             }
             szStart = pchEnd + 1;
         }
@@ -2945,8 +3332,20 @@ void syncWithMaster(connection *conn) {
          * PSYNC2: supports PSYNC v2, so understands +CONTINUE <new repl ID>.
          *
          * The master will ignore capabilities it does not understand. */
-        err = sendCommand(conn,"REPLCONF",
-                "capa","eof","capa","psync2","capa","activeExpire",NULL);
+
+
+        std::vector<const char*> veccapabilities = {
+            "REPLCONF",
+            "capa","eof",
+            "capa","psync2",
+            "capa","activeExpire",
+        };
+        if (g_pserver->m_pstorageFactory && !g_pserver->fActiveReplica) {
+            veccapabilities.push_back("capa");
+            veccapabilities.push_back("rocksdb-snapshot-load");
+        }
+
+        err = sendCommandArgv(conn, veccapabilities.size(), veccapabilities.data(), nullptr);
         if (err) goto write_error;
 
         /* Send UUID */
@@ -3290,6 +3689,15 @@ void replicationAbortSyncTransfer(redisMaster *mi) {
  *
  * Otherwise zero is returned and no operation is performed at all. */
 int cancelReplicationHandshake(redisMaster *mi, int reconnect) {
+    if (mi->bulkreadBuffer != nullptr) {
+        sdsfree(mi->bulkreadBuffer);
+        mi->bulkreadBuffer = nullptr;
+    }
+    if (mi->parseState) {
+        delete mi->parseState;
+        mi->parseState = nullptr;
+    }
+
     if (mi->repl_state == REPL_STATE_TRANSFER) {
         replicationAbortSyncTransfer(mi);
         mi->repl_state = REPL_STATE_CONNECT;
@@ -4282,6 +4690,13 @@ void replicationCron(void) {
         while((ln = listNext(&li))) {
             client *replica = (client*)ln->value;
             std::unique_lock<fastlock> ul(replica->lock);
+
+            if (replica->replstate == SLAVE_STATE_FASTSYNC_DONE && !clientHasPendingReplies(replica)) {
+                serverLog(LL_WARNING, "Putting replica online");
+                replica->postFunction([](client *c){
+                    putSlaveOnline(c);
+                });
+            }
 
             if (replica->replstate == SLAVE_STATE_ONLINE) {
                 if (replica->flags & CLIENT_PRE_PSYNC)

@@ -2,8 +2,12 @@
 #include <string>
 #include <sstream>
 #include <mutex>
+#include <unistd.h>
+#include "rocksdbfactor_internal.h"
 
 static const char keyprefix[] = INTERNAL_KEY_PREFIX;
+
+rocksdb::Options DefaultRocksDBOptions();
 
 bool FInternalKey(const char *key, size_t cch)
 {
@@ -15,8 +19,8 @@ bool FInternalKey(const char *key, size_t cch)
     return false;
 }
 
-RocksDBStorageProvider::RocksDBStorageProvider(std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count)
-    : m_spdb(spdb), m_psnapshot(psnapshot), m_spcolfamily(spcolfam), m_count(count)
+RocksDBStorageProvider::RocksDBStorageProvider(RocksDBStorageFactory *pfactory, std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count)
+    : m_pfactory(pfactory), m_spdb(spdb), m_psnapshot(psnapshot), m_spcolfamily(spcolfam), m_count(count)
 {
     m_readOptionsTemplate = rocksdb::ReadOptions();
     m_readOptionsTemplate.verify_checksums = false;
@@ -38,13 +42,57 @@ void RocksDBStorageProvider::insert(const char *key, size_t cchKey, void *data, 
         ++m_count;
 }
 
-void RocksDBStorageProvider::bulkInsert(sds *rgkeys, sds *rgvals, size_t celem)
+void RocksDBStorageProvider::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem)
 {
-    auto spbatch = std::make_unique<rocksdb::WriteBatch>();
-    for (size_t ielem = 0; ielem < celem; ++ielem) {
-        spbatch->Put(m_spcolfamily.get(), rocksdb::Slice(rgkeys[ielem], sdslen(rgkeys[ielem])), rocksdb::Slice(rgvals[ielem], sdslen(rgvals[ielem])));
+    if (celem >= 16384) {
+        rocksdb::Options options = DefaultRocksDBOptions();
+        rocksdb::SstFileWriter sst_file_writer(rocksdb::EnvOptions(), options, options.comparator);
+        std::string file_path = m_pfactory->getTempFolder() + "/tmpIngest.";
+        file_path += std::to_string(gettid());
+        file_path += ".sst";
+
+        rocksdb::Status s = sst_file_writer.Open(file_path);
+        if (!s.ok())
+            goto LFallback;
+
+        // Insert rows into the SST file, note that inserted keys must be 
+        // strictly increasing (based on options.comparator)
+        for (size_t ielem = 0; ielem < celem; ++ielem) {
+            s = sst_file_writer.Put(rocksdb::Slice(rgkeys[ielem], rgcbkeys[ielem]), rocksdb::Slice(rgvals[ielem], rgcbvals[ielem]));
+            if (!s.ok()) {
+                unlink(file_path.c_str());
+                goto LFallback;
+            }
+        }
+
+        s = sst_file_writer.Finish();
+        if (!s.ok()) {
+            unlink(file_path.c_str());
+            goto LFallback;
+        }
+
+        auto ingestOptions = rocksdb::IngestExternalFileOptions();
+        ingestOptions.move_files = true;
+        //ingestOptions.verify_file_checksum = false;
+        ingestOptions.write_global_seqno = false;
+
+        // Ingest the external SST file into the DB
+        s = m_spdb->IngestExternalFile(m_spcolfamily.get(), {file_path}, ingestOptions);
+        if (!s.ok()) {
+            unlink(file_path.c_str());
+            goto LFallback;
+        }
+
+        unlink(file_path.c_str());
+    } else {
+    LFallback:
+        auto spbatch = std::make_unique<rocksdb::WriteBatch>();
+        for (size_t ielem = 0; ielem < celem; ++ielem) {
+            spbatch->Put(m_spcolfamily.get(), rocksdb::Slice(rgkeys[ielem], rgcbkeys[ielem]), rocksdb::Slice(rgvals[ielem], rgcbvals[ielem]));
+        }
+        m_spdb->Write(WriteOptions(), spbatch.get());
     }
-    m_spdb->Write(WriteOptions(), spbatch.get());
+
     std::unique_lock<fastlock> l(m_lock);
     m_count += celem;
 }
@@ -123,7 +171,7 @@ bool RocksDBStorageProvider::enumerate(callback fn) const
 const IStorage *RocksDBStorageProvider::clone() const
 {
     const rocksdb::Snapshot *psnapshot = const_cast<RocksDBStorageProvider*>(this)->m_spdb->GetSnapshot();
-    return new RocksDBStorageProvider(const_cast<RocksDBStorageProvider*>(this)->m_spdb, const_cast<RocksDBStorageProvider*>(this)->m_spcolfamily, psnapshot, m_count);
+    return new RocksDBStorageProvider(m_pfactory, const_cast<RocksDBStorageProvider*>(this)->m_spdb, const_cast<RocksDBStorageProvider*>(this)->m_spcolfamily, psnapshot, m_count);
 }
 
 RocksDBStorageProvider::~RocksDBStorageProvider()

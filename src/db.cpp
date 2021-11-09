@@ -2903,8 +2903,10 @@ bool redisDbPersistentData::processChanges(bool fSnapshot)
         {
             if (m_fAllChanged)
             {
-                m_spstorage->clear();
-                storeDatabase();
+                if (dictSize(m_pdict) > 0 || m_spstorage->count() > 0) { // in some cases we may have pre-sized the StorageCache's dict, and we don't want clear to ruin it
+                    m_spstorage->clear();
+                    storeDatabase();
+                }
                 m_fAllChanged = 0;
             }
             else
@@ -2936,21 +2938,30 @@ void redisDbPersistentData::processChangesAsync(std::atomic<int> &pendingJobs)
         dictIterator *di = dictGetIterator(dictNew);
         dictEntry *de;
         std::vector<sds> veckeys;
+        std::vector<size_t> veccbkeys;
         std::vector<sds> vecvals;
+        std::vector<size_t> veccbvals;
         while ((de = dictNext(di)) != nullptr)
         {
             robj *o = (robj*)dictGetVal(de);
             sds temp = serializeStoredObjectAndExpire(this, (const char*) dictGetKey(de), o);
             veckeys.push_back((sds)dictGetKey(de));
+            veccbkeys.push_back(sdslen((sds)dictGetKey(de)));
             vecvals.push_back(temp);
+            veccbvals.push_back(sdslen(temp));
         }
-        m_spstorage->bulkInsert(veckeys.data(), vecvals.data(), veckeys.size());
+        m_spstorage->bulkInsert(veckeys.data(), veccbkeys.data(), vecvals.data(), veccbvals.data(), veckeys.size());
         for (auto val : vecvals)
             sdsfree(val);
         dictReleaseIterator(di);
         dictRelease(dictNew);
         --pendingJobs;
     });
+}
+
+void redisDbPersistentData::bulkStorageInsert(char **rgKeys, size_t *rgcbKeys, char **rgVals, size_t *rgcbVals, size_t celem)
+{
+    m_spstorage->bulkInsert(rgKeys, rgcbKeys, rgVals, rgcbVals, celem);
 }
 
 void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **psnapshotFree)

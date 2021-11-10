@@ -170,6 +170,7 @@ bool RocksDBStorageProvider::enumerate(callback fn) const
 
 const IStorage *RocksDBStorageProvider::clone() const
 {
+    std::unique_lock<fastlock> l(m_lock);
     const rocksdb::Snapshot *psnapshot = const_cast<RocksDBStorageProvider*>(this)->m_spdb->GetSnapshot();
     return new RocksDBStorageProvider(m_pfactory, const_cast<RocksDBStorageProvider*>(this)->m_spdb, const_cast<RocksDBStorageProvider*>(this)->m_spcolfamily, psnapshot, m_count);
 }

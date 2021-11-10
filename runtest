@@ -14,4 +14,3 @@ then
     exit 1
 fi
 $TCLSH tests/test_helper.tcl "${@}"
-$TCLSH tests/test_helper.tcl "${@}--flash"

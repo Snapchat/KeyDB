@@ -84,19 +84,31 @@ dictType metadataLongLongDictType = {
     nullptr                     /* async free destructor */
 };
 
+dictType metadataDictType = {
+    dictSdsHash,            /* hash function */
+    NULL,                       /* key dup */
+    NULL,                       /* val dup */
+    dictSdsKeyCompare,         /* key compare */
+    dictSdsDestructor,          /* key destructor */
+    dictSdsDestructor,          /* val destructor */
+    nullptr,                    /* allow to expand */
+    nullptr                     /* async free destructor */
+};
+
+
 SnapshotPayloadParseState::ParseStageName SnapshotPayloadParseState::getNextStage() {
     if (stackParse.empty())
         return ParseStageName::Global;
 
-    switch (stackParse.top().name)
+    switch (stackParse.back().name)
     {
         case ParseStageName::None:
             return ParseStageName::Global;
 
         case ParseStageName::Global:
-            if (stackParse.top().arraycur == 0)
+            if (stackParse.back().arraycur == 0)
                 return ParseStageName::MetaData;
-            else if (stackParse.top().arraycur == 1)
+            else if (stackParse.back().arraycur == 1)
                 return ParseStageName::Databases;
             break;
 
@@ -118,6 +130,7 @@ SnapshotPayloadParseState::ParseStageName SnapshotPayloadParseState::getNextStag
 void SnapshotPayloadParseState::flushQueuedKeys() {
     if (vecqueuedKeys.empty())
         return;
+    serverAssert(current_database >= 0);
 
     // TODO: We can't finish parse until all the work functions finish
     int idb = current_database;
@@ -125,11 +138,20 @@ void SnapshotPayloadParseState::flushQueuedKeys() {
     auto sizePrev = vecqueuedKeys.size();
     ++insertsInFlight;
     auto &insertsInFlightTmp = insertsInFlight; // C++ GRRRRRRRRRRRRRRRR, we don't want to capute "this" because that's dangerous
-    g_pserver->asyncworkqueue->AddWorkFunction([idb, vecqueuedKeys = std::move(this->vecqueuedKeys), vecqueuedKeysCb = std::move(this->vecqueuedKeysCb), vecqueuedVals = std::move(this->vecqueuedVals), vecqueuedValsCb = std::move(this->vecqueuedValsCb), &insertsInFlightTmp, pallocator = m_spallocator.release()]() mutable {
-        g_pserver->db[idb]->bulkStorageInsert(vecqueuedKeys.data(), vecqueuedKeysCb.data(), vecqueuedVals.data(), vecqueuedValsCb.data(), vecqueuedKeys.size());
-        --insertsInFlightTmp;
-        delete pallocator;
-    });
+    if (current_database < cserver.dbnum) {
+        g_pserver->asyncworkqueue->AddWorkFunction([idb, vecqueuedKeys = std::move(this->vecqueuedKeys), vecqueuedKeysCb = std::move(this->vecqueuedKeysCb), vecqueuedVals = std::move(this->vecqueuedVals), vecqueuedValsCb = std::move(this->vecqueuedValsCb), &insertsInFlightTmp, pallocator = m_spallocator.release()]() mutable {
+            g_pserver->db[idb]->bulkStorageInsert(vecqueuedKeys.data(), vecqueuedKeysCb.data(), vecqueuedVals.data(), vecqueuedValsCb.data(), vecqueuedKeys.size());
+            --insertsInFlightTmp;
+            delete pallocator;
+        });
+    } else {
+        // else drop the data
+        vecqueuedKeys.clear();
+        vecqueuedKeysCb.clear();
+        vecqueuedVals.clear();
+        vecqueuedValsCb.clear();
+        // Note: m_spallocator will get free'd when overwritten below
+    }
     m_spallocator = std::make_unique<SlabAllocator>();
     cbQueued = 0;
     vecqueuedKeys.reserve(sizePrev);
@@ -146,19 +168,21 @@ SnapshotPayloadParseState::SnapshotPayloadParseState() {
     ParseStage stage;
     stage.name = ParseStageName::None;
     stage.arraylen = 1;
-    stackParse.push(stage);
+    stackParse.push_back(stage);
 
     dictLongLongMetaData = dictCreate(&metadataLongLongDictType, nullptr);
+    dictMetaData = dictCreate(&metadataDictType, nullptr);
     insertsInFlight = 0;
     m_spallocator = std::make_unique<SlabAllocator>();
 }
 
 SnapshotPayloadParseState::~SnapshotPayloadParseState() {
     dictRelease(dictLongLongMetaData);
+    dictRelease(dictMetaData);
 }
 
-const char *SnapshotPayloadParseState::getStateDebugName() {
-    switch (stackParse.top().name) {
+const char *SnapshotPayloadParseState::getStateDebugName(ParseStage stage) {
+    switch (stage.name) {
         case ParseStageName::None:
             return "None";
 
@@ -185,8 +209,8 @@ const char *SnapshotPayloadParseState::getStateDebugName() {
 size_t SnapshotPayloadParseState::depth() const { return stackParse.size(); }
 
 void SnapshotPayloadParseState::trimState() {
-    while (!stackParse.empty() && (stackParse.top().arraycur == stackParse.top().arraylen))
-        stackParse.pop();
+    while (!stackParse.empty() && (stackParse.back().arraycur == stackParse.back().arraylen))
+        stackParse.pop_back();
     
     if (stackParse.empty()) {
         flushQueuedKeys();
@@ -203,13 +227,13 @@ void SnapshotPayloadParseState::pushArray(long long size) {
         throw "Bad Protocol: unexpected trailing data";
 
     if (size == 0) {
-        stackParse.top().arraycur++;
+        stackParse.back().arraycur++;
         return;
     }
     
-    if (stackParse.top().name == ParseStageName::Databases) {
+    if (stackParse.back().name == ParseStageName::Databases) {
         flushQueuedKeys();
-        current_database = stackParse.top().arraycur;
+        current_database = stackParse.back().arraycur;
     }
 
     ParseStage stage;
@@ -221,43 +245,65 @@ void SnapshotPayloadParseState::pushArray(long long size) {
     }
 
     // Note: This affects getNextStage so ensure its after
-    stackParse.top().arraycur++;
-    stackParse.push(stage);
+    stackParse.back().arraycur++;
+    stackParse.push_back(stage);
 }
 
 void SnapshotPayloadParseState::pushValue(const char *rgch, long long cch) {
     if (stackParse.empty())
         throw "Bad Protocol: unexpected trailing bulk string";
 
-    if (stackParse.top().arraycur >= static_cast<int>(stackParse.top().arrvalues.size()))
+    if (stackParse.back().arraycur >= static_cast<int>(stackParse.back().arrvalues.size()))
         throw "Bad protocol: Unexpected value";
 
-    auto &stage = stackParse.top();
-    stage.arrvalues[stackParse.top().arraycur].first = (char*)m_spallocator->allocate(cch);
-    stage.arrvalues[stackParse.top().arraycur].second = cch;
-    memcpy(stage.arrvalues[stackParse.top().arraycur].first, rgch, cch);
+    auto &stage = stackParse.back();
+    stage.arrvalues[stackParse.back().arraycur].first = (char*)m_spallocator->allocate(cch);
+    stage.arrvalues[stackParse.back().arraycur].second = cch;
+    memcpy(stage.arrvalues[stackParse.back().arraycur].first, rgch, cch);
     stage.arraycur++;
     switch (stage.name) {
         case ParseStageName::KeyValuePair:
-            if (stage.arraycur == 2) {
-                // We loaded both pairs
-                if (stage.arrvalues[0].first == nullptr || stage.arrvalues[1].first == nullptr)
-                    throw "Bad Protocol: Got array when expecing a string"; // A baddy could make us derefence the vector when its too small
-                vecqueuedKeys.push_back(stage.arrvalues[0].first);
-                vecqueuedKeysCb.push_back(stage.arrvalues[0].second);
-                vecqueuedVals.push_back(stage.arrvalues[1].first);
-                vecqueuedValsCb.push_back(stage.arrvalues[1].second);
-                stage.arrvalues[0].first = nullptr;
-                stage.arrvalues[1].first = nullptr;
-                cbQueued += vecqueuedKeysCb.back();
-                cbQueued += vecqueuedValsCb.back();
-                if (cbQueued >= queuedBatchLimit)
-                    flushQueuedKeys();
+            if (stackParse.size() < 2)
+                throw "Bad Protocol: unexpected bulk string";
+            if (stackParse[stackParse.size()-2].name == ParseStageName::MetaData) {
+                if (stage.arraycur == 2) {
+                    // We loaded both pairs
+                    if (stage.arrvalues[0].first == nullptr || stage.arrvalues[1].first == nullptr)
+                        throw "Bad Protocol: Got array when expecing a string"; // A baddy could make us derefence the vector when its too small
+
+                    if (!strcasecmp(stage.arrvalues[0].first, "lua")) {
+                        /* Load the script back in memory. */
+                        robj *auxval = createStringObject(stage.arrvalues[1].first, stage.arrvalues[1].second);
+                        if (luaCreateFunction(NULL,g_pserver->lua,auxval) == NULL) {
+                            throw "Can't load Lua script";
+                        }
+                    } else {
+                        dictAdd(dictMetaData, sdsnewlen(stage.arrvalues[0].first, stage.arrvalues[0].second), sdsnewlen(stage.arrvalues[1].first, stage.arrvalues[1].second));
+                    }
+                }
+            } else if (stackParse[stackParse.size()-2].name == ParseStageName::Dataset) {
+                if (stage.arraycur == 2) {
+                    // We loaded both pairs
+                    if (stage.arrvalues[0].first == nullptr || stage.arrvalues[1].first == nullptr)
+                        throw "Bad Protocol: Got array when expecing a string"; // A baddy could make us derefence the vector when its too small
+                    vecqueuedKeys.push_back(stage.arrvalues[0].first);
+                    vecqueuedKeysCb.push_back(stage.arrvalues[0].second);
+                    vecqueuedVals.push_back(stage.arrvalues[1].first);
+                    vecqueuedValsCb.push_back(stage.arrvalues[1].second);
+                    stage.arrvalues[0].first = nullptr;
+                    stage.arrvalues[1].first = nullptr;
+                    cbQueued += vecqueuedKeysCb.back();
+                    cbQueued += vecqueuedValsCb.back();
+                    if (cbQueued >= queuedBatchLimit)
+                        flushQueuedKeys();
+                }
+            } else {
+                throw "Bad Protocol: unexpected bulk string";
             }
             break;
 
         default:
-            throw "Bad Protocol: unexpected bulk string";
+            throw "Bad Protocol: unexpected bulk string out of KV pair";
     }
 }
 
@@ -265,12 +311,12 @@ void SnapshotPayloadParseState::pushValue(long long value) {
     if (stackParse.empty())
         throw "Bad Protocol: unexpected integer value";
     
-    stackParse.top().arraycur++;
+    stackParse.back().arraycur++;
 
-    if (stackParse.top().arraycur != 2 || stackParse.top().arrvalues[0].first == nullptr)
+    if (stackParse.back().arraycur != 2 || stackParse.back().arrvalues[0].first == nullptr)
         throw "Bad Protocol: unexpected integer value";
 
-    dictEntry *de = dictAddRaw(dictLongLongMetaData, sdsnewlen(stackParse.top().arrvalues[0].first, stackParse.top().arrvalues[0].second), nullptr);
+    dictEntry *de = dictAddRaw(dictLongLongMetaData, sdsnewlen(stackParse.back().arrvalues[0].first, stackParse.back().arrvalues[0].second), nullptr);
     if (de == nullptr)
         throw "Bad Protocol: metadata field sent twice";
     de->v.s64 = value;
@@ -284,4 +330,15 @@ long long SnapshotPayloadParseState::getMetaDataLongLong(const char *szField) co
         throw false;
     }
     return de->v.s64;
+}
+
+sds SnapshotPayloadParseState::getMetaDataStr(const char *szField) const {
+    sdsstring str(szField, strlen(szField));
+
+    dictEntry *de = dictFind(dictMetaData, str.get());
+    if (de == nullptr) {
+        serverLog(LL_WARNING, "Master did not send field: %s", szField);
+        throw false;
+    }
+    return (sds)de->v.val;
 }

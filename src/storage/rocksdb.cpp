@@ -8,6 +8,7 @@
 static const char keyprefix[] = INTERNAL_KEY_PREFIX;
 
 rocksdb::Options DefaultRocksDBOptions();
+extern "C" pid_t gettid();
 
 bool FInternalKey(const char *key, size_t cch)
 {

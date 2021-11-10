@@ -27,7 +27,7 @@ class SnapshotPayloadParseState {
         }
     };
 
-    std::stack<ParseStage> stackParse;
+    std::vector<ParseStage> stackParse;
     
     
     std::vector<char*> vecqueuedKeys;
@@ -39,6 +39,7 @@ class SnapshotPayloadParseState {
     std::atomic<int> insertsInFlight;
     std::unique_ptr<SlabAllocator> m_spallocator;
     dict *dictLongLongMetaData = nullptr;
+    dict *dictMetaData = nullptr;
     size_t cbQueued = 0;
     static const size_t queuedBatchLimit = 64*1024*1024;    // 64 MB
     int current_database = -1;
@@ -51,8 +52,9 @@ public:
     ~SnapshotPayloadParseState();
 
     long long getMetaDataLongLong(const char *field) const;
+    sds getMetaDataStr(const char *szField) const;
 
-    const char *getStateDebugName();
+    static const char *getStateDebugName(ParseStage stage);
 
     size_t depth() const;
 

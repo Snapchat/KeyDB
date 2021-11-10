@@ -223,10 +223,16 @@ uint64_t ACLGetCommandCategoryFlagByName(const char *name) {
     return 0; /* No match. */
 }
 
-/* Method for passwords/pattern comparison used for the user->passwords list
+/* Method for pattern comparison used for the user->patterns list
  * so that we can search for items with listSearchKey(). */
 int ACLListMatchSds(void *a, void *b) {
     return sdscmp((sds)a,(sds)b) == 0;
+}
+
+/* Method for password comparison used for the user->passwords list
+ * Like the above, but uses a time independant compare for security reasons */
+int ACLListMatchSdsSecure(void *a, void* b) {
+    return time_independent_strcmp((sds)a,(sds)b) == 0;
 }
 
 /* Method to free list elements from ACL users password/patterns lists. */
@@ -253,7 +259,7 @@ user *ACLCreateUser(const char *name, size_t namelen) {
     u->passwords = listCreate();
     u->patterns = listCreate();
     u->channels = listCreate();
-    listSetMatchMethod(u->passwords,ACLListMatchSds);
+    listSetMatchMethod(u->passwords,ACLListMatchSdsSecure);
     listSetFreeMethod(u->passwords,ACLListFreeSds);
     listSetDupMethod(u->passwords,ACLListDupSds);
     listSetMatchMethod(u->patterns,ACLListMatchSds);

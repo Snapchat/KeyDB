@@ -51,6 +51,7 @@ void cronCommand(client *c)
         
         if (c->argc < (6 + numkeys)) {
             addReplyError(c, "Missing arguments or numkeys is too big");
+            return;
         }
     }
 

@@ -1079,7 +1079,42 @@ int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
     }
     serverAssert(replica != nullptr);
 
-    g_pserver->asyncworkqueue->AddWorkFunction([repl_stream_db = rsi->repl_stream_db, spreplBuf = std::move(spreplBuf)]{
+    spreplBuf->addArrayLen(2);   // Two sections: Metadata and databases
+
+    // MetaData
+    aeAcquireLock();
+    spreplBuf->addArrayLen(3 + dictSize(g_pserver->lua_scripts));
+        spreplBuf->addArrayLen(2);
+            spreplBuf->addString("repl-stream-db", 14);
+            spreplBuf->addLong(rsi->repl_stream_db);
+        spreplBuf->addArrayLen(2);
+            spreplBuf->addString("repl-id", 7);
+            spreplBuf->addString(rsi->repl_id, CONFIG_RUN_ID_SIZE+1);
+        spreplBuf->addArrayLen(2);
+            spreplBuf->addString("repl-offset", 11);
+            spreplBuf->addLong(rsi->master_repl_offset);
+
+    if (dictSize(g_pserver->lua_scripts)) {
+        dictEntry *de;
+        auto di = dictGetIterator(g_pserver->lua_scripts);
+        while((de = dictNext(di)) != NULL) {
+            robj *body = (robj*)dictGetVal(de);
+
+            spreplBuf->addArrayLen(2);
+            spreplBuf->addString("lua", 3);
+            spreplBuf->addString(szFromObj(body), sdslen(szFromObj(body)));
+        }
+        dictReleaseIterator(di);
+        di = NULL; /* So that we don't release it again on error. */
+    }
+
+    std::shared_ptr<std::vector<std::unique_ptr<const StorageCache>>> spvecspsnapshot = std::make_shared<std::vector<std::unique_ptr<const StorageCache>>>();
+    for (int idb = 0; idb < cserver.dbnum; ++idb) {
+        spvecspsnapshot->emplace_back(g_pserver->db[idb]->CloneStorageCache());
+    }
+    aeReleaseLock();
+
+    g_pserver->asyncworkqueue->AddWorkFunction([spreplBuf = std::move(spreplBuf), spvecspsnapshot = std::move(spvecspsnapshot)]{
         int retval = C_OK;
         auto timeStart = ustime();
         auto lastLogTime = timeStart;
@@ -1087,18 +1122,10 @@ int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
         size_t cbLastUpdate = 0;
         auto &replBuf = *spreplBuf;
 
-        replBuf.addArrayLen(2);   // Two sections: Metadata and databases
-
-        // MetaData
-        replBuf.addArrayLen(1);
-            replBuf.addArrayLen(2);
-                replBuf.addString("repl-stream-db", 14);
-                replBuf.addLong(repl_stream_db);
-
         // Databases
         replBuf.addArrayLen(cserver.dbnum);
         for (int idb = 0; idb < cserver.dbnum; ++idb) {
-            std::unique_ptr<const StorageCache> spsnapshot = g_pserver->db[idb]->CloneStorageCache();
+            auto &spsnapshot = (*spvecspsnapshot)[idb];
             size_t snapshotDeclaredCount = spsnapshot->count();
             replBuf.addArrayLen(snapshotDeclaredCount);
             size_t count = 0;
@@ -1139,7 +1166,6 @@ int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
         serverLog(LL_NOTICE, "Transferred %zuMB total (%zuMB data) in %.2f seconds.  (%.2fGbit/s)", spreplBuf->cbWritten()/1024/1024, cbData/1024/1024, usec/1000000.0, (spreplBuf->cbWritten()*8.0)/(usec/1000000.0)/1000000000.0);
         if (retval == C_OK) {
             aeAcquireLock();
-            replicationScriptCacheFlush();
             replBuf.putSlavesOnline();
             aeReleaseLock();
         }
@@ -2302,6 +2328,7 @@ void disklessLoadDiscardBackup(const dbBackup *buckup, int flag) {
 size_t parseCount(const char *rgch, size_t cch, long long *pvalue) {
     size_t cchNumeral = 0;
 
+    if (cch > cchNumeral+1 && rgch[cchNumeral+1] == '-') ++cchNumeral;
     while ((cch > (cchNumeral+1)) && isdigit(rgch[1 + cchNumeral])) ++cchNumeral;
 
     if (cch < (cchNumeral+1+2)) { // +2 is for the \r\n we expect
@@ -2313,7 +2340,7 @@ size_t parseCount(const char *rgch, size_t cch, long long *pvalue) {
         throw false;
     }
 
-    if (!string2ll(rgch+1, cchNumeral, pvalue) || *pvalue < 0) {
+    if (!string2ll(rgch+1, cchNumeral, pvalue)) {
         serverLog(LL_WARNING, "Bad protocol from MASTER: %s", rgch);
         throw false;
     }
@@ -2330,6 +2357,7 @@ bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi
     if (mi->bulkreadBuffer == nullptr) {
         mi->bulkreadBuffer = sdsempty();
         mi->parseState = new SnapshotPayloadParseState();
+        if (g_pserver->aof_state != AOF_OFF) stopAppendOnly();
         if (!fUpdate) {
             int empty_db_flags = g_pserver->repl_slave_lazy_flush ? EMPTYDB_ASYNC :
                 EMPTYDB_NO_FLAGS;
@@ -2379,6 +2407,8 @@ bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi
 
                     // Lets read the array length
                     offset += parseCount(mi->bulkreadBuffer + offset, sdslen(mi->bulkreadBuffer) - offset, &arraySize);
+                    if (arraySize < 0)
+                        throw "Invalid array size";
 
                     mi->parseState->pushArray(arraySize);
                 } else if (mi->bulkreadBuffer[offset] == '$') {
@@ -2387,6 +2417,8 @@ bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi
 
                     // Lets read the string length
                     size_t offsetCount = parseCount(mi->bulkreadBuffer + offset, sdslen(mi->bulkreadBuffer) - offset, &payloadsize);
+                    if (payloadsize < 0)
+                        throw "Invalid array size";
 
                     // OK we know how long the string is, now lets make sure the payload is here.
                     if (sdslen(mi->bulkreadBuffer) < (offset + offsetCount + payloadsize + 2)) {
@@ -2421,7 +2453,14 @@ bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi
             if (mi->parseState->depth() != 0)
                 return false;
 
+            static_assert(sizeof(long) == sizeof(long long),"");
             rsi.repl_stream_db = mi->parseState->getMetaDataLongLong("repl-stream-db");
+            rsi.repl_offset = mi->parseState->getMetaDataLongLong("repl-offset");
+            sds str = mi->parseState->getMetaDataStr("repl-id");
+            if (sdslen(str) == CONFIG_RUN_ID_SIZE+1) {
+                memcpy(rsi.repl_id, str, CONFIG_RUN_ID_SIZE+1);
+            }
+
             fFinished = true;
             break;  // We're done!!!
         }
@@ -3347,7 +3386,7 @@ void syncWithMaster(connection *conn) {
             "capa","psync2",
             "capa","activeExpire",
         };
-        if (g_pserver->m_pstorageFactory && !g_pserver->fActiveReplica) {
+        if (g_pserver->m_pstorageFactory && !g_pserver->fActiveReplica && g_pserver->repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) {
             veccapabilities.push_back("capa");
             veccapabilities.push_back("rocksdb-snapshot-load");
         }

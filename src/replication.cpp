@@ -2335,6 +2335,13 @@ bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi
                 EMPTYDB_NO_FLAGS;
             serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Flushing old data");
             emptyDb(-1,empty_db_flags,replicationEmptyDbCallback);
+            for (int idb = 0; idb < cserver.dbnum; ++idb) {
+                aeAcquireLock();
+                g_pserver->db[idb]->processChanges(false);
+                aeReleaseLock();
+                g_pserver->db[idb]->commitChanges();
+                g_pserver->db[idb]->trackChanges(false);
+            }
         }
     }
 

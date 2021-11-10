@@ -704,6 +704,10 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
             integration/replication-4
             integration/replication-psync
         }
+        set fp [open {./tests/integration/rdb-repl-tests} r]
+        set file_data [read $fp]
+        close $fp
+        set ::skiptests [split $file_data "\n"]
     } else {
         puts "Wrong argument: $opt"
         exit 1

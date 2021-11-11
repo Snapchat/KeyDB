@@ -4009,7 +4009,7 @@ void initServer(void) {
                 * information, in order to allow partial resynchronizations
                 * with masters. */
                 replicationCacheMasterUsingMyself(mi);
-                g_pserver->metadataDb->retrieve("repl-stream-db", 14, [&](const char *, size_t, const void *data, size_t cb){
+                g_pserver->metadataDb->retrieve("repl-stream-db", 14, [&](const char *, size_t, const void *data, size_t){
                     selectDb(mi->cached_master, *(int*)data);
                 });
             }

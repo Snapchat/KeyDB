@@ -7,7 +7,7 @@ Files: *
 Copyright: 
  © 2006-2014 Salvatore Sanfilippo <antirez@gmail.com>
  © 2019-2021 John Sully
- © 2019-2021 EQ-Alpha Technology Ltd.
+ © 2019-2021 EQ Alpha Technology Ltd.
 
 License: BSD-3-clause
 
@@ -88,7 +88,7 @@ License: MIT
 Files: pkg/deb/debian_dh9/*
 Copyright: 
  © 2009 Chris Lamb <lamby@debian.org>
- © 2020-2021 EQ-Alpha Technology Ltd. <support@eqalpha.com>
+ © 2020-2021 EQ Alpha Technology Ltd. <support@eqalpha.com>
 License: BSD-3-clause
 
 License: BSD-2-clause

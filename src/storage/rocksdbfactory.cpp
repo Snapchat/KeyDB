@@ -90,14 +90,6 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
     m_spdb = std::shared_ptr<rocksdb::DB>(db);
     for (auto handle : handles)
     {
-        std::string metaId;
-
-        auto idStatus = m_spdb->Get(rocksdb::ReadOptions(), handle, rocksdb::Slice(meta_key, sizeof(meta_key)), &metaId);
-        if (idStatus.ok() && !strcmp(metaId.c_str(), METADATA_DB_IDENTIFIER)) {
-            auto metaStatus = m_spdb->Get(rocksdb::ReadOptions(), handle, rocksdb::Slice("repl-masters", 12), &this->metadata);
-            if (!metaStatus.ok()) this->metadata = "";
-        }
-
         std::string strVersion;
         auto status = m_spdb->Get(rocksdb::ReadOptions(), handle, rocksdb::Slice(version_key, sizeof(version_key)), &strVersion);
         if (!status.ok())

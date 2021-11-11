@@ -47,6 +47,7 @@ set ::all_tests {
     integration/replication-3
     integration/replication-4
     integration/replication-psync
+    integration/replication-psync-flash
     integration/replication-active
     integration/replication-multimaster
     integration/replication-multimaster-connect

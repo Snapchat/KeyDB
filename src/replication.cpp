@@ -1385,8 +1385,11 @@ void syncCommand(client *c) {
                             g_pserver->replid, g_pserver->replid2);
     }
 
+    /* CASE 0: Fast Sync */
+    if ((c->slave_capa & SLAVE_CAPA_ROCKSDB_SNAPSHOT) && g_pserver->m_pstorageFactory) {
+        startBgsaveForReplication(c->slave_capa);
     /* CASE 1: BGSAVE is in progress, with disk target. */
-    if (g_pserver->FRdbSaveInProgress() &&
+    } else if (g_pserver->FRdbSaveInProgress() &&
         g_pserver->rdb_child_type == RDB_CHILD_TYPE_DISK)
     {
         /* Ok a background save is in progress. Let's check if it is a good

@@ -270,7 +270,7 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
     
     void *sh, *newsh;
     size_t avail = sdsavail(s);
-    size_t len, newlen;
+    size_t len, newlen, reqlen;
     char type, oldtype = s[-1] & SDS_TYPE_MASK;
     int hdrlen;
     size_t usable;
@@ -280,7 +280,7 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
 
     len = sdslen(s);
     sh = (char*)s-sdsHdrSize(oldtype);
-    newlen = (len+addlen);
+    reqlen = newlen = (len+addlen);
     assert(newlen > len);   /* Catch size_t overflow */
     if (newlen < SDS_MAX_PREALLOC)
         newlen *= 2;
@@ -295,10 +295,8 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
     if (type == SDS_TYPE_5) type = SDS_TYPE_8;
 
     hdrlen = sdsHdrSize(type);
-    assert(hdrlen + newlen + 1 > len);  /* Catch size_t overflow */
-    if (oldtype==type && (len+1024) >= avail) {
-        // note: if we have a lot of free space don't use this as we don't want s_realloc copying
-        //  uninitialized data
+    assert(hdrlen + newlen + 1 > reqlen);  /* Catch size_t overflow */
+    if (oldtype==type) {
         newsh = s_realloc_usable(sh, hdrlen+newlen+1, &usable);
         if (newsh == NULL) return NULL;
         s = (char*)newsh+hdrlen;
@@ -803,6 +801,21 @@ sds sdstrim(sds s, const char *cset) {
     return s;
 }
 
+/* Changes the input string to be a subset of the original.
+ * It does not release the free space in the string, so a call to
+ * sdsRemoveFreeSpace may be wise after. */
+void sdssubstr(sds s, size_t start, size_t len) {
+    /* Clamp out of range input */
+    size_t oldlen = sdslen(s);
+    if (start >= oldlen) start = len = 0;
+    if (len > oldlen-start) len = oldlen-start;
+
+    /* Move the data */
+    if (len) memmove(s, s+start, len);
+    s[len] = 0;
+    sdssetlen(s,len);
+}
+
 /* Turn the string into a smaller (or equal) string containing only the
  * substring specified by the 'start' and 'end' indexes.
  *
@@ -814,6 +827,11 @@ sds sdstrim(sds s, const char *cset) {
  *
  * The string is modified in-place.
  *
+ * NOTE: this function can be misleading and can have unexpected behaviour,
+ * specifically when you want the length of the new string to be 0.
+ * Having start==end will result in a string with one character.
+ * please consider using sdssubstr instead.
+ *
  * Example:
  *
  * s = sdsnew("Hello World");
@@ -821,28 +839,13 @@ sds sdstrim(sds s, const char *cset) {
  */
 void sdsrange(sds s, ssize_t start, ssize_t end) {
     size_t newlen, len = sdslen(s);
-
     if (len == 0) return;
-    if (start < 0) {
-        start = len+start;
-        if (start < 0) start = 0;
-    }
-    if (end < 0) {
-        end = len+end;
-        if (end < 0) end = 0;
-    }
+    if (start < 0)
+        start = len + start;
+    if (end < 0)
+        end = len + end;
     newlen = (start > end) ? 0 : (end-start)+1;
-    if (newlen != 0) {
-        if (start >= (ssize_t)len) {
-            newlen = 0;
-        } else if (end >= (ssize_t)len) {
-            end = len-1;
-            newlen = (start > end) ? 0 : (end-start)+1;
-        }
-    }
-    if (start && newlen) memmove(s, s+start, newlen);
-    s[newlen] = 0;
-    sdssetlen(s,newlen);
+    sdssubstr(s, start, newlen);
 }
 
 /* Apply tolower() to every character of the sds string 's'. */
@@ -1412,6 +1415,18 @@ int sdsTest(int argc, char **argv, int accurate) {
         sdsrange(y,100,100);
         test_cond("sdsrange(...,100,100)",
             sdslen(y) == 0 && memcmp(y,"\0",1) == 0);
+
+        sdsfree(y);
+        y = sdsdup(x);
+        sdsrange(y,4,6);
+        test_cond("sdsrange(...,4,6)",
+            sdslen(y) == 0 && memcmp(y,"\0",1) == 0);
+
+        sdsfree(y);
+        y = sdsdup(x);
+        sdsrange(y,3,6);
+        test_cond("sdsrange(...,3,6)",
+            sdslen(y) == 1 && memcmp(y,"o\0",2) == 0);
 
         sdsfree(y);
         sdsfree(x);

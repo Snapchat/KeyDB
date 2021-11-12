@@ -156,8 +156,7 @@ void execCommandAbort(client *c, sds error) {
     /* Send EXEC to clients waiting data from MONITOR. We did send a MULTI
      * already, and didn't send any of the queued commands, now we'll just send
      * EXEC so it is clear that the transaction is over. */
-    if (listLength(g_pserver->monitors) && !g_pserver->loading)
-        replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
+    replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
 }
 
 void execCommand(client *c) {
@@ -172,20 +171,28 @@ void execCommand(client *c) {
         return;
     }
 
+    /* EXEC with expired watched key is disallowed*/
+    if (isWatchedKeyExpired(c)) {
+        c->flags |= (CLIENT_DIRTY_CAS);
+    }
+
     /* Check if we need to abort the EXEC because:
      * 1) Some WATCHed key was touched.
      * 2) There was a previous error while queueing commands.
      * A failed EXEC in the first case returns a multi bulk nil object
      * (technically it is not an error but a special behavior), while
      * in the second an EXECABORT error is returned. */
-    if (c->flags & (CLIENT_DIRTY_CAS|CLIENT_DIRTY_EXEC)) {
-        addReply(c, c->flags & CLIENT_DIRTY_EXEC ? shared.execaborterr :
-                                                   shared.nullarray[c->resp]);
+    if (c->flags & (CLIENT_DIRTY_CAS | CLIENT_DIRTY_EXEC)) {
+        if (c->flags & CLIENT_DIRTY_EXEC) {
+            addReplyErrorObject(c, shared.execaborterr);
+        } else {
+            addReply(c, shared.nullarray[c->resp]);
+        }
+
         discardTransaction(c);
-        goto handle_monitor;
+        return;
     }
 
-{   // GOTO Protectect Variable Scope
     uint64_t old_flags = c->flags;
 
     /* we do not want to allow blocking commands inside multi */
@@ -273,16 +280,6 @@ void execCommand(client *c) {
     }
 
     serverTL->in_exec = 0;
-} // END Goto Variable Protection Scope
-
-handle_monitor:
-    /* Send EXEC to clients waiting data from MONITOR. We do it here
-     * since the natural order of commands execution is actually:
-     * MUTLI, EXEC, ... commands inside transaction ...
-     * Instead EXEC is flagged as CMD_SKIP_MONITOR in the command
-     * table, and we do it here with correct ordering. */
-    if (listLength(g_pserver->monitors) && !g_pserver->loading)
-        replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
 }
 
 /* ===================== WATCH (CAS alike for MULTI/EXEC) ===================
@@ -358,6 +355,22 @@ void unwatchAllKeys(client *c) {
         decrRefCount(wk->key);
         zfree(wk);
     }
+}
+
+/* iterates over the watched_keys list and
+ * look for an expired key . */
+int isWatchedKeyExpired(client *c) {
+    listIter li;
+    listNode *ln;
+    watchedKey *wk;
+    if (listLength(c->watched_keys) == 0) return 0;
+    listRewind(c->watched_keys,&li);
+    while ((ln = listNext(&li))) {
+        wk = (watchedKey*)listNodeValue(ln);
+        if (keyIsExpired(wk->db, wk->key)) return 1;
+    }
+
+    return 0;
 }
 
 /* "Touch" a key, so that if this key is being WATCHed by some client the

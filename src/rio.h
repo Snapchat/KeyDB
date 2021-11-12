@@ -63,7 +63,7 @@ struct _rio {
     uint64_t cksum, flags;
 
     /* number of keys loaded since last rdbLoadProgressCallback */
-    long int keys_since_last_callback;
+    unsigned long int keys_since_last_callback;
 
     /* number of bytes read or written */
     size_t processed_bytes;

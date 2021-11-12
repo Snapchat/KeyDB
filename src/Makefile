@@ -74,7 +74,7 @@ endif
 # Do we use our assembly spinlock? X64 only
 ifeq ($(uname_S),Linux)
 ifeq ($(uname_M),x86_64)
-ifneq ($(@@),32bit)
+ifneq ($(TARGET32), true)
 ifeq ($(USEASM),true)
 	ASM_OBJ+= fastlock_x64.o
 	CFLAGS+= -DASM_SPINLOCK
@@ -171,12 +171,10 @@ ifeq ($(uname_S),Darwin)
 	# must be referenced explicitly during build.
 ifeq ($(uname_M),arm64)
 	# Homebrew arm64 uses /opt/homebrew as HOMEBREW_PREFIX
-	OPENSSL_CFLAGS=-I/opt/homebrew/opt/openssl/include
-	OPENSSL_LDFLAGS=-L/opt/homebrew/opt/openssl/lib
+	OPENSSL_PREFIX?=/opt/homebrew/opt/openssl
 else
 	# Homebrew x86/ppc uses /usr/local as HOMEBREW_PREFIX
-	OPENSSL_CFLAGS=-I/usr/local/opt/openssl/include
-	OPENSSL_LDFLAGS=-L/usr/local/opt/openssl/lib
+	OPENSSL_PREFIX?=/usr/local/opt/openssl
 endif
 else
 ifeq ($(uname_S),AIX)
@@ -244,6 +242,14 @@ endif
 endif
 endif
 endif
+
+ifdef OPENSSL_PREFIX
+	OPENSSL_CFLAGS=-I$(OPENSSL_PREFIX)/include
+	OPENSSL_LDFLAGS=-L$(OPENSSL_PREFIX)/lib
+	# Also export OPENSSL_PREFIX so it ends up in deps sub-Makefiles
+	export OPENSSL_PREFIX
+endif
+
 # Include paths to dependencies
 FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/license/
 FINAL_CXXFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/rocksdb/include/ -I../deps/license
@@ -480,13 +486,16 @@ clean:
 distclean: clean
 	-(cd ../deps && $(MAKE) distclean)
 	-(cd modules && $(MAKE) clean)
-	-(cd modules && $(MAKE) clean)
+	-(cd ../tests/modules && $(MAKE) clean)
 	-(rm -f .make-*)
 
 .PHONY: distclean
 
 test: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME)
 	@(cd ..; ./runtest)
+
+test-modules: $(REDIS_SERVER_NAME)
+	@(cd ..; ./runtest-moduleapi)
 
 test-sentinel: $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME)
 	@(cd ..; ./runtest-sentinel)
@@ -509,7 +518,7 @@ bench: $(REDIS_BENCHMARK_NAME)
 	@echo ""
 	@echo "WARNING: if it fails under Linux you probably need to install libc6-dev-i386"
 	@echo ""
-	$(MAKE) CXXFLAGS="-m32" CFLAGS="-m32" LDFLAGS="-m32"
+	$(MAKE) CXXFLAGS="-m32" CFLAGS="-m32" LDFLAGS="-m32" TARGET32=true
 
 gcov:
 	$(MAKE) KEYDB_CXXFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" KEYDB_CFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" KEYDB_LDFLAGS="-fprofile-arcs -ftest-coverage"

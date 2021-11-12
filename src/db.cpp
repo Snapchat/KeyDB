@@ -31,6 +31,7 @@
 #include "cluster.h"
 #include "atomicvar.h"
 #include "aelocker.h"
+#include "latency.h"
 
 #include <signal.h>
 #include <ctype.h>
@@ -51,7 +52,6 @@ struct dbBackup {
  * C-level DB API
  *----------------------------------------------------------------------------*/
 
-int keyIsExpired(const redisDbPersistentDataSnapshot *db, robj *key);
 int expireIfNeeded(redisDb *db, robj *key, robj *o);
 void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add);
 
@@ -221,7 +221,7 @@ robj *lookupKeyWriteWithFlags(redisDb *db, robj *key, int flags) {
 robj *lookupKeyWrite(redisDb *db, robj *key) {
     return lookupKeyWriteWithFlags(db, key, LOOKUP_NONE);
 }
-static void SentReplyOnKeyMiss(client *c, robj *reply){
+void SentReplyOnKeyMiss(client *c, robj *reply){
     serverAssert(sdsEncodedObject(reply));
     sds rep = szFromObj(reply);
     if (sdslen(rep) > 1 && rep[0] == '-'){
@@ -1916,6 +1916,23 @@ const expireEntry *redisDbPersistentDataSnapshot::getExpire(const char *key) con
     return const_cast<redisDbPersistentDataSnapshot*>(this)->getExpire(key);
 }
 
+/* Delete the specified expired key and propagate expire. */
+void deleteExpiredKeyAndPropagate(redisDb *db, robj *keyobj) {
+    mstime_t expire_latency;
+    latencyStartMonitor(expire_latency);
+    if (g_pserver->lazyfree_lazy_expire) {
+        dbAsyncDelete(db,keyobj);
+    } else {
+        dbSyncDelete(db,keyobj);
+    }
+    latencyEndMonitor(expire_latency);
+    latencyAddSampleIfNeeded("expire-del",expire_latency);
+    notifyKeyspaceEvent(NOTIFY_EXPIRED,"expired",keyobj,db->id);
+    signalModifiedKey(NULL,db,keyobj);
+    propagateExpire(db,keyobj,g_pserver->lazyfree_lazy_expire);
+    g_pserver->stat_expiredkeys++;
+}
+
 /* Propagate expires into slaves and the AOF file.
  * When a key expires in the master, a DEL operation for this key is sent
  * to all the slaves and the AOF file if enabled.
@@ -1998,17 +2015,9 @@ int keyIsExpired(const redisDbPersistentDataSnapshot *db, robj *key) {
 
     if (pexpire == nullptr) return 0; /* No expire for this key */
 
-    long long when = -1;
-    for (auto &exp : *pexpire)
-    {
-        if (exp.subkey() == nullptr)
-        {
-            when = exp.when();
-            break;
-        }
-    }
+    long long when = pexpire->FGetPrimaryExpire();
 
-    if (when == -1)
+    if (when == INVALID_EXPIRE)
         return 0;
 
     /* If we are in the context of a Lua script, we pretend that time is
@@ -2078,16 +2087,7 @@ int expireIfNeeded(redisDb *db, robj *key) {
     if (checkClientPauseTimeoutAndReturnIfPaused()) return 1;
 
     /* Delete the key */
-    if (g_pserver->lazyfree_lazy_expire) {
-        dbAsyncDelete(db,key);
-    } else {
-        dbSyncDelete(db,key);
-    }
-    g_pserver->stat_expiredkeys++;
-    propagateExpire(db,key,g_pserver->lazyfree_lazy_expire);
-    notifyKeyspaceEvent(NOTIFY_EXPIRED,
-        "expired",key,db->id);
-    signalModifiedKey(NULL,db,key);
+    deleteExpiredKeyAndPropagate(db,key);
     return 1;
 }
 
@@ -2152,7 +2152,6 @@ int getKeysUsingCommandTable(struct redisCommand *cmd,robj **argv, int argc, get
              * return no keys and expect the command implementation to report
              * an arity or syntax error. */
             if (cmd->flags & CMD_MODULE || cmd->arity < 0) {
-                getKeysFreeResult(result);
                 result->numkeys = 0;
                 return 0;
             } else {

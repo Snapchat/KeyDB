@@ -113,7 +113,7 @@ void pool_free(struct alloc_pool *ppool, void *pv)
         }
         cur = cur->pnext;
     }
-    serverLog(LOG_CRIT, "obj not from pool");
+    serverLog(LL_WARNING, "obj not from pool");
     sfree(obj); // we don't know where it came from
     return;
 }
@@ -155,14 +155,14 @@ void storage_init(const char *tmpfilePath, size_t cbFileReserve)
         int errv = memkind_create_pmem(PMEM_DIR, 0, &mkdisk);
         if (errv == MEMKIND_ERROR_INVALID)
         {
-            serverLog(LOG_CRIT, "Memory pool creation failed: %s", strerror(errno));
+            serverLog(LL_WARNING, "Memory pool creation failed: %s", strerror(errno));
             exit(EXIT_FAILURE);
         }
         else if (errv)
         {
             char msgbuf[1024];
             memkind_error_message(errv, msgbuf, 1024);
-            serverLog(LOG_CRIT, "Memory pool creation failed: %s", msgbuf);
+            serverLog(LL_WARNING, "Memory pool creation failed: %s", msgbuf);
             exit(EXIT_FAILURE);
         }
 
@@ -170,7 +170,7 @@ void storage_init(const char *tmpfilePath, size_t cbFileReserve)
         int fdTest = forkFile();
         if (fdTest < 0)
         {
-            serverLog(LOG_ERR, "Scratch file system does not support Copy on Write.  To fix this scratch-file-path must point to a path on a filesystem which supports copy on write, such as btrfs.");
+            serverLog(LL_WARNING, "Scratch file system does not support Copy on Write.  To fix this scratch-file-path must point to a path on a filesystem which supports copy on write, such as btrfs.");
             exit(EXIT_FAILURE);
         }
         close(fdTest);
@@ -258,7 +258,7 @@ void handle_prefork()
 {
     fdNew = forkFile();
     if (fdNew < 0)
-        serverLog(LOG_ERR, "Failed to clone scratch file");
+        serverLog(LL_WARNING, "Failed to clone scratch file");
 }
 
 void handle_postfork_parent()

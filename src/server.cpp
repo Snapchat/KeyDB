@@ -6572,6 +6572,7 @@ static void sigShutdownHandler(int sig) {
     if (g_pserver->shutdown_asap && sig == SIGINT) {
         serverLogFromHandler(LL_WARNING, "You insist... exiting now.");
         rdbRemoveTempFile(g_pserver->rdbThreadVars.tmpfileNum, 1);
+        g_pserver->garbageCollector.shutdown();
         exit(1); /* Exit with an error since this was not a clean shutdown. */
     } else if (g_pserver->loading) {
         serverLogFromHandler(LL_WARNING, "Received shutdown signal during loading, exiting now.");

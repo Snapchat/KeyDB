@@ -2665,6 +2665,9 @@ public:
     }
 
     ~rdbAsyncWorkThread() {
+        fExit = true;
+        while (m_lockPause.fOwnLock())
+            m_lockPause.unlock();
         if (m_thread.joinable())
             endWork();
     }

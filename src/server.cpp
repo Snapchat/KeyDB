@@ -7394,7 +7394,13 @@ int main(int argc, char **argv) {
         }
 
         InitServerLast();
-        loadDataFromDisk();
+
+        try {
+            loadDataFromDisk();
+        } catch (ShutdownException) {
+            exit(EXIT_SUCCESS);
+        }
+
         if (g_pserver->cluster_enabled) {
             if (verifyClusterConfigWithData() == C_ERR) {
                 serverLog(LL_WARNING,

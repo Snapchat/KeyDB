@@ -6427,13 +6427,6 @@ void redisAsciiArt(void) {
         serverLogRaw(LL_NOTICE|LL_RAW,buf);
     }
 
-    if (cserver.license_key == nullptr && !g_pserver->sentinel_mode)
-    {
-#ifndef NO_LICENSE_CHECK
-        serverLog(LL_WARNING, "!!!! KeyDB Enterprise is being run in trial mode  !!!!");
-        serverLog(LL_WARNING, "!!!! Execution will terminate in %d minutes !!!!", cserver.trial_timeout);
-#endif
-    }
     zfree(buf);
 }
 
@@ -7320,6 +7313,13 @@ int main(int argc, char **argv) {
     } else {
         serverLog(LL_WARNING, "Configuration loaded");
     }
+
+#ifndef NO_LICENSE_CHECK
+    if (!g_pserver->sentinel_mode && (cserver.license_key == nullptr || !FValidKey(cserver.license_key, strlen(cserver.license_key)))){
+        serverLog(LL_WARNING, "Error: %s license key provided, exiting immediately.", cserver.license_key == nullptr ? "No" : "Invalid");
+        exit(1);
+    }
+#endif
 
     validateConfiguration();
 

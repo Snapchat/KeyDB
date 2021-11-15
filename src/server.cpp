@@ -63,6 +63,7 @@
 #include <algorithm>
 #include <uuid/uuid.h>
 #include <mutex>
+#include <condition_variable>
 #include "aelocker.h"
 #include "motd.h"
 #include "t_nhash.h"
@@ -94,6 +95,10 @@ struct redisServer server; /* Server global state */
 redisServer *g_pserver = &GlobalHidden::server;
 struct redisServerConst cserver;
 __thread struct redisServerThreadVars *serverTL = NULL;   // thread local server vars
+std::mutex time_thread_mutex;
+std::condition_variable time_thread_cv;
+int sleeping_threads = 0;
+void wakeTimeThread();
 
 /* Our command table.
  *
@@ -743,7 +748,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"auth",authCommand,-2,
-     "no-auth no-script ok-loading ok-stale fast no-monitor no-slowlog @connection",
+     "no-auth no-script ok-loading ok-stale fast @connection",
      0,NULL,0,0,0,0,0,0},
 
     /* We don't allow PING during loading since in Redis PING is used as
@@ -790,7 +795,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"exec",execCommand,1,
-     "no-script no-monitor no-slowlog ok-loading ok-stale @transaction",
+     "no-script no-slowlog ok-loading ok-stale @transaction",
      0,NULL,0,0,0,0,0,0},
 
     {"discard",discardCommand,1,
@@ -911,7 +916,7 @@ struct redisCommand redisCommandTable[] = {
 
     {"migrate",migrateCommand,-6,
      "write random @keyspace @dangerous",
-     0,migrateGetKeys,0,0,0,0,0,0},
+     0,migrateGetKeys,3,3,1,0,0,0},
 
     {"asking",askingCommand,1,
      "fast @keyspace",
@@ -942,17 +947,21 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"hello",helloCommand,-1,
-     "no-auth no-script fast no-monitor ok-loading ok-stale @connection",
+     "no-auth no-script fast ok-loading ok-stale @connection",
      0,NULL,0,0,0,0,0,0},
 
     /* EVAL can modify the dataset, however it is not flagged as a write
-     * command since we do the check while running commands from Lua. */
+     * command since we do the check while running commands from Lua.
+     * 
+     * EVAL and EVALSHA also feed monitors before the commands are executed,
+     * as opposed to after.
+      */
     {"eval",evalCommand,-3,
-     "no-script may-replicate @scripting",
+     "no-script no-monitor may-replicate @scripting",
      0,evalGetKeys,0,0,0,0,0,0},
 
     {"evalsha",evalShaCommand,-3,
-     "no-script may-replicate @scripting",
+     "no-script no-monitor may-replicate @scripting",
      0,evalGetKeys,0,0,0,0,0,0},
 
     {"slowlog",slowlogCommand,-2,
@@ -1917,6 +1926,7 @@ void clientsCron(int iel) {
             if (clientsCronResizeQueryBuffer(c)) goto LContinue;
             if (clientsCronTrackExpansiveClients(c, curr_peak_mem_usage_slot)) goto LContinue;
             if (clientsCronTrackClientsMemUsage(c)) goto LContinue;
+            if (closeClientOnOutputBufferLimitReached(c, 0)) continue; // Client also free'd
         LContinue:
             fastlock_unlock(&c->lock);
         }        
@@ -2002,7 +2012,7 @@ void databasesCron(bool fMainThread) {
  * info or not using the 'update_daylight_info' argument. Normally we update
  * such info only when calling this function from serverCron() but not when
  * calling it from call(). */
-void updateCachedTime(int update_daylight_info) {
+void updateCachedTime() {
     long long t = ustime();
     __atomic_store(&g_pserver->ustime, &t, __ATOMIC_RELAXED);
     t /= 1000;
@@ -2015,12 +2025,10 @@ void updateCachedTime(int update_daylight_info) {
      * context is safe since we will never fork() while here, in the main
      * thread. The logging function will call a thread safe version of
      * localtime that has no locks. */
-    if (update_daylight_info) {
-        struct tm tm;
-        time_t ut = g_pserver->unixtime;
-        localtime_r(&ut,&tm);
-        __atomic_store(&g_pserver->daylight_active, &tm.tm_isdst, __ATOMIC_RELAXED);
-    }
+    struct tm tm;
+    time_t ut = g_pserver->unixtime;
+    localtime_r(&ut,&tm);
+    __atomic_store(&g_pserver->daylight_active, &tm.tm_isdst, __ATOMIC_RELAXED);
 }
 
 void checkChildrenDone(void) {
@@ -2146,9 +2154,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Software watchdog: deliver the SIGALRM that will reach the signal
      * handler if we don't return here fast enough. */
     if (g_pserver->watchdog_period) watchdogScheduleSignal(g_pserver->watchdog_period);
-
-    /* Update the time cache. */
-    updateCachedTime(1);
 
     g_pserver->hz = g_pserver->config_hz;
     /* Adapt the g_pserver->hz value to the number of configured clients. If we have
@@ -2407,7 +2412,6 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
 
 void blockingOperationStarts() {
     if(!g_pserver->blocking_op_nesting++){
-        updateCachedTime(0);
         g_pserver->blocked_last_cron = g_pserver->mstime;
     }
 }
@@ -2618,6 +2622,14 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     locker.disarm();
     if (!fSentReplies)
         handleClientsWithPendingWrites(iel, aof_state);
+
+    // Scope lock_guard
+    {
+        std::lock_guard<std::mutex> lock(time_thread_mutex);
+        sleeping_threads++;
+        serverAssert(sleeping_threads <= cserver.cthreads);
+    }
+    
     /* Determine whether the modules are enabled before sleeping, and use that result
        both here, and after wakeup to avoid double acquire or release of the GIL */
     serverTL->modulesEnabledThisAeLoop = !!moduleCount();
@@ -2637,6 +2649,7 @@ void afterSleep(struct aeEventLoop *eventLoop) {
        Don't check here that modules are enabled, rather use the result from beforeSleep
        Otherwise you may double acquire the GIL and cause deadlocks in the module */
     if (!ProcessingEventsWhileBlocked) {
+        wakeTimeThread();
         if (serverTL->modulesEnabledThisAeLoop) moduleAcquireGIL(TRUE /*fServerThread*/);
     }
 }
@@ -2780,6 +2793,7 @@ void createSharedObjects(void) {
     shared.getack = makeObjectShared("GETACK",6);
     shared.special_asterick = makeObjectShared("*",1);
     shared.special_equals = makeObjectShared("=",1);
+    shared.redacted = makeObjectShared("(redacted)",10);
 
     /* KeyDB Specific */
     shared.hdel = makeObjectShared(createStringObject("HDEL", 4));
@@ -2833,7 +2847,7 @@ void initMasterInfo(redisMaster *master)
 void initServerConfig(void) {
     int j;
 
-    updateCachedTime(true);
+    updateCachedTime();
     getRandomHexChars(g_pserver->runid,CONFIG_RUN_ID_SIZE);
     g_pserver->runid[CONFIG_RUN_ID_SIZE] = '\0';
     changeReplicationId();
@@ -2970,6 +2984,10 @@ void initServerConfig(void) {
     cserver.cthreads = CONFIG_DEFAULT_THREADS;
     cserver.fThreadAffinity = CONFIG_DEFAULT_THREAD_AFFINITY;
     cserver.threadAffinityOffset = 0;
+
+    /* Client Pause related */
+    g_pserver->client_pause_type = CLIENT_PAUSE_OFF;
+    g_pserver->client_pause_end_time = 0; 
     initConfigValues();
 }
 
@@ -3091,7 +3109,7 @@ int setOOMScoreAdj(int process_class) {
 
     fd = open("/proc/self/oom_score_adj", O_WRONLY);
     if (fd < 0 || write(fd, buf, strlen(buf)) < 0) {
-        serverLog(LOG_WARNING, "Unable to write oom_score_adj: %s", strerror(errno));
+        serverLog(LL_WARNING, "Unable to write oom_score_adj: %s", strerror(errno));
         if (fd != -1) close(fd);
         return C_ERR;
     }
@@ -3496,11 +3514,6 @@ void initServer(void) {
         serverAssert(mi->master == nullptr);
         if (mi->cached_master != nullptr)
             selectDb(mi->cached_master, 0);
-    }
-
-    if (g_pserver->syslog_enabled) {
-        openlog(g_pserver->syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,
-            g_pserver->syslog_facility);
     }
 
     g_pserver->aof_state = g_pserver->aof_enabled ? AOF_ON : AOF_OFF;
@@ -3915,12 +3928,6 @@ void preventCommandPropagation(client *c) {
     c->flags |= CLIENT_PREVENT_PROP;
 }
 
-/* Avoid logging any information about this client's arguments
- * since they contain sensitive information. */
-void preventCommandLogging(client *c) {
-    c->flags |= CLIENT_PREVENT_LOGGING;
-}
-
 /* AOF specific version of preventCommandPropagation(). */
 void preventCommandAOF(client *c) {
     c->flags |= CLIENT_PREVENT_AOF_PROP;
@@ -3934,7 +3941,7 @@ void preventCommandReplication(client *c) {
 /* Log the last command a client executed into the slowlog. */
 void slowlogPushCurrentCommand(client *c, struct redisCommand *cmd, ustime_t duration) {
     /* Some commands may contain sensitive data that should not be available in the slowlog. */
-    if ((c->flags & CLIENT_PREVENT_LOGGING) || (cmd->flags & CMD_SKIP_SLOWLOG))
+    if (cmd->flags & CMD_SKIP_SLOWLOG)
         return;
 
     /* If command argument vector was rewritten, use the original
@@ -3989,17 +3996,6 @@ void call(client *c, int flags) {
     serverAssert(GlobalLocksAcquired());
     static long long prev_err_count;
 
-    serverTL->fixed_time_expire++;
-
-    /* Send the command to clients in MONITOR mode if applicable.
-     * Administrative commands are considered too dangerous to be shown. */
-    if (listLength(g_pserver->monitors) &&
-        !g_pserver->loading.load(std::memory_order_relaxed) &&
-        !(c->cmd->flags & (CMD_SKIP_MONITOR|CMD_ADMIN)))
-    {
-        replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
-    }
-
     /* We need to transfer async writes before a client's repl state gets changed.  Otherwise
         we won't be able to propogate them correctly. */
     if (c->cmd->flags & CMD_CATEGORY_REPLICATION) {
@@ -4016,7 +4012,8 @@ void call(client *c, int flags) {
     /* Call the command. */
     dirty = g_pserver->dirty;
     prev_err_count = g_pserver->stat_total_error_replies;
-    updateCachedTime(0);
+    g_pserver->fixed_time_expire++;
+
     incrementMvccTstamp();
     elapsedStart(&call_timer);
     try {
@@ -4081,6 +4078,14 @@ void call(client *c, int flags) {
      * If the client is blocked we will handle slowlog when it is unblocked. */
     if ((flags & CMD_CALL_SLOWLOG) && !(c->flags & CLIENT_BLOCKED))
         slowlogPushCurrentCommand(c, real_cmd, duration);
+
+    /* Send the command to clients in MONITOR mode if applicable.
+     * Administrative commands are considered too dangerous to be shown. */
+    if (!(c->cmd->flags & (CMD_SKIP_MONITOR|CMD_ADMIN))) {
+        robj **argv = c->original_argv ? c->original_argv : c->argv;
+        int argc = c->original_argv ? c->original_argc : c->argc;
+        replicationFeedMonitors(c,g_pserver->monitors,c->db->id,argv,argc);
+    }
 
     /* Clear the original argv.
      * If the client is blocked we will handle slowlog when it is unblocked. */
@@ -4317,13 +4322,8 @@ int processCommand(client *c, int callFlags) {
     int is_may_replicate_command = (c->cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE)) ||
                                    (c->cmd->proc == execCommand && (c->mstate.cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE)));
 
-    /* Check if the user is authenticated. This check is skipped in case
-     * the default user is flagged as "nopass" and is active. */
-    int auth_required = (!(DefaultUser->flags & USER_FLAG_NOPASS) ||
-                          (DefaultUser->flags & USER_FLAG_DISABLED)) &&
-                        !c->authenticated;
-    if (auth_required) {
-        /* AUTH and HELLO and no auth modules are valid even in
+    if (authRequired(c)) {
+        /* AUTH and HELLO and no auth commands are valid even in
          * non-authenticated state. */
         if (!(c->cmd->flags & CMD_NO_AUTH)) {
             rejectCommand(c,shared.noautherr);
@@ -5455,12 +5455,16 @@ sds genRedisInfoString(const char *section) {
             while ((ln = listNext(&li)))
             {
                 long long slave_repl_offset = 1;
+                long long slave_read_repl_offset = 1;
                 redisMaster *mi = (redisMaster*)listNodeValue(ln);
 
-                if (mi->master)
+                if (mi->master){
                     slave_repl_offset = mi->master->reploff;
-                else if (mi->cached_master)
+                    slave_read_repl_offset = mi->master->read_reploff;
+                } else if (mi->cached_master){
                     slave_repl_offset = mi->cached_master->reploff;
+                    slave_read_repl_offset = mi->cached_master->read_reploff;
+                }
 
                 char master_prefix[128] = "";
                 if (cmasters != 0) {
@@ -5473,6 +5477,7 @@ sds genRedisInfoString(const char *section) {
                     "master%s_link_status:%s\r\n"
                     "master%s_last_io_seconds_ago:%d\r\n"
                     "master%s_sync_in_progress:%d\r\n"
+                    "slave_read_repl_offset:%lld\r\n"
                     "slave_repl_offset:%lld\r\n"
                     ,master_prefix, mi->masterhost,
                     master_prefix, mi->masterport,
@@ -5481,6 +5486,7 @@ sds genRedisInfoString(const char *section) {
                     master_prefix, mi->master ?
                     ((int)(g_pserver->unixtime-mi->master->lastinteraction)) : -1,
                     master_prefix, mi->repl_state == REPL_STATE_TRANSFER,
+                    slave_read_repl_offset, 
                     slave_repl_offset
                 );
 
@@ -6535,10 +6541,35 @@ void OnTerminate()
     serverPanic("std::teminate() called");
 }
 
+void wakeTimeThread() {
+    updateCachedTime();
+    std::lock_guard<std::mutex> lock(time_thread_mutex);
+    if (sleeping_threads >= cserver.cthreads)
+        time_thread_cv.notify_one();
+    sleeping_threads--;
+    serverAssert(sleeping_threads >= 0);
+}
+
+void *timeThreadMain(void*) {
+    timespec delay;
+    delay.tv_sec = 0;
+    delay.tv_nsec = 100;
+    while (true) {
+        {
+            std::unique_lock<std::mutex> lock(time_thread_mutex);
+            if (sleeping_threads >= cserver.cthreads) {
+                time_thread_cv.wait(lock);
+            }
+        }
+        updateCachedTime();
+        clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, NULL);
+    }
+}
+
 void *workerThreadMain(void *parg)
 {
     int iel = (int)((int64_t)parg);
-    serverLog(LOG_INFO, "Thread %d alive.", iel);
+    serverLog(LL_NOTICE, "Thread %d alive.", iel);
     serverTL = g_pserver->rgthreadvar+iel;  // set the TLS threadsafe global
     tlsInitThread();
 
@@ -6782,6 +6813,11 @@ int main(int argc, char **argv) {
         sdsfree(options);
     }
 
+    if (g_pserver->syslog_enabled) {
+        openlog(g_pserver->syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,
+            g_pserver->syslog_facility);
+    }
+
     if (cserver.fUsePro) {
         const char *keydb_pro_dir = getenv("KEYDB_PRO_DIRECTORY");
         sds path = sdsnew(keydb_pro_dir);
@@ -6926,6 +6962,8 @@ int main(int argc, char **argv) {
     setOOMScoreAdj(-1);
     serverAssert(cserver.cthreads > 0 && cserver.cthreads <= MAX_EVENT_LOOPS);
 
+    pthread_create(&cserver.time_thread_id, nullptr, timeThreadMain, nullptr);
+
     pthread_attr_t tattr;
     pthread_attr_init(&tattr);
     pthread_attr_setstacksize(&tattr, 1 << 23); // 8 MB
@@ -6940,7 +6978,7 @@ int main(int argc, char **argv) {
             CPU_SET(iel + cserver.threadAffinityOffset, &cpuset);
             if (pthread_setaffinity_np(g_pserver->rgthread[iel], sizeof(cpu_set_t), &cpuset) == 0)
             {
-                serverLog(LOG_INFO, "Binding thread %d to cpu %d", iel, iel + cserver.threadAffinityOffset + 1);
+                serverLog(LL_NOTICE, "Binding thread %d to cpu %d", iel, iel + cserver.threadAffinityOffset + 1);
             }
 #else
 			serverLog(LL_WARNING, "CPU pinning not available on this platform");

@@ -149,7 +149,7 @@ void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj
     uint32_t aux = htonl(o->type);
     mixDigest(digest,&aux,sizeof(aux));
     expireEntry *pexpire = getExpire(db,keyobj);
-    long long expiretime = -1;
+    long long expiretime = INVALID_EXPIRE;
     char buf[128];
 
     if (pexpire != nullptr)
@@ -281,7 +281,7 @@ void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj
         serverPanic("Unknown object type");
     }
     /* If the key has an expire, add it to the mix */
-    if (expiretime != -1) xorDigest(digest,"!!expire!!",10);
+    if (expiretime != INVALID_EXPIRE) xorDigest(digest,"!!expire!!",10);
 }
 
 /* Compute the dataset digest. Since keys, sets elements, hashes elements
@@ -741,7 +741,7 @@ NULL
         } else if (!strcasecmp(name,"double")) {
             addReplyDouble(c,3.14159265359);
         } else if (!strcasecmp(name,"bignum")) {
-            addReplyProto(c,"(1234567999999999999999999999999999999\r\n",40);
+            addReplyBigNum(c,"1234567999999999999999999999999999999",37);
         } else if (!strcasecmp(name,"null")) {
             addReplyNull(c);
         } else if (!strcasecmp(name,"array")) {
@@ -757,11 +757,13 @@ NULL
                 addReplyBool(c, j == 1);
             }
         } else if (!strcasecmp(name,"attrib")) {
-            addReplyAttributeLen(c,1);
-            addReplyBulkCString(c,"key-popularity");
-            addReplyArrayLen(c,2);
-            addReplyBulkCString(c,"key:123");
-            addReplyLongLong(c,90);
+            if (c->resp >= 3) {
+                addReplyAttributeLen(c,1);
+                addReplyBulkCString(c,"key-popularity");
+                addReplyArrayLen(c,2);
+                addReplyBulkCString(c,"key:123");
+                addReplyLongLong(c,90);
+            }
             /* Attributes are not real replies, so a well formed reply should
              * also have a normal reply type after the attribute. */
             addReplyBulkCString(c,"Some real reply following the attribute");

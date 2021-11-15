@@ -2115,7 +2115,6 @@ struct redisServerConst {
     int enable_motd;            /* Flag to retrieve the Message of today using CURL request*/
 
     sds license_key = nullptr;
-    int trial_timeout = 0;
     int delete_on_evict = false;   // Only valid when a storage provider is set
     int thread_min_client_threshold = 50;
     int multimaster_no_forward;

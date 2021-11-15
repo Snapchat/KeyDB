@@ -1536,6 +1536,7 @@ struct redisServerConst {
     pid_t pid;                  /* Main process pid. */
     time_t stat_starttime;          /* Server start time */
     pthread_t main_thread_id;         /* Main thread id */
+    pthread_t time_thread_id;
     char *configfile;           /* Absolute config file path, or NULL */
     char *executable;           /* Absolute executable file path. */
     char **exec_argv;           /* Executable argv vector (copy). */
@@ -2637,7 +2638,7 @@ void resetErrorTableStats(void);
 void adjustOpenFilesLimit(void);
 void incrementErrorCount(const char *fullerr, size_t namelen);
 void closeListeningSockets(int unlink_unix_socket);
-void updateCachedTime(int update_daylight_info);
+void updateCachedTime(void);
 void resetServerStats(void);
 void activeDefragCycle(void);
 unsigned int getLRUClock(void);

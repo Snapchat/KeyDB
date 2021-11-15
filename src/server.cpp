@@ -1258,29 +1258,6 @@ void _serverLog(int level, const char *fmt, ...) {
     serverLogRaw(level,msg);
 }
 
-static void checkTrialTimeout()
-{
-#ifndef NO_LICENSE_CHECK
-    if (g_pserver->sentinel_mode)
-        return; // sentinel is not licensed
-    if (cserver.license_key != nullptr && FValidKey(cserver.license_key, strlen(cserver.license_key)))
-        return;
-    time_t curtime = time(NULL);
-    int64_t elapsed = (int64_t)curtime - (int64_t)cserver.stat_starttime;
-    int64_t remaining = (cserver.trial_timeout * 60L) - elapsed;
-    if (remaining <= 0)
-    {
-        serverLog(LL_WARNING, "Trial timeout exceeded.  KeyDB will now exit.");
-        prepareForShutdown(SHUTDOWN_SAVE);
-        exit(0);
-    }
-    else
-    {
-        serverLog(LL_WARNING, "Trial timeout in %ld:%02ld minutes", remaining/60, remaining % 60);
-    }
-#endif
-}
-
 /* Log a fixed message without printf-alike capabilities, in a way that is
  * safe to call from a signal handler.
  *
@@ -2586,8 +2563,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     run_with_period(30000) {
-        checkTrialTimeout();
-
         /* Tune the fastlock to CPU load */
         fastlock_auto_adjust_waits();
     }
@@ -6128,11 +6103,7 @@ sds genRedisInfoString(const char *section) {
             "variant:enterprise\r\n"
             "license_status:%s\r\n"
             "mvcc_depth:%d\r\n",
-#ifdef NO_LICENSE_CHECK
             "OK",
-#else
-            cserver.license_key ? "OK" : "Trial",
-#endif
             mvcc_depth
         );
     }

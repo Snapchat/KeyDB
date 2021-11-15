@@ -112,6 +112,15 @@ static void clientSetDefaultAuth(client *c) {
                        !(c->user->flags & USER_FLAG_DISABLED);
 }
 
+int authRequired(client *c) {
+    /* Check if the user is authenticated. This check is skipped in case
+     * the default user is flagged as "nopass" and is active. */
+    int auth_required = (!(DefaultUser->flags & USER_FLAG_NOPASS) ||
+                          (DefaultUser->flags & USER_FLAG_DISABLED)) &&
+                        !c->authenticated;
+    return auth_required;
+}
+
 client *createClient(connection *conn, int iel) {
     client *c = (client*)zmalloc(sizeof(client), MALLOC_LOCAL);
     serverAssert(conn == nullptr || (iel == (serverTL - g_pserver->rgthreadvar)));
@@ -403,7 +412,7 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
         listAddNodeTail(c->reply, tail);
         c->reply_bytes += tail->size;
 
-        asyncCloseClientOnOutputBufferLimitReached(c);
+        closeClientOnOutputBufferLimitReached(c, 1);
     }
 }
 
@@ -735,7 +744,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         listNodeValue(ln) = buf;
         c->reply_bytes += buf->size;
 
-        asyncCloseClientOnOutputBufferLimitReached(c);
+        closeClientOnOutputBufferLimitReached(c, 1);
     }
 }
 
@@ -789,14 +798,13 @@ void setDeferredSetLen(client *c, void *node, long length) {
 }
 
 void setDeferredAttributeLen(client *c, void *node, long length) {
-    int prefix = c->resp == 2 ? '*' : '|';
-    if (c->resp == 2) length *= 2;
-    setDeferredAggregateLen(c,node,length,prefix);
+    serverAssert(c->resp >= 3);
+    setDeferredAggregateLen(c,node,length,'|');
 }
 
 void setDeferredPushLen(client *c, void *node, long length) {
-    int prefix = c->resp == 2 ? '*' : '>';
-    setDeferredAggregateLen(c,node,length,prefix);
+    serverAssert(c->resp >= 3);
+    setDeferredAggregateLen(c,node,length,'>');
 }
 
 /* Add a double as a bulk reply */
@@ -822,6 +830,16 @@ void addReplyDouble(client *c, double d) {
             dlen = snprintf(dbuf,sizeof(dbuf),",%.17g\r\n",d);
             addReplyProto(c,dbuf,dlen);
         }
+    }
+}
+
+void addReplyBigNum(client *c, const char* num, size_t len) {
+    if (c->resp == 2) {
+        addReplyBulkCBuffer(c, num, len);
+    } else {
+        addReplyProto(c,"(",1);
+        addReplyProto(c,num,len);
+        addReply(c,shared.crlf);
     }
 }
 
@@ -896,14 +914,13 @@ void addReplySetLen(client *c, long length) {
 }
 
 void addReplyAttributeLen(client *c, long length) {
-    int prefix = c->resp == 2 ? '*' : '|';
-    if (c->resp == 2) length *= 2;
-    addReplyAggregateLen(c,length,prefix);
+    serverAssert(c->resp >= 3);
+    addReplyAggregateLen(c,length,'|');
 }
 
 void addReplyPushLen(client *c, long length) {
-    int prefix = c->resp == 2 ? '*' : '>';
-    addReplyAggregateLen(c,length,prefix);
+    serverAssert(c->resp >= 3);
+    addReplyAggregateLen(c,length,'>');
 }
 
 void addReplyNull(client *c) {
@@ -1093,7 +1110,7 @@ void AddReplyFromClient(client *dst, client *src) {
     src->bufpos = 0;
 
     /* Check output buffer limits */
-    asyncCloseClientOnOutputBufferLimitReached(dst);
+    closeClientOnOutputBufferLimitReached(dst, 1);
 }
 
 /* Copy 'src' client output buffers into 'dst' client output buffers.
@@ -1307,8 +1324,7 @@ void acceptOnThread(connection *conn, int flags, char *cip)
         int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [conn, flags, ielTarget, szT, fBootLoad] {
             connMarshalThread(conn);
             acceptCommonHandler(conn,flags,szT,ielTarget);
-            if (!g_fTestMode && !fBootLoad)
-                rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
+            rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
             zfree(szT);
         });
 
@@ -1316,8 +1332,7 @@ void acceptOnThread(connection *conn, int flags, char *cip)
             return;
         // If res != AE_OK we can still try to accept on the local thread
     }
-    if (!g_fTestMode && !fBootLoad)
-        rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
+    rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
 
     aeAcquireLock();
     acceptCommonHandler(conn,flags,cip,ielCur);
@@ -1910,7 +1925,7 @@ void ProcessPendingAsyncWrites()
          (c->replstate == SLAVE_STATE_ONLINE && !c->repl_put_online_on_ack))))
             continue;
 
-        asyncCloseClientOnOutputBufferLimitReached(c);
+        closeClientOnOutputBufferLimitReached(c, 1);
         if (c->flags & CLIENT_CLOSE_ASAP)
             continue;   // we will never write this so don't post an op
         
@@ -2035,9 +2050,6 @@ void resetClient(client *c) {
         c->flags |= CLIENT_REPLY_SKIP;
         c->flags &= ~CLIENT_REPLY_SKIP_NEXT;
     }
-
-    /* Always clear the prevent logging field. */
-    c->flags &= ~CLIENT_PREVENT_LOGGING;
 }
 
 /* This function is used when we want to re-enter the event loop but there
@@ -2229,6 +2241,10 @@ int processMultibulkBuffer(client *c) {
             addReplyError(c,"Protocol error: invalid multibulk length");
             setProtocolError("invalid mbulk count",c);
             return C_ERR;
+        } else if (ll > 10 && authRequired(c)) {
+            addReplyError(c, "Protocol error: unauthenticated multibulk length");
+            setProtocolError("unauth mbulk count", c);
+            return C_ERR;
         }
 
         c->qb_pos = (newline-c->querybuf)+2;
@@ -2275,6 +2291,10 @@ int processMultibulkBuffer(client *c) {
                 (!(c->flags & CLIENT_MASTER) && ll > g_pserver->proto_max_bulk_len)) {
                 addReplyError(c,"Protocol error: invalid bulk length");
                 setProtocolError("invalid bulk length",c);
+                return C_ERR;
+            } else if (ll > 16384 && authRequired(c)) {
+                addReplyError(c, "Protocol error: unauthenticated bulk length");
+                setProtocolError("unauth bulk length", c);
                 return C_ERR;
             }
 
@@ -2339,21 +2359,25 @@ int processMultibulkBuffer(client *c) {
 
 /* Perform necessary tasks after a command was executed:
  *
- * 1. The client is reset unless there are reasons to avoid doing it.
+ * 1. The client is reset unless there are reasons to avoid doing it. 
  * 2. In the case of master clients, the replication offset is updated.
  * 3. Propagate commands we got from our master to replicas down the line. */
 void commandProcessed(client *c, int flags) {
+        /* If client is blocked(including paused), just return avoid reset and replicate.
+     *
+     * 1. Don't reset the client structure for blocked clients, so that the reply
+     *    callback will still be able to access the client argv and argc fields.
+     *    The client will be reset in unblockClient().
+     * 2. Don't update replication offset or propagate commands to replicas,
+     *    since we have not applied the command. */
+    if (c->flags & CLIENT_BLOCKED) return;
+
+    resetClient(c);
+
     long long prev_offset = c->reploff;
     if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
         /* Update the applied replication offset of our master. */
         c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
-    }
-
-    /* Don't reset the client structure for blocked clients, so that the reply
-     * callback will still be able to access the client argv and argc fields.
-     * The client will be reset in unblockClient(). */
-    if (!(c->flags & CLIENT_BLOCKED)) {
-        resetClient(c);
     }
 
     /* If the client is a master we need to compute the difference
@@ -3089,7 +3113,7 @@ NULL
         if (getLongLongFromObjectOrReply(c,c->argv[2],&id,NULL)
             != C_OK) return;
         struct client *target = lookupClientByID(id);
-        if (target && target->flags & CLIENT_BLOCKED) {
+        if (target && target->flags & CLIENT_BLOCKED && moduleBlockedClientMayTimeout(target)) {
             std::unique_lock<fastlock> ul(target->lock);
             if (unblock_error)
                 addReplyError(target,
@@ -3415,7 +3439,8 @@ void helloCommand(client *c) {
         int moreargs = (c->argc-1) - j;
         const char *opt = (const char*)ptrFromObj(c->argv[j]);
         if (!strcasecmp(opt,"AUTH") && moreargs >= 2) {
-            preventCommandLogging(c);
+            redactClientCommandArgument(c, j+1);
+            redactClientCommandArgument(c, j+2);
             if (ACLAuthenticateUser(c, c->argv[j+1], c->argv[j+2]) == C_ERR) {
                 addReplyError(c,"-WRONGPASS invalid username-password pair or user is disabled.");
                 return;
@@ -3502,6 +3527,15 @@ static void retainOriginalCommandVector(client *c) {
         c->original_argv[j] = c->argv[j];
         incrRefCount(c->argv[j]);
     }
+}
+
+/* Redact a given argument to prevent it from being shown
+ * in the slowlog. This information is stored in the
+ * original_argv array. */
+void redactClientCommandArgument(client *c, int argc) {
+    retainOriginalCommandVector(c);
+    decrRefCount(c->argv[argc]);
+    c->original_argv[argc] = shared.redacted;
 }
 
 /* Rewrite the command vector of the client. All the new objects ref count
@@ -3673,18 +3707,33 @@ int checkClientOutputBufferLimits(client *c) {
  *
  * Note: we need to close the client asynchronously because this function is
  * called from contexts where the client can't be freed safely, i.e. from the
- * lower level functions pushing data inside the client output buffers. */
-void asyncCloseClientOnOutputBufferLimitReached(client *c) {
-    if (!c->conn) return; /* It is unsafe to free fake clients. */
+ * lower level functions pushing data inside the client output buffers.
+ * When `async` is set to 0, we close the client immediately, this is
+ * useful when called from cron.
+ *
+ * Returns 1 if client was (flagged) closed. */
+int closeClientOnOutputBufferLimitReached(client *c, int async) {
+    if (!c->conn) return 0; /* It is unsafe to free fake clients. */
     serverAssert(c->reply_bytes < SIZE_MAX-(1024*64));
-    if (c->reply_bytes == 0 || c->flags & CLIENT_CLOSE_ASAP) return;
+    if (c->reply_bytes == 0 || c->flags & CLIENT_CLOSE_ASAP) return 0;
     if (checkClientOutputBufferLimits(c)) {
         sds client = catClientInfoString(sdsempty(),c);
 
-        freeClientAsync(c);
-        serverLog(LL_WARNING,"Client %s scheduled to be closed ASAP for overcoming of output buffer limits.", client);
+        if (async) {
+            freeClientAsync(c);
+            serverLog(LL_WARNING,
+                      "Client %s scheduled to be closed ASAP for overcoming of output buffer limits.",
+                      client);
+        } else {
+            freeClient(c);
+            serverLog(LL_WARNING,
+                      "Client %s closed for overcoming of output buffer limits.",
+                      client);
+        }
         sdsfree(client);
+        return  1;
     }
+    return 0;
 }
 
 /* Helper function used by performEvictions() in order to flush slaves
@@ -3771,6 +3820,7 @@ void unpauseClients(void) {
     client *c;
     
     g_pserver->client_pause_type = CLIENT_PAUSE_OFF;
+    g_pserver->client_pause_end_time = 0;
 
     /* Unblock all of the clients so they are reprocessed. */
     listRewind(g_pserver->paused_clients,&li);
@@ -3818,10 +3868,6 @@ void processEventsWhileBlocked(int iel) {
     listIter li;
     listNode *ln;
     listRewind(g_pserver->clients, &li);
-
-    /* Update our cached time since it is used to create and update the last
-     * interaction time with clients and for other important things. */
-    updateCachedTime(0);
 
     // All client locks must be acquired *after* the global lock is reacquired to prevent deadlocks
     //  so unlock here, and save them for reacquisition later

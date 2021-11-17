@@ -1,3 +1,17 @@
+keydb (6:6.2.1-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * This release of KeyDB is at parity with Redis 6.2.6. In addition, the following changes were included:
+  * Systemd support for release packages 
+  * Fixes to buffer overflows in the `BITOP SHIFT` and `CRON` commands 
+  * Server times are now computed on a seperate thread to improve performance 
+  * Now enforces syslog identity and facility as soon as possible 
+  * Removed erroneous use of LOG_... flags when using syslog 
+  * Fixed erroneous `#endif` leading to build errors on some platforms 
+  * Fixed the incorrect counting of client connections 
+  * Issues resolved: #355, #370
+
+ -- Ben Schermel <ben@eqalpha.com>  Wed, 17 Nov 2021 20:00:37 +0000
+
 keydb (6:6.2.0-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * Removed unused command line options(-a, -d, -P, -r, -q, --csv, -l, -I, -e, --precision, --cluster, --enable-tracking)

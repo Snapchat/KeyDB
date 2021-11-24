@@ -3846,6 +3846,9 @@ void initServer(void) {
         g_pserver->rgthreadvar[i].rgdbSnapshot = (const redisDbPersistentDataSnapshot**)zcalloc(sizeof(redisDbPersistentDataSnapshot*)*cserver.dbnum, MALLOC_LOCAL);
         serverAssert(g_pserver->rgthreadvar[i].rgdbSnapshot != nullptr);
     }
+    g_pserver->modulethreadvar.rgdbSnapshot = (const redisDbPersistentDataSnapshot**)zcalloc(sizeof(redisDbPersistentDataSnapshot*)*cserver.dbnum, MALLOC_LOCAL);
+    serverAssert(g_pserver->modulethreadvar.rgdbSnapshot != nullptr);
+
     serverAssert(g_pserver->rgthreadvar[0].rgdbSnapshot != nullptr);
 
     /* Fixup Master Client Database */

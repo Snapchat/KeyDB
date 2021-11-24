@@ -975,14 +975,7 @@ public:
                 aeAcquireLock();
             }
             
-            if (ireplica == replicas.size()-1 && replica->replyAsync == nullptr) {
-                if (prepareClientToWrite(replica) == C_OK) {
-                    replica->replyAsync = reply;
-                    reply = nullptr;
-                }
-            } else {
-                addReplyProto(replica, reply->buf(), reply->size);
-            }
+            addReplyProto(replica, reply->buf(), reply->used);
         }
         ProcessPendingAsyncWrites();
         replicas.erase(std::remove_if(replicas.begin(), replicas.end(), [](const client *c)->bool{ return c->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_ASAP;}), replicas.end());
@@ -1089,7 +1082,7 @@ int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
             spreplBuf->addLong(rsi->repl_stream_db);
         spreplBuf->addArrayLen(2);
             spreplBuf->addString("repl-id", 7);
-            spreplBuf->addString(rsi->repl_id, CONFIG_RUN_ID_SIZE+1);
+            spreplBuf->addString(rsi->repl_id, CONFIG_RUN_ID_SIZE);
         spreplBuf->addArrayLen(2);
             spreplBuf->addString("repl-offset", 11);
             spreplBuf->addLong(rsi->master_repl_offset);

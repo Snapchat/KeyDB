@@ -2093,6 +2093,64 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
     }
 }
 
+/* Save the replid of yourself and any connected masters to storage.
+ * Returns if no storage provider is used. */
+void saveMasterStatusToStorage()
+{
+    if (!g_pserver->m_pstorageFactory || !g_pserver->metadataDb) return;
+
+    g_pserver->metadataDb->insert("repl-id", 7, g_pserver->replid, sizeof(g_pserver->replid), true);
+    g_pserver->metadataDb->insert("repl-offset", 11, &g_pserver->master_repl_offset, sizeof(g_pserver->master_repl_offset), true);
+    if (g_pserver->fActiveReplica || (!listLength(g_pserver->masters) && g_pserver->repl_backlog)) {
+        g_pserver->metadataDb->insert("repl-stream-db", 14, g_pserver->replicaseldb == -1 ? 0 : &g_pserver->replicaseldb,
+                                        g_pserver->replicaseldb == -1 ? 0 : sizeof(g_pserver->replicaseldb), true);
+    }
+
+    struct redisMaster *miFirst = (redisMaster*)(listLength(g_pserver->masters) ? listNodeValue(listFirst(g_pserver->masters)) : NULL);
+
+    if (miFirst && miFirst->master) {
+        g_pserver->metadataDb->insert("repl-stream-db", 14, &miFirst->master->db->id, sizeof(miFirst->master->db->id), true);
+    }
+    else if (miFirst && miFirst->cached_master) {
+        g_pserver->metadataDb->insert("repl-stream-db", 14, &miFirst->cached_master->db->id, sizeof(miFirst->cached_master->db->id), true);
+    }
+
+    if (listLength(g_pserver->masters) == 0) {
+        g_pserver->metadataDb->insert("repl-masters", 12, (void*)"", 0, true);
+        return;
+    }
+    sds val = sds(sdsempty());
+    listNode *ln;
+    listIter li;
+    redisMaster *mi;
+    listRewind(g_pserver->masters,&li);
+    while((ln = listNext(&li)) != NULL) {
+        mi = (redisMaster*)listNodeValue(ln);
+        if (!mi->master) {
+            // If master client is not available, use info from master struct - better than nothing
+            if (mi->master_replid[0] == 0) {
+                // if replid is null, there's no reason to save it
+                continue;
+            }
+            val = sdscatfmt(val, "%s:%I:%s:%i;", mi->master_replid,
+                mi->master_initial_offset,
+                mi->masterhost,
+                mi->masterport);
+        }
+        else {
+            if (mi->master->replid[0] == 0) {
+                // if replid is null, there's no reason to save it
+                continue;
+            }
+            val = sdscatfmt(val, "%s:%I:%s:%i;", mi->master->replid,
+                mi->master->reploff,
+                mi->masterhost,
+                mi->masterport);
+        }
+    }
+    g_pserver->metadataDb->insert("repl-masters", 12, (void*)val, sdslen(val), true);
+}
+
 /* Change the current instance replication ID with a new, random one.
  * This will prevent successful PSYNCs between this master and other
  * slaves, so the command should be called when something happens that
@@ -2100,6 +2158,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
 void changeReplicationId(void) {
     getRandomHexChars(g_pserver->replid,CONFIG_RUN_ID_SIZE);
     g_pserver->replid[CONFIG_RUN_ID_SIZE] = '\0';
+    saveMasterStatusToStorage();
 }
 
 
@@ -2891,6 +2950,7 @@ void readSyncBulkPayload(connection *conn) {
         g_pserver->master_repl_offset = mi->master->reploff;
         if (g_pserver->repl_batch_offStart >= 0)
             g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
+        saveMasterStatusToStorage();
     }
     clearReplicationId2();
 
@@ -3852,6 +3912,7 @@ struct redisMaster *replicationAddMaster(char *ip, int port) {
             mi->masterhost, mi->masterport);
         connectWithMaster(mi);
     }
+    saveMasterStatusToStorage();
     return mi;
 }
 
@@ -3935,6 +3996,8 @@ void replicationUnsetMaster(redisMaster *mi) {
     /* Restart the AOF subsystem in case we shut it down during a sync when
      * we were still a slave. */
     if (g_pserver->aof_enabled && g_pserver->aof_state == AOF_OFF) restartAOFAfterSYNC();
+
+    saveMasterStatusToStorage();
 }
 
 /* This function is called when the replica lose the connection with the
@@ -3966,6 +4029,8 @@ void replicationHandleMasterDisconnection(redisMaster *mi) {
                 mi->masterhost, mi->masterport);
             connectWithMaster(mi);
         }
+
+        saveMasterStatusToStorage();
     }
 }
 

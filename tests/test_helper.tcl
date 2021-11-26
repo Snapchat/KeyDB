@@ -47,6 +47,7 @@ set ::all_tests {
     integration/replication-3
     integration/replication-4
     integration/replication-psync
+    integration/replication-psync-flash
     integration/replication-active
     integration/replication-multimaster
     integration/replication-multimaster-connect
@@ -59,6 +60,7 @@ set ::all_tests {
     integration/failover
     integration/redis-cli
     integration/redis-benchmark
+    integration/replication-fast
     unit/pubsub
     unit/slowlog
     unit/scripting
@@ -692,6 +694,21 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--help}} {
         print_help_screen
         exit 0
+    } elseif {$opt eq {--flash}} {
+        lappend ::global_storage_provider storage-provider
+        lappend ::global_storage_provider flash
+        lappend ::global_storage_provider ./rocks.db
+        set ::all_tests {
+            integration/replication
+            integration/replication-2
+            integration/replication-3
+            integration/replication-4
+            integration/replication-psync
+        }
+        set fp [open {./tests/integration/rdb-repl-tests} r]
+        set file_data [read $fp]
+        close $fp
+        set ::skiptests [split $file_data "\n"]
     } else {
         puts "Wrong argument: $opt"
         exit 1

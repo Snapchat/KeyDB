@@ -46,6 +46,7 @@
 #include <chrono>
 #include <unordered_map>
 #include <string>
+#include <sys/mman.h>
 
 void replicationDiscardCachedMaster(redisMaster *mi);
 void replicationResurrectCachedMaster(redisMaster *mi, connection *conn);
@@ -184,8 +185,39 @@ int bg_unlink(const char *filename) {
 
 /* ---------------------------------- MASTER -------------------------------- */
 
+bool createDiskBacklog() {
+    // Lets create some disk backed pages and add them here
+    std::string path = "./repl-backlog-temp" + std::to_string(gettid());
+    int fd = open(path.c_str(), O_CREAT | O_RDWR | O_LARGEFILE, S_IRUSR | S_IWUSR);
+    if (fd < 0) {
+        return false;
+    }
+    size_t alloc = cserver.repl_backlog_disk_size;
+    int result = truncate(path.c_str(), alloc);
+    unlink(path.c_str()); // ensure the fd is the only ref
+    if (result == -1) {
+        close (fd);
+        return false;
+    }
+
+    g_pserver->repl_backlog_disk = (char*)mmap(nullptr, alloc, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (g_pserver->repl_backlog_disk == MAP_FAILED) {
+        g_pserver->repl_backlog_disk = nullptr;
+        return false;
+    }
+
+    serverLog(LL_VERBOSE, "Disk Backed Replication Allocated");
+    return true;
+}
+
 void createReplicationBacklog(void) {
     serverAssert(g_pserver->repl_backlog == NULL);
+    if (cserver.repl_backlog_disk_size) {
+        if (!createDiskBacklog()) {
+            serverLog(LL_WARNING, "Failed to create disk backlog, will use memory only");
+        }
+    }
     g_pserver->repl_backlog = (char*)zmalloc(g_pserver->repl_backlog_size, MALLOC_LOCAL);
     g_pserver->repl_backlog_histlen = 0;
     g_pserver->repl_backlog_idx = 0;
@@ -234,9 +266,22 @@ void resizeReplicationBacklog(long long newsize) {
         long long earliest_off = g_pserver->repl_lowest_off.load();
 
         if (earliest_off != -1) {
-            // We need to keep critical data so we can't shrink less than the hot data in the buffer
+            char *backlog = nullptr;
             newsize = std::max(newsize, g_pserver->master_repl_offset - earliest_off);
-            char *backlog = (char*)zmalloc(newsize);
+            
+            if (cserver.repl_backlog_disk_size != 0) {
+                if (newsize > g_pserver->repl_backlog_config_size) {
+                    if (g_pserver->repl_backlog == g_pserver->repl_backlog_disk)
+                        return; // Can't do anything more
+                    serverLog(LL_NOTICE, "Switching to disk backed replication backlog due to exceeding memory limits");
+                    backlog = g_pserver->repl_backlog_disk;
+                    newsize = cserver.repl_backlog_disk_size;
+                }
+            }
+
+            // We need to keep critical data so we can't shrink less than the hot data in the buffer
+            if (backlog == nullptr)
+                backlog = (char*)zmalloc(newsize);
             g_pserver->repl_backlog_histlen = g_pserver->master_repl_offset - earliest_off;
             long long earliest_idx = getReplIndexFromOffset(earliest_off);
 
@@ -251,7 +296,10 @@ void resizeReplicationBacklog(long long newsize) {
                 auto cbActiveBacklog = cbPhase1 + g_pserver->repl_backlog_idx;
                 serverAssert(g_pserver->repl_backlog_histlen == cbActiveBacklog);
             }
-            zfree(g_pserver->repl_backlog);
+            if (g_pserver->repl_backlog != g_pserver->repl_backlog_disk)
+                zfree(g_pserver->repl_backlog);
+            else
+                serverLog(LL_NOTICE, "Returning to memory backed replication backlog");
             g_pserver->repl_backlog = backlog;
             g_pserver->repl_backlog_idx = g_pserver->repl_backlog_histlen;
             if (g_pserver->repl_batch_idxStart >= 0) {
@@ -261,7 +309,10 @@ void resizeReplicationBacklog(long long newsize) {
             }
             g_pserver->repl_backlog_start = earliest_off;
         } else {
-            zfree(g_pserver->repl_backlog);
+            if (g_pserver->repl_backlog != g_pserver->repl_backlog_disk)
+                zfree(g_pserver->repl_backlog);
+            else
+                serverLog(LL_NOTICE, "Returning to memory backed replication backlog");
             g_pserver->repl_backlog = (char*)zmalloc(newsize);
             g_pserver->repl_backlog_histlen = 0;
             g_pserver->repl_backlog_idx = 0;
@@ -311,6 +362,8 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
             long long maxClientBuffer = (long long)cserver.client_obuf_limits[CLIENT_TYPE_SLAVE].hard_limit_bytes;
             if (maxClientBuffer <= 0)
                 maxClientBuffer = LLONG_MAX;    // infinite essentially
+            if (cserver.repl_backlog_disk_size)
+                maxClientBuffer = std::max(g_pserver->repl_backlog_size, cserver.repl_backlog_disk_size);
             long long min_offset = LLONG_MAX;
             int listening_replicas = 0;
             while ((ln = listNext(&li))) {

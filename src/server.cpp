@@ -4005,6 +4005,9 @@ void InitServerLast() {
     g_pserver->initial_memory_usage = zmalloc_used_memory();
 
     g_pserver->asyncworkqueue = new (MALLOC_LOCAL) AsyncWorkQueue(cserver.cthreads);
+
+    // Allocate the repl backlog
+    
 }
 
 /* Parse the flags string description 'strflags' and set them to the

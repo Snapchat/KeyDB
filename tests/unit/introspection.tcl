@@ -123,6 +123,7 @@ start_server {tags {"introspection"}} {
             active-replica
             bind
             set-proc-title
+            repl-backlog-disk-reserve
         }
 
         if {!$::tls} {

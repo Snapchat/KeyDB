@@ -2469,7 +2469,10 @@ static int updateJemallocBgThread(int val, int prev, const char **err) {
 static int updateReplBacklogSize(long long val, long long prev, const char **err) {
     /* resizeReplicationBacklog sets g_pserver->repl_backlog_size, and relies on
      * being able to tell when the size changes, so restore prev before calling it. */
-    UNUSED(err);
+    if (cserver.repl_backlog_disk_size) {
+        *err = "Unable to dynamically resize the backlog because disk backlog is enabled";
+        return 0;
+    }
     g_pserver->repl_backlog_size = prev;
     g_pserver->repl_backlog_config_size = val;
     resizeReplicationBacklog(val);
@@ -2822,6 +2825,7 @@ standardConfig configs[] = {
     createLongLongConfig("proto-max-bulk-len", NULL, MODIFIABLE_CONFIG, 1024*1024, LLONG_MAX, g_pserver->proto_max_bulk_len, 512ll*1024*1024, MEMORY_CONFIG, NULL, NULL), /* Bulk request max size */
     createLongLongConfig("stream-node-max-entries", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->stream_node_max_entries, 100, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("repl-backlog-size", NULL, MODIFIABLE_CONFIG, 1, LLONG_MAX, g_pserver->repl_backlog_size, 1024*1024, MEMORY_CONFIG, NULL, updateReplBacklogSize), /* Default: 1mb */
+    createLongLongConfig("repl-backlog-disk-reserve", NULL, IMMUTABLE_CONFIG, 0, LLONG_MAX, cserver.repl_backlog_disk_size, 0, MEMORY_CONFIG, NULL, NULL),
 
     /* Unsigned Long Long configs */
     createULongLongConfig("maxmemory", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->maxmemory, 0, MEMORY_CONFIG, NULL, updateMaxmemory),

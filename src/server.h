@@ -2170,6 +2170,7 @@ struct redisServer {
     mode_t umask;               /* The umask value of the process on startup */
     std::atomic<int> hz;        /* serverCron() calls frequency in hertz */
     int in_fork_child;          /* indication that this is a fork child */
+    IStorage *metadataDb = nullptr;
     redisDb **db = nullptr;
     dict *commands;             /* Command table */
     dict *orig_commands;        /* Command table before command renaming. */

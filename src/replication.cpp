@@ -975,14 +975,8 @@ public:
                 aeAcquireLock();
             }
             
-            if (ireplica == replicas.size()-1 && replica->replyAsync == nullptr) {
-                if (prepareClientToWrite(replica) == C_OK) {
-                    replica->replyAsync = reply;
-                    reply = nullptr;
-                }
-            } else {
-                addReplyProto(replica, reply->buf(), reply->size);
-            }
+            std::unique_lock<fastlock> lock(replica->lock);
+            addReplyProto(replica, reply->buf(), reply->used);
         }
         ProcessPendingAsyncWrites();
         replicas.erase(std::remove_if(replicas.begin(), replicas.end(), [](const client *c)->bool{ return c->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_ASAP;}), replicas.end());
@@ -1089,7 +1083,7 @@ int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
             spreplBuf->addLong(rsi->repl_stream_db);
         spreplBuf->addArrayLen(2);
             spreplBuf->addString("repl-id", 7);
-            spreplBuf->addString(rsi->repl_id, CONFIG_RUN_ID_SIZE+1);
+            spreplBuf->addString(rsi->repl_id, CONFIG_RUN_ID_SIZE);
         spreplBuf->addArrayLen(2);
             spreplBuf->addString("repl-offset", 11);
             spreplBuf->addLong(rsi->master_repl_offset);
@@ -1387,7 +1381,7 @@ void syncCommand(client *c) {
 
     /* CASE 0: Fast Sync */
     if ((c->slave_capa & SLAVE_CAPA_ROCKSDB_SNAPSHOT) && g_pserver->m_pstorageFactory) {
-        startBgsaveForReplication(c->slave_capa);
+        serverLog(LL_NOTICE,"Fast SYNC on next replication cycle");
     /* CASE 1: BGSAVE is in progress, with disk target. */
     } else if (g_pserver->FRdbSaveInProgress() &&
         g_pserver->rdb_child_type == RDB_CHILD_TYPE_DISK)

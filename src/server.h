@@ -2142,6 +2142,7 @@ struct redisServerConst {
     char *storage_conf = nullptr;
     int fForkBgSave = false;
     int time_thread_priority = false;
+    long long repl_backlog_disk_size = 0;
 };
 
 struct redisServer {
@@ -2381,6 +2382,7 @@ struct redisServer {
     int replicaseldb;                 /* Last SELECTed DB in replication output */
     int repl_ping_slave_period;     /* Master pings the replica every N seconds */
     char *repl_backlog;             /* Replication backlog for partial syncs */
+    char *repl_backlog_disk = nullptr;
     long long repl_backlog_size;    /* Backlog circular buffer size */
     long long repl_backlog_config_size; /* The repl backlog may grow but we want to know what the user set it to */
     long long repl_backlog_histlen; /* Backlog actual data length */

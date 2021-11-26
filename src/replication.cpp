@@ -2126,6 +2126,10 @@ void saveMasterStatusToStorage()
     listRewind(g_pserver->masters,&li);
     while((ln = listNext(&li)) != NULL) {
         mi = (redisMaster*)listNodeValue(ln);
+        if (mi->masterhost == NULL) {
+            // if we don't know the host, no reason to save
+            continue;
+        }
         if (!mi->master) {
             // If master client is not available, use info from master struct - better than nothing
             if (mi->master_replid[0] == 0) {

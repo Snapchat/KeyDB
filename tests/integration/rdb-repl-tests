@@ -1,0 +1,4 @@
+diskless no replicas drop during rdb pipe
+diskless slow replicas drop during rdb pipe
+diskless timeout replicas drop during rdb pipe
+Kill rdb child process if its dumping RDB is not useful

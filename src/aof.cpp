@@ -870,6 +870,11 @@ int loadAppendOnlyFile(char *filename) {
     fakeClient = createAOFClient();
     startLoadingFile(fp, filename, RDBFLAGS_AOF_PREAMBLE);
 
+    for (int idb = 0; idb < cserver.dbnum; ++idb)
+    {
+        g_pserver->db[idb]->trackChanges(true);
+    }
+
     /* Check if this AOF file has an RDB preamble. In that case we need to
      * load the RDB file and later continue loading the AOF tail. */
     char sig[5]; /* "REDIS" */
@@ -890,11 +895,6 @@ int loadAppendOnlyFile(char *filename) {
         } else {
             serverLog(LL_NOTICE,"Reading the remaining AOF tail...");
         }
-    }
-
-    for (int idb = 0; idb < cserver.dbnum; ++idb)
-    {
-        g_pserver->db[idb]->trackChanges(true);
     }
 
     /* Read the actual AOF file, in REPL format, command by command. */

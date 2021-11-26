@@ -975,6 +975,7 @@ public:
                 aeAcquireLock();
             }
             
+            std::unique_lock<fastlock> lock(replica->lock);
             addReplyProto(replica, reply->buf(), reply->used);
         }
         ProcessPendingAsyncWrites();
@@ -1380,7 +1381,7 @@ void syncCommand(client *c) {
 
     /* CASE 0: Fast Sync */
     if ((c->slave_capa & SLAVE_CAPA_ROCKSDB_SNAPSHOT) && g_pserver->m_pstorageFactory) {
-        startBgsaveForReplication(c->slave_capa);
+        serverLog(LL_NOTICE,"Fast SYNC on next replication cycle");
     /* CASE 1: BGSAVE is in progress, with disk target. */
     } else if (g_pserver->FRdbSaveInProgress() &&
         g_pserver->rdb_child_type == RDB_CHILD_TYPE_DISK)

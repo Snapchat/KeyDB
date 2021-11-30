@@ -29,6 +29,7 @@ redis-check-rdb
 keydb-check-rdb
 redis-check-dump
 keydb-check-dump
+keydb-diagnostic-tool
 redis-cli
 redis-sentinel
 redis-server
@@ -57,4 +58,4 @@ Makefile.dep
 .ccls
 .ccls-cache/*
 compile_commands.json
-redis.code-workspace
+keydb.code-workspace

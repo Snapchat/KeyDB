@@ -476,6 +476,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CMD_CATEGORY_SCRIPTING (1ULL<<38)
 #define CMD_CATEGORY_REPLICATION (1ULL<<39)
 #define CMD_SKIP_PROPOGATE (1ULL<<40)  /* "noprop" flag */
+#define CMD_ASYNC_OK (1ULL<<41) /* This command is safe without a lock */
 
 /* AOF states */
 #define AOF_OFF 0             /* AOF is off */
@@ -574,6 +575,7 @@ typedef enum {
     REPL_STATE_NONE = 0,            /* No active replication */
     REPL_STATE_CONNECT,             /* Must connect to master */
     REPL_STATE_CONNECTING,          /* Connecting to master */
+    REPL_STATE_RETRY_NOREPLPING,    /* Master does not support REPLPING, retry with PING */
     /* --- Handshake states, must be ordered --- */
     REPL_STATE_RECEIVE_PING_REPLY,  /* Wait for PING reply */
     REPL_STATE_SEND_HANDSHAKE,      /* Send handshake sequance to master */
@@ -726,6 +728,7 @@ typedef enum {
 #define CMD_CALL_FULL (CMD_CALL_SLOWLOG | CMD_CALL_STATS | CMD_CALL_PROPAGATE | CMD_CALL_NOWRAP)
 #define CMD_CALL_NOWRAP (1<<4)  /* Don't wrap also propagate array into
                                    MULTI/EXEC: the caller will handle it.  */
+#define CMD_CALL_ASYNC (1<<5)
 
 /* Command propagation flags, see propagate() function */
 #define PROPAGATE_NONE 0
@@ -956,6 +959,7 @@ struct redisObjectExtended {
 };
 
 typedef struct redisObject {
+    friend redisObject *createEmbeddedStringObject(const char *ptr, size_t len);
 protected:
     redisObject() {}
 
@@ -1281,6 +1285,8 @@ public:
     // These need to be fixed
     using redisDbPersistentData::size;
     using redisDbPersistentData::expireSize;
+
+    static const uint64_t msStaleThreshold = 500;
 };
 
 /* Redis database representation. There are multiple databases identified
@@ -1351,7 +1357,6 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::commitChanges;
     using redisDbPersistentData::setexpireUnsafe;
     using redisDbPersistentData::setexpire;
-    using redisDbPersistentData::createSnapshot;
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::restoreSnapshot;
     using redisDbPersistentData::removeAllCachedValues;
@@ -1367,6 +1372,13 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::bulkStorageInsert;
 
 public:
+    const redisDbPersistentDataSnapshot *createSnapshot(uint64_t mvccCheckpoint, bool fOptional) {
+        auto psnapshot = redisDbPersistentData::createSnapshot(mvccCheckpoint, fOptional);
+        if (psnapshot != nullptr)
+            mvccLastSnapshot = psnapshot->mvccCheckpoint();
+        return psnapshot;
+    }
+
     expireset::setiter expireitr;
     dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
     dict *ready_keys;           /* Blocked keys that received a PUSH */
@@ -1375,6 +1387,7 @@ public:
     long long last_expire_set;  /* when the last expire was set */
     double avg_ttl;             /* Average TTL, just for stats */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
+    uint64_t mvccLastSnapshot = 0;
 };
 
 /* Declare database backup that include redis main DBs and slots to keys map.
@@ -1692,6 +1705,8 @@ struct client {
     // post a function from a non-client thread to run on its client thread
     bool postFunction(std::function<void(client *)> fn, bool fLock = true);
     size_t argv_len_sum() const;
+    bool asyncCommand(std::function<void(const redisDbPersistentDataSnapshot *, const std::vector<robj_sharedptr> &)> &&mainFn, 
+                        std::function<void(const redisDbPersistentDataSnapshot *)> &&postFn = nullptr);
 };
 
 struct saveparam {
@@ -1730,7 +1745,7 @@ struct sharedObjectsStruct {
     *emptyscan, *multi, *exec, *left, *right, *hset, *srem, *xgroup, *xclaim,  
     *script, *replconf, *eval, *persist, *set, *pexpireat, *pexpire, 
     *time, *pxat, *px, *retrycount, *force, *justid, 
-    *lastid, *ping, *setid, *keepttl, *load, *createconsumer,
+    *lastid, *ping, *replping, *setid, *keepttl, *load, *createconsumer,
     *getack, *special_asterick, *special_equals, *default_username,
     *hdel, *zrem, *mvccrestore, *pexpirememberat,
     *select[PROTO_SHARED_SELECT_CMDS],
@@ -2046,9 +2061,12 @@ struct redisServerThreadVars {
     long unsigned commandsExecuted = 0;
     GarbageCollectorCollection::Epoch gcEpoch;
     const redisDbPersistentDataSnapshot **rgdbSnapshot = nullptr;
+    long long stat_total_error_replies; /* Total number of issued error replies ( command + rejected errors ) */
+    long long prev_err_count; /* per thread marker of exisiting errors during a call */
     bool fRetrySetAofEvent = false;
     bool modulesEnabledThisAeLoop = false; /* In this loop of aeMain, were modules enabled before 
                                               the thread went to sleep? */
+    bool disable_async_commands = false; /* this is only valid for one cycle of the AE loop and is reset in afterSleep */
     std::vector<client*> vecclientsProcess;
     dictAsyncRehashCtl *rehashCtl = nullptr;
 
@@ -2279,10 +2297,11 @@ struct redisServer {
     double stat_module_progress;   /* Module save progress. */
     uint64_t stat_clients_type_memory[CLIENT_TYPE_COUNT];/* Mem usage by type */
     long long stat_unexpected_error_replies; /* Number of unexpected (aof-loading, replica to master, etc.) error replies */
-    long long stat_total_error_replies; /* Total number of issued error replies ( command + rejected errors ) */
     long long stat_dump_payload_sanitizations; /* Number deep dump payloads integrity validations. */
     std::atomic<long long> stat_total_reads_processed; /* Total number of read events processed */
     std::atomic<long long> stat_total_writes_processed; /* Total number of write events processed */
+    long long stat_storage_provider_read_hits;
+    long long stat_storage_provider_read_misses;
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {
@@ -2602,6 +2621,8 @@ struct redisServer {
                                 * failover then any replica can be used. */
     int target_replica_port; /* Failover target port */
     int failover_state; /* Failover state */
+
+    int enable_async_commands;
 
     long long repl_batch_offStart = -1;
     long long repl_batch_idxStart = -1;
@@ -2997,6 +3018,7 @@ robj *createZsetZiplistObject(void);
 robj *createStreamObject(void);
 robj *createModuleObject(moduleType *mt, void *value);
 int getLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg);
+int getUnsignedLongLongFromObjectOrReply(client *c, robj *o, uint64_t *target, const char *msg);
 int getPositiveLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg);
 int getRangeLongFromObjectOrReply(client *c, robj *o, long min, long max, long *target, const char *msg);
 int checkType(client *c, robj_roptr o, int type);
@@ -3348,6 +3370,7 @@ void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey);
 int expireIfNeeded(redisDb *db, robj *key);
 void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when);
 void setExpire(client *c, redisDb *db, robj *key, expireEntry &&entry);
+robj_roptr lookupKeyRead(redisDb *db, robj *key, uint64_t mvccCheckpoint);
 robj_roptr lookupKeyRead(redisDb *db, robj *key);
 int checkAlreadyExpired(long long when);
 robj *lookupKeyWrite(redisDb *db, robj *key);

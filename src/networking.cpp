@@ -199,7 +199,7 @@ client *createClient(connection *conn, int iel) {
     c->paused_list_node = NULL;
     c->client_tracking_redirection = 0;
     c->casyncOpsPending = 0;
-    c->mvccCheckpoint = 0;
+    c->mvccCheckpoint = getMvccTstamp();
     c->master_error = 0;
     memset(c->uuid, 0, UUID_BINARY_LEN);
 
@@ -529,8 +529,8 @@ void addReplyErrorLength(client *c, const char *s, size_t len) {
 
 /* Do some actions after an error reply was sent (Log if needed, updates stats, etc.) */
 void afterErrorReply(client *c, const char *s, size_t len, int severity = ERR_CRITICAL) {
-    /* Increment the global error counter */
-    g_pserver->stat_total_error_replies++;
+    /* Increment the thread error counter */
+    serverTL->stat_total_error_replies++;
     /* Increment the error stats
      * If the string already starts with "-..." then the error prefix
      * is provided by the caller ( we limit the search to 32 chars). Otherwise we use "-ERR". */
@@ -2450,7 +2450,7 @@ void commandProcessed(client *c, int flags) {
      * sub-replicas and to the replication backlog. */
     if (c->flags & CLIENT_MASTER) {
         AeLocker ae;
-            ae.arm(c);
+        ae.arm(c);
         long long applied = c->reploff - prev_offset;
         if (applied) {
             if (!g_pserver->fActiveReplica && (flags & CMD_CALL_PROPAGATE))
@@ -2474,7 +2474,7 @@ int processCommandAndResetClient(client *c, int flags) {
     int deadclient = 0;
     client *old_client = serverTL->current_client;
     serverTL->current_client = c;
-    serverAssert(GlobalLocksAcquired());
+    serverAssert((flags & CMD_CALL_ASYNC) || GlobalLocksAcquired());
     
     if (processCommand(c, flags) == C_OK) {
         commandProcessed(c, flags);
@@ -2582,6 +2582,17 @@ void parseClientCommandBuffer(client *c) {
     }
 }
 
+bool FAsyncCommand(parsed_command &cmd)
+{
+    if (serverTL->in_eval || serverTL->in_exec)
+        return false;
+    auto parsedcmd = lookupCommand(szFromObj(cmd.argv[0]));
+    if (parsedcmd == nullptr)
+        return false;
+    static const long long expectedFlags = CMD_ASYNC_OK | CMD_READONLY;
+    return (parsedcmd->flags & expectedFlags) == expectedFlags;
+}
+
 /* This function is called every time, in the client structure 'c', there is
  * more query buffer to process, because we read more data from the socket
  * or because a client was blocked and later reactivated, so there could be
@@ -2599,6 +2610,9 @@ void processInputBuffer(client *c, bool fParse, int callFlags) {
         if (cmd.argc != cmd.argcMax) break;
 
         if (!FClientReady(c)) break;
+
+        if ((callFlags & CMD_CALL_ASYNC) && !FAsyncCommand(cmd))
+            break;
 
         zfree(c->argv);
         c->argc = cmd.argc;
@@ -2709,7 +2723,19 @@ void readQueryFromClient(connection *conn) {
 
     if (cserver.cthreads > 1 || g_pserver->m_pstorageFactory) {
         parseClientCommandBuffer(c);
-        serverTL->vecclientsProcess.push_back(c);
+        if (g_pserver->enable_async_commands && !serverTL->disable_async_commands && listLength(g_pserver->monitors) == 0 && (aeLockContention() || serverTL->rgdbSnapshot[c->db->id] || g_fTestMode)) {
+            // Frequent writers aren't good candidates for this optimization, they cause us to renew the snapshot too often
+            //  so we exclude them unless the snapshot we need already exists
+            bool fSnapshotExists = c->db->mvccLastSnapshot >= c->mvccCheckpoint;
+            bool fWriteTooRecent = (((getMvccTstamp() - c->mvccCheckpoint) >> MVCC_MS_SHIFT) < redisDbPersistentDataSnapshot::msStaleThreshold/2);
+
+            // The check below avoids running async commands if this is a frequent writer unless a snapshot is already there to service it
+            if (!fWriteTooRecent || fSnapshotExists) {
+                processInputBuffer(c, false, CMD_CALL_SLOWLOG | CMD_CALL_STATS | CMD_CALL_ASYNC);
+            }
+        }
+        if (!c->vecqueuedcmd.empty())
+            serverTL->vecclientsProcess.push_back(c);
     } else {
         // If we're single threaded its actually better to just process the command here while the query is hot in the cache
         //  multithreaded lock contention dominates and batching is better

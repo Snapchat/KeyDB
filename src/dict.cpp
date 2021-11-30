@@ -408,7 +408,7 @@ dictAsyncRehashCtl *dictRehashAsyncStart(dict *d, int buckets) {
 
     d->asyncdata = new dictAsyncRehashCtl(d, d->asyncdata);
 
-    int empty_visits = buckets;
+    int empty_visits = buckets*10;
 
     while (d->asyncdata->queue.size() < (size_t)buckets && (size_t)d->rehashidx < d->ht[0].size) {
         dictEntry *de;
@@ -577,9 +577,9 @@ static void _dictRehashStep(dict *d) {
 }
 
 /* Add an element to the target hash table */
-int dictAdd(dict *d, void *key, void *val)
+int dictAdd(dict *d, void *key, void *val, dictEntry **existing)
 {
-    dictEntry *entry = dictAddRaw(d,key,NULL);
+    dictEntry *entry = dictAddRaw(d,key,existing);
 
     if (!entry) return DICT_ERR;
     dictSetVal(d, entry, val);
@@ -713,6 +713,7 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
                     }
                 }
                 d->ht[table].used--;
+                _dictExpandIfNeeded(d);
                 return he;
             }
             prevHe = he;

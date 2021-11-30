@@ -34,6 +34,7 @@
 #include "bio.h"
 #include "atomicvar.h"
 #include <mutex>
+#include <map>
 #include <math.h>
 
 /* ----------------------------------------------------------------------------
@@ -461,6 +462,69 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     return C_ERR;
 }
 
+class FreeMemoryLazyFree : public ICollectable
+{    
+    ssize_t m_cb = 0;
+    std::vector<std::pair<dict*, std::vector<dictEntry*>>> vecdictvecde;
+
+public:
+    static std::atomic<int> s_clazyFreesInProgress;
+
+    FreeMemoryLazyFree() {
+        s_clazyFreesInProgress++;
+    }
+
+    FreeMemoryLazyFree(const FreeMemoryLazyFree&) = delete;
+    FreeMemoryLazyFree(FreeMemoryLazyFree&&) = default;
+
+    ~FreeMemoryLazyFree() {
+        aeAcquireLock();
+        for (auto &pair : vecdictvecde) {
+            for (auto de : pair.second) {
+                dictFreeUnlinkedEntry(pair.first, de);
+            }
+        }
+        aeReleaseLock();
+        --s_clazyFreesInProgress;
+    }
+
+    ssize_t addEntry(dict *d, dictEntry *de) {
+        ssize_t cbFreedNow = 0;
+        ssize_t cb = sizeof(dictEntry);
+        cb += sdsAllocSize((sds)dictGetKey(de));
+        robj *o = (robj*)dictGetVal(de);
+        switch (o->type) {
+        case OBJ_STRING:
+            cb += getStringObjectSdsUsedMemory(o)+sizeof(robj);
+            break;
+
+        default:
+            // If we don't know about it we can't accurately track the memory so free now
+            cbFreedNow = zmalloc_used_memory();
+            decrRefCount(o);
+            cbFreedNow -= zmalloc_used_memory();
+            de->v.val = nullptr;
+        }
+
+        auto itr = std::lower_bound(vecdictvecde.begin(), vecdictvecde.end(), d, 
+            [](const std::pair<dict*, std::vector<dictEntry*>> &a, dict *d) -> bool {
+                return a.first < d;
+            }
+        );
+        if (itr == vecdictvecde.end() || itr->first != d) {
+            itr = vecdictvecde.insert(itr, std::make_pair(d, std::vector<dictEntry*>()));
+        }
+        serverAssert(itr->first == d);
+        itr->second.push_back(de);
+        m_cb += cb;
+        return cb + cbFreedNow;
+    }
+
+    size_t memory_queued() { return m_cb; }
+};
+
+std::atomic<int> FreeMemoryLazyFree::s_clazyFreesInProgress {0};
+
 /* Return 1 if used memory is more than maxmemory after allocating more memory,
  * return 0 if not. Redis may reject user's requests or evict some keys if used
  * memory exceeds maxmemory, especially, when we allocate huge memory at once. */
@@ -508,6 +572,9 @@ static int isSafeToPerformEvictions(void) {
     /* By default replicas should ignore maxmemory
      * and just be masters exact copies. */
     if (g_pserver->m_pstorageFactory == nullptr && listLength(g_pserver->masters) && g_pserver->repl_slave_ignore_maxmemory && !g_pserver->fActiveReplica) return 0;
+
+    /* If we have a lazy free obj pending, our amounts will be off, wait for it to go away */
+    if (FreeMemoryLazyFree::s_clazyFreesInProgress > 0) return 0;
 
     /* When clients are paused the dataset should be static not just from the
      * POV of clients not being able to write, but also from the POV of
@@ -572,6 +639,8 @@ int performEvictions(bool fPreSnapshot) {
     const bool fEvictToStorage = !cserver.delete_on_evict && g_pserver->db[0]->FStorageProvider();
     int result = EVICT_FAIL;
     int ckeysFailed = 0;
+
+    std::unique_ptr<FreeMemoryLazyFree> splazy = std::make_unique<FreeMemoryLazyFree>();
 
     if (getMaxmemoryState(&mem_reported,NULL,&mem_tofree,NULL,false,fPreSnapshot) == C_OK)
         return EVICT_OK;
@@ -662,7 +731,7 @@ int performEvictions(bool fPreSnapshot) {
         /* volatile-random and allkeys-random policy */
         if (g_pserver->maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM ||
                  g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_RANDOM
-                 || fEvictToStorage)
+                 || fFallback)
         {
             /* When evicting a random key, we try to evict a key for
              * each DB, so we use the static 'next_db' variable to
@@ -698,9 +767,9 @@ int performEvictions(bool fPreSnapshot) {
             if (fEvictToStorage)
             {
                 // This key is in the storage so we only need to free the object
-                delta = (long long) zmalloc_used_memory();
-                if (db->removeCachedValue(bestkey)) {
-                    delta -= (long long) zmalloc_used_memory();
+                dictEntry *deT;
+                if (db->removeCachedValue(bestkey, &deT)) {
+                    mem_freed += splazy->addEntry(db->dictUnsafeKeyOnly(), deT);
                     ckeysFailed = 0;
                 }
                 else {
@@ -709,7 +778,6 @@ int performEvictions(bool fPreSnapshot) {
                     if (ckeysFailed > 1024)
                         goto cant_free;
                 }
-                mem_freed += delta;
             }
             else
             {
@@ -764,7 +832,7 @@ int performEvictions(bool fPreSnapshot) {
                 /* After some time, exit the loop early - even if memory limit
                  * hasn't been reached.  If we suddenly need to free a lot of
                  * memory, don't want to spend too much time here.  */
-                if (elapsedUs(evictionTimer) > eviction_time_limit_us) {
+                if (g_pserver->m_pstorageFactory == nullptr && elapsedUs(evictionTimer) > eviction_time_limit_us) {
                     // We still need to free memory - start eviction timer proc
                     if (!isEvictionProcRunning && serverTL->el != nullptr) {
                         isEvictionProcRunning = 1;
@@ -781,6 +849,10 @@ int performEvictions(bool fPreSnapshot) {
     /* at this point, the memory is OK, or we have reached the time limit */
     result = (isEvictionProcRunning) ? EVICT_RUNNING : EVICT_OK;
 
+    if (splazy != nullptr && splazy->memory_queued() > 0 && !serverTL->gcEpoch.isReset()) {
+        g_pserver->garbageCollector.enqueue(serverTL->gcEpoch, std::move(splazy));
+    }
+
 cant_free:
     if (g_pserver->m_pstorageFactory)
     {
@@ -796,10 +868,15 @@ cant_free:
             redisDb *db = g_pserver->db[idb];
             if (db->FStorageProvider())
             {
-                serverLog(LL_WARNING, "Failed to evict keys, falling back to flushing entire cache.  Consider increasing maxmemory-samples.");
-                db->removeAllCachedValues();
-                if (((mem_reported - zmalloc_used_memory()) + mem_freed) >= mem_tofree)
-                    result = EVICT_OK;
+                if (db->size() != 0 && db->size(true /*fcachedOnly*/) == 0 && db->keycacheIsEnabled()) {
+                    serverLog(LL_WARNING, "Key cache exceeds maxmemory, freeing - performance may be affected increase maxmemory if possible");
+                    db->disableKeyCache();
+                } else if (db->size(true /*fCachedOnly*/)) {
+                    serverLog(LL_WARNING, "Failed to evict keys, falling back to flushing entire cache.  Consider increasing maxmemory-samples.");
+                    db->removeAllCachedValues();
+                    if (((mem_reported - zmalloc_used_memory()) + mem_freed) >= mem_tofree)
+                        result = EVICT_OK;
+                }
             }
         }
     }

@@ -136,9 +136,10 @@ void StorageCache::retrieve(sds key, IStorage::callbackSingle fn) const
 
 size_t StorageCache::count() const
 {
-    std::unique_lock<fastlock> ul(m_lock);
+    std::unique_lock<fastlock> ul(m_lock, std::defer_lock);
+    bool fLocked = ul.try_lock();
     size_t count = m_spstorage->count();
-    if (m_pdict != nullptr) {
+    if (m_pdict != nullptr && fLocked) {
         serverAssert(bulkInsertsInProgress.load(std::memory_order_seq_cst) || count == (dictSize(m_pdict) + m_collisionCount));
     }
     return count;
@@ -147,4 +148,14 @@ size_t StorageCache::count() const
 void StorageCache::beginWriteBatch() { 
     serverAssert(GlobalLocksAcquired());    // Otherwise we deadlock
     m_spstorage->beginWriteBatch(); 
+}
+
+void StorageCache::emergencyFreeCache() {
+    dict *d = m_pdict;
+    m_pdict = nullptr;
+    if (d != nullptr) {
+        g_pserver->asyncworkqueue->AddWorkFunction([d]{
+            dictRelease(d);
+        });
+    }
 }

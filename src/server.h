@@ -39,6 +39,9 @@
 #include "rio.h"
 #include "atomicvar.h"
 
+#include <concurrentqueue.h>
+#include <blockingconcurrentqueue.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <cmath>
@@ -1070,6 +1073,9 @@ class dict_iter : public dict_const_iter
 {
     dict *m_dict = nullptr;
 public:
+    dict_iter()
+        : dict_const_iter(nullptr)
+    {}
     explicit dict_iter(nullptr_t)
         : dict_const_iter(nullptr)
     {}
@@ -1134,7 +1140,7 @@ public:
     void getStats(char *buf, size_t bufsize) { dictGetStats(buf, bufsize, m_pdict); }
     void getExpireStats(char *buf, size_t bufsize) { m_setexpire->getstats(buf, bufsize); }
 
-    bool insert(char *k, robj *o, bool fAssumeNew = false);
+    bool insert(char *k, robj *o, bool fAssumeNew = false, dict_iter *existing = nullptr);
     void tryResize();
     int incrementallyRehash();
     void updateValue(dict_iter itr, robj *val);
@@ -1156,14 +1162,17 @@ public:
     bool FRehashing() const { return dictIsRehashing(m_pdict) || dictIsRehashing(m_pdictTombstone); }
 
     void setStorageProvider(StorageCache *pstorage);
+    void endStorageProvider();
 
     void trackChanges(bool fBulk, size_t sizeHint = 0);
+    bool FTrackingChanges() const { return !!m_fTrackingChanges; }
 
     // Process and commit changes for secondary storage.  Note that process and commit are seperated
     //  to allow you to release the global lock before commiting.  To prevent deadlocks you *must*
     //  either release the global lock or keep the same global lock between the two functions as
     //  a second look is kept to ensure writes to secondary storage are ordered
     bool processChanges(bool fSnapshot);
+    void processChangesAsync(std::atomic<int> &pendingJobs);
     void commitChanges(const redisDbPersistentDataSnapshot **psnapshotFree = nullptr);
 
     // This should only be used if you look at the key, we do not fixup
@@ -1179,10 +1188,12 @@ public:
     void restoreSnapshot(const redisDbPersistentDataSnapshot *psnapshot);
 
     bool FStorageProvider() { return m_spstorage != nullptr; }
-    bool removeCachedValue(const char *key);
+    bool removeCachedValue(const char *key, dictEntry **ppde = nullptr);
     void removeAllCachedValues();
+    void disableKeyCache();
+    bool keycacheIsEnabled();
 
-    void prefetchKeysAsync(client *c, struct parsed_command &command);
+    bool prefetchKeysAsync(client *c, struct parsed_command &command, bool fExecOK);
 
     bool FSnapshot() const { return m_spdbSnapshotHOLDER != nullptr; }
 
@@ -1297,6 +1308,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
 
     void initialize(int id);
     void storageProviderInitialize();
+    void storageProviderDelete();
     virtual ~redisDb();
 
     void dbOverwriteCore(redisDb::iter itr, sds keySds, robj *val, bool fUpdateMvcc, bool fRemoveExpire);
@@ -1330,17 +1342,21 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::setExpire;
     using redisDbPersistentData::trackChanges;
     using redisDbPersistentData::processChanges;
+    using redisDbPersistentData::processChangesAsync;
     using redisDbPersistentData::commitChanges;
     using redisDbPersistentData::setexpireUnsafe;
     using redisDbPersistentData::setexpire;
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::restoreSnapshot;
     using redisDbPersistentData::removeAllCachedValues;
+    using redisDbPersistentData::disableKeyCache;
+    using redisDbPersistentData::keycacheIsEnabled;
     using redisDbPersistentData::dictUnsafeKeyOnly;
     using redisDbPersistentData::resortExpire;
     using redisDbPersistentData::prefetchKeysAsync;
     using redisDbPersistentData::prepOverwriteForSnapshot;
     using redisDbPersistentData::FRehashing;
+    using redisDbPersistentData::FTrackingChanges;
 
 public:
     const redisDbPersistentDataSnapshot *createSnapshot(uint64_t mvccCheckpoint, bool fOptional) {
@@ -1607,7 +1623,6 @@ struct client {
                                   * when sending data to this replica. */
     long long repl_end_off = -1; /* Replication offset to write to, stored in the replica, as opposed to using the global offset 
                                   * to prevent needing the global lock */
-    int fPendingReplicaWrite;    /* Is there a write queued for this replica? */
 
     char replid[CONFIG_RUN_ID_SIZE+1]; /* Master replication ID (if master). */
     int slave_listening_port; /* As configured with: REPLCONF listening-port */
@@ -1669,6 +1684,10 @@ struct client {
     int argc;
     robj **argv;
     size_t argv_len_sumActive = 0;
+
+    bool FPendingReplicaWrite() const {
+        return repl_curr_off != repl_end_off;
+    }
 
     // post a function from a non-client thread to run on its client thread
     bool postFunction(std::function<void(client *)> fn, bool fLock = true);
@@ -2011,7 +2030,7 @@ public:
 
 // Per-thread variabels that may be accessed without a lock
 struct redisServerThreadVars {
-    aeEventLoop *el;
+    aeEventLoop *el = nullptr;
     socketFds ipfd;             /* TCP socket file descriptors */
     socketFds tlsfd;            /* TLS socket file descriptors */
     int in_eval;                /* Are we inside EVAL? */
@@ -2020,6 +2039,7 @@ struct redisServerThreadVars {
     list *unblocked_clients;     /* list of clients to unblock before next loop NOT THREADSAFE */
     list *clients_pending_asyncwrite;
     int cclients;
+    int cclientsReplica = 0;
     client *current_client; /* Current client */
     long fixed_time_expire = 0;     /* If > 0, expire keys against server.mstime. */
     client *lua_client = nullptr;   /* The "fake client" to query Redis from Lua */
@@ -2139,6 +2159,8 @@ struct redisServerConst {
     int storage_memory_model = STORAGE_WRITETHROUGH;
     char *storage_conf = nullptr;
     int fForkBgSave = false;
+    int time_thread_priority = false;
+    long long repl_backlog_disk_size = 0;
 };
 
 struct redisServer {
@@ -2214,6 +2236,8 @@ struct redisServer {
     unsigned int loading_process_events_interval_keys;
 
     int active_expire_enabled;      /* Can be disabled for testing purposes. */
+
+    int replicaIsolationFactor = 1;
 
     /* Fields used only for stats */
     long long stat_numcommands;     /* Number of processed commands */
@@ -2312,6 +2336,7 @@ struct redisServer {
     sds aof_child_diff;             /* AOF diff accumulator child side. */
     int aof_rewrite_pending = 0;    /* is a call to aofChildWriteDiffData already queued? */
     /* RDB persistence */
+    int allowRdbResizeOp;           /* Debug situations we may want rehash to be ocurring, so ignore resize */
     long long dirty;                /* Changes to DB from the last save */
     long long dirty_before_bgsave;  /* Used to restore dirty on failed BGSAVE */
     struct _rdbThreadVars
@@ -2376,6 +2401,7 @@ struct redisServer {
     int replicaseldb;                 /* Last SELECTed DB in replication output */
     int repl_ping_slave_period;     /* Master pings the replica every N seconds */
     char *repl_backlog;             /* Replication backlog for partial syncs */
+    char *repl_backlog_disk = nullptr;
     long long repl_backlog_size;    /* Backlog circular buffer size */
     long long repl_backlog_config_size; /* The repl backlog may grow but we want to know what the user set it to */
     long long repl_backlog_histlen; /* Backlog actual data length */
@@ -3343,7 +3369,7 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
 #define LOOKUP_NONOTIFY (1<<1)
 #define LOOKUP_UPDATEMVCC (1<<2)
 void dbAdd(redisDb *db, robj *key, robj *val);
-void dbOverwrite(redisDb *db, robj *key, robj *val, bool fRemoveExpire = false);
+void dbOverwrite(redisDb *db, robj *key, robj *val, bool fRemoveExpire = false, dict_iter *pitrExisting = nullptr);
 int dbMerge(redisDb *db, sds key, robj *val, int fReplace);
 void genericSetKey(client *c, redisDb *db, robj *key, robj *val, int keepttl, int signal);
 void setKey(client *c, redisDb *db, robj *key, robj *val);

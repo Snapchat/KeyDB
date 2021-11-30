@@ -46,6 +46,7 @@
 #include <chrono>
 #include <unordered_map>
 #include <string>
+#include <sys/mman.h>
 
 void replicationDiscardCachedMaster(redisMaster *mi);
 void replicationResurrectCachedMaster(redisMaster *mi, connection *conn);
@@ -184,8 +185,39 @@ int bg_unlink(const char *filename) {
 
 /* ---------------------------------- MASTER -------------------------------- */
 
+bool createDiskBacklog() {
+    // Lets create some disk backed pages and add them here
+    std::string path = "./repl-backlog-temp" + std::to_string(gettid());
+    int fd = open(path.c_str(), O_CREAT | O_RDWR | O_LARGEFILE, S_IRUSR | S_IWUSR);
+    if (fd < 0) {
+        return false;
+    }
+    size_t alloc = cserver.repl_backlog_disk_size;
+    int result = truncate(path.c_str(), alloc);
+    unlink(path.c_str()); // ensure the fd is the only ref
+    if (result == -1) {
+        close (fd);
+        return false;
+    }
+
+    g_pserver->repl_backlog_disk = (char*)mmap(nullptr, alloc, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (g_pserver->repl_backlog_disk == MAP_FAILED) {
+        g_pserver->repl_backlog_disk = nullptr;
+        return false;
+    }
+
+    serverLog(LL_VERBOSE, "Disk Backed Replication Allocated");
+    return true;
+}
+
 void createReplicationBacklog(void) {
     serverAssert(g_pserver->repl_backlog == NULL);
+    if (cserver.repl_backlog_disk_size) {
+        if (!createDiskBacklog()) {
+            serverLog(LL_WARNING, "Failed to create disk backlog, will use memory only");
+        }
+    }
     g_pserver->repl_backlog = (char*)zmalloc(g_pserver->repl_backlog_size, MALLOC_LOCAL);
     g_pserver->repl_backlog_histlen = 0;
     g_pserver->repl_backlog_idx = 0;
@@ -234,9 +266,22 @@ void resizeReplicationBacklog(long long newsize) {
         long long earliest_off = g_pserver->repl_lowest_off.load();
 
         if (earliest_off != -1) {
-            // We need to keep critical data so we can't shrink less than the hot data in the buffer
+            char *backlog = nullptr;
             newsize = std::max(newsize, g_pserver->master_repl_offset - earliest_off);
-            char *backlog = (char*)zmalloc(newsize);
+            
+            if (cserver.repl_backlog_disk_size != 0) {
+                if (newsize > g_pserver->repl_backlog_config_size) {
+                    if (g_pserver->repl_backlog == g_pserver->repl_backlog_disk)
+                        return; // Can't do anything more
+                    serverLog(LL_NOTICE, "Switching to disk backed replication backlog due to exceeding memory limits");
+                    backlog = g_pserver->repl_backlog_disk;
+                    newsize = cserver.repl_backlog_disk_size;
+                }
+            }
+
+            // We need to keep critical data so we can't shrink less than the hot data in the buffer
+            if (backlog == nullptr)
+                backlog = (char*)zmalloc(newsize);
             g_pserver->repl_backlog_histlen = g_pserver->master_repl_offset - earliest_off;
             long long earliest_idx = getReplIndexFromOffset(earliest_off);
 
@@ -251,7 +296,10 @@ void resizeReplicationBacklog(long long newsize) {
                 auto cbActiveBacklog = cbPhase1 + g_pserver->repl_backlog_idx;
                 serverAssert(g_pserver->repl_backlog_histlen == cbActiveBacklog);
             }
-            zfree(g_pserver->repl_backlog);
+            if (g_pserver->repl_backlog != g_pserver->repl_backlog_disk)
+                zfree(g_pserver->repl_backlog);
+            else
+                serverLog(LL_NOTICE, "Returning to memory backed replication backlog");
             g_pserver->repl_backlog = backlog;
             g_pserver->repl_backlog_idx = g_pserver->repl_backlog_histlen;
             if (g_pserver->repl_batch_idxStart >= 0) {
@@ -261,7 +309,10 @@ void resizeReplicationBacklog(long long newsize) {
             }
             g_pserver->repl_backlog_start = earliest_off;
         } else {
-            zfree(g_pserver->repl_backlog);
+            if (g_pserver->repl_backlog != g_pserver->repl_backlog_disk)
+                zfree(g_pserver->repl_backlog);
+            else
+                serverLog(LL_NOTICE, "Returning to memory backed replication backlog");
             g_pserver->repl_backlog = (char*)zmalloc(newsize);
             g_pserver->repl_backlog_histlen = 0;
             g_pserver->repl_backlog_idx = 0;
@@ -311,6 +362,8 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
             long long maxClientBuffer = (long long)cserver.client_obuf_limits[CLIENT_TYPE_SLAVE].hard_limit_bytes;
             if (maxClientBuffer <= 0)
                 maxClientBuffer = LLONG_MAX;    // infinite essentially
+            if (cserver.repl_backlog_disk_size)
+                maxClientBuffer = std::max(g_pserver->repl_backlog_size, cserver.repl_backlog_disk_size);
             long long min_offset = LLONG_MAX;
             int listening_replicas = 0;
             while ((ln = listNext(&li))) {
@@ -761,7 +814,6 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
 
     /* Force the partial sync to be queued */
     prepareClientToWrite(c);
-    c->fPendingReplicaWrite = true; 
 
     return len;
 }
@@ -890,6 +942,7 @@ int masterTryPartialResynchronization(client *c) {
     c->repl_ack_time = g_pserver->unixtime;
     c->repl_put_online_on_ack = 0;
     listAddNodeTail(g_pserver->slaves,c);
+    g_pserver->rgthreadvar[c->iel].cclientsReplica++;
 
     /* We can't use the connection buffers since they are used to accumulate
      * new commands at this stage. But we are sure the socket send buffer is
@@ -993,6 +1046,7 @@ int startBgsaveForReplication(int mincapa) {
                 replica->replstate = REPL_STATE_NONE;
                 replica->flags &= ~CLIENT_SLAVE;
                 listDelNode(g_pserver->slaves,ln);
+                g_pserver->rgthreadvar[replica->iel].cclientsReplica--;
                 addReplyError(replica,
                     "BGSAVE failed, replication can't continue");
                 replica->flags |= CLIENT_CLOSE_AFTER_REPLY;
@@ -1122,6 +1176,7 @@ void syncCommand(client *c) {
     c->repldbfd = -1;
     c->flags |= CLIENT_SLAVE;
     listAddNodeTail(g_pserver->slaves,c);
+    g_pserver->rgthreadvar[c->iel].cclientsReplica++;
 
     /* Create the replication backlog if needed. */
     if (listLength(g_pserver->slaves) == 1 && g_pserver->repl_backlog == NULL) {
@@ -4992,6 +5047,22 @@ void flushReplBacklogToClients()
         long long min_offset = LONG_LONG_MAX;
         // Ensure no overflow
         serverAssert(g_pserver->repl_batch_offStart < g_pserver->master_repl_offset);
+        if (g_pserver->master_repl_offset - g_pserver->repl_batch_offStart > g_pserver->repl_backlog_size) {
+            // We overflowed
+            listIter li;
+            listNode *ln;
+            listRewind(g_pserver->slaves, &li);
+            while ((ln = listNext(&li))) {
+                client *c = (client*)listNodeValue(ln);
+                sds sdsClient = catClientInfoString(sdsempty(),c);
+                freeClientAsync(c);
+                serverLog(LL_WARNING,"Client %s scheduled to be closed ASAP for overcoming of output buffer limits.", sdsClient);
+                sdsfree(sdsClient);
+            }
+            goto LDone;
+        }
+
+        // Ensure no overflow if we get here
         serverAssert(g_pserver->master_repl_offset - g_pserver->repl_batch_offStart <= g_pserver->repl_backlog_size);
         serverAssert(g_pserver->repl_batch_idxStart != g_pserver->repl_backlog_idx);
 
@@ -5022,16 +5093,13 @@ void flushReplBacklogToClients()
             replica->repl_end_off = g_pserver->master_repl_offset;
 
             /* Only if the there isn't already a pending write do we prepare the client to write */
-            if (!replica->fPendingReplicaWrite){
-                serverAssert(replica->repl_curr_off != g_pserver->master_repl_offset);
-                prepareClientToWrite(replica);
-                replica->fPendingReplicaWrite = true; 
-            }
-
+            serverAssert(replica->repl_curr_off != g_pserver->master_repl_offset);
+            prepareClientToWrite(replica);
         }
         if (fAsyncWrite)
             ProcessPendingAsyncWrites();
 
+LDone:
         // This may be called multiple times per "frame" so update with our progress flushing to clients
         g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
         g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;

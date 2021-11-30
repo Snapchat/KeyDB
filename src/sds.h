@@ -369,6 +369,8 @@ public:
 
     bool operator==(const char *other) const
     {
+        if (other == nullptr || m_str == nullptr)
+            return other == m_str;
         return sdscmp(m_str, other) == 0;
     }
 
@@ -396,8 +398,11 @@ public:
     {}
 
     sdsstring(const sdsstring &other)
-        : sdsview(sdsdup(other.m_str))
-    {}
+        : sdsview()
+    {
+        if (other.m_str != nullptr)
+            m_str = sdsdup(other.m_str);
+    }
 
     sdsstring(const char *rgch, size_t cch)
         : sdsview(sdsnewlen(rgch, cch))

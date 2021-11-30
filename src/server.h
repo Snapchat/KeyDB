@@ -609,12 +609,15 @@ typedef enum {
 #define SLAVE_STATE_WAIT_BGSAVE_END 7 /* Waiting RDB file creation to finish. */
 #define SLAVE_STATE_SEND_BULK 8 /* Sending RDB file to replica. */
 #define SLAVE_STATE_ONLINE 9 /* RDB file transmitted, sending just updates. */
+#define SLAVE_STATE_FASTSYNC_TX 10
+#define SLAVE_STATE_FASTSYNC_DONE 11
 
 /* Slave capabilities. */
 #define SLAVE_CAPA_NONE 0
 #define SLAVE_CAPA_EOF (1<<0)    /* Can parse the RDB EOF streaming format. */
 #define SLAVE_CAPA_PSYNC2 (1<<1) /* Supports PSYNC2 protocol. */
 #define SLAVE_CAPA_ACTIVE_EXPIRE (1<<2) /* Will the slave perform its own expirations? (Don't send delete) */
+#define SLAVE_CAPA_ROCKSDB_SNAPSHOT (1<<3)
 
 /* Synchronous read timeout - replica side */
 #define CONFIG_REPL_SYNCIO_TIMEOUT 5
@@ -1106,7 +1109,12 @@ public:
 
     size_t slots() const { return dictSlots(m_pdict); }
     size_t size(bool fCachedOnly = false) const;
-    void expand(uint64_t slots) { dictExpand(m_pdict, slots); }
+    void expand(uint64_t slots) {
+        if (m_spstorage)
+            m_spstorage->expand(slots);
+        else
+            dictExpand(m_pdict, slots); 
+    }
     
     void trackkey(robj_roptr o, bool fUpdate)
     {
@@ -1196,6 +1204,9 @@ public:
     bool prefetchKeysAsync(client *c, struct parsed_command &command, bool fExecOK);
 
     bool FSnapshot() const { return m_spdbSnapshotHOLDER != nullptr; }
+
+    std::unique_ptr<const StorageCache> CloneStorageCache() { return std::unique_ptr<const StorageCache>(m_spstorage->clone()); }
+    void bulkStorageInsert(char **rgKeys, size_t *rgcbKeys, char **rgVals, size_t *rgcbVals, size_t celem);
 
     dict_iter find_cached_threadsafe(const char *key) const;
 
@@ -1357,6 +1368,8 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::prepOverwriteForSnapshot;
     using redisDbPersistentData::FRehashing;
     using redisDbPersistentData::FTrackingChanges;
+    using redisDbPersistentData::CloneStorageCache;
+    using redisDbPersistentData::bulkStorageInsert;
 
 public:
     const redisDbPersistentDataSnapshot *createSnapshot(uint64_t mvccCheckpoint, bool fOptional) {
@@ -1686,7 +1699,7 @@ struct client {
     size_t argv_len_sumActive = 0;
 
     bool FPendingReplicaWrite() const {
-        return repl_curr_off != repl_end_off;
+        return repl_curr_off != repl_end_off && replstate == SLAVE_STATE_ONLINE;
     }
 
     // post a function from a non-client thread to run on its client thread
@@ -2076,6 +2089,7 @@ struct redisMaster {
     long long master_initial_offset;           /* Master PSYNC offset. */
 
     bool isActive = false;
+    bool isRocksdbSnapshotRepl = false;
     int repl_state;          /* Replication status if the instance is a replica */
     off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
     off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
@@ -2085,6 +2099,9 @@ struct redisMaster {
     char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
     time_t repl_down_since; /* Unix time at which link with master went down */
+
+    class SnapshotPayloadParseState *parseState;
+    sds bulkreadBuffer = nullptr;
 
     unsigned char master_uuid[UUID_BINARY_LEN];  /* Used during sync with master, this is our master's UUID */
                                                 /* After we've connected with our master use the UUID in g_pserver->master */
@@ -2172,6 +2189,7 @@ struct redisServer {
     mode_t umask;               /* The umask value of the process on startup */
     std::atomic<int> hz;        /* serverCron() calls frequency in hertz */
     int in_fork_child;          /* indication that this is a fork child */
+    IStorage *metadataDb = nullptr;
     redisDb **db = nullptr;
     dict *commands;             /* Command table */
     dict *orig_commands;        /* Command table before command renaming. */
@@ -2852,7 +2870,7 @@ void addReplyDouble(client *c, double d);
 void addReplyHumanLongDouble(client *c, long double d);
 void addReplyLongLong(client *c, long long ll);
 #ifdef __cplusplus
-void addReplyLongLongWithPrefixCore(client *c, long long ll, char prefix);
+void addReplyLongLongWithPrefix(client *c, long long ll, char prefix);
 #endif
 void addReplyArrayLen(client *c, long length);
 void addReplyMapLen(client *c, long length);

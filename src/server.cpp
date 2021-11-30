@@ -57,7 +57,6 @@
 #include <limits.h>
 #include <float.h>
 #include <math.h>
-#include <sys/resource.h>
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
@@ -69,7 +68,6 @@
 #include "keycheck.h"
 #include "motd.h"
 #include "t_nhash.h"
-#include <sys/resource.h>
 #ifdef __linux__
 #include <sys/prctl.h>
 #include <sys/mman.h>
@@ -223,7 +221,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"get",getCommand,2,
-     "read-only fast @string",
+     "read-only fast async @string",
      0,NULL,1,1,1,0,0,0},
 
     {"getex",getexCommand,-2,
@@ -317,7 +315,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"mget",mgetCommand,-2,
-     "read-only fast @string",
+     "read-only fast async @string",
      0,NULL,1,-1,1,0,0,0},
 
     {"rpush",rpushCommand,-3,
@@ -609,7 +607,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hmget",hmgetCommand,-3,
-     "read-only fast @hash",
+     "read-only fast async @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hincrby",hincrbyCommand,4,
@@ -633,15 +631,15 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hkeys",hkeysCommand,2,
-     "read-only to-sort @hash",
+     "read-only to-sort async @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hvals",hvalsCommand,2,
-     "read-only to-sort @hash",
+     "read-only to-sort async @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hgetall",hgetallCommand,2,
-     "read-only random @hash",
+     "read-only random async @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hexists",hexistsCommand,3,
@@ -653,7 +651,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hscan",hscanCommand,-3,
-     "read-only random @hash",
+     "read-only random async @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"incrby",incrbyCommand,3,
@@ -759,6 +757,10 @@ struct redisCommand redisCommandTable[] = {
      * not available. */
     {"ping",pingCommand,-1,
      "ok-stale ok-loading fast @connection @replication",
+     0,NULL,0,0,0,0,0,0},
+
+     {"replping",pingCommand,-1,
+     "ok-stale fast @connection @replication",
      0,NULL,0,0,0,0,0,0},
 
     {"echo",echoCommand,2,
@@ -2068,6 +2070,7 @@ int hash_spin_worker() {
  * rehashing. */
 void databasesCron(bool fMainThread) {
     serverAssert(GlobalLocksAcquired());
+
     if (fMainThread) {
         /* Expire keys by random sampling. Not required for slaves
         * as master will synthesize DELs for us. */
@@ -2410,7 +2413,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         stat_net_input_bytes = g_pserver->stat_net_input_bytes.load(std::memory_order_relaxed);
         stat_net_output_bytes = g_pserver->stat_net_output_bytes.load(std::memory_order_relaxed);
 
-        trackInstantaneousMetric(STATS_METRIC_COMMAND,g_pserver->stat_numcommands);
+        long long stat_numcommands;
+        __atomic_load(&g_pserver->stat_numcommands, &stat_numcommands, __ATOMIC_RELAXED);
+        trackInstantaneousMetric(STATS_METRIC_COMMAND,stat_numcommands);
         trackInstantaneousMetric(STATS_METRIC_NET_INPUT,
                 stat_net_input_bytes);
         trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT,
@@ -2779,6 +2784,14 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     locker.arm();
 
+    /* end any snapshots created by fast async commands */
+    for (int idb = 0; idb < cserver.dbnum; ++idb) {
+        if (serverTL->rgdbSnapshot[idb] != nullptr) {
+            g_pserver->db[idb]->endSnapshot(serverTL->rgdbSnapshot[idb]);
+            serverTL->rgdbSnapshot[idb] = nullptr;
+        }
+    }
+
     size_t zmalloc_used = zmalloc_used_memory();
     if (zmalloc_used > g_pserver->stat_peak_memory)
         g_pserver->stat_peak_memory = zmalloc_used;
@@ -2990,6 +3003,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
         serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
         for (int idb = 0; idb < cserver.dbnum; ++idb)
             g_pserver->db[idb]->trackChanges(false);
+
+        serverTL->disable_async_commands = false;
     }
 }
 
@@ -3124,6 +3139,7 @@ void createSharedObjects(void) {
     shared.lastid = makeObjectShared("LASTID",6);
     shared.default_username = makeObjectShared("default",7);
     shared.ping = makeObjectShared("ping",4);
+    shared.replping = makeObjectShared("replping", 8);
     shared.setid = makeObjectShared("SETID",5);
     shared.keepttl = makeObjectShared("KEEPTTL",7);
     shared.load = makeObjectShared("LOAD",4);
@@ -3694,7 +3710,8 @@ void resetServerStats(void) {
     g_pserver->stat_net_input_bytes = 0;
     g_pserver->stat_net_output_bytes = 0;
     g_pserver->stat_unexpected_error_replies = 0;
-    g_pserver->stat_total_error_replies = 0;
+    for (int iel = 0; iel < cserver.cthreads; ++iel)
+        g_pserver->rgthreadvar[iel].stat_total_error_replies = 0;
     g_pserver->stat_dump_payload_sanitizations = 0;
     g_pserver->aof_delayed_fsync = 0;
 }
@@ -3841,6 +3858,9 @@ void initServer(void) {
         g_pserver->rgthreadvar[i].rgdbSnapshot = (const redisDbPersistentDataSnapshot**)zcalloc(sizeof(redisDbPersistentDataSnapshot*)*cserver.dbnum, MALLOC_LOCAL);
         serverAssert(g_pserver->rgthreadvar[i].rgdbSnapshot != nullptr);
     }
+    g_pserver->modulethreadvar.rgdbSnapshot = (const redisDbPersistentDataSnapshot**)zcalloc(sizeof(redisDbPersistentDataSnapshot*)*cserver.dbnum, MALLOC_LOCAL);
+    serverAssert(g_pserver->modulethreadvar.rgdbSnapshot != nullptr);
+
     serverAssert(g_pserver->rgthreadvar[0].rgdbSnapshot != nullptr);
 
     /* Fixup Master Client Database */
@@ -4089,6 +4109,8 @@ int populateCommandTableParseFlags(struct redisCommand *c, const char *strflags)
             c->flags |= CMD_NO_AUTH;
         } else if (!strcasecmp(flag,"may-replicate")) {
             c->flags |= CMD_MAY_REPLICATE;
+        } else if (!strcasecmp(flag,"async")) {
+            c->flags |= CMD_ASYNC_OK;
         } else {
             /* Parse ACL categories here if the flag name starts with @. */
             uint64_t catflag;
@@ -4388,8 +4410,7 @@ void call(client *c, int flags) {
     monotime call_timer;
     int client_old_flags = c->flags;
     struct redisCommand *real_cmd = c->cmd;
-    serverAssert(GlobalLocksAcquired());
-    static long long prev_err_count;
+    serverAssert(((flags & CMD_CALL_ASYNC) && (c->cmd->flags & CMD_READONLY)) || GlobalLocksAcquired());
 
     serverTL->fixed_time_expire++;
 
@@ -4412,12 +4433,15 @@ void call(client *c, int flags) {
     /* Initialization: clear the flags that must be set by the command on
      * demand, and initialize the array for additional commands propagation. */
     c->flags &= ~(CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP);
-    redisOpArray prev_also_propagate = g_pserver->also_propagate;
-    redisOpArrayInit(&g_pserver->also_propagate);
+    redisOpArray prev_also_propagate;
+    if (!(flags & CMD_CALL_ASYNC)) {
+        prev_also_propagate = g_pserver->also_propagate;
+        redisOpArrayInit(&g_pserver->also_propagate);
+    }
 
     /* Call the command. */
     dirty = g_pserver->dirty;
-    prev_err_count = g_pserver->stat_total_error_replies;
+    serverTL->prev_err_count = serverTL->stat_total_error_replies;
     incrementMvccTstamp();
     elapsedStart(&call_timer);
     try {
@@ -4432,7 +4456,10 @@ void call(client *c, int flags) {
     serverTL->commandsExecuted++;
     const long duration = elapsedUs(call_timer);
     c->duration = duration;
-    dirty = g_pserver->dirty-dirty;
+    if (flags & CMD_CALL_ASYNC)
+        dirty = 0;  // dirty is bogus in this case as there's no synchronization
+    else
+        dirty = g_pserver->dirty-dirty;
     if (dirty < 0) dirty = 0;
 
     if (dirty)
@@ -4442,7 +4469,7 @@ void call(client *c, int flags) {
      * We leverage a static variable (prev_err_count) to retain
      * the counter across nested function calls and avoid logging
      * the same error twice. */
-    if ((g_pserver->stat_total_error_replies - prev_err_count) > 0) {
+    if ((serverTL->stat_total_error_replies - serverTL->prev_err_count) > 0) {
         real_cmd->failed_calls++;
     }
 
@@ -4483,8 +4510,13 @@ void call(client *c, int flags) {
 
     /* Log the command into the Slow log if needed.
      * If the client is blocked we will handle slowlog when it is unblocked. */
-    if ((flags & CMD_CALL_SLOWLOG) && !(c->flags & CLIENT_BLOCKED))
-        slowlogPushCurrentCommand(c, real_cmd, duration);
+    if ((flags & CMD_CALL_SLOWLOG) && !(c->flags & CLIENT_BLOCKED)) {
+        if (duration >= g_pserver->slowlog_log_slower_than) {
+            AeLocker locker;
+            locker.arm(c);
+            slowlogPushCurrentCommand(c, real_cmd, duration);
+        }
+    }
 
     /* Clear the original argv.
      * If the client is blocked we will handle slowlog when it is unblocked. */
@@ -4493,8 +4525,8 @@ void call(client *c, int flags) {
 
     /* populate the per-command statistics that we show in INFO commandstats. */
     if (flags & CMD_CALL_STATS) {
-        real_cmd->microseconds += duration;
-        real_cmd->calls++;
+        __atomic_fetch_add(&real_cmd->microseconds, duration, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&real_cmd->calls, 1, __ATOMIC_RELAXED);
     }
 
     /* Propagate the command into the AOF and replication link */
@@ -4538,48 +4570,50 @@ void call(client *c, int flags) {
     c->flags |= client_old_flags &
         (CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP);
 
-    /* Handle the alsoPropagate() API to handle commands that want to propagate
-     * multiple separated commands. Note that alsoPropagate() is not affected
-     * by CLIENT_PREVENT_PROP flag. */
-    if (g_pserver->also_propagate.numops) {
-        int j;
-        redisOp *rop;
+    if (!(flags & CMD_CALL_ASYNC)) {
+        /* Handle the alsoPropagate() API to handle commands that want to propagate
+        * multiple separated commands. Note that alsoPropagate() is not affected
+        * by CLIENT_PREVENT_PROP flag. */
+        if (g_pserver->also_propagate.numops) {
+            int j;
+            redisOp *rop;
 
-        if (flags & CMD_CALL_PROPAGATE) {
-            bool multi_emitted = false;
-            /* Wrap the commands in g_pserver->also_propagate array,
-             * but don't wrap it if we are already in MULTI context,
-             * in case the nested MULTI/EXEC.
-             *
-             * And if the array contains only one command, no need to
-             * wrap it, since the single command is atomic. */
-            if (g_pserver->also_propagate.numops > 1 &&
-                !(c->cmd->flags & CMD_MODULE) &&
-                !(c->flags & CLIENT_MULTI) &&
-                !(flags & CMD_CALL_NOWRAP))
-            {
-                execCommandPropagateMulti(c->db->id);
-                multi_emitted = true;
-            }
-            
-            for (j = 0; j < g_pserver->also_propagate.numops; j++) {
-                rop = &g_pserver->also_propagate.ops[j];
-                int target = rop->target;
-                /* Whatever the command wish is, we honor the call() flags. */
-                if (!(flags&CMD_CALL_PROPAGATE_AOF)) target &= ~PROPAGATE_AOF;
-                if (!(flags&CMD_CALL_PROPAGATE_REPL)) target &= ~PROPAGATE_REPL;
-                if (target)
-                    propagate(rop->cmd,rop->dbid,rop->argv,rop->argc,target);
-            }
+            if (flags & CMD_CALL_PROPAGATE) {
+                bool multi_emitted = false;
+                /* Wrap the commands in g_pserver->also_propagate array,
+                * but don't wrap it if we are already in MULTI context,
+                * in case the nested MULTI/EXEC.
+                *
+                * And if the array contains only one command, no need to
+                * wrap it, since the single command is atomic. */
+                if (g_pserver->also_propagate.numops > 1 &&
+                    !(c->cmd->flags & CMD_MODULE) &&
+                    !(c->flags & CLIENT_MULTI) &&
+                    !(flags & CMD_CALL_NOWRAP))
+                {
+                    execCommandPropagateMulti(c->db->id);
+                    multi_emitted = true;
+                }
+                
+                for (j = 0; j < g_pserver->also_propagate.numops; j++) {
+                    rop = &g_pserver->also_propagate.ops[j];
+                    int target = rop->target;
+                    /* Whatever the command wish is, we honor the call() flags. */
+                    if (!(flags&CMD_CALL_PROPAGATE_AOF)) target &= ~PROPAGATE_AOF;
+                    if (!(flags&CMD_CALL_PROPAGATE_REPL)) target &= ~PROPAGATE_REPL;
+                    if (target)
+                        propagate(rop->cmd,rop->dbid,rop->argv,rop->argc,target);
+                }
 
-            if (multi_emitted) {
-                execCommandPropagateExec(c->db->id);
+                if (multi_emitted) {
+                    execCommandPropagateExec(c->db->id);
+                }
             }
+            redisOpArrayFree(&g_pserver->also_propagate);
         }
-        redisOpArrayFree(&g_pserver->also_propagate);
+        
+        g_pserver->also_propagate = prev_also_propagate;
     }
-    
-    g_pserver->also_propagate = prev_also_propagate;
 
     /* Client pause takes effect after a transaction has finished. This needs
      * to be located after everything is propagated. */
@@ -4599,15 +4633,17 @@ void call(client *c, int flags) {
         }
     }
 
-    g_pserver->stat_numcommands++;
+    __atomic_fetch_add(&g_pserver->stat_numcommands, 1, __ATOMIC_RELAXED);
     serverTL->fixed_time_expire--;
-    prev_err_count = g_pserver->stat_total_error_replies;
+    serverTL->prev_err_count = serverTL->stat_total_error_replies;
 
-    /* Record peak memory after each command and before the eviction that runs
-     * before the next command. */
-    size_t zmalloc_used = zmalloc_used_memory();
-    if (zmalloc_used > g_pserver->stat_peak_memory)
-        g_pserver->stat_peak_memory = zmalloc_used;
+    if (!(flags & CMD_CALL_ASYNC)) {
+        /* Record peak memory after each command and before the eviction that runs
+        * before the next command. */
+        size_t zmalloc_used = zmalloc_used_memory();
+        if (zmalloc_used > g_pserver->stat_peak_memory)
+            g_pserver->stat_peak_memory = zmalloc_used;
+    }
 }
 
 /* Used when a command that is ready for execution needs to be rejected, due to
@@ -4663,7 +4699,7 @@ static int cmdHasMovableKeys(struct redisCommand *cmd) {
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c, int callFlags) {
     AssertCorrectThread(c);
-    serverAssert(GlobalLocksAcquired());
+    serverAssert((callFlags & CMD_CALL_ASYNC) || GlobalLocksAcquired());
     if (!g_pserver->lua_timedout) {
         /* Both EXEC and EVAL call call() directly so there should be
          * no way in_exec or in_eval or propagate_in_transaction is 1.
@@ -4797,7 +4833,7 @@ int processCommand(client *c, int callFlags) {
      * the event loop since there is a busy Lua script running in timeout
      * condition, to avoid mixing the propagation of scripts with the
      * propagation of DELs due to eviction. */
-    if (g_pserver->maxmemory && !g_pserver->lua_timedout) {
+    if (g_pserver->maxmemory && !g_pserver->lua_timedout && !(callFlags & CMD_CALL_ASYNC)) {
         int out_of_memory = (performEvictions(false /*fPreSnapshot*/) == EVICT_FAIL);
         /* freeMemoryIfNeeded may flush replica output buffers. This may result
          * into a replica, that may be the active client, to be freed. */
@@ -4996,6 +5032,46 @@ bool client::postFunction(std::function<void(client *)> fn, bool fLock) {
     }, fLock) == AE_OK;
 }
 
+std::vector<robj_sharedptr> clientArgs(client *c) {
+    std::vector<robj_sharedptr> args;
+    for (int j = 0; j < c->argc; j++) {
+        args.push_back(robj_sharedptr(c->argv[j]));
+    }
+    return args;
+}
+
+bool client::asyncCommand(std::function<void(const redisDbPersistentDataSnapshot *, const std::vector<robj_sharedptr> &)> &&mainFn, 
+                            std::function<void(const redisDbPersistentDataSnapshot *)> &&postFn) 
+{
+    serverAssert(FCorrectThread(this));
+    const redisDbPersistentDataSnapshot *snapshot = nullptr;
+    if (!(this->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
+        snapshot = this->db->createSnapshot(this->mvccCheckpoint, false /* fOptional */);
+    if (snapshot == nullptr) {
+        return false;
+    }
+    aeEventLoop *el = serverTL->el;
+    blockClient(this, BLOCKED_ASYNC);
+    g_pserver->asyncworkqueue->AddWorkFunction([el, this, mainFn, postFn, snapshot] {
+        std::vector<robj_sharedptr> args = clientArgs(this);
+        aePostFunction(el, [this, mainFn, postFn, snapshot, args] {
+            aeReleaseLock();
+            std::unique_lock<decltype(this->lock)> lock(this->lock);
+            AeLocker locker;
+            locker.arm(this);
+            unblockClient(this);
+            mainFn(snapshot, args);
+            locker.disarm();
+            lock.unlock();
+            if (postFn)
+                postFn(snapshot);
+            this->db->endSnapshotAsync(snapshot);
+            aeAcquireLock();
+        });
+    });
+    return true;
+}
+
 /* ====================== Error lookup and execution ===================== */
 
 void incrementErrorCount(const char *fullerr, size_t namelen) {
@@ -5056,11 +5132,7 @@ int prepareForShutdown(int flags) {
        overwrite the synchronous saving did by SHUTDOWN. */
     if (g_pserver->FRdbSaveInProgress()) {
         serverLog(LL_WARNING,"There is a child saving an .rdb. Killing it!");
-        /* Note that, in killRDBChild, we call rdbRemoveTempFile that will
-         * do close fd(in order to unlink file actully) in background thread.
-         * The temp rdb file fd may won't be closed when redis exits quickly,
-         * but OS will close this fd when process exits. */
-        killRDBChild(true);
+        killRDBChild();
         /* Note that, in killRDBChild normally has backgroundSaveDoneHandler
          * doing it's cleanup, but in this case this code will not be reached,
          * so we need to call rdbRemoveTempFile which will close fd(in order
@@ -5806,6 +5878,10 @@ sds genRedisInfoString(const char *section) {
         stat_net_input_bytes = g_pserver->stat_net_input_bytes.load(std::memory_order_relaxed);
         stat_net_output_bytes = g_pserver->stat_net_output_bytes.load(std::memory_order_relaxed);
 
+        long long stat_total_error_replies = 0;
+        for (int iel = 0; iel < cserver.cthreads; ++iel)
+            stat_total_error_replies += g_pserver->rgthreadvar[iel].stat_total_error_replies;
+
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info,
             "# Stats\r\n"
@@ -5846,7 +5922,9 @@ sds genRedisInfoString(const char *section) {
             "total_reads_processed:%lld\r\n"
             "total_writes_processed:%lld\r\n"
             "instantaneous_lock_contention:%d\r\n"
-            "avg_lock_contention:%f\r\n",
+            "avg_lock_contention:%f\r\n"
+            "storage_provider_read_hits:%lld\r\n"
+            "storage_provider_read_misses:%lld\r\n",
             g_pserver->stat_numconnections,
             g_pserver->stat_numcommands,
             getInstantaneousMetric(STATS_METRIC_COMMAND),
@@ -5879,12 +5957,14 @@ sds genRedisInfoString(const char *section) {
             (unsigned long long) trackingGetTotalItems(),
             (unsigned long long) trackingGetTotalPrefixes(),
             g_pserver->stat_unexpected_error_replies,
-            g_pserver->stat_total_error_replies,
+            stat_total_error_replies,
             g_pserver->stat_dump_payload_sanitizations,
             stat_total_reads_processed,
             stat_total_writes_processed,
             aeLockContention(),
-            avgLockContention);
+            avgLockContention,
+            g_pserver->stat_storage_provider_read_hits,
+            g_pserver->stat_storage_provider_read_misses);
     }
 
     /* Replication */
@@ -7402,7 +7482,7 @@ int main(int argc, char **argv) {
                 serverLog(LL_WARNING, "Failed to test the kernel for a bug that could lead to data corruption during background save. "
                                       "Your system could be affected, please report this error.");
             if (!checkIgnoreWarning("ARM64-COW-BUG")) {
-                serverLog(LL_WARNING,"Redis will now exit to prevent data corruption. "
+                serverLog(LL_WARNING,"KeyDB will now exit to prevent data corruption. "
                                      "Note that it is possible to suppress this warning by setting the following config: ignore-warnings ARM64-COW-BUG");
                 exit(1);
             }

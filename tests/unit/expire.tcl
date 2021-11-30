@@ -179,11 +179,30 @@ start_server {tags {"expire"}} {
         # one second.
         after 1000
         set size2 [r dbsize]
+        set async [lindex [split [r config get enable-async-commands] " "] 1]
+        r config set enable-async-commands no
         r mget key1 key2 key3
+        r config set enable-async-commands $async
         set size3 [r dbsize]
         r debug set-active-expire 1
         list $size1 $size2 $size3
     } {3 3 0}
+
+    test {Return nil when async get expired key} {
+        r flushdb
+        r debug set-active-expire 0
+        r psetex key 500 a
+        # Redis expires random keys ten times every second so we are
+        # fairly sure that all the three keys should be evicted after
+        # one second.
+        after 1000
+        set async [lindex [split [r config get enable-async-commands] " "] 1]
+        r config set enable-async-commands yes
+        set out [r get key]
+        r config set enable-async-commands $async
+        r debug set-active-expire 1
+        assert_equal $out {}
+    }
 
     test {EXPIRE should not resurrect keys (issue #1026)} {
         r debug set-active-expire 0

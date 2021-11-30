@@ -102,10 +102,11 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
         allocsize = sizeof(void*);
 
     size_t mvccExtraBytes = g_pserver->fActiveReplica ? sizeof(redisObjectExtended) : 0;
-    char *oB = (char*)zcalloc(sizeof(robj)+allocsize-sizeof(redisObject::m_ptr)+mvccExtraBytes, MALLOC_SHARED);
+    char *oB = (char*)zmalloc(sizeof(robj)+allocsize-sizeof(redisObject::m_ptr)+mvccExtraBytes, MALLOC_SHARED);
     robj *o = reinterpret_cast<robj*>(oB + mvccExtraBytes);
     struct sdshdr8 *sh = (sdshdr8*)(&o->m_ptr);
 
+    new (o) redisObject;
     o->type = OBJ_STRING;
     o->encoding = OBJ_ENCODING_EMBSTR;
     o->setrefcount(1);
@@ -752,6 +753,20 @@ int getUnsignedLongLongFromObject(robj *o, uint64_t *target) {
 int getLongLongFromObjectOrReply(client *c, robj *o, long long *target, const char *msg) {
     long long value;
     if (getLongLongFromObject(o, &value) != C_OK) {
+        if (msg != NULL) {
+            addReplyError(c,(char*)msg);
+        } else {
+            addReplyError(c,"value is not an integer or out of range");
+        }
+        return C_ERR;
+    }
+    *target = value;
+    return C_OK;
+}
+
+int getUnsignedLongLongFromObjectOrReply(client *c, robj *o, uint64_t *target, const char *msg) {
+    uint64_t value;
+    if (getUnsignedLongLongFromObject(o, &value) != C_OK) {
         if (msg != NULL) {
             addReplyError(c,(char*)msg);
         } else {
@@ -1586,23 +1601,22 @@ robj *deserializeStoredStringObject(const char *data, size_t cb)
         newObject = createObject(OBJ_STRING, nullptr);
         newObject->encoding = oT->encoding;
         newObject->m_ptr = oT->m_ptr;
-        return newObject;
+        break;
 
     case OBJ_ENCODING_EMBSTR:
         newObject = createEmbeddedStringObject(szFromObj(oT), sdslen(szFromObj(oT)));
-        return newObject;
+        break;
 
     case OBJ_ENCODING_RAW:
         newObject = createObject(OBJ_STRING, sdsnewlen(SDS_NOINIT,cb-sizeof(robj)-sizeof(uint64_t)));
         newObject->lru = oT->lru;
         memcpy(newObject->m_ptr, data+sizeof(robj)+sizeof(mvcc), cb-sizeof(robj)-sizeof(mvcc));
-        return newObject;
+        break;
 
     default:
         serverPanic("Unknown string object encoding from storage");
     }
     setMvccTstamp(newObject, mvcc);
-    newObject->setrefcount(1);
 
     return newObject;
 }

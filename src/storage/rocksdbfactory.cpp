@@ -5,6 +5,7 @@
 #include <rocksdb/utilities/options_util.h>
 #include <rocksdb/sst_file_manager.h>
 #include <rocksdb/utilities/convenience.h>
+#include <rocksdb/slice_transform.h>
 
 class RocksDBStorageFactory : public IStorageFactory
 {
@@ -22,6 +23,7 @@ public:
     virtual size_t totalDiskspaceUsed() const override;
 
     virtual bool FSlow() const override { return true; }
+    virtual size_t filedsRequired() const override;
 
 private:
     void setVersion(rocksdb::ColumnFamilyHandle*);
@@ -52,31 +54,23 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
     options.create_missing_column_families = true;
     rocksdb::DB *db = nullptr;
 
-    if (rgchConfig != nullptr)
-    {
-        std::string options_string(rgchConfig, cchConfig);
-        rocksdb::Status status;
-        if (!(status = rocksdb::GetDBOptionsFromString(options, options_string, &options)).ok())
-        {
-            fprintf(stderr, "Failed to parse FLASH options: %s\r\n", status.ToString().c_str());
-            exit(EXIT_FAILURE);
-        }
-    }
-
     options.max_background_compactions = 4;
     options.max_background_flushes = 2;
+    options.max_open_files = filedsRequired();
     options.bytes_per_sync = 1048576;
     options.compaction_pri = rocksdb::kMinOverlappingRatio;
-    //options.compression = rocksdb::kLZ4Compression;
     options.compression = rocksdb::kNoCompression;
     options.enable_pipelined_write = true;
     options.sst_file_manager = m_pfilemanager;
+    options.allow_mmap_reads = true;
+    options.prefix_extractor.reset(rocksdb::NewFixedPrefixTransform(0));
     rocksdb::BlockBasedTableOptions table_options;
     table_options.block_size = 16 * 1024;
     table_options.cache_index_and_filter_blocks = true;
     table_options.pin_l0_filter_and_index_blocks_in_cache = true;
     table_options.data_block_index_type = rocksdb::BlockBasedTableOptions::kDataBlockBinaryAndHash;
     table_options.checksum = rocksdb::kNoChecksum;
+    table_options.format_version = 4;
     options.table_factory.reset(NewBlockBasedTableFactory(table_options));
     options.table_factory.reset(
         rocksdb::NewBlockBasedTableFactory(table_options));
@@ -86,6 +80,17 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
         rocksdb::ColumnFamilyOptions cf_options(options);
         cf_options.level_compaction_dynamic_level_bytes = true;
         veccoldesc.push_back(rocksdb::ColumnFamilyDescriptor(std::to_string(idb), cf_options));
+    }
+
+    if (rgchConfig != nullptr)
+    {
+        std::string options_string(rgchConfig, cchConfig);
+        rocksdb::Status status;
+        if (!(status = rocksdb::GetDBOptionsFromString(options, options_string, &options)).ok())
+        {
+            fprintf(stderr, "Failed to parse FLASH options: %s\r\n", status.ToString().c_str());
+            exit(EXIT_FAILURE);
+        }
     }
     
     std::vector<rocksdb::ColumnFamilyHandle*> handles;
@@ -125,6 +130,10 @@ void RocksDBStorageFactory::setVersion(rocksdb::ColumnFamilyHandle *handle)
     auto status = m_spdb->Put(rocksdb::WriteOptions(), handle, rocksdb::Slice(version_key, sizeof(version_key)), rocksdb::Slice(KEYDB_REAL_VERSION, strlen(KEYDB_REAL_VERSION)+1));
     if (!status.ok())
         throw status.ToString();
+}
+
+size_t RocksDBStorageFactory::filedsRequired() const {
+    return 256;
 }
 
 IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *privdata)

@@ -2,6 +2,8 @@
 #include <functional>
 #include "sds.h"
 
+#define METADATA_DB_IDENTIFIER "c299fde0-6d42-4ec4-b939-34f680ffe39f"
+
 class IStorageFactory
 {
 public:
@@ -9,6 +11,7 @@ public:
 
     virtual ~IStorageFactory() {}
     virtual class IStorage *create(int db, key_load_iterator itr, void *privdata) = 0;
+    virtual class IStorage *createMetadataDb() = 0;
     virtual const char *name() const = 0;
     virtual size_t totalDiskspaceUsed() const = 0;
     virtual bool FSlow() const = 0;
@@ -30,10 +33,10 @@ public:
     virtual bool enumerate(callback fn) const = 0;
     virtual size_t count() const = 0;
 
-    virtual void bulkInsert(sds *rgkeys, sds *rgvals, size_t celem) {
+    virtual void bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem) {
         beginWriteBatch();
         for (size_t ielem = 0; ielem < celem; ++ielem) {
-            insert(rgkeys[ielem], sdslen(rgkeys[ielem]), rgvals[ielem], sdslen(rgvals[ielem]), false);
+            insert(rgkeys[ielem], rgcbkeys[ielem], rgvals[ielem], rgcbvals[ielem], false);
         }
         endWriteBatch();
     }

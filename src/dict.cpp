@@ -721,7 +721,6 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
         }
         if (!dictIsRehashing(d)) break;
     }
-
     _dictExpandIfNeeded(d);
     return NULL; /* not found */
 }

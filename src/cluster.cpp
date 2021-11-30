@@ -5867,7 +5867,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
     multiState *ms, _ms;
     multiCmd mc;
     int i, slot = 0, migrating_slot = 0, importing_slot = 0, missing_keys = 0;
-    serverAssert(GlobalLocksAcquired());
+    serverAssert((c->cmd->flags & CMD_ASYNC_OK) || GlobalLocksAcquired());
 
     /* Allow any key to be set if a module disabled cluster redirections. */
     if (g_pserver->cluster_module_flags & CLUSTER_MODULE_FLAG_NO_REDIRECTION)

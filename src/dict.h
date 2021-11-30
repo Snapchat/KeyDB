@@ -206,7 +206,7 @@ typedef void (dictScanBucketFunction)(void *privdata, dictEntry **bucketref);
 dict *dictCreate(dictType *type, void *privDataPtr);
 int dictExpand(dict *d, unsigned long size, bool fShrink = false);
 int dictTryExpand(dict *d, unsigned long size, bool fShrink);
-int dictAdd(dict *d, void *key, void *val);
+int dictAdd(dict *d, void *key, void *val, dictEntry **existing = nullptr);
 dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing);
 dictEntry *dictAddOrFind(dict *d, void *key);
 int dictReplace(dict *d, void *key, void *val);

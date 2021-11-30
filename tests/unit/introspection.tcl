@@ -44,6 +44,11 @@ start_server {tags {"introspection"}} {
         set e
     } {ERR*}
 
+    test {replica-weighting-factor does not accept values less than 1} {
+        catch {r config set replica-weighting-factor 0} e
+        set e
+    } {ERR*}
+
     test {CLIENT SETNAME can assign a name to this connection} {
         assert_equal [r client setname myname] {OK}
         r client list
@@ -109,6 +114,7 @@ start_server {tags {"introspection"}} {
             server_cpulist
             bio_cpulist
             aof_rewrite_cpulist
+            time-thread-priority
             bgsave_cpulist
 	        storage-cache-mode
 	        storage-provider-options
@@ -117,6 +123,7 @@ start_server {tags {"introspection"}} {
             active-replica
             bind
             set-proc-title
+            repl-backlog-disk-reserve
         }
 
         if {!$::tls} {

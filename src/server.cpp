@@ -1707,12 +1707,12 @@ void tryResizeHashTables(int dbid) {
  * is returned. */
 int redisDbPersistentData::incrementallyRehash() {
     /* Keys dictionary */
-    if (dictIsRehashing(m_pdict) || dictIsRehashing(m_pdictTombstone)) {
-        int result = dictRehashMilliseconds(m_pdict,1);
-        result += dictRehashMilliseconds(m_pdictTombstone,1);
-        return result; /* already used our millisecond for this loop... */
-    }
-    return 0;
+    int result = 0;
+    if (dictIsRehashing(m_pdict))
+        result += dictRehashMilliseconds(m_pdict,1);
+    if (dictIsRehashing(m_pdictTombstone))
+        dictRehashMilliseconds(m_pdictTombstone,1); // don't count this
+    return result; /* already used our millisecond for this loop... */
 }
 
 /* This function is called once a background process of some kind terminates,
@@ -2115,12 +2115,17 @@ void databasesCron(bool fMainThread) {
         if (g_pserver->activerehashing) {
             for (j = 0; j < dbs_per_call; j++) {
                 if (serverTL->rehashCtl != nullptr) {
-                    if (dictRehashSomeAsync(serverTL->rehashCtl, 5)) {
-                        break;
-                    } else {
-                        dictCompleteRehashAsync(serverTL->rehashCtl, true /*fFree*/);
-                        serverTL->rehashCtl = nullptr;
+                    if (!serverTL->rehashCtl->done.load(std::memory_order_relaxed)) {
+                        aeReleaseLock();
+                        if (dictRehashSomeAsync(serverTL->rehashCtl, rehashes_per_ms)) {
+                            aeAcquireLock();
+                            break;
+                        }
+                        aeAcquireLock();
                     }
+
+                    dictCompleteRehashAsync(serverTL->rehashCtl, true /*fFree*/);
+                    serverTL->rehashCtl = nullptr;
                 }
 
                 serverAssert(serverTL->rehashCtl == nullptr);
@@ -2128,21 +2133,26 @@ void databasesCron(bool fMainThread) {
                 /* Are we async rehashing? And if so is it time to re-calibrate? */
                 /* The recalibration limit is a prime number to ensure balancing across threads */
                 if (rehashes_per_ms > 0 && async_rehashes < 131 && !cserver.active_defrag_enabled && cserver.cthreads > 1 && dictSize(dict) > 2048 && dictIsRehashing(dict) && !g_pserver->loading) {
-                    serverTL->rehashCtl = dictRehashAsyncStart(dict, rehashes_per_ms);
-                    ++async_rehashes;
+                    serverTL->rehashCtl = dictRehashAsyncStart(dict, rehashes_per_ms * ((1000 / g_pserver->hz) / 10));  // Estimate 10% CPU time spent in lock contention
+                    if (serverTL->rehashCtl)
+                        ++async_rehashes;
                 }
                 if (serverTL->rehashCtl)
                     break;
-                
+
                 // Before starting anything new, can we end the rehash of a blocked thread?
-                if (dict->asyncdata != nullptr) {
+                while (dict->asyncdata != nullptr) {
                     auto asyncdata = dict->asyncdata;
                     if (asyncdata->done) {
                         dictCompleteRehashAsync(asyncdata, false /*fFree*/);    // Don't free because we don't own the pointer
                         serverAssert(dict->asyncdata != asyncdata);
-                        break;  // completion can be expensive, don't do anything else
+                    } else {
+                        break;
                     }
                 }
+
+                if (dict->asyncdata)
+                    break;
 
                 rehashes_per_ms = g_pserver->db[rehash_db]->incrementallyRehash();
                 async_rehashes = 0;
@@ -2364,13 +2374,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(id);
     UNUSED(clientData);
 
-    if (serverTL->rehashCtl != nullptr && !serverTL->rehashCtl->done) {
-        aeReleaseLock();
-        // If there is not enough lock contention we may not have made enough progress on the async
-        //  rehash.  Ensure we finish it outside the lock.
-        dictRehashSomeAsync(serverTL->rehashCtl, serverTL->rehashCtl->queue.size());
-        aeAcquireLock();
-    }
+    if (g_pserver->maxmemory && g_pserver->m_pstorageFactory)
+        performEvictions(false);
 
     /* If another threads unblocked one of our clients, and this thread has been idle
         then beforeSleep won't have a chance to process the unblocking.  So we also
@@ -2614,7 +2619,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             g_pserver->rdb_bgsave_scheduled = 0;
     }
 
-    if (cserver.storage_memory_model == STORAGE_WRITEBACK && g_pserver->m_pstorageFactory) {
+    if (cserver.storage_memory_model == STORAGE_WRITEBACK && g_pserver->m_pstorageFactory && !g_pserver->loading) {
         run_with_period(g_pserver->storage_flush_period) {
             flushStorageWeak();
         }
@@ -2660,13 +2665,8 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
     UNUSED(id);
     UNUSED(clientData);
 
-    if (serverTL->rehashCtl != nullptr && !serverTL->rehashCtl->done) {
-        aeReleaseLock();
-        // If there is not enough lock contention we may not have made enough progress on the async
-        //  rehash.  Ensure we finish it outside the lock.
-        dictRehashSomeAsync(serverTL->rehashCtl, serverTL->rehashCtl->queue.size());
-        aeAcquireLock();
-    }
+    if (g_pserver->maxmemory && g_pserver->m_pstorageFactory)
+        performEvictions(false);
 
     int iel = ielFromEventLoop(eventLoop);
     serverAssert(iel != IDX_EVENT_LOOP_MAIN);
@@ -2895,7 +2895,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     static thread_local bool fFirstRun = true;
     // note: we also copy the DB pointer in case a DB swap is done while the lock is released
     std::vector<redisDb*> vecdb;    // note we cache the database pointer in case a dbswap is done while the lock is released
-    if (cserver.storage_memory_model == STORAGE_WRITETHROUGH && g_pserver->m_pstorageFactory != nullptr)
+    if (cserver.storage_memory_model == STORAGE_WRITETHROUGH && g_pserver->m_pstorageFactory != nullptr && !g_pserver->loading)
     {
         if (!fFirstRun) {
             mstime_t storage_process_latency;
@@ -2965,6 +2965,16 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         std::lock_guard<std::mutex> lock(time_thread_mutex);
         sleeping_threads++;
         serverAssert(sleeping_threads <= cserver.cthreads);
+    }
+
+    if (!g_pserver->garbageCollector.empty()) {
+        // Server threads don't free the GC, but if we don't have a
+        //  a bgsave or some other async task then we'll hold onto the
+        //  data for too long
+        g_pserver->asyncworkqueue->AddWorkFunction([]{
+            auto epoch = g_pserver->garbageCollector.startEpoch();
+            g_pserver->garbageCollector.endEpoch(epoch);
+        }, true /*fHiPri*/);
     }
 
     /* Determine whether the modules are enabled before sleeping, and use that result
@@ -3477,6 +3487,8 @@ int setOOMScoreAdj(int process_class) {
  * g_pserver->maxclients to the value that we can actually handle. */
 void adjustOpenFilesLimit(void) {
     rlim_t maxfiles = g_pserver->maxclients+CONFIG_MIN_RESERVED_FDS;
+    if (g_pserver->m_pstorageFactory)
+        maxfiles += g_pserver->m_pstorageFactory->filedsRequired();
     struct rlimit limit;
 
     if (getrlimit(RLIMIT_NOFILE,&limit) == -1) {
@@ -3795,8 +3807,6 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
     pvar->in_eval = 0;
     pvar->in_exec = 0;
     pvar->el = aeCreateEventLoop(g_pserver->maxclients+CONFIG_FDSET_INCR);
-    aeSetBeforeSleepProc(pvar->el, beforeSleep, AE_SLEEP_THREADSAFE);
-    aeSetAfterSleepProc(pvar->el, afterSleep, AE_SLEEP_THREADSAFE);
     pvar->current_client = nullptr;
     pvar->fRetrySetAofEvent = false;
     if (pvar->el == NULL) {
@@ -3805,6 +3815,8 @@ static void initServerThread(struct redisServerThreadVars *pvar, int fMain)
             strerror(errno));
         exit(1);
     }
+    aeSetBeforeSleepProc(pvar->el, beforeSleep, AE_SLEEP_THREADSAFE);
+    aeSetAfterSleepProc(pvar->el, afterSleep, AE_SLEEP_THREADSAFE);
 
     fastlock_init(&pvar->lockPendingWrite, "lockPendingWrite");
 
@@ -4010,6 +4022,9 @@ void InitServerLast() {
     g_pserver->initial_memory_usage = zmalloc_used_memory();
 
     g_pserver->asyncworkqueue = new (MALLOC_LOCAL) AsyncWorkQueue(cserver.cthreads);
+
+    // Allocate the repl backlog
+    
 }
 
 /* Parse the flags string description 'strflags' and set them to the
@@ -6637,6 +6652,7 @@ static void sigShutdownHandler(int sig) {
     if (g_pserver->shutdown_asap && sig == SIGINT) {
         serverLogFromHandler(LL_WARNING, "You insist... exiting now.");
         rdbRemoveTempFile(g_pserver->rdbThreadVars.tmpfileNum, 1);
+        g_pserver->garbageCollector.shutdown();
         exit(1); /* Exit with an error since this was not a clean shutdown. */
     } else if (g_pserver->loading) {
         serverLogFromHandler(LL_WARNING, "Received shutdown signal during loading, exiting now.");
@@ -6818,6 +6834,7 @@ void loadDataFromDisk(void) {
         serverLog(LL_NOTICE, "Loading the RDB even though we have a storage provider because the database is empty");
     }
     
+    serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
     if (g_pserver->aof_state == AOF_ON) {
         if (loadAppendOnlyFile(g_pserver->aof_filename) == C_OK)
             serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
@@ -6863,6 +6880,8 @@ void loadDataFromDisk(void) {
             exit(1);
         }
     }
+    g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
+    serverTL->gcEpoch.reset();
 }
 
 void redisOutOfMemoryHandler(size_t allocation_size) {
@@ -7136,13 +7155,6 @@ void *workerThreadMain(void *parg)
     moduleReleaseGIL(true);
     serverAssert(!GlobalLocksAcquired());
     aeDeleteEventLoop(el);
-
-    aeAcquireLock();
-    for (int idb = 0; idb < cserver.dbnum; ++idb) {
-        if (g_pserver->rgthreadvar[iel].rgdbSnapshot[idb] != nullptr)
-            g_pserver->db[idb]->endSnapshot(g_pserver->rgthreadvar[iel].rgdbSnapshot[idb]);
-    }
-    aeReleaseLock();
 
     return NULL;
 }
@@ -7463,7 +7475,13 @@ int main(int argc, char **argv) {
         }
 
         InitServerLast();
-        loadDataFromDisk();
+
+        try {
+            loadDataFromDisk();
+        } catch (ShutdownException) {
+            exit(EXIT_SUCCESS);
+        }
+
         if (g_pserver->cluster_enabled) {
             if (verifyClusterConfigWithData() == C_ERR) {
                 serverLog(LL_WARNING,
@@ -7519,6 +7537,11 @@ int main(int argc, char **argv) {
     serverAssert(cserver.cthreads > 0 && cserver.cthreads <= MAX_EVENT_LOOPS);
 
     pthread_create(&cserver.time_thread_id, nullptr, timeThreadMain, nullptr);
+    if (cserver.time_thread_priority) {
+        struct sched_param time_thread_priority;
+        time_thread_priority.sched_priority = sched_get_priority_max(SCHED_FIFO);
+        pthread_setschedparam(cserver.time_thread_id, SCHED_FIFO, &time_thread_priority);
+    }
 
     pthread_attr_t tattr;
     pthread_attr_init(&tattr);
@@ -7560,8 +7583,7 @@ int main(int argc, char **argv) {
     if (!fLockAcquired)
         g_fInCrash = true;  // We don't actually crash right away, because we want to sync any storage providers
     for (int idb = 0; idb < cserver.dbnum; ++idb) {
-        delete g_pserver->db[idb];
-        g_pserver->db[idb] = nullptr;
+        g_pserver->db[idb]->storageProviderDelete();
     }
     // If we couldn't acquire the global lock it means something wasn't shutdown and we'll probably deadlock
     serverAssert(fLockAcquired);

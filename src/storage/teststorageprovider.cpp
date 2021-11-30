@@ -6,6 +6,13 @@ IStorage *TestStorageFactory::create(int, key_load_iterator, void *)
     return new (MALLOC_LOCAL) TestStorageProvider();
 }
 
+IStorage *TestStorageFactory::createMetadataDb()
+{
+    IStorage *metadataDb = new (MALLOC_LOCAL) TestStorageProvider();
+    metadataDb->insert("KEYDB_METADATA_ID", strlen("KEYDB_METADATA_ID"), (void*)METADATA_DB_IDENTIFIER, strlen(METADATA_DB_IDENTIFIER), false);
+    return metadataDb;
+}
+
 const char *TestStorageFactory::name() const
 {
     return "TEST Storage Provider";

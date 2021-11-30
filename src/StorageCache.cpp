@@ -97,17 +97,47 @@ void StorageCache::insert(sds key, const void *data, size_t cbdata, bool fOverwr
     m_spstorage->insert(key, sdslen(key), (void*)data, cbdata, fOverwrite);
 }
 
-void StorageCache::bulkInsert(sds *rgkeys, sds *rgvals, size_t celem)
+long _dictKeyIndex(dict *d, const void *key, uint64_t hash, dictEntry **existing);
+void StorageCache::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem)
 {
+    std::vector<dictEntry*> vechashes;
+    if (m_pdict != nullptr) {
+        vechashes.reserve(celem);
+
+        for (size_t ielem = 0; ielem < celem; ++ielem) {
+            dictEntry *de = (dictEntry*)zmalloc(sizeof(dictEntry));
+            de->key = (void*)dictGenHashFunction(rgkeys[ielem], (int)rgcbkeys[ielem]);
+            de->v.u64 = 1;
+            vechashes.push_back(de);
+        }
+    }
+
     std::unique_lock<fastlock> ul(m_lock);
     bulkInsertsInProgress++;
     if (m_pdict != nullptr) {
-        for (size_t ielem = 0; ielem < celem; ++ielem) {
-            cacheKey(rgkeys[ielem]);
+        for (dictEntry *de : vechashes) {
+            if (dictIsRehashing(m_pdict)) dictRehash(m_pdict,1);
+            /* Get the index of the new element, or -1 if
+                * the element already exists. */
+            long index;
+            if ((index = _dictKeyIndex(m_pdict, de->key, (uint64_t)de->key, nullptr)) == -1) {
+                dictEntry *de = dictFind(m_pdict, de->key);
+                serverAssert(de != nullptr);
+                de->v.s64++;
+                m_collisionCount++;
+                zfree(de);
+            } else {
+                int iht = dictIsRehashing(m_pdict) ? 1 : 0;
+                de->next = m_pdict->ht[iht].table[index];
+                m_pdict->ht[iht].table[index] = de;
+                m_pdict->ht[iht].used++;
+            }
         }
     }
     ul.unlock();
-    m_spstorage->bulkInsert(rgkeys, rgvals, celem);
+
+    m_spstorage->bulkInsert(rgkeys, rgcbkeys, rgvals, rgcbvals, celem);
+
     bulkInsertsInProgress--;
 }
 
@@ -117,6 +147,14 @@ const StorageCache *StorageCache::clone()
     // Clones never clone the cache
     StorageCache *cacheNew = new StorageCache(const_cast<IStorage*>(m_spstorage->clone()), false /*fCache*/);
     return cacheNew;
+}
+
+void StorageCache::expand(uint64_t slots)
+{
+    std::unique_lock<fastlock> ul(m_lock);
+    if (m_pdict) {
+        dictExpand(m_pdict, slots);
+    }
 }
 
 void StorageCache::retrieve(sds key, IStorage::callbackSingle fn) const

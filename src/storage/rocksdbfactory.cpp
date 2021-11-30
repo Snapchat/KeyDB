@@ -6,28 +6,23 @@
 #include <rocksdb/sst_file_manager.h>
 #include <rocksdb/utilities/convenience.h>
 #include <rocksdb/slice_transform.h>
+#include "rocksdbfactor_internal.h"
+#include <sys/types.h>
+#include <sys/stat.h> 
 
-class RocksDBStorageFactory : public IStorageFactory
-{
-    std::shared_ptr<rocksdb::DB> m_spdb;    // Note: This must be first so it is deleted last
-    std::vector<std::unique_ptr<rocksdb::ColumnFamilyHandle>> m_vecspcols;
-    std::shared_ptr<rocksdb::SstFileManager> m_pfilemanager;
-
-public:
-    RocksDBStorageFactory(const char *dbfile, int dbnum, const char *rgchConfig, size_t cchConfig);
-    ~RocksDBStorageFactory();
-
-    virtual IStorage *create(int db, key_load_iterator iter, void *privdata) override;
-    virtual const char *name() const override;
-
-    virtual size_t totalDiskspaceUsed() const override;
-
-    virtual bool FSlow() const override { return true; }
-    virtual size_t filedsRequired() const override;
-
-private:
-    void setVersion(rocksdb::ColumnFamilyHandle*);
-};
+rocksdb::Options DefaultRocksDBOptions() {
+    rocksdb::Options options;
+    options.max_background_compactions = 4;
+    options.max_background_flushes = 2;
+    options.bytes_per_sync = 1048576;
+    options.compaction_pri = rocksdb::kMinOverlappingRatio;
+    options.compression = rocksdb::kNoCompression;
+    options.enable_pipelined_write = true;
+    options.allow_mmap_reads = true;
+    options.avoid_unnecessary_blocking_io = true;
+    options.prefix_extractor.reset(rocksdb::NewFixedPrefixTransform(0));
+    return options;
+}
 
 IStorageFactory *CreateRocksDBStorageFactory(const char *path, int dbnum, const char *rgchConfig, size_t cchConfig)
 {
@@ -35,7 +30,9 @@ IStorageFactory *CreateRocksDBStorageFactory(const char *path, int dbnum, const 
 }
 
 RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, const char *rgchConfig, size_t cchConfig)
+    : m_path(dbfile)
 {
+    dbnum++; // create an extra db for metadata
     // Get the count of column families in the actual database
     std::vector<std::string> vecT;
     auto status = rocksdb::DB::ListColumnFamilies(rocksdb::Options(), dbfile, &vecT);
@@ -49,21 +46,13 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
 
     m_pfilemanager = std::shared_ptr<rocksdb::SstFileManager>(rocksdb::NewSstFileManager(rocksdb::Env::Default()));
 
-    rocksdb::Options options;
+    rocksdb::Options options = DefaultRocksDBOptions();
+    options.max_open_files = filedsRequired();
+    options.sst_file_manager = m_pfilemanager;
     options.create_if_missing = true;
     options.create_missing_column_families = true;
     rocksdb::DB *db = nullptr;
 
-    options.max_background_compactions = 4;
-    options.max_background_flushes = 2;
-    options.max_open_files = filedsRequired();
-    options.bytes_per_sync = 1048576;
-    options.compaction_pri = rocksdb::kMinOverlappingRatio;
-    options.compression = rocksdb::kNoCompression;
-    options.enable_pipelined_write = true;
-    options.sst_file_manager = m_pfilemanager;
-    options.allow_mmap_reads = true;
-    options.prefix_extractor.reset(rocksdb::NewFixedPrefixTransform(0));
     rocksdb::BlockBasedTableOptions table_options;
     table_options.block_size = 16 * 1024;
     table_options.cache_index_and_filter_blocks = true;
@@ -136,6 +125,23 @@ size_t RocksDBStorageFactory::filedsRequired() const {
     return 256;
 }
 
+std::string RocksDBStorageFactory::getTempFolder()
+{
+    auto path = m_path + "/keydb_tmp/";
+    if (!m_fCreatedTempFolder) {
+        if (!mkdir(path.c_str(), 0700))
+            m_fCreatedTempFolder = true;
+    }
+    return path;
+}
+
+IStorage *RocksDBStorageFactory::createMetadataDb()
+{
+    IStorage *metadataDb = this->create(-1, nullptr, nullptr);
+    metadataDb->insert(meta_key, sizeof(meta_key), (void*)METADATA_DB_IDENTIFIER, strlen(METADATA_DB_IDENTIFIER), false);
+    return metadataDb;
+}
+
 IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *privdata)
 {
     ++db;   // skip default col family
@@ -174,7 +180,7 @@ IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *pr
             ++count;
         }
     }
-    return new RocksDBStorageProvider(m_spdb, spcolfamily, nullptr, count);
+    return new RocksDBStorageProvider(this, m_spdb, spcolfamily, nullptr, count);
 }
 
 const char *RocksDBStorageFactory::name() const

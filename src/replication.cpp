@@ -55,6 +55,7 @@ void replicationSendAck(redisMaster *mi);
 void putSlaveOnline(client *replica);
 int cancelReplicationHandshake(redisMaster *mi, int reconnect);
 static void propagateMasterStaleKeys();
+extern "C" pid_t gettid();
 
 /* We take a global flag to remember if this instance generated an RDB
  * because of replication, so that we can remove the RDB file in case

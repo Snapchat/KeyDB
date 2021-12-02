@@ -3363,6 +3363,7 @@ int rewriteConfig(char *path, int force_all);
 void initConfigValues();
 
 /* db.c -- Keyspace access API */
+class AeLocker;
 int removeExpire(redisDb *db, robj *key);
 int removeSubkeyExpire(redisDb *db, robj *key, robj *subkey);
 void propagateExpire(redisDb *db, robj *key, int lazy);
@@ -3370,10 +3371,11 @@ void propagateSubkeyExpire(redisDb *db, int type, robj *key, robj *subkey);
 int expireIfNeeded(redisDb *db, robj *key);
 void setExpire(client *c, redisDb *db, robj *key, robj *subkey, long long when);
 void setExpire(client *c, redisDb *db, robj *key, expireEntry &&entry);
-robj_roptr lookupKeyRead(redisDb *db, robj *key, uint64_t mvccCheckpoint);
+robj_roptr lookupKeyRead(redisDb *db, robj *key, uint64_t mvccCheckpoint, AeLocker &locker);
 robj_roptr lookupKeyRead(redisDb *db, robj *key);
 int checkAlreadyExpired(long long when);
 robj *lookupKeyWrite(redisDb *db, robj *key);
+robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply, AeLocker &locker);
 robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply);
 robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply);
 robj_roptr lookupKeyReadWithFlags(redisDb *db, robj *key, int flags);

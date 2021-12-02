@@ -206,7 +206,7 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key) {
     serverAssert(GlobalLocksAcquired());
     return lookupKeyReadWithFlags(db,key,LOOKUP_NONE);
 }
-robj_roptr lookupKeyRead(redisDb *db, robj *key, uint64_t mvccCheckpoint) {
+robj_roptr lookupKeyRead(redisDb *db, robj *key, uint64_t mvccCheckpoint, AeLocker &locker) {
     robj_roptr o;
 
     if (aeThreadOwnsLock()) {
@@ -217,7 +217,6 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key, uint64_t mvccCheckpoint) {
             return nullptr;
         int idb = db->id;
         if (serverTL->rgdbSnapshot[idb] == nullptr || serverTL->rgdbSnapshot[idb]->mvccCheckpoint() < mvccCheckpoint) {
-            AeLocker locker;
             locker.arm(serverTL->current_client);
             if (serverTL->rgdbSnapshot[idb] != nullptr) {
                 db->endSnapshot(serverTL->rgdbSnapshot[idb]);
@@ -229,6 +228,9 @@ robj_roptr lookupKeyRead(redisDb *db, robj *key, uint64_t mvccCheckpoint) {
                 // We still need to service the read
                 o = lookupKeyReadWithFlags(db,key,LOOKUP_NONE);
                 serverTL->disable_async_commands = true; // don't try this again
+            }
+            else {
+                locker.disarm();
             }
         }
         if (serverTL->rgdbSnapshot[idb] != nullptr) {
@@ -263,7 +265,12 @@ static void SentReplyOnKeyMiss(client *c, robj *reply){
     }
 }
 robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply) {
-    robj_roptr o = lookupKeyRead(c->db, key, c->mvccCheckpoint);
+    robj_roptr o = lookupKeyRead(c->db, key);
+    if (!o) SentReplyOnKeyMiss(c, reply);
+    return o;
+}
+robj_roptr lookupKeyReadOrReply(client *c, robj *key, robj *reply, AeLocker &locker) {
+    robj_roptr o = lookupKeyRead(c->db, key, c->mvccCheckpoint, locker);
     if (!o) SentReplyOnKeyMiss(c, reply);
     return o;
 }

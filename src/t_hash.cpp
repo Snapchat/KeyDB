@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "aelocker.h"
 #include <math.h>
 
 /*-----------------------------------------------------------------------------
@@ -799,8 +800,8 @@ static void addHashFieldToReply(client *c, robj_roptr o, sds field) {
 
 void hgetCommand(client *c) {
     robj_roptr o;
-
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == nullptr ||
+    AeLocker locker;
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp], locker)) == nullptr ||
         checkType(c,o,OBJ_HASH)) return;
 
     addHashFieldToReply(c, o, szFromObj(c->argv[2]));
@@ -809,10 +810,11 @@ void hgetCommand(client *c) {
 void hmgetCommand(client *c) {
     robj_roptr o;
     int i;
+    AeLocker locker;
 
     /* Don't abort when the key cannot be found. Non-existing keys are empty
      * hashes, where HMGET should respond with a series of null bulks. */
-    o = lookupKeyRead(c->db, c->argv[1], c->mvccCheckpoint);
+    o = lookupKeyRead(c->db, c->argv[1], c->mvccCheckpoint, locker);
     if (checkType(c,o,OBJ_HASH)) return;
 
     addReplyArrayLen(c, c->argc-2);
@@ -889,10 +891,11 @@ void genericHgetallCommand(client *c, int flags) {
     robj_roptr o;
     hashTypeIterator *hi;
     int length, count = 0;
+    AeLocker locker;
 
     robj *emptyResp = (flags & OBJ_HASH_KEY && flags & OBJ_HASH_VALUE) ?
         shared.emptymap[c->resp] : shared.emptyarray;
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],emptyResp))
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],emptyResp,locker))
         == nullptr || checkType(c,o,OBJ_HASH)) return;
 
     /* We return a map if the user requested keys and values, like in the
@@ -946,9 +949,10 @@ void hexistsCommand(client *c) {
 void hscanCommand(client *c) {
     robj_roptr o;
     unsigned long cursor;
+    AeLocker locker;
 
     if (parseScanCursorOrReply(c,c->argv[2],&cursor) == C_ERR) return;
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptyscan)) == nullptr ||
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptyscan,locker)) == nullptr ||
         checkType(c,o,OBJ_HASH)) return;
     scanGenericCommand(c,o,cursor);
 }

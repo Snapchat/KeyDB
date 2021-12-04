@@ -2178,6 +2178,7 @@ struct redisServerConst {
     int fForkBgSave = false;
     int time_thread_priority = false;
     long long repl_backlog_disk_size = 0;
+    int force_backlog_disk = 0;
 };
 
 struct redisServer {

@@ -220,7 +220,12 @@ void createReplicationBacklog(void) {
             serverLog(LL_WARNING, "Failed to create disk backlog, will use memory only");
         }
     }
-    g_pserver->repl_backlog = (char*)zmalloc(g_pserver->repl_backlog_size, MALLOC_LOCAL);
+    if (cserver.force_backlog_disk && g_pserver->repl_backlog_disk != nullptr) {
+        g_pserver->repl_backlog = g_pserver->repl_backlog_disk;
+        g_pserver->repl_backlog_size = cserver.repl_backlog_disk_size;
+    } else {
+        g_pserver->repl_backlog = (char*)zmalloc(g_pserver->repl_backlog_size, MALLOC_LOCAL);
+    }
     g_pserver->repl_backlog_histlen = 0;
     g_pserver->repl_backlog_idx = 0;
     g_pserver->repl_backlog_start = g_pserver->master_repl_offset;
@@ -272,7 +277,7 @@ void resizeReplicationBacklog(long long newsize) {
             newsize = std::max(newsize, g_pserver->master_repl_offset - earliest_off);
             
             if (cserver.repl_backlog_disk_size != 0) {
-                if (newsize > g_pserver->repl_backlog_config_size) {
+                if (newsize > g_pserver->repl_backlog_config_size || cserver.force_backlog_disk) {
                     if (g_pserver->repl_backlog == g_pserver->repl_backlog_disk)
                         return; // Can't do anything more
                     serverLog(LL_NOTICE, "Switching to disk backed replication backlog due to exceeding memory limits");
@@ -5718,6 +5723,8 @@ void trimReplicationBacklog() {
         return; // We're already a good size
     if (g_pserver->repl_lowest_off > 0 && (g_pserver->master_repl_offset - g_pserver->repl_lowest_off + 1) > g_pserver->repl_backlog_config_size)
         return; // There is untransmitted data we can't truncate
+    if (cserver.force_backlog_disk && g_pserver->repl_backlog == g_pserver->repl_backlog_disk)
+        return; // We're already in the disk backlog and we're told to stay there
 
     serverLog(LL_NOTICE, "Reclaiming %lld replication backlog bytes", g_pserver->repl_backlog_size - g_pserver->repl_backlog_config_size);
     resizeReplicationBacklog(g_pserver->repl_backlog_config_size);

@@ -282,7 +282,7 @@ static void parseRedisUri(const char *uri) {
     if (curr == end) return;
 
     /* Extract database number. */
-    config.dbnum = atoi(curr);
+    config.input_dbnum = atoi(curr);
 }
 
 /* _serverAssert is needed by dict */
@@ -601,28 +601,42 @@ static int cliAuth(redisContext *ctx, char *user, char *auth) {
         reply = redisCommand(ctx,"AUTH %s",auth);
     else
         reply = redisCommand(ctx,"AUTH %s %s",user,auth);
-    if (reply != NULL) {
-        if (reply->type == REDIS_REPLY_ERROR)
-            fprintf(stderr,"Warning: AUTH failed\n");
-        freeReplyObject(reply);
-        return REDIS_OK;
+
+    if (reply == NULL) {
+        fprintf(stderr, "\nI/O error\n");
+        return REDIS_ERR;
     }
-    return REDIS_ERR;
+
+    int result = REDIS_OK;
+    if (reply->type == REDIS_REPLY_ERROR) {
+        result = REDIS_ERR;
+        fprintf(stderr, "AUTH failed: %s\n", reply->str);
+    }
+    freeReplyObject(reply);
+    return result;
 }
 
-/* Send SELECT dbnum to the server */
+/* Send SELECT input_dbnum to the server */
 static int cliSelect(void) {
     redisReply *reply;
-    if (config.dbnum == 0) return REDIS_OK;
+    if (config.input_dbnum == config.dbnum) return REDIS_OK;
 
-    reply = redisCommand(context,"SELECT %d",config.dbnum);
-    if (reply != NULL) {
-        int result = REDIS_OK;
-        if (reply->type == REDIS_REPLY_ERROR) result = REDIS_ERR;
-        freeReplyObject(reply);
-        return result;
+    reply = redisCommand(context,"SELECT %d",config.input_dbnum);
+    if (reply == NULL) {
+        fprintf(stderr, "\nI/O error\n");
+        return REDIS_ERR;
     }
-    return REDIS_ERR;
+
+    int result = REDIS_OK;
+    if (reply->type == REDIS_REPLY_ERROR) {
+        result = REDIS_ERR;
+        fprintf(stderr,"SELECT %d failed: %s\n",config.input_dbnum,reply->str);
+    } else {
+        config.dbnum = config.input_dbnum;
+        cliRefreshPrompt();
+    }
+    freeReplyObject(reply);
+    return result;
 }
 
 /* Select RESP3 mode if redis-cli was started with the -3 option.  */
@@ -631,13 +645,18 @@ static int cliSwitchProto(void) {
     if (config.resp3 == 0) return REDIS_OK;
 
     reply = redisCommand(context,"HELLO 3");
-    if (reply != NULL) {
-        int result = REDIS_OK;
-        if (reply->type == REDIS_REPLY_ERROR) result = REDIS_ERR;
-        freeReplyObject(reply);
-        return result;
+    if (reply == NULL) {
+        fprintf(stderr, "\nI/O error\n");
+        return REDIS_ERR;
     }
-    return REDIS_ERR;
+
+    int result = REDIS_OK;
+    if (reply->type == REDIS_REPLY_ERROR) {
+        result = REDIS_ERR;
+        fprintf(stderr,"HELLO 3 failed: %s\n",reply->str);
+    }
+    freeReplyObject(reply);
+    return result;
 }
 
 /* Connect to the server. It is possible to pass certain flags to the function:
@@ -674,12 +693,15 @@ static int cliConnect(int flags) {
         if (context->err) {
             if (!(flags & CC_QUIET)) {
                 fprintf(stderr,"Could not connect to Redis at ");
-                if (config.hostsocket == NULL)
-                    fprintf(stderr,"%s:%d: %s\n",
+                if (config.hostsocket == NULL ||
+                    (config.cluster_mode && config.cluster_reissue_command))
+                {
+                    fprintf(stderr, "%s:%d: %s\n",
                         config.hostip,config.hostport,context->errstr);
-                else
+                } else {
                     fprintf(stderr,"%s: %s\n",
                         config.hostsocket,context->errstr);
+                }
             }
             redisFree(context);
             context = NULL;
@@ -708,6 +730,29 @@ static int cliConnect(int flags) {
     }
 
     return REDIS_OK;
+}
+
+/* In cluster, if server replies ASK, we will redirect to a different node.
+ * Before sending the real command, we need to send ASKING command first. */
+static int cliSendAsking() {
+    redisReply *reply;
+
+    config.cluster_send_asking = 0;
+    if (context == NULL) {
+        return REDIS_ERR;
+    }
+    reply = redisCommand(context,"ASKING");
+    if (reply == NULL) {
+        fprintf(stderr, "\nI/O error\n");
+        return REDIS_ERR;
+    }
+    int result = REDIS_OK;
+    if (reply->type == REDIS_REPLY_ERROR) {
+        result = REDIS_ERR;
+        fprintf(stderr,"ASKING failed: %s\n",reply->str);
+    }
+    freeReplyObject(reply);
+    return result;
 }
 
 static void cliPrintContextError(void) {
@@ -938,6 +983,7 @@ static sds cliFormatReplyRaw(redisReply *r) {
     case REDIS_REPLY_DOUBLE:
         out = sdscatprintf(out,"%s",r->str);
         break;
+    case REDIS_REPLY_SET:
     case REDIS_REPLY_ARRAY:
     case REDIS_REPLY_PUSH:
         for (i = 0; i < r->elements; i++) {
@@ -996,6 +1042,7 @@ static sds cliFormatReplyCSV(redisReply *r) {
         out = sdscat(out,r->integer ? "true" : "false");
     break;
     case REDIS_REPLY_ARRAY:
+    case REDIS_REPLY_SET:
     case REDIS_REPLY_PUSH:
     case REDIS_REPLY_MAP: /* CSV has no map type, just output flat list. */
         for (i = 0; i < r->elements; i++) {
@@ -1083,7 +1130,7 @@ static int cliReadReply(int output_raw_strings) {
     /* Check if we need to connect to a different node and reissue the
      * request. */
     if (config.cluster_mode && reply->type == REDIS_REPLY_ERROR &&
-        (!strncmp(reply->str,"MOVED",5) || !strcmp(reply->str,"ASK")))
+        (!strncmp(reply->str,"MOVED ",6) || !strncmp(reply->str,"ASK ",4)))
     {
         char *p = reply->str, *s;
         int slot;
@@ -1107,6 +1154,9 @@ static int cliReadReply(int output_raw_strings) {
             printf("-> Redirected to slot [%d] located at %s:%d\n",
                 slot, config.hostip, config.hostport);
         config.cluster_reissue_command = 1;
+        if (!strncmp(reply->str,"ASK ",4)) {
+            config.cluster_send_asking = 1;
+        }
         cliRefreshPrompt();
     } else if (!config.interactive && config.set_errcode && 
         reply->type == REDIS_REPLY_ERROR) 
@@ -1119,6 +1169,7 @@ static int cliReadReply(int output_raw_strings) {
     if (output) {
         out = cliFormatReply(reply, config.output, output_raw_strings);
         fwrite(out,sdslen(out),1,stdout);
+        fflush(stdout);
         sdsfree(out);
     }
     freeReplyObject(reply);
@@ -1240,7 +1291,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
             if (!strcasecmp(command,"select") && argc == 2 && 
                 config.last_cmd_type != REDIS_REPLY_ERROR) 
             {
-                config.dbnum = atoi(argv[1]);
+                config.input_dbnum = config.dbnum = atoi(argv[1]);
                 cliRefreshPrompt();
             } else if (!strcasecmp(command,"auth") && (argc == 2 || argc == 3)) {
                 cliSelect();
@@ -1252,21 +1303,23 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
                 cliRefreshPrompt();
             } else if (!strcasecmp(command,"exec") && argc == 1 && config.in_multi) {
                 config.in_multi = 0;
-                if (config.last_cmd_type == REDIS_REPLY_ERROR) {
-                    config.dbnum = config.pre_multi_dbnum;
+                if (config.last_cmd_type == REDIS_REPLY_ERROR ||
+                    config.last_cmd_type == REDIS_REPLY_NIL)
+                {
+                    config.input_dbnum = config.dbnum = config.pre_multi_dbnum;
                 }
                 cliRefreshPrompt();
             } else if (!strcasecmp(command,"discard") && argc == 1 && 
                 config.last_cmd_type != REDIS_REPLY_ERROR) 
             {
                 config.in_multi = 0;
-                config.dbnum = config.pre_multi_dbnum;
+                config.input_dbnum = config.dbnum = config.pre_multi_dbnum;
                 cliRefreshPrompt();
             } 
         }
         if (config.cluster_reissue_command){
             /* If we need to reissue the command, break to prevent a
-               further 'repeat' number of dud interations */
+               further 'repeat' number of dud interactions */
             break;
         }
         if (config.interval) usleep(config.interval);
@@ -1347,7 +1400,7 @@ static int parseOptions(int argc, char **argv) {
             double seconds = atof(argv[++i]);
             config.interval = seconds*1000000;
         } else if (!strcmp(argv[i],"-n") && !lastarg) {
-            config.dbnum = atoi(argv[++i]);
+            config.input_dbnum = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--no-auth-warning")) {
             config.no_auth_warning = 1;
         } else if (!strcmp(argv[i], "--askpass")) {
@@ -1587,6 +1640,11 @@ static int parseOptions(int argc, char **argv) {
         }
     }
 
+    if (config.hostsocket && config.cluster_mode) {
+        fprintf(stderr,"Options -c and -s are mutually exclusive.\n");
+        exit(1);
+    }
+
     /* --ldb requires --eval. */
     if (config.eval_ldb && config.eval == NULL) {
         fprintf(stderr,"Options --ldb and --ldb-sync-mode require --eval.\n");
@@ -1705,6 +1763,7 @@ static void usage(void) {
 "  --lru-test <keys>  Simulate a cache workload with an 80-20 distribution.\n"
 "  --replica          Simulate a replica showing commands received from the master.\n"
 "  --rdb <filename>   Transfer an RDB dump from remote server to local file.\n"
+"                     Use filename of \"-\" to write to stdout.\n"
 "  --pipe             Transfer raw KeyDB protocol from stdin to server.\n"
 "  --pipe-timeout <n> In --pipe mode, abort with error if after sending all data.\n"
 "                     no reply is received within <n> seconds.\n"
@@ -1803,23 +1862,32 @@ static sds *getSdsArrayFromArgv(int argc, char **argv, int quoted) {
 
 static int issueCommandRepeat(int argc, char **argv, long repeat) {
     while (1) {
+        if (config.cluster_reissue_command || context == NULL ||
+            context->err == REDIS_ERR_IO || context->err == REDIS_ERR_EOF)
+        {
+            if (cliConnect(CC_FORCE) != REDIS_OK) {
+                cliPrintContextError();
+                config.cluster_reissue_command = 0;
+                return REDIS_ERR;
+            }
+        }
         config.cluster_reissue_command = 0;
-        if (cliSendCommand(argc,argv,repeat) != REDIS_OK) {
-            cliConnect(CC_FORCE);
-
-            /* If we still cannot send the command print error.
-             * We'll try to reconnect the next time. */
-            if (cliSendCommand(argc,argv,repeat) != REDIS_OK) {
+        if (config.cluster_send_asking) {
+            if (cliSendAsking() != REDIS_OK) {
                 cliPrintContextError();
                 return REDIS_ERR;
             }
         }
+        if (cliSendCommand(argc,argv,repeat) != REDIS_OK) {
+            cliPrintContextError();
+            return REDIS_ERR;
+        }
+
         /* Issue the command again if we got redirected in cluster mode */
         if (config.cluster_mode && config.cluster_reissue_command) {
-            cliConnect(CC_FORCE);
-        } else {
-            break;
+            continue;
         }
+        break;
     }
     return REDIS_OK;
 }
@@ -5614,9 +5682,9 @@ static int clusterManagerCommandImport(int argc, char **argv) {
     }
 
     if (config.cluster_manager_command.flags & CLUSTER_MANAGER_CMD_FLAG_COPY)
-        strcat(cmdfmt, " %s");
+        cmdfmt = sdscat(cmdfmt," COPY");
     if (config.cluster_manager_command.flags & CLUSTER_MANAGER_CMD_FLAG_REPLACE)
-        strcat(cmdfmt, " %s");
+        cmdfmt = sdscat(cmdfmt," REPLACE");
 
     /* Use SCAN to iterate over the keys, migrating to the
      * right node as needed. */
@@ -5648,8 +5716,7 @@ static int clusterManagerCommandImport(int argc, char **argv) {
             printf("Migrating %s to %s:%d: ", key, target->ip, target->port);
             redisReply *r = reconnectingRedisCommand(src_ctx, cmdfmt,
                                                      target->ip, target->port,
-                                                     key, 0, timeout,
-                                                     "COPY", "REPLACE");
+                                                     key, 0, timeout);
             if (!r || r->type == REDIS_REPLY_ERROR) {
                 if (r && r->str) {
                     clusterManagerLogErr("Source %s:%d replied with "
@@ -6065,7 +6132,7 @@ static void latencyDistMode(void) {
 #define RDB_EOF_MARK_SIZE 40
 
 void sendReplconf(const char* arg1, const char* arg2) {
-    printf("sending REPLCONF %s %s\n", arg1, arg2);
+    fprintf(stderr, "sending REPLCONF %s %s\n", arg1, arg2);
     redisReply *reply = redisCommand(context, "REPLCONF %s %s", arg1, arg2);
 
     /* Handle any error conditions */
@@ -6125,7 +6192,7 @@ unsigned long long sendSync(redisContext *c, char *out_eof) {
     }
     *p = '\0';
     if (buf[0] == '-') {
-        printf("SYNC with master failed: %s\n", buf);
+        fprintf(stderr, "SYNC with master failed: %s\n", buf);
         exit(1);
     }
     if (strncmp(buf+1,"EOF:",4) == 0 && strlen(buf+5) >= RDB_EOF_MARK_SIZE) {
@@ -6230,8 +6297,9 @@ static void getRDB(clusterManagerNode *node) {
             payload, filename);
     }
 
+    int write_to_stdout = !strcmp(filename,"-");
     /* Write to file. */
-    if (!strcmp(filename,"-")) {
+    if (write_to_stdout) {
         fd = STDOUT_FILENO;
     } else {
         fd = open(filename, O_CREAT|O_WRONLY, 0644);
@@ -6273,7 +6341,7 @@ static void getRDB(clusterManagerNode *node) {
     }
     if (usemark) {
         payload = ULLONG_MAX - payload - RDB_EOF_MARK_SIZE;
-        if (ftruncate(fd, payload) == -1)
+        if (!write_to_stdout && ftruncate(fd, payload) == -1)
             fprintf(stderr,"ftruncate failed: %s.\n", strerror(errno));
         fprintf(stderr,"Transfer finished with success after %llu bytes\n", payload);
     } else {
@@ -6282,7 +6350,7 @@ static void getRDB(clusterManagerNode *node) {
     redisFree(s); /* Close the connection ASAP as fsync() may take time. */
     if (node)
         node->context = NULL;
-    if (fsync(fd) == -1) {
+    if (!write_to_stdout && fsync(fd) == -1) {
         fprintf(stderr,"Fail to fsync '%s': %s\n", filename, strerror(errno));
         exit(1);
     }
@@ -7080,6 +7148,7 @@ int main(int argc, char **argv) {
     config.repeat = 1;
     config.interval = 0;
     config.dbnum = 0;
+    config.input_dbnum = 0;
     config.interactive = 0;
     config.shutdown = 0;
     config.monitor_mode = 0;
@@ -7090,6 +7159,7 @@ int main(int argc, char **argv) {
     config.lru_test_mode = 0;
     config.lru_test_sample_size = 0;
     config.cluster_mode = 0;
+    config.cluster_send_asking = 0;
     config.slave_mode = 0;
     config.getrdb_mode = 0;
     config.stat_mode = 0;

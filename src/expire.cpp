@@ -74,11 +74,12 @@ void activeExpireCycleExpireFullKey(redisDb *db, const char *key) {
  *----------------------------------------------------------------------------*/
 
 
-void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
+int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, size_t &tried) {
     if (!e.FFat())
     {
         activeExpireCycleExpireFullKey(db, e.key());
-        return;
+        ++tried;
+        return 1;
     }
 
     expireEntryFat *pfat = e.pfatentry();
@@ -91,6 +92,7 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
 
     while (!pfat->FEmpty())
     {
+        ++tried;
         if (pfat->nextExpireEntry().when > now)
             break;
 
@@ -98,7 +100,7 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
         if (pfat->nextExpireEntry().spsubkey == nullptr)
         {
             activeExpireCycleExpireFullKey(db, e.key());
-            return;
+            return ++deleted;
         }
 
         switch (val->type)
@@ -108,7 +110,7 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
                 deleted++;
                 if (setTypeSize(val) == 0) {
                     activeExpireCycleExpireFullKey(db, e.key());
-                    return;
+                    return deleted;
                 }
             }
             break;
@@ -118,7 +120,7 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
                 deleted++;
                 if (hashTypeLength(val) == 0) {
                     activeExpireCycleExpireFullKey(db, e.key());
-                    return;
+                    return deleted;
                 }
             }
             break;
@@ -128,7 +130,7 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
                 deleted++;
                 if (zsetLength(val) == 0) {
                     activeExpireCycleExpireFullKey(db, e.key());
-                    return;
+                    return deleted;
                 }
             }
             break;
@@ -143,7 +145,7 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
                 decrRefCount(val);
             }, true /*fLock*/, true /*fForceQueue*/);
         }
-            return;
+            return deleted;
 
         case OBJ_LIST:
         default:
@@ -156,6 +158,9 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
         
         pfat->popfrontExpireEntry();
         fTtlChanged = true;
+        if ((tried % ACTIVE_EXPIRE_CYCLE_SUBKEY_LOOKUPS_PER_LOOP) == 0) {
+            break;
+        }
     }
 
     if (pfat->FEmpty())
@@ -178,6 +183,8 @@ void activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now) {
             break;
         }
     }
+
+    return deleted;
 }
 
 int parseUnitString(const char *sz)
@@ -390,10 +397,8 @@ void activeExpireCycleCore(int type) {
         db->expireitr = db->setexpireUnsafe()->enumerate(db->expireitr, now, [&](expireEntry &e) __attribute__((always_inline)) {
             if (e.when() < now)
             {
-                activeExpireCycleExpire(db, e, now);
-                ++expired;
+                expired += activeExpireCycleExpire(db, e, now, tried);
             }
-            ++tried;
 
             if ((tried % ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP) == 0)
             {
@@ -501,8 +506,8 @@ void expireSlaveKeys(void) {
                 if (itrExpire != db->setexpire()->end())
                 {
                     if (itrExpire->when() < start) {
-                        activeExpireCycleExpire(g_pserver->db[dbid],*itrExpire,start);
-                        expired = 1;
+                        size_t tried = 0;
+                        expired = activeExpireCycleExpire(g_pserver->db[dbid],*itrExpire,start,tried);
                     }
                 }
 
@@ -678,7 +683,7 @@ void pexpireatCommand(client *c) {
 
 /* Implements TTL and PTTL */
 void ttlGenericCommand(client *c, int output_ms) {
-    long long expire = -1, ttl = -1;
+    long long expire = INVALID_EXPIRE, ttl = -1;
 
     /* If the key does not exist at all, return -2 */
     if (lookupKeyReadWithFlags(c->db,c->argv[1],LOOKUP_NOTOUCH) == nullptr) {
@@ -713,7 +718,7 @@ void ttlGenericCommand(client *c, int output_ms) {
     }
 
     
-    if (expire != -1) {
+    if (expire != INVALID_EXPIRE) {
         ttl = expire-mstime();
         if (ttl < 0) ttl = 0;
     }

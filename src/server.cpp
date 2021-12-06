@@ -749,7 +749,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"auth",authCommand,-2,
-     "no-auth no-script ok-loading ok-stale fast no-monitor no-slowlog @connection",
+     "no-auth no-script ok-loading ok-stale fast @connection",
      0,NULL,0,0,0,0,0,0},
 
     /* We don't allow PING during loading since in Redis PING is used as
@@ -796,7 +796,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"exec",execCommand,1,
-     "no-script no-monitor no-slowlog ok-loading ok-stale @transaction",
+     "no-script no-slowlog ok-loading ok-stale @transaction",
      0,NULL,0,0,0,0,0,0},
 
     {"discard",discardCommand,1,
@@ -917,7 +917,7 @@ struct redisCommand redisCommandTable[] = {
 
     {"migrate",migrateCommand,-6,
      "write random @keyspace @dangerous",
-     0,migrateGetKeys,0,0,0,0,0,0},
+     0,migrateGetKeys,3,3,1,0,0,0},
 
     {"asking",askingCommand,1,
      "fast @keyspace",
@@ -948,17 +948,21 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"hello",helloCommand,-1,
-     "no-auth no-script fast no-monitor ok-loading ok-stale @connection",
+     "no-auth no-script fast ok-loading ok-stale @connection",
      0,NULL,0,0,0,0,0,0},
 
     /* EVAL can modify the dataset, however it is not flagged as a write
-     * command since we do the check while running commands from Lua. */
+     * command since we do the check while running commands from Lua.
+     * 
+     * EVAL and EVALSHA also feed monitors before the commands are executed,
+     * as opposed to after.
+      */
     {"eval",evalCommand,-3,
-     "no-script may-replicate @scripting",
+     "no-script no-monitor may-replicate @scripting",
      0,evalGetKeys,0,0,0,0,0,0},
 
     {"evalsha",evalShaCommand,-3,
-     "no-script may-replicate @scripting",
+     "no-script no-monitor may-replicate @scripting",
      0,evalGetKeys,0,0,0,0,0,0},
 
     {"slowlog",slowlogCommand,-2,
@@ -1252,29 +1256,6 @@ void _serverLog(int level, const char *fmt, ...) {
     va_end(ap);
 
     serverLogRaw(level,msg);
-}
-
-static void checkTrialTimeout()
-{
-#ifndef NO_LICENSE_CHECK
-    if (g_pserver->sentinel_mode)
-        return; // sentinel is not licensed
-    if (cserver.license_key != nullptr && FValidKey(cserver.license_key, strlen(cserver.license_key)))
-        return;
-    time_t curtime = time(NULL);
-    int64_t elapsed = (int64_t)curtime - (int64_t)cserver.stat_starttime;
-    int64_t remaining = (cserver.trial_timeout * 60L) - elapsed;
-    if (remaining <= 0)
-    {
-        serverLog(LL_WARNING, "Trial timeout exceeded.  KeyDB will now exit.");
-        prepareForShutdown(SHUTDOWN_SAVE);
-        exit(0);
-    }
-    else
-    {
-        serverLog(LL_WARNING, "Trial timeout in %ld:%02ld minutes", remaining/60, remaining % 60);
-    }
-#endif
 }
 
 /* Log a fixed message without printf-alike capabilities, in a way that is
@@ -2039,6 +2020,7 @@ void clientsCron(int iel) {
             if (clientsCronResizeQueryBuffer(c)) goto LContinue;
             if (clientsCronTrackExpansiveClients(c, curr_peak_mem_usage_slot)) goto LContinue;
             if (clientsCronTrackClientsMemUsage(c)) goto LContinue;
+            if (closeClientOnOutputBufferLimitReached(c, 0)) continue; // Client also free'd
         LContinue:
             fastlock_unlock(&c->lock);
         }        
@@ -2589,8 +2571,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     run_with_period(30000) {
-        checkTrialTimeout();
-
         /* Tune the fastlock to CPU load */
         fastlock_auto_adjust_waits();
     }
@@ -3147,6 +3127,7 @@ void createSharedObjects(void) {
     shared.getack = makeObjectShared("GETACK",6);
     shared.special_asterick = makeObjectShared("*",1);
     shared.special_equals = makeObjectShared("=",1);
+    shared.redacted = makeObjectShared("(redacted)",10);
 
     /* KeyDB Specific */
     shared.hdel = makeObjectShared(createStringObject("HDEL", 4));
@@ -3343,6 +3324,10 @@ void initServerConfig(void) {
     g_pserver->db = (redisDb**)zcalloc(sizeof(redisDb*)*std::max(cserver.dbnum, 1), MALLOC_LOCAL);
 
     cserver.threadAffinityOffset = 0;
+
+    /* Client Pause related */
+    g_pserver->client_pause_type = CLIENT_PAUSE_OFF;
+    g_pserver->client_pause_end_time = 0; 
     initConfigValues();
 }
 
@@ -3464,7 +3449,7 @@ int setOOMScoreAdj(int process_class) {
 
     fd = open("/proc/self/oom_score_adj", O_WRONLY);
     if (fd < 0 || write(fd, buf, strlen(buf)) < 0) {
-        serverLog(LOG_WARNING, "Unable to write oom_score_adj: %s", strerror(errno));
+        serverLog(LL_WARNING, "Unable to write oom_score_adj: %s", strerror(errno));
         if (fd != -1) close(fd);
         return C_ERR;
     }
@@ -3873,11 +3858,6 @@ void initServer(void) {
         serverAssert(mi->master == nullptr);
         if (mi->cached_master != nullptr)
             selectDb(mi->cached_master, 0);
-    }
-
-    if (g_pserver->syslog_enabled) {
-        openlog(g_pserver->syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,
-            g_pserver->syslog_facility);
     }
 
     g_pserver->aof_state = g_pserver->aof_enabled ? AOF_ON : AOF_OFF;
@@ -4339,12 +4319,6 @@ void preventCommandPropagation(client *c) {
     c->flags |= CLIENT_PREVENT_PROP;
 }
 
-/* Avoid logging any information about this client's arguments
- * since they contain sensitive information. */
-void preventCommandLogging(client *c) {
-    c->flags |= CLIENT_PREVENT_LOGGING;
-}
-
 /* AOF specific version of preventCommandPropagation(). */
 void preventCommandAOF(client *c) {
     c->flags |= CLIENT_PREVENT_AOF_PROP;
@@ -4358,7 +4332,7 @@ void preventCommandReplication(client *c) {
 /* Log the last command a client executed into the slowlog. */
 void slowlogPushCurrentCommand(client *c, struct redisCommand *cmd, ustime_t duration) {
     /* Some commands may contain sensitive data that should not be available in the slowlog. */
-    if ((c->flags & CLIENT_PREVENT_LOGGING) || (cmd->flags & CMD_SKIP_SLOWLOG))
+    if (cmd->flags & CMD_SKIP_SLOWLOG)
         return;
 
     /* If command argument vector was rewritten, use the original
@@ -4412,17 +4386,6 @@ void call(client *c, int flags) {
     struct redisCommand *real_cmd = c->cmd;
     serverAssert(((flags & CMD_CALL_ASYNC) && (c->cmd->flags & CMD_READONLY)) || GlobalLocksAcquired());
 
-    serverTL->fixed_time_expire++;
-
-    /* Send the command to clients in MONITOR mode if applicable.
-     * Administrative commands are considered too dangerous to be shown. */
-    if (listLength(g_pserver->monitors) &&
-        !g_pserver->loading.load(std::memory_order_relaxed) &&
-        !(c->cmd->flags & (CMD_SKIP_MONITOR|CMD_ADMIN)))
-    {
-        replicationFeedMonitors(c,g_pserver->monitors,c->db->id,c->argv,c->argc);
-    }
-
     /* We need to transfer async writes before a client's repl state gets changed.  Otherwise
         we won't be able to propogate them correctly. */
     if (c->cmd->flags & CMD_CATEGORY_REPLICATION) {
@@ -4442,6 +4405,7 @@ void call(client *c, int flags) {
     /* Call the command. */
     dirty = g_pserver->dirty;
     serverTL->prev_err_count = serverTL->stat_total_error_replies;
+    g_pserver->fixed_time_expire++;
     incrementMvccTstamp();
     elapsedStart(&call_timer);
     try {
@@ -4516,6 +4480,14 @@ void call(client *c, int flags) {
             locker.arm(c);
             slowlogPushCurrentCommand(c, real_cmd, duration);
         }
+    }
+
+    /* Send the command to clients in MONITOR mode if applicable.
+     * Administrative commands are considered too dangerous to be shown. */
+    if (!(c->cmd->flags & (CMD_SKIP_MONITOR|CMD_ADMIN))) {
+        robj **argv = c->original_argv ? c->original_argv : c->argv;
+        int argc = c->original_argv ? c->original_argc : c->argc;
+        replicationFeedMonitors(c,g_pserver->monitors,c->db->id,argv,argc);
     }
 
     /* Clear the original argv.
@@ -4757,13 +4729,8 @@ int processCommand(client *c, int callFlags) {
     int is_may_replicate_command = (c->cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE)) ||
                                    (c->cmd->proc == execCommand && (c->mstate.cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE)));
 
-    /* Check if the user is authenticated. This check is skipped in case
-     * the default user is flagged as "nopass" and is active. */
-    int auth_required = (!(DefaultUser->flags & USER_FLAG_NOPASS) ||
-                          (DefaultUser->flags & USER_FLAG_DISABLED)) &&
-                        !c->authenticated;
-    if (auth_required) {
-        /* AUTH and HELLO and no auth modules are valid even in
+    if (authRequired(c)) {
+        /* AUTH and HELLO and no auth commands are valid even in
          * non-authenticated state. */
         if (!(c->cmd->flags & CMD_NO_AUTH)) {
             rejectCommand(c,shared.noautherr);
@@ -5986,12 +5953,16 @@ sds genRedisInfoString(const char *section) {
             while ((ln = listNext(&li)))
             {
                 long long slave_repl_offset = 1;
+                long long slave_read_repl_offset = 1;
                 redisMaster *mi = (redisMaster*)listNodeValue(ln);
 
-                if (mi->master)
+                if (mi->master){
                     slave_repl_offset = mi->master->reploff;
-                else if (mi->cached_master)
+                    slave_read_repl_offset = mi->master->read_reploff;
+                } else if (mi->cached_master){
                     slave_repl_offset = mi->cached_master->reploff;
+                    slave_read_repl_offset = mi->cached_master->read_reploff;
+                }
 
                 char master_prefix[128] = "";
                 if (cmasters != 0) {
@@ -6004,6 +5975,7 @@ sds genRedisInfoString(const char *section) {
                     "master%s_link_status:%s\r\n"
                     "master%s_last_io_seconds_ago:%d\r\n"
                     "master%s_sync_in_progress:%d\r\n"
+                    "slave_read_repl_offset:%lld\r\n"
                     "slave_repl_offset:%lld\r\n"
                     ,master_prefix, mi->masterhost,
                     master_prefix, mi->masterport,
@@ -6012,6 +5984,7 @@ sds genRedisInfoString(const char *section) {
                     master_prefix, mi->master ?
                     ((int)(g_pserver->unixtime-mi->master->lastinteraction)) : -1,
                     master_prefix, mi->repl_state == REPL_STATE_TRANSFER,
+                    slave_read_repl_offset, 
                     slave_repl_offset
                 );
 
@@ -6258,11 +6231,7 @@ sds genRedisInfoString(const char *section) {
             "variant:enterprise\r\n"
             "license_status:%s\r\n"
             "mvcc_depth:%d\r\n",
-#ifdef NO_LICENSE_CHECK
             "OK",
-#else
-            cserver.license_key ? "OK" : "Trial",
-#endif
             mvcc_depth
         );
     }
@@ -6557,13 +6526,6 @@ void redisAsciiArt(void) {
         serverLogRaw(LL_NOTICE|LL_RAW,buf);
     }
 
-    if (cserver.license_key == nullptr && !g_pserver->sentinel_mode)
-    {
-#ifndef NO_LICENSE_CHECK
-        serverLog(LL_WARNING, "!!!! KeyDB Enterprise is being run in trial mode  !!!!");
-        serverLog(LL_WARNING, "!!!! Execution will terminate in %d minutes !!!!", cserver.trial_timeout);
-#endif
-    }
     zfree(buf);
 }
 
@@ -7167,7 +7129,7 @@ void *timeThreadMain(void*) {
 void *workerThreadMain(void *parg)
 {
     int iel = (int)((int64_t)parg);
-    serverLog(LOG_INFO, "Thread %d alive.", iel);
+    serverLog(LL_NOTICE, "Thread %d alive.", iel);
     serverTL = g_pserver->rgthreadvar+iel;  // set the TLS threadsafe global
     tlsInitThread();
 
@@ -7422,6 +7384,11 @@ int main(int argc, char **argv) {
         sdsfree(options);
     }
 
+    if (g_pserver->syslog_enabled) {
+        openlog(g_pserver->syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,
+            g_pserver->syslog_facility);
+    }
+    
     if (g_pserver->sentinel_mode) sentinelCheckConfigFile();
 
     cserver.supervised = redisIsSupervised(cserver.supervised_mode);
@@ -7442,6 +7409,13 @@ int main(int argc, char **argv) {
     } else {
         serverLog(LL_WARNING, "Configuration loaded");
     }
+
+#ifndef NO_LICENSE_CHECK
+    if (!g_pserver->sentinel_mode && (cserver.license_key == nullptr || !FValidKey(cserver.license_key, strlen(cserver.license_key)))){
+        serverLog(LL_WARNING, "Error: %s license key provided, exiting immediately.", cserver.license_key == nullptr ? "No" : "Invalid");
+        exit(1);
+    }
+#endif
 
     validateConfiguration();
 
@@ -7592,7 +7566,7 @@ int main(int argc, char **argv) {
             CPU_SET(iel + cserver.threadAffinityOffset, &cpuset);
             if (pthread_setaffinity_np(g_pserver->rgthread[iel], sizeof(cpu_set_t), &cpuset) == 0)
             {
-                serverLog(LOG_INFO, "Binding thread %d to cpu %d", iel, iel + cserver.threadAffinityOffset + 1);
+                serverLog(LL_NOTICE, "Binding thread %d to cpu %d", iel, iel + cserver.threadAffinityOffset + 1);
             }
 #else
 			serverLog(LL_WARNING, "CPU pinning not available on this platform");

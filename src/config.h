@@ -36,6 +36,7 @@
 
 #ifdef __linux__
 #include <features.h>
+#include <fcntl.h>
 #endif
 
 #define CONFIG_DEFAULT_RDB_FILENAME "dump.rdb"

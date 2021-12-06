@@ -554,8 +554,12 @@ void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
         }
         return buf;
     } else {
-        robj *o = encode ? createStringObject(SDS_NOINIT,len) :
-                           createRawStringObject(SDS_NOINIT,len);
+        robj *o = encode ? tryCreateStringObject(SDS_NOINIT,len) :
+                           tryCreateRawStringObject(SDS_NOINIT,len);
+        if (!o) {
+            serverLog(g_pserver->loading? LL_WARNING: LL_VERBOSE, "rdbGenericLoadStringObject failed allocating %llu bytes", len);
+            return NULL;
+        }
         if (len && rioRead(rdb,ptrFromObj(o),len) == 0) {
             decrRefCount(o);
             return NULL;
@@ -1131,7 +1135,7 @@ int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEn
     int savelfu = g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU;
 
     /* Save the expire time */
-    long long expiretime = -1;
+    long long expiretime = INVALID_EXPIRE;
     if (pexpire != nullptr && pexpire->FGetPrimaryExpire(&expiretime)) {
         if (rdbSaveType(rdb,RDB_OPCODE_EXPIRETIME_MS) == -1) return -1;
         if (rdbSaveMillisecondTime(rdb,expiretime) == -1) return -1;
@@ -1753,11 +1757,16 @@ robj *rdbLoadCheckModuleValue(rio *rdb, char *modulename) {
 }
 
 /* Load a Redis object of the specified type from the specified file.
- * On success a newly allocated object is returned, otherwise NULL. */
-robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
+ * On success a newly allocated object is returned, otherwise NULL.
+ * When the function returns NULL and if 'error' is not NULL, the
+ * integer pointed by 'error' is set to the type of error that occurred */
+robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int *error, uint64_t mvcc_tstamp) {
     robj *o = NULL, *ele, *dec;
     uint64_t len;
     unsigned int i;
+
+    /* Set default error of load object, it will be set to 0 on success. */
+    if (error) *error = RDB_LOAD_ERR_OTHER;
 
     int deep_integrity_validation = cserver.sanitize_dump_payload == SANITIZE_DUMP_YES;
     if (cserver.sanitize_dump_payload == SANITIZE_DUMP_CLIENTS) {
@@ -1777,6 +1786,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
     } else if (rdbtype == RDB_TYPE_LIST) {
         /* Read list value */
         if ((len = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
+        if (len == 0) goto emptykey;
 
         o = createQuicklistObject();
         quicklistSetOptions((quicklist*)ptrFromObj(o), g_pserver->list_max_ziplist_size,
@@ -1797,9 +1807,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
     } else if (rdbtype == RDB_TYPE_SET) {
         /* Read Set value */
         if ((len = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
+        if (len == 0) goto emptykey;
 
         /* Use a regular set when there are too many entries. */
-        if (len > g_pserver->set_max_intset_entries) {
+        size_t max_entries = g_pserver->set_max_intset_entries;
+        if (max_entries >= 1<<30) max_entries = 1<<30;
+        if (len > max_entries) {
             o = createSetObject();
             /* It's faster to expand the dict to the right size asap in order
              * to avoid rehashing */
@@ -1860,10 +1873,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
     } else if (rdbtype == RDB_TYPE_ZSET_2 || rdbtype == RDB_TYPE_ZSET) {
         /* Read list/set value. */
         uint64_t zsetlen;
-        size_t maxelelen = 0;
+        size_t maxelelen = 0, totelelen = 0;
         zset *zs;
 
         if ((zsetlen = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
+        if (zsetlen == 0) goto emptykey;
+
         o = createZsetObject();
         zs = (zset*)ptrFromObj(o);
 
@@ -1900,6 +1915,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
 
             /* Don't care about integer-encoded strings. */
             if (sdslen(sdsele) > maxelelen) maxelelen = sdslen(sdsele);
+            totelelen += sdslen(sdsele);
 
             znode = zslInsert(zs->zsl,score,sdsele);
             if (dictAdd(zs->dict,sdsele,&znode->score) != DICT_OK) {
@@ -1912,8 +1928,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
 
         /* Convert *after* loading, since sorted sets are not stored ordered. */
         if (zsetLength(o) <= g_pserver->zset_max_ziplist_entries &&
-            maxelelen <= g_pserver->zset_max_ziplist_value)
+            maxelelen <= g_pserver->zset_max_ziplist_value &&
+            ziplistSafeToAdd(NULL, totelelen))
                 zsetConvert(o,OBJ_ENCODING_ZIPLIST);
+
     } else if (rdbtype == RDB_TYPE_HASH) {
         uint64_t len;
         int ret;
@@ -1922,6 +1940,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
 
         len = rdbLoadLen(rdb, NULL);
         if (len == RDB_LENERR) return NULL;
+        if (len == 0) goto emptykey;
 
         o = createHashObject();
 
@@ -1966,21 +1985,31 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                 }
             }
 
+            /* Convert to hash table if size threshold is exceeded */
+            if (sdslen(field) > g_pserver->hash_max_ziplist_value ||
+                sdslen(value) > g_pserver->hash_max_ziplist_value || 
+                !ziplistSafeToAdd((unsigned char*)ptrFromObj(o), sdslen(field)+sdslen(value)))
+            {
+                hashTypeConvert(o, OBJ_ENCODING_HT);
+                ret = dictAdd((dict*)ptrFromObj(o), field, value);
+                if (ret == DICT_ERR) {
+                    rdbReportCorruptRDB("Duplicate hash fields detected");
+                    if (dupSearchDict) dictRelease(dupSearchDict);
+                    sdsfree(value);
+                    sdsfree(field);
+                    decrRefCount(o);
+                    return NULL;
+                }
+                break;
+            }
+
             /* Add pair to ziplist */
             o->m_ptr = ziplistPush((unsigned char*)ptrFromObj(o), (unsigned char*)field,
                     sdslen(field), ZIPLIST_TAIL);
             o->m_ptr = ziplistPush((unsigned char*)ptrFromObj(o), (unsigned char*)value,
                     sdslen(value), ZIPLIST_TAIL);
 
-            /* Convert to hash table if size threshold is exceeded */
-            if (sdslen(field) > g_pserver->hash_max_ziplist_value ||
-                sdslen(value) > g_pserver->hash_max_ziplist_value)
-            {
-                sdsfree(field);
-                sdsfree(value);
-                hashTypeConvert(o, OBJ_ENCODING_HT);
-                break;
-            }
+
             sdsfree(field);
             sdsfree(value);
         }
@@ -2029,6 +2058,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
         serverAssert(len == 0);
     } else if (rdbtype == RDB_TYPE_LIST_QUICKLIST) {
         if ((len = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
+        if (len == 0) goto emptykey;
+
         o = createQuicklistObject();
         quicklistSetOptions((quicklist*)ptrFromObj(o), g_pserver->list_max_ziplist_size,
                             g_pserver->list_compress_depth);
@@ -2048,7 +2079,19 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                 zfree(zl);
                 return NULL;
             }
-            quicklistAppendZiplist((quicklist*)ptrFromObj(o), zl);
+
+            /* Silently skip empty ziplists, if we'll end up with empty quicklist we'll fail later. */
+            if (ziplistLen(zl) == 0) {
+                zfree(zl);
+                continue;
+            } else {
+                quicklistAppendZiplist((quicklist*)ptrFromObj(o), zl);
+            }
+        }
+
+        if (quicklistCount((quicklist*)ptrFromObj(o)) == 0) {
+            decrRefCount(o);
+            goto emptykey;
         }
     } else if (rdbtype == RDB_TYPE_HASH_ZIPMAP  ||
                rdbtype == RDB_TYPE_LIST_ZIPLIST ||
@@ -2093,12 +2136,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                     while ((zi = zipmapNext(zi, &fstr, &flen, &vstr, &vlen)) != NULL) {
                         if (flen > maxlen) maxlen = flen;
                         if (vlen > maxlen) maxlen = vlen;
-                        zl = ziplistPush(zl, fstr, flen, ZIPLIST_TAIL);
-                        zl = ziplistPush(zl, vstr, vlen, ZIPLIST_TAIL);
 
                         /* search for duplicate records */
                         sds field = sdstrynewlen(fstr, flen);
-                        if (!field || dictAdd(dupSearchDict, field, NULL) != DICT_OK) {
+                        if (!field || dictAdd(dupSearchDict, field, NULL) != DICT_OK ||
+                            !ziplistSafeToAdd(zl, (size_t)flen + vlen)) {
                             rdbReportCorruptRDB("Hash zipmap with dup elements, or big length (%u)", flen);
                             dictRelease(dupSearchDict);
                             sdsfree(field);
@@ -2107,6 +2149,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                             decrRefCount(o);
                             return NULL;
                         }
+
+                        zl = ziplistPush(zl, fstr, flen, ZIPLIST_TAIL);
+                        zl = ziplistPush(zl, vstr, vlen, ZIPLIST_TAIL);
                     }
 
                     dictRelease(dupSearchDict);
@@ -2131,6 +2176,14 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                     decrRefCount(o);
                     return NULL;
                 }
+
+                if (ziplistLen(encoded) == 0) {
+                    zfree(encoded);
+                    o->m_ptr = NULL;
+                    decrRefCount(o);
+                    goto emptykey;
+                }
+
                 o->type = OBJ_LIST;
                 o->encoding = OBJ_ENCODING_ZIPLIST;
                 listTypeConvert(o,OBJ_ENCODING_QUICKLIST);
@@ -2160,6 +2213,13 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                 }
                 o->type = OBJ_ZSET;
                 o->encoding = OBJ_ENCODING_ZIPLIST;
+                if (zsetLength(o) == 0) {
+                    zfree(encoded);
+                    o->m_ptr = NULL;
+                    decrRefCount(o);
+                    goto emptykey;
+                }
+
                 if (zsetLength(o) > g_pserver->zset_max_ziplist_entries)
                     zsetConvert(o,OBJ_ENCODING_SKIPLIST);
                 break;
@@ -2174,6 +2234,13 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                 }
                 o->type = OBJ_HASH;
                 o->encoding = OBJ_ENCODING_ZIPLIST;
+                if (hashTypeLength(o) == 0) {
+                    zfree(encoded);
+                    o->m_ptr = NULL;
+                    decrRefCount(o);
+                    goto emptykey;
+                }
+
                 if (hashTypeLength(o) > g_pserver->hash_max_ziplist_entries)
                     hashTypeConvert(o, OBJ_ENCODING_HT);
                 break;
@@ -2242,7 +2309,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
             }
 
             /* Insert the key in the radix tree. */
-            int retval = raxInsert(s->rax,
+            int retval = raxTryInsert(s->rax,
                 (unsigned char*)nodekey,sizeof(streamID),lp,NULL);
             sdsfree(nodekey);
             if (!retval) {
@@ -2331,7 +2398,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                     streamFreeNACK(nack);
                     return NULL;
                 }
-                if (!raxInsert(cgroup->pel,rawid,sizeof(rawid),nack,NULL)) {
+                if (!raxTryInsert(cgroup->pel,rawid,sizeof(rawid),nack,NULL)) {
                     rdbReportCorruptRDB("Duplicated global PEL entry "
                                             "loading stream consumer group");
                     decrRefCount(o);
@@ -2395,14 +2462,32 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
                      * loading the global PEL. Then set the same shared
                      * NACK structure also in the consumer-specific PEL. */
                     nack->consumer = consumer;
-                    if (!raxInsert(consumer->pel,rawid,sizeof(rawid),nack,NULL)) {
+                    if (!raxTryInsert(consumer->pel,rawid,sizeof(rawid),nack,NULL)) {
                         rdbReportCorruptRDB("Duplicated consumer PEL entry "
                                                 " loading a stream consumer "
                                                 "group");
                         decrRefCount(o);
+                        streamFreeNACK(nack);
                         return NULL;
                     }
                 }
+            }
+
+            /* Verify that each PEL eventually got a consumer assigned to it. */
+            if (deep_integrity_validation) {
+                raxIterator ri_cg_pel;
+                raxStart(&ri_cg_pel,cgroup->pel);
+                raxSeek(&ri_cg_pel,"^",NULL,0);
+                while(raxNext(&ri_cg_pel)) {
+                    streamNACK *nack = (streamNACK *)ri_cg_pel.data;
+                    if (!nack->consumer) {
+                        raxStop(&ri_cg_pel);
+                        rdbReportCorruptRDB("Stream CG PEL entry without consumer");
+                        decrRefCount(o);
+                        return NULL;
+                    }
+                }
+                raxStop(&ri_cg_pel);
             }
         }
     } else if (rdbtype == RDB_TYPE_MODULE || rdbtype == RDB_TYPE_MODULE_2) {
@@ -2485,7 +2570,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, uint64_t mvcc_tstamp) {
 
     setMvccTstamp(o, mvcc_tstamp);
     serverAssert(!o->FExpires());
+    if (error) *error = 0;
     return o;
+
+emptykey:
+    if (error) *error = RDB_LOAD_ERR_EMPTY_KEY;
+    return NULL;
 }
 
 /* Mark that we are loading in the global state and setup the fields
@@ -2781,7 +2871,7 @@ public:
         * received from the master. In the latter case, the master is
         * responsible for key expiry. If we would expire keys here, the
         * snapshot taken by the master may not be reflected on the replica. */
-        bool fExpiredKey = iAmMaster() && !(this->rdbflags&RDBFLAGS_AOF_PREAMBLE) && job.expiretime != -1 && job.expiretime < this->now;
+        bool fExpiredKey = iAmMaster() && !(this->rdbflags&RDBFLAGS_AOF_PREAMBLE) && job.expiretime != INVALID_EXPIRE && job.expiretime < this->now;
         if (fStaleMvccKey || fExpiredKey) {
             if (fStaleMvccKey && !fExpiredKey && this->rsi != nullptr && this->rsi->mi != nullptr && this->rsi->mi->staleKeyMap != nullptr && lookupKeyRead(job.db, &keyobj) == nullptr) {
                 // We have a key that we've already deleted and is not back in our database.
@@ -2803,7 +2893,7 @@ public:
                 f1024thKey = (ckeys % 1024) == 0;
 
                 /* Set the expire time if needed */
-                if (job.expiretime != -1)
+                if (job.expiretime != INVALID_EXPIRE)
                 {
                     setExpire(NULL,job.db,&keyobj,nullptr,job.expiretime);
                 }
@@ -2963,7 +3053,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     redisDb *dbCur = g_pserver->db[dbid];
     char buf[1024];
     /* Key-specific attributes, set by opcodes before the key type. */
-    long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now;
+    long long lru_idle = -1, lfu_freq = -1, expiretime = INVALID_EXPIRE, now;
     long long lru_clock = 0;
     unsigned long long ckeysLoaded = 0;
     uint64_t mvcc_tstamp = OBJ_MVCC_INVALID;
@@ -2972,6 +3062,8 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     robj *subexpireKey = nullptr;
     sds key = nullptr;
     bool fLastKeyExpired = false;
+    int error;
+    long long empty_keys_skipped = 0, expired_keys_skipped = 0, keys_loaded = 0;
     std::unique_ptr<rdbInsertJob> spjob;
 
     // If we're tracking changes we need to reset this
@@ -3163,8 +3255,10 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             int when_opcode = rdbLoadLen(rdb,NULL);
             int when = rdbLoadLen(rdb,NULL);
             if (rioGetReadError(rdb)) goto eoferr;
-            if (when_opcode != RDB_MODULE_OPCODE_UINT)
+            if (when_opcode != RDB_MODULE_OPCODE_UINT) {
                 rdbReportReadError("bad when_opcode");
+                goto eoferr;
+            }
             moduleType *mt = moduleTypeLookupModuleByID(moduleid);
             char name[10];
             moduleTypeNameByID(name,moduleid);
@@ -3188,7 +3282,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 if (mt->aux_load(&io,moduleid&1023, when) != REDISMODULE_OK || io.error) {
                     moduleTypeNameByID(name,moduleid);
                     serverLog(LL_WARNING,"The RDB file contains module AUX data for the module type '%s', that the responsible module is not able to load. Check for modules log above for additional clues.", name);
-                    exit(1);
+                    goto eoferr;
                 }
                 if (io.ctx) {
                     moduleFreeContext(io.ctx);
@@ -3197,7 +3291,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 uint64_t eof = rdbLoadLen(rdb,NULL);
                 if (eof != RDB_MODULE_OPCODE_EOF) {
                     serverLog(LL_WARNING,"The RDB file contains module AUX data for the module '%s' that is not terminated by the proper module value EOF marker", name);
-                    exit(1);
+                    goto eoferr;
                 }
                 continue;
             } else {
@@ -3218,56 +3312,67 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         if ((key = (sds)rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS_SHARED,NULL)) == NULL)
             goto eoferr;
         /* Read value */
-        if ((val = rdbLoadObject(type,rdb,key,mvcc_tstamp)) == NULL) {
-            sdsfree(key);
-            key = nullptr;
-            goto eoferr;
-        }
-
-
-        bool fStaleMvccKey = (rsi) ? mvccFromObj(val) < rsi->mvccMinThreshold : false;
-        if (spjob != nullptr)
-            wqueue.enqueue(spjob);
-        spjob = std::make_unique<rdbInsertJob>();
-        spjob->db = dbCur;
-        spjob->key = sdsdupshared(key);
-        spjob->val = val;
-        spjob->lru_clock = lru_clock;
-        spjob->expiretime = expiretime;
-        spjob->lru_idle = lru_idle;
-        spjob->lfu_freq = lfu_freq;
-        val = nullptr;
-
-        /* Check if the key already expired. This function is used when loading
-         * an RDB file from disk, either at startup, or when an RDB was
-         * received from the master. In the latter case, the master is
-         * responsible for key expiry. If we would expire keys here, the
-         * snapshot taken by the master may not be reflected on the replica.
-         * Similarly if the RDB is the preamble of an AOF file, we want to
-         * load all the keys as they are, since the log of operations later
-         * assume to work in an exact keyspace state. */
-        bool fExpiredKey = iAmMaster() && !(rdbflags&RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now;
-        fLastKeyExpired = fStaleMvccKey || fExpiredKey;
-
-        ckeysLoaded++;
-        if (g_pserver->m_pstorageFactory && (ckeysLoaded % 128) == 0)
-        {
-            if (!serverTL->gcEpoch.isReset()) {
-                g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
-                serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
+        val = rdbLoadObject(type,rdb,key,&error,mvcc_tstamp);
+        if (val == NULL) {
+            /* Since we used to have bug that could lead to empty keys
+             * (See #8453), we rather not fail when empty key is encountered
+             * in an RDB file, instead we will silently discard it and
+             * continue loading. */
+            if (error == RDB_LOAD_ERR_EMPTY_KEY) {
+                if(empty_keys_skipped++ < 10)
+                    serverLog(LL_WARNING, "rdbLoadObject skipping empty key: %s", key);
+                sdsfree(key);
+                key = nullptr;
+            } else {
+                sdsfree(key);
+                key = nullptr;
+                goto eoferr;
             }
+        } else {
+            bool fStaleMvccKey = (rsi) ? mvccFromObj(val) < rsi->mvccMinThreshold : false;
+            if (spjob != nullptr)
+                wqueue.enqueue(spjob);
+            spjob = std::make_unique<rdbInsertJob>();
+            spjob->db = dbCur;
+            spjob->key = sdsdupshared(key);
+            spjob->val = val;
+            spjob->lru_clock = lru_clock;
+            spjob->expiretime = expiretime;
+            spjob->lru_idle = lru_idle;
+            spjob->lfu_freq = lfu_freq;
+            val = nullptr;
+
+            /* Check if the key already expired. This function is used when loading
+            * an RDB file from disk, either at startup, or when an RDB was
+            * received from the master. In the latter case, the master is
+            * responsible for key expiry. If we would expire keys here, the
+            * snapshot taken by the master may not be reflected on the replica.
+            * Similarly if the RDB is the preamble of an AOF file, we want to
+            * load all the keys as they are, since the log of operations later
+            * assume to work in an exact keyspace state. */
+            bool fExpiredKey = iAmMaster() && !(rdbflags&RDBFLAGS_AOF_PREAMBLE) && expiretime != INVALID_EXPIRE && expiretime < now;
+            fLastKeyExpired = fStaleMvccKey || fExpiredKey;
+
+            ckeysLoaded++;
+            if (g_pserver->m_pstorageFactory && (ckeysLoaded % 128) == 0)
+            {
+                if (!serverTL->gcEpoch.isReset()) {
+                    g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
+                    serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
+                }
+            }
+
+            if (g_pserver->key_load_delay)
+                debugDelay(g_pserver->key_load_delay);
+
+            rdb->keys_since_last_callback++;
+
+            /* Reset the state that is key-specified and is populated by
+            * opcodes before the key, so that we start from scratch again. */
+            expiretime = INVALID_EXPIRE;
+            lfu_freq = -1;
+            lru_idle = -1;
         }
-
-        if (g_pserver->key_load_delay)
-            debugDelay(g_pserver->key_load_delay);
-
-        rdb->keys_since_last_callback++;
-
-        /* Reset the state that is key-specified and is populated by
-         * opcodes before the key, so that we start from scratch again. */
-        expiretime = -1;
-        lfu_freq = -1;
-        lru_idle = -1;
     }
 
     if (spjob != nullptr)
@@ -3312,7 +3417,15 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             g_pserver->db[idb]->trackChanges(false);
         }
     }
-
+    if (empty_keys_skipped) {
+        serverLog(LL_WARNING,
+            "Done loading RDB, keys loaded: %lld, keys expired: %lld, empty keys skipped: %lld.",
+                keys_loaded, expired_keys_skipped, empty_keys_skipped);
+    } else {
+        serverLog(LL_WARNING,
+            "Done loading RDB, keys loaded: %lld, keys expired: %lld.",
+                keys_loaded, expired_keys_skipped);
+    }
     return C_OK;
 
     /* Unexpected end of file is handled here calling rdbReportReadError():

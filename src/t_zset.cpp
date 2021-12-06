@@ -1242,14 +1242,15 @@ void zsetConvert(robj *zobj, int encoding) {
 }
 
 /* Convert the sorted set object into a ziplist if it is not already a ziplist
- * and if the number of elements and the maximum element size is within the
- * expected ranges. */
-void zsetConvertToZiplistIfNeeded(robj *zobj, size_t maxelelen) {
+ * and if the number of elements and the maximum element size and total elements size
+ * are within the expected ranges. */
+void zsetConvertToZiplistIfNeeded(robj *zobj, size_t maxelelen, size_t totelelen) {
     if (zobj->encoding == OBJ_ENCODING_ZIPLIST) return;
     zset *set = (zset*)zobj->m_ptr;
 
     if (set->zsl->length <= g_pserver->zset_max_ziplist_entries &&
-        maxelelen <= g_pserver->zset_max_ziplist_value)
+        maxelelen <= g_pserver->zset_max_ziplist_value &&
+        ziplistSafeToAdd(NULL, totelelen))
             zsetConvert(zobj,OBJ_ENCODING_ZIPLIST);
 }
 
@@ -1370,20 +1371,28 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
             }
             return 1;
         } else if (!xx) {
-            /* Optimize: check if the element is too large or the list
+            /* check if the element is too large or the list
              * becomes too long *before* executing zzlInsert. */
-            zobj->m_ptr = zzlInsert((unsigned char*)zobj->m_ptr,ele,score);
-            if (zzlLength((unsigned char*)zobj->m_ptr) > g_pserver->zset_max_ziplist_entries ||
-                sdslen(ele) > g_pserver->zset_max_ziplist_value)
+            if (zzlLength((unsigned char*)ptrFromObj(zobj))+1 > g_pserver->zset_max_ziplist_entries ||
+                sdslen(ele) > g_pserver->zset_max_ziplist_value ||
+                !ziplistSafeToAdd((unsigned char *)ptrFromObj(zobj), sdslen(ele)))
+            {
                 zsetConvert(zobj,OBJ_ENCODING_SKIPLIST);
-            if (newscore) *newscore = score;
-            *out_flags |= ZADD_OUT_ADDED;
-            return 1;
+            } else {
+                zobj->m_ptr = zzlInsert((unsigned char *)ptrFromObj(zobj),ele,score);
+                if (newscore) *newscore = score;
+                *out_flags |= ZADD_OUT_ADDED;
+                return 1;
+            }
         } else {
             *out_flags |= ZADD_OUT_NOP;
             return 1;
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    }
+
+    /* Note that the above block handling ziplist would have either returned or
+     * converted the key to skiplist. */
+    if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = (zset*)zobj->m_ptr;
         zskiplistNode *znode;
         dictEntry *de;
@@ -2360,7 +2369,7 @@ inline static void zunionInterAggregate(double *target, double val, int aggregat
     }
 }
 
-static int zsetDictGetMaxElementLength(dict *d) {
+static size_t zsetDictGetMaxElementLength(dict *d, size_t *totallen) {
     dictIterator *di;
     dictEntry *de;
     size_t maxelelen = 0;
@@ -2370,6 +2379,8 @@ static int zsetDictGetMaxElementLength(dict *d) {
     while((de = dictNext(di)) != NULL) {
         sds ele = (sds)dictGetKey(de);
         if (sdslen(ele) > maxelelen) maxelelen = sdslen(ele);
+        if (totallen)
+            (*totallen) += sdslen(ele);
     }
 
     dictReleaseIterator(di);
@@ -2377,7 +2388,7 @@ static int zsetDictGetMaxElementLength(dict *d) {
     return maxelelen;
 }
 
-static void zdiffAlgorithm1(zsetopsrc *src, long setnum, zset *dstzset, size_t *maxelelen) {
+static void zdiffAlgorithm1(zsetopsrc *src, long setnum, zset *dstzset, size_t *maxelelen, size_t *totelelen) {
     /* DIFF Algorithm 1:
      *
      * We perform the diff by iterating all the elements of the first set,
@@ -2425,13 +2436,14 @@ static void zdiffAlgorithm1(zsetopsrc *src, long setnum, zset *dstzset, size_t *
             znode = zslInsert(dstzset->zsl,zval.score,tmp);
             dictAdd(dstzset->dict,tmp,&znode->score);
             if (sdslen(tmp) > *maxelelen) *maxelelen = sdslen(tmp);
+            (*totelelen) += sdslen(tmp);
         }
     }
     zuiClearIterator(&src[0]);
 }
 
 
-static void zdiffAlgorithm2(zsetopsrc *src, long setnum, zset *dstzset, size_t *maxelelen) {
+static void zdiffAlgorithm2(zsetopsrc *src, long setnum, zset *dstzset, size_t *maxelelen, size_t *totelelen) {
     /* DIFF Algorithm 2:
      *
      * Add all the elements of the first set to the auxiliary set.
@@ -2485,7 +2497,7 @@ static void zdiffAlgorithm2(zsetopsrc *src, long setnum, zset *dstzset, size_t *
 
     /* Using this algorithm, we can't calculate the max element as we go,
      * we have to iterate through all elements to find the max one after. */
-    *maxelelen = zsetDictGetMaxElementLength(dstzset->dict);
+    *maxelelen = zsetDictGetMaxElementLength(dstzset->dict, totelelen);
 }
 
 static int zsetChooseDiffAlgorithm(zsetopsrc *src, long setnum) {
@@ -2522,14 +2534,14 @@ static int zsetChooseDiffAlgorithm(zsetopsrc *src, long setnum) {
     return (algo_one_work <= algo_two_work) ? 1 : 2;
 }
 
-static void zdiff(zsetopsrc *src, long setnum, zset *dstzset, size_t *maxelelen) {
+static void zdiff(zsetopsrc *src, long setnum, zset *dstzset, size_t *maxelelen, size_t *totelelen) {
     /* Skip everything if the smallest input is empty. */
     if (zuiLength(&src[0]) > 0) {
         int diff_algo = zsetChooseDiffAlgorithm(src, setnum);
         if (diff_algo == 1) {
-            zdiffAlgorithm1(src, setnum, dstzset, maxelelen);
+            zdiffAlgorithm1(src, setnum, dstzset, maxelelen, totelelen);
         } else if (diff_algo == 2) {
-            zdiffAlgorithm2(src, setnum, dstzset, maxelelen);
+            zdiffAlgorithm2(src, setnum, dstzset, maxelelen, totelelen);
         } else if (diff_algo != 0) {
             serverPanic("Unknown algorithm");
         }
@@ -2564,7 +2576,7 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
     zsetopsrc *src;
     zsetopval zval;
     sds tmp;
-    size_t maxelelen = 0;
+    size_t maxelelen = 0, totelelen = 0;
     robj *dstobj;
     zset *dstzset;
     zskiplistNode *znode;
@@ -2700,6 +2712,7 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
                     tmp = zuiNewSdsFromValue(&zval);
                     znode = zslInsert(dstzset->zsl,score,tmp);
                     dictAdd(dstzset->dict,tmp,&znode->score);
+                    totelelen += sdslen(tmp);
                     if (sdslen(tmp) > maxelelen) maxelelen = sdslen(tmp);
                 }
             }
@@ -2736,6 +2749,7 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
                     /* Remember the longest single element encountered,
                      * to understand if it's possible to convert to ziplist
                      * at the end. */
+                     totelelen += sdslen(tmp);
                      if (sdslen(tmp) > maxelelen) maxelelen = sdslen(tmp);
                     /* Update the element with its initial score. */
                     dictSetKey(accumulator, de, tmp);
@@ -2770,14 +2784,14 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
         dictReleaseIterator(di);
         dictRelease(accumulator);
     } else if (op == SET_OP_DIFF) {
-        zdiff(src, setnum, dstzset, &maxelelen);
+        zdiff(src, setnum, dstzset, &maxelelen, &totelelen);
     } else {
         serverPanic("Unknown operator");
     }
 
     if (dstkey) {
         if (dstzset->zsl->length) {
-            zsetConvertToZiplistIfNeeded(dstobj, maxelelen);
+            zsetConvertToZiplistIfNeeded(dstobj, maxelelen, totelelen);
             setKey(c, c->db, dstkey, dstobj);
             addReplyLongLong(c, zsetLength(dstobj));
             notifyKeyspaceEvent(NOTIFY_ZSET,
@@ -3662,7 +3676,12 @@ void zrangeGenericCommand(zrange_result_handler *handler, int argc_start, int st
         lookupKeyWrite(c->db,key) :
         lookupKeyRead(c->db,key);
     if (zobj == nullptr) {
-        addReply(c,shared.emptyarray);
+        if (store) {
+            handler->beginResultEmission(handler);
+            handler->finalizeResultEmission(handler, 0);
+        } else {
+            addReply(c, shared.emptyarray);
+        }
         goto cleanup;
     }
 
@@ -3818,10 +3837,15 @@ void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey
     }
 
     void *arraylen_ptr = addReplyDeferredLen(c);
-    long arraylen = 0;
+    long result_count = 0;
 
     /* We emit the key only for the blocking variant. */
     if (emitkey) addReplyBulk(c,key);
+
+    /* Respond with a single (flat) array in RESP2 or if countarg is not
+     * provided (returning a single element). In RESP3, when countarg is
+     * provided, use nested array.  */
+    int use_nested_array = c->resp > 2 && countarg != NULL;
 
     /* Remove the element. */
     do {
@@ -3865,16 +3889,19 @@ void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey
         serverAssertWithInfo(c,zobj,zsetDel(zobj,ele));
         g_pserver->dirty++;
 
-        if (arraylen == 0) { /* Do this only for the first iteration. */
+        if (result_count == 0) { /* Do this only for the first iteration. */
             const char *events[2] = {"zpopmin","zpopmax"};
             notifyKeyspaceEvent(NOTIFY_ZSET,events[where],key,c->db->id);
             signalModifiedKey(c,c->db,key);
         }
 
+        if (use_nested_array) {
+            addReplyArrayLen(c,2);
+        }
         addReplyBulkCBuffer(c,ele,sdslen(ele));
         addReplyDouble(c,score);
         sdsfree(ele);
-        arraylen += 2;
+        ++result_count;
 
         /* Remove the key, if indeed needed. */
         if (zsetLength(zobj) == 0) {
@@ -3884,7 +3911,10 @@ void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey
         }
     } while(--count);
 
-    setDeferredArrayLen(c,arraylen_ptr,arraylen + (emitkey != 0));
+    if (!use_nested_array) {
+        result_count *= 2;
+    }
+    setDeferredArrayLen(c,arraylen_ptr,result_count + (emitkey != 0));
 }
 
 /* ZPOPMIN key [<count>] */
@@ -3985,7 +4015,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
     int uniq = 1;
     robj_roptr zsetobj;
 
-    if ((zsetobj = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp]))
+    if ((zsetobj = lookupKeyReadOrReply(c, c->argv[1], shared.emptyarray))
         == nullptr || checkType(c, zsetobj, OBJ_ZSET)) return;
     size = zsetLength(zsetobj);
 
@@ -4021,7 +4051,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
                     addReplyArrayLen(c,2);
                 addReplyBulkCBuffer(c, key, sdslen(key));
                 if (withscores)
-                    addReplyDouble(c, dictGetDoubleVal(de));
+                    addReplyDouble(c, *(double*)dictGetVal(de));
             }
         } else if (zsetobj->encoding == OBJ_ENCODING_ZIPLIST) {
             ziplistEntry *keys, *vals = NULL;
@@ -4170,7 +4200,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
     }
 }
 
-/* ZRANDMEMBER [<count> WITHSCORES] */
+/* ZRANDMEMBER key [<count> [WITHSCORES]] */
 void zrandmemberCommand(client *c) {
     long l;
     int withscores = 0;

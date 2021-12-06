@@ -131,6 +131,11 @@
 #define RDBFLAGS_REPLICATION (1<<1)     /* Load/save for SYNC. */
 #define RDBFLAGS_ALLOW_DUP (1<<2)       /* Allow duplicated keys when loading.*/
 
+/* When rdbLoadObject() returns NULL, the err flag is
+ * set to hold the type of error that occurred */
+#define RDB_LOAD_ERR_EMPTY_KEY  1   /* Error of empty key */
+#define RDB_LOAD_ERR_OTHER      2   /* Any other errors */
+
 int rdbSaveType(rio *rdb, unsigned char type);
 int rdbLoadType(rio *rdb);
 int rdbSaveTime(rio *rdb, time_t t);
@@ -154,7 +159,7 @@ int rdbSaveS3(char *path, const redisDbPersistentDataSnapshot **rgpdb, rdbSaveIn
 int rdbLoadS3(char *path, rdbSaveInfo *rsi, int rdbflags);
 ssize_t rdbSaveObject(rio *rdb, robj_roptr o, robj_roptr key);
 size_t rdbSavedObjectLen(robj *o, robj *key);
-robj *rdbLoadObject(int type, rio *rdb, sds key, uint64_t mvcc_tstamp);
+robj *rdbLoadObject(int type, rio *rdb, sds key, int *error, uint64_t mvcc_tstamp);
 void backgroundSaveDoneHandler(int exitcode, bool fCancelled);
 int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime);
 ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt);

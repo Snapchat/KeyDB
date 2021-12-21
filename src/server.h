@@ -96,6 +96,7 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "connection.h" /* Connection abstraction */
 #include "serverassert.h"
 #include "expire.h"
+#include "readwritelock.h"
 
 #define REDISMODULE_CORE 1
 #include "redismodule.h"    /* Redis modules API defines. */
@@ -2113,6 +2114,7 @@ typedef struct {
 
 //extern struct redisServer server;
 extern redisServer *g_pserver;
+extern readWriteLock *g_forkLock;
 extern struct redisServerConst cserver;
 extern __thread struct redisServerThreadVars *serverTL;   // thread local server vars
 extern struct sharedObjectsStruct shared;

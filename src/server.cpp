@@ -67,6 +67,7 @@
 #include "aelocker.h"
 #include "motd.h"
 #include "t_nhash.h"
+#include "readwritelock.h"
 #ifdef __linux__
 #include <sys/prctl.h>
 #include <sys/mman.h>
@@ -91,8 +92,10 @@ double R_Zero, R_PosInf, R_NegInf, R_Nan;
 /* Global vars */
 namespace GlobalHidden {
 struct redisServer server; /* Server global state */
+readWriteLock forkLock;
 }
 redisServer *g_pserver = &GlobalHidden::server;
+readWriteLock *g_forkLock = &GlobalHidden::forkLock;
 struct redisServerConst cserver;
 __thread struct redisServerThreadVars *serverTL = NULL;   // thread local server vars
 std::mutex time_thread_mutex;
@@ -2629,6 +2632,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         sleeping_threads++;
         serverAssert(sleeping_threads <= cserver.cthreads);
     }
+
+    g_forkLock->releaseRead();
     
     /* Determine whether the modules are enabled before sleeping, and use that result
        both here, and after wakeup to avoid double acquire or release of the GIL */
@@ -2651,6 +2656,7 @@ void afterSleep(struct aeEventLoop *eventLoop) {
     if (!ProcessingEventsWhileBlocked) {
         wakeTimeThread();
         if (serverTL->modulesEnabledThisAeLoop) moduleAcquireGIL(TRUE /*fServerThread*/);
+        g_forkLock->acquireRead();
     }
 }
 

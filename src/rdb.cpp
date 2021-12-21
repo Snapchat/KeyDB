@@ -1511,6 +1511,8 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
 
     g_pserver->dirty_before_bgsave = g_pserver->dirty;
     g_pserver->lastbgsave_try = time(NULL);
+    g_forkLock->releaseRead();
+    g_forkLock->acquireWrite();
 
     if ((childpid = redisFork(CHILD_TYPE_RDB)) == 0) {
         int retval;
@@ -1524,6 +1526,8 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
         }
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
+        g_forkLock->releaseWrite();
+        g_forkLock->acquireRead();
         /* Parent */
         if (childpid == -1) {
             g_pserver->lastbgsave_status = C_ERR;

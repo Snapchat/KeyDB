@@ -2654,9 +2654,9 @@ void afterSleep(struct aeEventLoop *eventLoop) {
        Don't check here that modules are enabled, rather use the result from beforeSleep
        Otherwise you may double acquire the GIL and cause deadlocks in the module */
     if (!ProcessingEventsWhileBlocked) {
-        wakeTimeThread();
         if (serverTL->modulesEnabledThisAeLoop) moduleAcquireGIL(TRUE /*fServerThread*/);
         g_forkLock->acquireRead();
+        wakeTimeThread();
     }
 }
 
@@ -6567,7 +6567,9 @@ void *timeThreadMain(void*) {
                 time_thread_cv.wait(lock);
             }
         }
+        g_forkLock->acquireRead();
         updateCachedTime();
+        g_forkLock->releaseRead();
         clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, NULL);
     }
 }

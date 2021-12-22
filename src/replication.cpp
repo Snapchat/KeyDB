@@ -1099,8 +1099,8 @@ public:
         flushData();
         for (auto replica : replicas) {
             // Return to original settings
-            //if (!g_pserver->repl_disable_tcp_nodelay)
-            //    connEnableTcpNoDelay(replica->conn);
+            if (!g_pserver->repl_disable_tcp_nodelay)
+                connEnableTcpNoDelay(replica->conn);
         }
     }
 

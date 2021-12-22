@@ -6602,6 +6602,7 @@ void *workerThreadMain(void *parg)
     catch (ShutdownException)
     {
     }
+    g_forkLock->releaseRead();
     moduleReleaseGIL(true);
     serverAssert(!GlobalLocksAcquired());
     aeDeleteEventLoop(el);

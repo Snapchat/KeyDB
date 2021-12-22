@@ -2,36 +2,75 @@
 #include <condition_variable>
 
 class readWriteLock {
-    std::condition_variable m_cv;
     std::mutex m_readLock;
-    std::mutex m_writeLock;
-    std::unique_lock<std::mutex> m_ul;
+    std::recursive_mutex m_writeLock;
+    std::condition_variable m_cv;
     int m_readCount = 0;
-    bool m_wlocked = false;
+    int m_writeCount = 0;
 public:
     void acquireRead() {
         std::unique_lock<std::mutex> rm(m_readLock);
+        while (m_writeCount > 0)
+            m_cv.wait(rm);
         m_readCount++;
     }
-    void acquireWrite() {
-        m_ul = std::unique_lock<std::mutex>(m_readLock);
-        while (m_readCount > 0) {
-            m_cv.wait(m_ul);
-        }
-        m_writeLock.lock();
-        m_wlocked = true;
+    
+    bool tryAcquireRead() {
+        std::unique_lock<std::mutex> rm(m_readLock, std::defer_lock);
+        if (!rm.try_lock())
+            return false;
+        if (m_writeCount > 0)
+            return false;
+        m_readCount++;
+        return true;
     }
+
+    void acquireWrite(bool exclusive = true) {
+        std::unique_lock<std::mutex> rm(m_readLock);
+        while (m_readCount > 0)
+            m_cv.wait(rm);
+        if (exclusive)
+            while(!m_writeLock.try_lock())
+                m_cv.wait(rm);
+        m_writeCount++;
+    }
+
+    bool tryAcquireWrite(bool exclusive = true) {
+        std::unique_lock<std::mutex> rm(m_readLock, std::defer_lock);
+        if (!rm.try_lock())
+            return false;
+        if (m_readCount > 0)
+            return false;
+        if (exclusive)
+            if (!m_writeLock.try_lock())
+                return false;
+        m_writeCount++;
+        return true;
+    }
+
     void releaseRead() {
         std::unique_lock<std::mutex> rm(m_readLock);
+        serverAssert(m_readCount > 0);
         m_readCount--;
         if (m_readCount == 0)
             m_cv.notify_all();
     }
-    void releaseWrite() {
-        serverAssert(m_wlocked);
-        m_wlocked = false;
-        m_writeLock.unlock();
-        m_ul.unlock();
-        m_cv.notify_all();
+
+    void releaseWrite(bool exclusive = true) {
+        std::unique_lock<std::mutex> rm(m_readLock);
+        serverAssert(m_writeCount > 0);
+        if (exclusive)
+            m_writeLock.unlock();
+        m_writeCount--;
+        if (m_writeCount == 0)
+            m_cv.notify_all();
+    }
+
+    bool hasReader() {
+        return m_readCount > 0;
+    }
+
+    bool hasWriter() {
+        return m_writeCount > 0;
     }
 };

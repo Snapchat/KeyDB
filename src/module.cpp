@@ -365,11 +365,7 @@ typedef struct RedisModuleCommandFilter {
 static list *moduleCommandFilters;
 
 /* Module GIL Variables */
-static int s_cAcquisitionsServer = 0;
-static int s_cAcquisitionsModule = 0;
-static std::mutex s_mutex;
-static std::condition_variable s_cv;
-static std::recursive_mutex s_mutexModule;
+static readWriteLock s_moduleGIL;
 thread_local bool g_fModuleThread = false;
 
 typedef void (*RedisModuleForkDoneHandler) (int exitcode, int bysignal, void *user_data);
@@ -5962,95 +5958,58 @@ void RM_ThreadSafeContextUnlock(RedisModuleCtx *ctx) {
 //  as the server thread acquisition is sufficient.  If we did try to lock we would deadlock
 static bool FModuleCallBackLock(bool fServerThread)
 {
-    return !fServerThread && aeThreadOwnsLock() && !g_fModuleThread && s_cAcquisitionsServer > 0;
+    return !fServerThread && aeThreadOwnsLock() && !g_fModuleThread && s_moduleGIL.hasReader();
 }
 void moduleAcquireGIL(int fServerThread, int fExclusive) {
-    std::unique_lock<std::mutex> lock(s_mutex);
-    int *pcheck = fServerThread ? &s_cAcquisitionsModule : &s_cAcquisitionsServer;
-
     if (FModuleCallBackLock(fServerThread)) {
         return;
     }
 
-    while (*pcheck > 0)
-        s_cv.wait(lock);
-
     if (fServerThread)
     {
-        ++s_cAcquisitionsServer;
+        s_moduleGIL.acquireRead();
     }
     else
     {
-        // only try to acquire the mutexModule in exclusive mode 
-        if (fExclusive){
-            // It is possible that another module thread holds the GIL (and s_mutexModule as a result). 
-            // When said thread goes to release the GIL, it will wait for s_mutex, which this thread owns. 
-            // This thread is however waiting for the GIL (and s_mutexModule) that the other thread owns.
-            // As a result, a deadlock has occured. 
-            // We release the lock on s_mutex and wait until we are able to safely acquire the GIL 
-            // in order to prevent this deadlock from occuring. 
-            while (!s_mutexModule.try_lock())
-                s_cv.wait(lock);     
-        }    
-        ++s_cAcquisitionsModule;
-        fModuleGILWlocked++;
+        s_moduleGIL.acquireWrite(fExclusive);
     }
 }
 
 int moduleTryAcquireGIL(bool fServerThread, int fExclusive) {
-    std::unique_lock<std::mutex> lock(s_mutex, std::defer_lock);
-    if (!lock.try_lock())
-        return 1;
-    int *pcheck = fServerThread ? &s_cAcquisitionsModule : &s_cAcquisitionsServer;
-
     if (FModuleCallBackLock(fServerThread)) {
         return 0;
     }
 
-    if (*pcheck > 0)
-        return 1;
-
     if (fServerThread)
     {
-        ++s_cAcquisitionsServer;
+        if (!s_moduleGIL.tryAcquireRead())
+            return 1;
     }
     else
     {
-        // only try to acquire the mutexModule in exclusive mode 
-        if (fExclusive){
-            if (!s_mutexModule.try_lock())
-                return 1;
-        }
-        ++s_cAcquisitionsModule;
-        fModuleGILWlocked++;
+        if (!s_moduleGIL.tryAcquireWrite(fExclusive))
+            return 1;
     }
     return 0;
 }
 
 void moduleReleaseGIL(int fServerThread, int fExclusive) {
-    std::unique_lock<std::mutex> lock(s_mutex);
-
     if (FModuleCallBackLock(fServerThread)) {
         return;
     }
-
+    
     if (fServerThread)
     {
-        --s_cAcquisitionsServer;
+        s_moduleGIL.releaseRead();
     }
     else
     {
-        // only try to release the mutexModule in exclusive mode
-        if (fExclusive)
-            s_mutexModule.unlock();
-        --s_cAcquisitionsModule;
-        fModuleGILWlocked--;
+        s_moduleGIL.releaseWrite(fExclusive);
     }
-    s_cv.notify_all();
 }
 
 int moduleGILAcquiredByModule(void) {
-    return fModuleGILWlocked > 0;
+    return s_moduleGIL.hasWriter();
 }
 
 

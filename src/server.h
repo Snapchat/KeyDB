@@ -734,6 +734,9 @@ typedef enum {
 #define REDISMODULE_AUX_BEFORE_RDB (1<<0)
 #define REDISMODULE_AUX_AFTER_RDB (1<<1)
 
+/* Number of cycles before time thread gives up fork lock */
+#define MAX_CYCLES_TO_HOLD_FORK_LOCK 10
+
 struct RedisModule;
 struct RedisModuleIO;
 struct RedisModuleDigest;

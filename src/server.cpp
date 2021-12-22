@@ -6573,10 +6573,11 @@ void *timeThreadMain(void*) {
                 g_forkLock->releaseRead();
                 time_thread_cv.wait(lock);
                 g_forkLock->acquireRead();
+                cycle_count = 0;
             }
         }
         updateCachedTime();
-        if (cycle_count == 500) {
+        if (cycle_count == MAX_CYCLES_TO_HOLD_FORK_LOCK) {
             g_forkLock->releaseRead();
             g_forkLock->acquireRead();
             cycle_count = 0;

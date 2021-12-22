@@ -6564,16 +6564,17 @@ void *timeThreadMain(void*) {
     timespec delay;
     delay.tv_sec = 0;
     delay.tv_nsec = 100;
+    g_forkLock->acquireRead();
     while (true) {
         {
             std::unique_lock<std::mutex> lock(time_thread_mutex);
             if (sleeping_threads >= cserver.cthreads) {
+                g_forkLock->releaseRead();
                 time_thread_cv.wait(lock);
+                g_forkLock->acquireRead();
             }
         }
-        g_forkLock->acquireRead();
         updateCachedTime();
-        g_forkLock->releaseRead();
         clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, NULL);
     }
 }

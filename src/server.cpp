@@ -6593,6 +6593,7 @@ void *workerThreadMain(void *parg)
     }
 
     moduleAcquireGIL(true); // Normally afterSleep acquires this, but that won't be called on the first run
+    g_forkLock->acquireRead();
     aeEventLoop *el = g_pserver->rgthreadvar[iel].el;
     try
     {

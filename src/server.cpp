@@ -6564,6 +6564,7 @@ void *timeThreadMain(void*) {
     timespec delay;
     delay.tv_sec = 0;
     delay.tv_nsec = 100;
+    int cycle_count = 0;
     g_forkLock->acquireRead();
     while (true) {
         {
@@ -6575,7 +6576,13 @@ void *timeThreadMain(void*) {
             }
         }
         updateCachedTime();
+        if (cycle_count == 500) {
+            g_forkLock->releaseRead();
+            g_forkLock->acquireRead();
+            cycle_count = 0;
+        }
         clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, NULL);
+        cycle_count++;
     }
 }
 

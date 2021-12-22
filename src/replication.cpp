@@ -2213,6 +2213,7 @@ void saveMasterStatusToStorage()
         }
     }
     g_pserver->metadataDb->insert("repl-masters", 12, (void*)val, sdslen(val), true);
+    sdsfree(val);
 }
 
 /* Change the current instance replication ID with a new, random one.

@@ -1942,7 +1942,9 @@ void ProcessPendingAsyncWrites()
                 bool fResult = c->postFunction([](client *c) {
                     c->fPendingAsyncWriteHandler = false;
                     clientInstallWriteHandler(c);
+                    c->lock.unlock();
                     handleClientsWithPendingWrites(c->iel, g_pserver->aof_state);
+                    c->lock.lock();
                 }, false);
 
                 if (!fResult)

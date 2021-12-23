@@ -9,7 +9,7 @@
 # reconnect with the master, otherwise just the initial synchronization is
 # checked for consistency.
 proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reconnect} {
-    start_server {tags {"repl"}} {
+    start_server [list tags {"repl"} overrides [list storage-provider {flash .rocks.db.m} repl-backlog-size 1m]] {
         start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.db} delete-on-evict no storage-flush-period 10]] {
 
             set master [srv -1 client]
@@ -84,7 +84,7 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
                     fail "Slave still not connected after some time"
                 }  
 
-                set retry 10
+                set retry 20
                 while {$retry && ([$master debug digest] ne [$slave debug digest])}\
                 {
                     after 1000

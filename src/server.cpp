@@ -3395,6 +3395,16 @@ int restartServer(int flags, mstime_t delay) {
         }
     }
 
+    if (flags & RESTART_SERVER_GRACEFULLY) {
+        if (g_pserver->m_pstorageFactory) {
+            saveMasterStatusToStorage(true);
+            for (int idb = 0; idb < cserver.dbnum; ++idb) {
+                g_pserver->db[idb]->storageProviderDelete();
+            }
+            delete g_pserver->metadataDb;
+        }
+    }
+
     /* Execute the server with the original command line. */
     if (delay) usleep(delay*1000);
     zfree(cserver.exec_argv[0]);
@@ -5163,6 +5173,7 @@ int prepareForShutdown(int flags) {
             if (g_pserver->db[idb]->processChanges(false))
                 g_pserver->db[idb]->commitChanges();
         }
+        saveMasterStatusToStorage(true);
     }
 
     /* Fire the shutdown modules event. */
@@ -7591,9 +7602,13 @@ int main(int argc, char **argv) {
     g_pserver->shutdown_asap = true;    // flag that we're in shutdown
     if (!fLockAcquired)
         g_fInCrash = true;  // We don't actually crash right away, because we want to sync any storage providers
+    
+    saveMasterStatusToStorage(true);
     for (int idb = 0; idb < cserver.dbnum; ++idb) {
         g_pserver->db[idb]->storageProviderDelete();
     }
+    delete g_pserver->metadataDb;
+
     // If we couldn't acquire the global lock it means something wasn't shutdown and we'll probably deadlock
     serverAssert(fLockAcquired);
 

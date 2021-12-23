@@ -6562,7 +6562,11 @@ void *timeThreadMain(void*) {
             }
         }
         updateCachedTime();
+#if defined(__APPLE__)
+        nanosleep(&delay, nullptr);
+#else
         clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, NULL);
+#endif
     }
 }
 

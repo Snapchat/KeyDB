@@ -4291,7 +4291,14 @@ RedisModuleCallReply *RM_Call(RedisModuleCtx *ctx, const char *cmdname, const ch
         if (!(flags & REDISMODULE_ARGV_NO_REPLICAS))
             call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
+
+    {
+    aeAcquireLock();
+    std::unique_lock<fastlock> ul(c->lock);
     call(c,call_flags);
+    aeReleaseLock();
+    }
+
     g_pserver->replication_allowed = prev_replication_allowed;
 
     serverAssert((c->flags & CLIENT_BLOCKED) == 0);

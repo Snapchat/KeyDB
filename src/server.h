@@ -2827,6 +2827,7 @@ int redisSetProcTitle(const char *title);
 int validateProcTitleTemplate(const char *_template);
 int redisCommunicateSystemd(const char *sd_notify_msg);
 void redisSetCpuAffinity(const char *cpulist);
+void saveMasterStatusToStorage(bool fShutdown);
 
 /* networking.c -- Networking and Client related operations */
 client *createClient(connection *conn, int iel);

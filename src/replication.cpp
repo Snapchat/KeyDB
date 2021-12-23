@@ -2155,12 +2155,16 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
 
 /* Save the replid of yourself and any connected masters to storage.
  * Returns if no storage provider is used. */
-void saveMasterStatusToStorage()
+void saveMasterStatusToStorage(bool fShutdown)
 {
+    long long tmp = -1;
     if (!g_pserver->m_pstorageFactory || !g_pserver->metadataDb) return;
 
     g_pserver->metadataDb->insert("repl-id", 7, g_pserver->replid, sizeof(g_pserver->replid), true);
-    g_pserver->metadataDb->insert("repl-offset", 11, &g_pserver->master_repl_offset, sizeof(g_pserver->master_repl_offset), true);
+    if (fShutdown)
+        g_pserver->metadataDb->insert("repl-offset", 11, &g_pserver->master_repl_offset, sizeof(g_pserver->master_repl_offset), true);
+    else
+        g_pserver->metadataDb->insert("repl-offset", 11, &tmp, sizeof(g_pserver->master_repl_offset), true);
     if (g_pserver->fActiveReplica || (!listLength(g_pserver->masters) && g_pserver->repl_backlog)) {
         g_pserver->metadataDb->insert("repl-stream-db", 14, g_pserver->replicaseldb == -1 ? 0 : &g_pserver->replicaseldb,
                                         g_pserver->replicaseldb == -1 ? 0 : sizeof(g_pserver->replicaseldb), true);
@@ -2223,7 +2227,7 @@ void saveMasterStatusToStorage()
 void changeReplicationId(void) {
     getRandomHexChars(g_pserver->replid,CONFIG_RUN_ID_SIZE);
     g_pserver->replid[CONFIG_RUN_ID_SIZE] = '\0';
-    saveMasterStatusToStorage();
+    saveMasterStatusToStorage(false);
 }
 
 
@@ -3015,7 +3019,7 @@ void readSyncBulkPayload(connection *conn) {
         g_pserver->master_repl_offset = mi->master->reploff;
         if (g_pserver->repl_batch_offStart >= 0)
             g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
-        saveMasterStatusToStorage();
+        saveMasterStatusToStorage(false);
     }
     clearReplicationId2();
 
@@ -3984,7 +3988,7 @@ struct redisMaster *replicationAddMaster(char *ip, int port) {
             mi->masterhost, mi->masterport);
         connectWithMaster(mi);
     }
-    saveMasterStatusToStorage();
+    saveMasterStatusToStorage(false);
     return mi;
 }
 
@@ -4069,7 +4073,7 @@ void replicationUnsetMaster(redisMaster *mi) {
      * we were still a slave. */
     if (g_pserver->aof_enabled && g_pserver->aof_state == AOF_OFF) restartAOFAfterSYNC();
 
-    saveMasterStatusToStorage();
+    saveMasterStatusToStorage(false);
 }
 
 /* This function is called when the replica lose the connection with the
@@ -4102,7 +4106,7 @@ void replicationHandleMasterDisconnection(redisMaster *mi) {
             connectWithMaster(mi);
         }
 
-        saveMasterStatusToStorage();
+        saveMasterStatusToStorage(false);
     }
 }
 

@@ -2157,7 +2157,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
  * Returns if no storage provider is used. */
 void saveMasterStatusToStorage(bool fShutdown)
 {
-    long long tmp = -1;
+    long long tmp = LONG_LONG_MAX;
     if (!g_pserver->m_pstorageFactory || !g_pserver->metadataDb) return;
 
     g_pserver->metadataDb->insert("repl-id", 7, g_pserver->replid, sizeof(g_pserver->replid), true);

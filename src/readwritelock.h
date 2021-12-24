@@ -7,11 +7,11 @@ class readWriteLock {
     std::condition_variable m_cv;
     int m_readCount = 0;
     int m_writeCount = 0;
-    bool writeWaiting = false;
+    bool m_writeWaiting = false;
 public:
     void acquireRead() {
         std::unique_lock<std::mutex> rm(m_readLock);
-        while (m_writeCount > 0 || writeWaiting)
+        while (m_writeCount > 0 || m_writeWaiting)
             m_cv.wait(rm);
         m_readCount++;
     }
@@ -20,7 +20,7 @@ public:
         std::unique_lock<std::mutex> rm(m_readLock, std::defer_lock);
         if (!rm.try_lock())
             return false;
-        if (m_writeCount > 0 || writeWaiting)
+        if (m_writeCount > 0 || m_writeWaiting)
             return false;
         m_readCount++;
         return true;
@@ -28,7 +28,7 @@ public:
 
     void acquireWrite(bool exclusive = true) {
         std::unique_lock<std::mutex> rm(m_readLock);
-        writeWaiting = true;
+        m_writeWaiting = true;
         while (m_readCount > 0)
             m_cv.wait(rm);
         if (exclusive) {
@@ -39,12 +39,12 @@ public:
                 m_cv.wait(rm);
         }
         m_writeCount++;
-        writeWaiting = false;
+        m_writeWaiting = false;
     }
 
     void upgradeWrite(bool exclusive = true) {
         std::unique_lock<std::mutex> rm(m_readLock);
-        writeWaiting = true;
+        m_writeWaiting = true;
         while (m_readCount > 1)
             m_cv.wait(rm);
         if (exclusive) {
@@ -56,7 +56,7 @@ public:
         }
         m_writeCount++;
         m_readCount--;
-        writeWaiting = false;
+        m_writeWaiting = false;
     }
 
     bool tryAcquireWrite(bool exclusive = true) {
@@ -94,7 +94,7 @@ public:
         if (exclusive)
             m_writeLock.unlock();
         m_writeCount--;
-        while (m_writeCount > 0 || writeWaiting)
+        while (m_writeCount > 0 || m_writeWaiting)
             m_cv.wait(rm);
         m_readCount++;
     }
@@ -105,5 +105,9 @@ public:
 
     bool hasWriter() {
         return m_writeCount > 0;
+    }
+
+    bool writeWaiting() {
+        return m_writeWaiting;
     }
 };

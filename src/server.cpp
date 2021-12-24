@@ -6282,7 +6282,9 @@ int redisFork(int purpose) {
         openChildInfoPipe();
     }
     g_forkLock->releaseRead();
+    long long startWriteLock = ustime();
     executeWithoutGlobalLock([](std::vector<client*>&){ g_forkLock->acquireWrite(); });
+    latencyAddSampleIfNeeded("fork-lock",(ustime()-startWriteLock)/1000);
     if ((childpid = fork()) == 0) {
         /* Child */
         g_pserver->in_fork_child = purpose;

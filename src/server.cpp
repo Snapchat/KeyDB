@@ -6238,7 +6238,7 @@ void executeWithoutGlobalLock(std::function<void(std::vector<client*>&)> func) {
     {
         client *c = (client*)listNodeValue(ln);
         if (c->lock.fOwnLock()) {
-            //serverAssert(c->flags & CLIENT_PROTECTED);  // If the client is not protected we have no gurantee they won't be free'd in the event loop
+            serverAssert(c->flags & CLIENT_PROTECTED || c->flags & CLIENT_EXECUTING_COMMAND);  // If the client is not protected we have no gurantee they won't be free'd in the event loop
             c->lock.unlock();
             vecclients.push_back(c);
         }

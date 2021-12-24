@@ -42,6 +42,23 @@ public:
         writeWaiting = false;
     }
 
+    void upgradeWrite(bool exclusive = true) {
+        std::unique_lock<std::mutex> rm(m_readLock);
+        writeWaiting = true;
+        while (m_readCount > 1)
+            m_cv.wait(rm);
+        if (exclusive) {
+            /* Another thread might have the write lock while we have the read lock
+               but won't be able to release it until they can acquire the read lock
+               so release the read lock and try again instead of waiting to avoid deadlock */
+            while(!m_writeLock.try_lock())
+                m_cv.wait(rm);
+        }
+        m_writeCount++;
+        m_readCount--;
+        writeWaiting = false;
+    }
+
     bool tryAcquireWrite(bool exclusive = true) {
         std::unique_lock<std::mutex> rm(m_readLock, std::defer_lock);
         if (!rm.try_lock())
@@ -69,6 +86,17 @@ public:
             m_writeLock.unlock();
         m_writeCount--;
         m_cv.notify_all();
+    }
+
+    void downgradeWrite(bool exclusive = true) {
+        std::unique_lock<std::mutex> rm(m_readLock);
+        serverAssert(m_writeCount > 0);
+        if (exclusive)
+            m_writeLock.unlock();
+        m_writeCount--;
+        while (m_writeCount > 0 || writeWaiting)
+            m_cv.wait(rm);
+        m_readCount++;
     }
 
     bool hasReader() {

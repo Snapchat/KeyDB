@@ -6282,7 +6282,7 @@ int redisFork(int purpose) {
         openChildInfoPipe();
     }
     
-    executeWithoutGlobalLock([](std::vector<client*>&){ g_forkLock->releaseRead(); g_forkLock->acquireWrite(); });
+    executeWithoutGlobalLock([](std::vector<client*>&){ g_forkLock->upgradeWrite(); });
     if ((childpid = fork()) == 0) {
         /* Child */
         g_pserver->in_fork_child = purpose;
@@ -6291,7 +6291,7 @@ int redisFork(int purpose) {
         closeChildUnusedResourceAfterFork();
     } else {
         /* Parent */
-        executeWithoutGlobalLock([](std::vector<client*>&){ g_forkLock->releaseWrite(); g_forkLock->acquireRead(); });
+        executeWithoutGlobalLock([](std::vector<client*>&){ g_forkLock->downgradeWrite(); });
         g_pserver->stat_total_forks++;
         g_pserver->stat_fork_time = ustime()-start;
         g_pserver->stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / g_pserver->stat_fork_time / (1024*1024*1024); /* GB per second. */

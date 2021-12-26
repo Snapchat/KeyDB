@@ -2165,18 +2165,20 @@ void saveMasterStatusToStorage(bool fShutdown)
         g_pserver->metadataDb->insert("repl-offset", 11, &g_pserver->master_repl_offset, sizeof(g_pserver->master_repl_offset), true);
     else
         g_pserver->metadataDb->insert("repl-offset", 11, &tmp, sizeof(g_pserver->master_repl_offset), true);
+
     if (g_pserver->fActiveReplica || (!listLength(g_pserver->masters) && g_pserver->repl_backlog)) {
-        g_pserver->metadataDb->insert("repl-stream-db", 14, g_pserver->replicaseldb == -1 ? 0 : &g_pserver->replicaseldb,
-                                        g_pserver->replicaseldb == -1 ? 0 : sizeof(g_pserver->replicaseldb), true);
-    }
+        int zero = 0;
+        g_pserver->metadataDb->insert("repl-stream-db", 14, g_pserver->replicaseldb == -1 ? &zero : &g_pserver->replicaseldb,
+                                        sizeof(g_pserver->replicaseldb), true);
+    } else {
+        struct redisMaster *miFirst = (redisMaster*)(listLength(g_pserver->masters) ? listNodeValue(listFirst(g_pserver->masters)) : NULL);
 
-    struct redisMaster *miFirst = (redisMaster*)(listLength(g_pserver->masters) ? listNodeValue(listFirst(g_pserver->masters)) : NULL);
-
-    if (miFirst && miFirst->master) {
-        g_pserver->metadataDb->insert("repl-stream-db", 14, &miFirst->master->db->id, sizeof(miFirst->master->db->id), true);
-    }
-    else if (miFirst && miFirst->cached_master) {
-        g_pserver->metadataDb->insert("repl-stream-db", 14, &miFirst->cached_master->db->id, sizeof(miFirst->cached_master->db->id), true);
+        if (miFirst && miFirst->master) {
+            g_pserver->metadataDb->insert("repl-stream-db", 14, &miFirst->master->db->id, sizeof(miFirst->master->db->id), true);
+        }
+        else if (miFirst && miFirst->cached_master) {
+            g_pserver->metadataDb->insert("repl-stream-db", 14, &miFirst->cached_master->db->id, sizeof(miFirst->cached_master->db->id), true);
+        }
     }
 
     if (listLength(g_pserver->masters) == 0) {

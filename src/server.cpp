@@ -3397,7 +3397,6 @@ int restartServer(int flags, mstime_t delay) {
 
     if (flags & RESTART_SERVER_GRACEFULLY) {
         if (g_pserver->m_pstorageFactory) {
-            saveMasterStatusToStorage(true);
             for (int idb = 0; idb < cserver.dbnum; ++idb) {
                 g_pserver->db[idb]->storageProviderDelete();
             }
@@ -4003,14 +4002,21 @@ void initServer(void) {
                 }
             });
             g_pserver->metadataDb->retrieve("repl-offset", 11, [&](const char *, size_t, const void *data, size_t cb){
-                if (cb == sizeof(g_pserver->replid)) {
+                if (cb == sizeof(g_pserver->master_repl_offset)) {
                     g_pserver->master_repl_offset = *(long long*)data;
                 }
             });
 
+            int repl_stream_db = -1;
+            g_pserver->metadataDb->retrieve("repl-stream-db", 14, [&](const char *, size_t, const void *data, size_t){
+                repl_stream_db = *(int*)data;
+            });
+
+            /* !!! AFTER THIS POINT WE CAN NO LONGER READ FROM THE META DB AS IT WILL BE OVERWRITTEN !!! */
+            // replicationCacheMasterUsingMyself triggers the overwrite 
+
             listIter li;
             listNode *ln;
-                
             listRewind(g_pserver->masters, &li);
             while ((ln = listNext(&li)))
             {
@@ -4019,9 +4025,7 @@ void initServer(void) {
                 * information, in order to allow partial resynchronizations
                 * with masters. */
                 replicationCacheMasterUsingMyself(mi);
-                g_pserver->metadataDb->retrieve("repl-stream-db", 14, [&](const char *, size_t, const void *data, size_t){
-                    selectDb(mi->cached_master, *(int*)data);
-                });
+                selectDb(mi->cached_master, repl_stream_db);
             }
         }
     }
@@ -4031,6 +4035,8 @@ void initServer(void) {
     {
         g_pserver->db[idb]->storageProviderInitialize();
     }
+
+    saveMasterStatusToStorage(false); // eliminate the repl-offset field
     
     /* Initialize ACL default password if it exists */
     ACLUpdateDefaultUserPassword(g_pserver->requirepass);

@@ -6,11 +6,11 @@ proc prepare_value {size} {
     return $_v
 }
 
-start_server {tags {"replication-fast"} overrides {storage-provider {flash ./rocks.db.master}}} {
+start_server {tags {"replication-fast"} overrides {storage-provider {flash ./rocks.db.master} databases 256}} {
     set slave [srv 0 client]
     set slave_host [srv 0 host]
     set slave_port [srv 0 port]
-    start_server {tags {} overrides {storage-provider {flash ./rocks.db.replica}}} {
+    start_server {tags {} overrides {storage-provider {flash ./rocks.db.replica} databases 256}} {
         set master [srv 0 client]
         set master_host [srv 0 host]
         set master_port [srv 0 port]

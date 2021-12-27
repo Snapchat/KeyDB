@@ -2157,14 +2157,13 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type)
  * Returns if no storage provider is used. */
 void saveMasterStatusToStorage(bool fShutdown)
 {
-    long long tmp = LONG_LONG_MAX;
     if (!g_pserver->m_pstorageFactory || !g_pserver->metadataDb) return;
 
     g_pserver->metadataDb->insert("repl-id", 7, g_pserver->replid, sizeof(g_pserver->replid), true);
     if (fShutdown)
         g_pserver->metadataDb->insert("repl-offset", 11, &g_pserver->master_repl_offset, sizeof(g_pserver->master_repl_offset), true);
     else
-        g_pserver->metadataDb->insert("repl-offset", 11, &tmp, sizeof(g_pserver->master_repl_offset), true);
+        g_pserver->metadataDb->erase("repl-offset", 11);
 
     if (g_pserver->fActiveReplica || (!listLength(g_pserver->masters) && g_pserver->repl_backlog)) {
         int zero = 0;
@@ -2527,6 +2526,8 @@ bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi
             while (sdslen(mi->bulkreadBuffer) > offset) {
                 // Pop completed items
                 mi->parseState->trimState();
+                if (mi->parseState->depth() == 0)
+                    break;
 
                 if (mi->bulkreadBuffer[offset] == '*') {
                     // Starting an array
@@ -2609,8 +2610,6 @@ bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi
         return false;
 
     serverLog(LL_NOTICE, "Fast sync complete");
-    sdsfree(mi->bulkreadBuffer);
-    mi->bulkreadBuffer = nullptr;
     delete mi->parseState;
     mi->parseState = nullptr;
     return true;
@@ -2996,6 +2995,18 @@ void readSyncBulkPayload(connection *conn) {
 
     /* Final setup of the connected slave <- master link */
     replicationCreateMasterClient(mi,mi->repl_transfer_s,rsi.repl_stream_db);
+    if (mi->isRocksdbSnapshotRepl) {
+        /* We need to handle the case where the initial querybuf data was read by fast sync */
+        /* This should match the work readQueryFromClient would do for a master client */
+        mi->master->querybuf = sdscatsds(mi->master->querybuf, mi->bulkreadBuffer);
+        sdsfree(mi->bulkreadBuffer);
+        mi->bulkreadBuffer = nullptr;
+
+        mi->master->pending_querybuf = sdscatlen(mi->master->pending_querybuf,
+            mi->master->querybuf,sdslen(mi->master->querybuf));
+
+        mi->master->read_reploff += sdslen(mi->master->querybuf);
+    }
     mi->repl_transfer_s = nullptr;
     mi->repl_state = REPL_STATE_CONNECTED;
     mi->repl_down_since = 0;
@@ -3043,6 +3054,8 @@ void readSyncBulkPayload(connection *conn) {
      * will trigger an AOF rewrite, and when done will start appending
      * to the new file. */
     if (g_pserver->aof_enabled) restartAOFAfterSYNC();
+    if (mi->isRocksdbSnapshotRepl)
+        readQueryFromClient(conn); // There may be querybuf data we just appeneded
     return;
 }
 

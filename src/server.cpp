@@ -6224,7 +6224,7 @@ void closeChildUnusedResourceAfterFork() {
     cserver.pidfile = NULL;
 }
 
-void executeWithoutGlobalLock(std::function<void(std::vector<client*>&)> func) {
+void executeWithoutGlobalLock(std::function<void()> func) {
     serverAssert(GlobalLocksAcquired());
 
     std::vector<client*> vecclients;
@@ -6254,7 +6254,18 @@ void executeWithoutGlobalLock(std::function<void(std::vector<client*>&)> func) {
 
     aeReleaseLock();
     serverAssert(!GlobalLocksAcquired());
-    func(vecclients);
+    try {
+        func();
+    }
+    catch (...) {
+        // Caller expects us to be locked so fix and rethrow
+        AeLocker locker;
+        locker.arm(nullptr);
+        locker.release();
+        for (client *c : vecclients)
+            c->lock.lock();
+        throw;
+    }
     
     AeLocker locker;
     locker.arm(nullptr);
@@ -6283,7 +6294,7 @@ int redisFork(int purpose) {
     }
     g_forkLock->releaseRead();
     long long startWriteLock = ustime();
-    executeWithoutGlobalLock([](std::vector<client*>&){ g_forkLock->acquireWrite(); });
+    executeWithoutGlobalLock([](){ g_forkLock->acquireWrite(); });
     latencyAddSampleIfNeeded("fork-lock",(ustime()-startWriteLock)/1000);
     if ((childpid = fork()) == 0) {
         /* Child */

@@ -2501,7 +2501,7 @@ void sendChildInfo(childInfoType info_type, size_t keys, const char *pname);
 void receiveChildInfo(void);
 
 /* Fork helpers */
-void executeWithoutGlobalLock(std::function<void(std::vector<client*>&)> func);
+void executeWithoutGlobalLock(std::function<void()> func);
 int redisFork(int type);
 int hasActiveChildProcess();
 void resetChildState();

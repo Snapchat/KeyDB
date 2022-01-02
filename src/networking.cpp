@@ -3864,7 +3864,7 @@ int checkClientPauseTimeoutAndReturnIfPaused(void) {
 void processEventsWhileBlocked(int iel) {
 
     int eventsCount = 0;
-    executeWithoutGlobalLock([&](std::vector<client*>& vecclients){
+    executeWithoutGlobalLock([&](){
         int iterations = 4; /* See the function top-comment. */
         try
         {
@@ -3884,13 +3884,7 @@ void processEventsWhileBlocked(int iel) {
         }
         catch (...)
         {
-            // Caller expects us to be locked so fix and rethrow
             ProcessingEventsWhileBlocked = 0;
-            AeLocker locker;
-            locker.arm(nullptr);
-            locker.release();
-            for (client *c : vecclients)
-                c->lock.lock();
             throw;
         }
     });

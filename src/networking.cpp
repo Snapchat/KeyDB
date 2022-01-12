@@ -2522,9 +2522,6 @@ void readQueryFromClient(connection *conn) {
     size_t qblen;
 
     serverAssert(FCorrectThread(c));
-
-    if (g_forkLock->writeWaiting())
-        return;
     
     AeLocker aelock;
     AssertCorrectThread(c);

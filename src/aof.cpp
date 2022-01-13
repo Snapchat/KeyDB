@@ -131,7 +131,7 @@ void installAofRewriteEvent()
         g_pserver->aof_rewrite_pending = true;
         int res = aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [] {
             g_pserver->aof_rewrite_pending = false;
-            if (g_pserver->aof_pipe_write_data_to_child >= 0)
+            if (!g_pserver->aof_stop_sending_diff && g_pserver->aof_pipe_write_data_to_child >= 0)
                 aeCreateFileEvent(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, g_pserver->aof_pipe_write_data_to_child, AE_WRITABLE, aofChildWriteDiffData, NULL);
         });
         if (res != AE_OK)

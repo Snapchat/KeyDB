@@ -89,6 +89,11 @@ typedef struct bkinfo {
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
     serverAssert(GlobalLocksAcquired());
+    /* Master client should never be blocked unless pause or module */
+    serverAssert(!(c->flags & CLIENT_MASTER &&
+                   btype != BLOCKED_MODULE &&
+                   btype != BLOCKED_PAUSE));
+
     c->flags |= CLIENT_BLOCKED;
     c->btype = btype;
     g_pserver->blocked_clients++;
@@ -587,7 +592,6 @@ void handleClientsBlockedOnKeys(void) {
              * lookup, invalidating the first one.
              * See https://github.com/redis/redis/pull/6554. */
             serverTL->fixed_time_expire++;
-            updateCachedTime(0);
 
             /* Serve clients blocked on the key. */
             robj *o = lookupKeyWrite(rl->db,rl->key);

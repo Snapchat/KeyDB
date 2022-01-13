@@ -6940,7 +6940,7 @@ void loadDataFromDisk(void) {
         if (loadAppendOnlyFile(g_pserver->aof_filename) == C_OK)
             serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     } else if (g_pserver->rdb_filename != NULL || g_pserver->rdb_s3bucketpath != NULL) {
-        rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+        rdbSaveInfo rsi;
         rsi.fForceSetKey = false;
         errno = 0; /* Prevent a stale value from affecting error checking */
         if (rdbLoad(&rsi,RDBFLAGS_NONE) == C_OK) {
@@ -6969,11 +6969,23 @@ void loadDataFromDisk(void) {
                 while ((ln = listNext(&li)))
                 {
                     redisMaster *mi = (redisMaster*)listNodeValue(ln);
-                    /* If we are a replica, create a cached master from this
-                    * information, in order to allow partial resynchronizations
-                    * with masters. */
-                    replicationCacheMasterUsingMyself(mi);
-                    selectDb(mi->cached_master,rsi.repl_stream_db);
+                    if (g_pserver->fActiveReplica) {
+                        for (size_t i = 0; i < rsi.numMasters(); i++) {
+                            if (!strcmp(mi->masterhost, rsi.masters[i].masterhost) && mi->masterport == rsi.masters[i].masterport) {
+                                memcpy(mi->master_replid, rsi.masters[i].master_replid, sizeof(mi->master_replid));
+                                mi->master_initial_offset = rsi.masters[i].master_initial_offset;
+                                replicationCacheMasterUsingMaster(mi);
+                                serverLog(LL_NOTICE, "Cached master recovered from RDB for %s:%d", mi->masterhost, mi->masterport);
+                            }
+                        }
+                    }
+                    else {
+                        /* If we are a replica, create a cached master from this
+                        * information, in order to allow partial resynchronizations
+                        * with masters. */
+                        replicationCacheMasterUsingMyself(mi);
+                        selectDb(mi->cached_master,rsi.repl_stream_db);
+                    }
                 }
             }
         } else if (errno != ENOENT) {
@@ -7596,7 +7608,7 @@ int main(int argc, char **argv) {
             __AFL_INIT();
 #endif
             rio rdb;
-            rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+            rdbSaveInfo rsi;
             startLoadingFile(stdin, (char*)"stdin", 0);
             rioInitWithFile(&rdb,stdin);
             rdbLoadRio(&rdb,0,&rsi);

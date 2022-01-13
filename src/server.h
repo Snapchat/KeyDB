@@ -1850,6 +1850,43 @@ struct redisMemOverhead {
     } *db;
 };
 
+
+struct redisMaster {
+    char *masteruser;               /* AUTH with this user and masterauth with master */
+    char *masterauth;               /* AUTH with this password with master */
+    char *masterhost;               /* Hostname of master */
+    int masterport;                 /* Port of master */
+    client *cached_master;          /* Cached master to be reused for PSYNC. */
+    client *master;
+    /* The following two fields is where we store master PSYNC replid/offset
+     * while the PSYNC is in progress. At the end we'll copy the fields into
+     * the server->master client structure. */
+    char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid. */
+    long long master_initial_offset;           /* Master PSYNC offset. */
+
+    bool isActive = false;
+    bool isRocksdbSnapshotRepl = false;
+    int repl_state;          /* Replication status if the instance is a replica */
+    off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
+    off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
+    off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
+    connection *repl_transfer_s;     /* Slave -> Master SYNC socket */
+    int repl_transfer_fd;    /* Slave -> Master SYNC temp file descriptor */
+    char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
+    time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
+    time_t repl_down_since; /* Unix time at which link with master went down */
+
+    class SnapshotPayloadParseState *parseState;
+    sds bulkreadBuffer = nullptr;
+
+    unsigned char master_uuid[UUID_BINARY_LEN];  /* Used during sync with master, this is our master's UUID */
+                                                /* After we've connected with our master use the UUID in g_pserver->master */
+    uint64_t mvccLastSync;
+    /* During a handshake the server may have stale keys, we track these here to share once a reciprocal connection is made */
+    std::map<int, std::vector<robj_sharedptr>> *staleKeyMap;
+    int ielReplTransfer = -1;
+};
+
 /* This structure can be optionally passed to RDB save/load functions in
  * order to implement additional functionalities, by storing and loading
  * metadata to the RDB file.
@@ -1858,7 +1895,66 @@ struct redisMemOverhead {
  * replication in order to make sure that chained slaves (slaves of slaves)
  * select the correct DB and are able to accept the stream coming from the
  * top-level master. */
-typedef struct rdbSaveInfo {
+class rdbSaveInfo {
+public:
+    rdbSaveInfo() {
+        repl_stream_db = -1;
+        repl_id_is_set = 0;
+        memcpy(repl_id, "0000000000000000000000000000000000000000", sizeof(repl_id));
+        repl_offset = -1;
+        fForceSetKey = TRUE;
+        mvccMinThreshold = 0;
+        masters = nullptr;
+        masterCount = 0;
+    }
+    rdbSaveInfo(const rdbSaveInfo &other) {
+        repl_stream_db = other.repl_stream_db;
+        repl_id_is_set = other.repl_id_is_set;
+        memcpy(repl_id, other.repl_id, sizeof(repl_id));
+        repl_offset = other.repl_offset;
+        fForceSetKey = other.fForceSetKey;
+        mvccMinThreshold = other.mvccMinThreshold;
+        masters = (struct redisMaster*)malloc(sizeof(struct redisMaster) * other.masterCount);
+        memcpy(masters, other.masters, sizeof(struct redisMaster) * other.masterCount);
+        masterCount = other.masterCount;
+    }
+    rdbSaveInfo(rdbSaveInfo &&other) : rdbSaveInfo() {
+        swap(*this, other);
+    }
+    rdbSaveInfo &operator=(rdbSaveInfo other) {
+        swap(*this, other);
+        return *this;
+    }
+    ~rdbSaveInfo() {
+        free(masters);
+    }
+    friend void swap(rdbSaveInfo &first, rdbSaveInfo &second) {
+        std::swap(first.repl_stream_db, second.repl_stream_db);
+        std::swap(first.repl_id_is_set, second.repl_id_is_set);
+        std::swap(first.repl_id, second.repl_id);
+        std::swap(first.repl_offset, second.repl_offset);
+        std::swap(first.fForceSetKey, second.fForceSetKey);
+        std::swap(first.mvccMinThreshold, second.mvccMinThreshold);
+        std::swap(first.masters, second.masters);
+        std::swap(first.masterCount, second.masterCount);
+
+    }
+
+    void addMaster(const struct redisMaster &mi) {
+        masterCount++;
+        if (masters == nullptr) {
+            masters = (struct redisMaster*)malloc(sizeof(struct redisMaster));
+        }
+        else {
+            masters = (struct redisMaster*)realloc(masters, sizeof(struct redisMaster) * masterCount);
+        }
+        memcpy(masters + masterCount - 1, &mi, sizeof(struct redisMaster));
+    }
+
+    size_t numMasters() {
+        return masterCount;
+    }
+
     /* Used saving and loading. */
     int repl_stream_db;  /* DB to select in g_pserver->master client. */
 
@@ -1872,10 +1968,11 @@ typedef struct rdbSaveInfo {
     long long master_repl_offset;
 
     uint64_t mvccMinThreshold;
-    struct redisMaster *mi;
-} rdbSaveInfo;
+    struct redisMaster *masters;
 
-#define RDB_SAVE_INFO_INIT {-1,0,"0000000000000000000000000000000000000000",-1, TRUE, 0, 0, nullptr}
+private:
+    size_t masterCount;
+};
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -2079,42 +2176,6 @@ struct redisServerThreadVars {
     int getRdbKeySaveDelay();
 private:
     int rdb_key_save_delay = -1; // thread local cache
-};
-
-struct redisMaster {
-    char *masteruser;               /* AUTH with this user and masterauth with master */
-    char *masterauth;               /* AUTH with this password with master */
-    char *masterhost;               /* Hostname of master */
-    int masterport;                 /* Port of master */
-    client *cached_master;          /* Cached master to be reused for PSYNC. */
-    client *master;
-    /* The following two fields is where we store master PSYNC replid/offset
-     * while the PSYNC is in progress. At the end we'll copy the fields into
-     * the server->master client structure. */
-    char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid. */
-    long long master_initial_offset;           /* Master PSYNC offset. */
-
-    bool isActive = false;
-    bool isRocksdbSnapshotRepl = false;
-    int repl_state;          /* Replication status if the instance is a replica */
-    off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
-    off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
-    off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
-    connection *repl_transfer_s;     /* Slave -> Master SYNC socket */
-    int repl_transfer_fd;    /* Slave -> Master SYNC temp file descriptor */
-    char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
-    time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
-    time_t repl_down_since; /* Unix time at which link with master went down */
-
-    class SnapshotPayloadParseState *parseState;
-    sds bulkreadBuffer = nullptr;
-
-    unsigned char master_uuid[UUID_BINARY_LEN];  /* Used during sync with master, this is our master's UUID */
-                                                /* After we've connected with our master use the UUID in g_pserver->master */
-    uint64_t mvccLastSync;
-    /* During a handshake the server may have stale keys, we track these here to share once a reciprocal connection is made */
-    std::map<int, std::vector<robj_sharedptr>> *staleKeyMap;
-    int ielReplTransfer = -1;
 };
 
 // Const vars are not changed after worker threads are launched
@@ -3101,6 +3162,7 @@ void clearReplicationId2(void);
 void mergeReplicationId(const char *);
 void chopReplicationBacklog(void);
 void replicationCacheMasterUsingMyself(struct redisMaster *mi);
+void replicationCacheMasterUsingMaster(struct redisMaster *mi);
 void feedReplicationBacklog(const void *ptr, size_t len);
 void updateMasterAuth();
 void showLatestBacklog();

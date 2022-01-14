@@ -1359,7 +1359,9 @@ void acceptOnThread(connection *conn, int flags, char *cip)
     }
     rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
 
+    g_forkLock->releaseRead();
     aeAcquireLock();
+    g_forkLock->acquireRead();
     acceptCommonHandler(conn,flags,cip,ielCur);
     aeReleaseLock();
 }

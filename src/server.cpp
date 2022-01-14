@@ -67,6 +67,7 @@
 #include "aelocker.h"
 #include "motd.h"
 #include "t_nhash.h"
+#include "readwritelock.h"
 #ifdef __linux__
 #include <sys/prctl.h>
 #include <sys/mman.h>
@@ -91,8 +92,10 @@ double R_Zero, R_PosInf, R_NegInf, R_Nan;
 /* Global vars */
 namespace GlobalHidden {
 struct redisServer server; /* Server global state */
+readWriteLock forkLock;
 }
 redisServer *g_pserver = &GlobalHidden::server;
+readWriteLock *g_forkLock = &GlobalHidden::forkLock;
 struct redisServerConst cserver;
 __thread struct redisServerThreadVars *serverTL = NULL;   // thread local server vars
 std::mutex time_thread_mutex;
@@ -2649,8 +2652,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
        Don't check here that modules are enabled, rather use the result from beforeSleep
        Otherwise you may double acquire the GIL and cause deadlocks in the module */
     if (!ProcessingEventsWhileBlocked) {
-        wakeTimeThread();
         if (serverTL->modulesEnabledThisAeLoop) moduleAcquireGIL(TRUE /*fServerThread*/);
+        wakeTimeThread();
     }
 }
 
@@ -6218,6 +6221,63 @@ void closeChildUnusedResourceAfterFork() {
     cserver.pidfile = NULL;
 }
 
+void executeWithoutGlobalLock(std::function<void()> func) {
+    serverAssert(GlobalLocksAcquired());
+
+    std::vector<client*> vecclients;
+    listIter li;
+    listNode *ln;
+    listRewind(g_pserver->clients, &li);
+
+    // All client locks must be acquired *after* the global lock is reacquired to prevent deadlocks
+    //  so unlock here, and save them for reacquisition later
+    while ((ln = listNext(&li)) != nullptr)
+    {
+        client *c = (client*)listNodeValue(ln);
+        if (c->lock.fOwnLock()) {
+            serverAssert(c->flags & CLIENT_PROTECTED || c->flags & CLIENT_EXECUTING_COMMAND);  // If the client is not protected we have no gurantee they won't be free'd in the event loop
+            c->lock.unlock();
+            vecclients.push_back(c);
+        }
+    }
+    
+    /* Since we're about to release our lock we need to flush the repl backlog queue */
+    bool fReplBacklog = g_pserver->repl_batch_offStart >= 0;
+    if (fReplBacklog) {
+        flushReplBacklogToClients();
+        g_pserver->repl_batch_idxStart = -1;
+        g_pserver->repl_batch_offStart = -1;
+    }
+
+    aeReleaseLock();
+    serverAssert(!GlobalLocksAcquired());
+    try {
+        func();
+    }
+    catch (...) {
+        // Caller expects us to be locked so fix and rethrow
+        AeLocker locker;
+        locker.arm(nullptr);
+        locker.release();
+        for (client *c : vecclients)
+            c->lock.lock();
+        throw;
+    }
+    
+    AeLocker locker;
+    locker.arm(nullptr);
+    locker.release();
+
+    // Restore it so the calling code is not confused
+    if (fReplBacklog) {
+        g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
+        g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
+    }
+
+    for (client *c : vecclients)
+        c->lock.lock();
+}
+
 /* purpose is one of CHILD_TYPE_ types */
 int redisFork(int purpose) {
     int childpid;
@@ -6229,7 +6289,9 @@ int redisFork(int purpose) {
 
         openChildInfoPipe();
     }
-    
+    long long startWriteLock = ustime();
+    g_forkLock->acquireWrite();
+    latencyAddSampleIfNeeded("fork-lock",(ustime()-startWriteLock)/1000);
     if ((childpid = fork()) == 0) {
         /* Child */
         g_pserver->in_fork_child = purpose;
@@ -6238,6 +6300,7 @@ int redisFork(int purpose) {
         closeChildUnusedResourceAfterFork();
     } else {
         /* Parent */
+        g_forkLock->releaseWrite();
         g_pserver->stat_total_forks++;
         g_pserver->stat_fork_time = ustime()-start;
         g_pserver->stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / g_pserver->stat_fork_time / (1024*1024*1024); /* GB per second. */
@@ -6554,20 +6617,32 @@ void *timeThreadMain(void*) {
     timespec delay;
     delay.tv_sec = 0;
     delay.tv_nsec = 100;
+    int cycle_count = 0;
+    g_forkLock->acquireRead();
     while (true) {
         {
             std::unique_lock<std::mutex> lock(time_thread_mutex);
             if (sleeping_threads >= cserver.cthreads) {
+                g_forkLock->releaseRead();
                 time_thread_cv.wait(lock);
+                g_forkLock->acquireRead();
+                cycle_count = 0;
             }
         }
         updateCachedTime();
+        if (cycle_count == MAX_CYCLES_TO_HOLD_FORK_LOCK) {
+            g_forkLock->releaseRead();
+            g_forkLock->acquireRead();
+            cycle_count = 0;
+        }
 #if defined(__APPLE__)
         nanosleep(&delay, nullptr);
 #else
         clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, NULL);
 #endif
+        cycle_count++;
     }
+    g_forkLock->releaseRead();
 }
 
 void *workerThreadMain(void *parg)

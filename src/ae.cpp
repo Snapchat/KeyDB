@@ -53,6 +53,7 @@
 #include "zmalloc.h"
 #include "config.h"
 #include "serverassert.h"
+#include "server.h"
 
 #ifdef USE_MUTEX
 thread_local int cOwnLock = 0;
@@ -87,6 +88,8 @@ mutex_wrapper g_lock;
 #else
 fastlock g_lock("AE (global)");
 #endif
+readWriteLock forkLock("Fork (global)");
+readWriteLock *g_forkLock = &forkLock;
 thread_local aeEventLoop *g_eventLoopThisThread = NULL;
 
 /* Include the best multiplexing layer supported by this system.
@@ -154,16 +157,22 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
 
         case AE_ASYNC_OP::PostFunction:
             {
-            if (cmd.fLock && !ulock.owns_lock())
+            if (cmd.fLock && !ulock.owns_lock()) {
+                g_forkLock->releaseRead();
                 ulock.lock();
+                g_forkLock->acquireRead();
+            }
             ((aePostFunctionProc*)cmd.proc)(cmd.clientData);
             break;
             }
 
         case AE_ASYNC_OP::PostCppFunction:
         {
-            if (cmd.fLock && !ulock.owns_lock())
+            if (cmd.fLock && !ulock.owns_lock()) {
+                g_forkLock->releaseRead();
                 ulock.lock();
+                g_forkLock->acquireRead();
+            }
             (*cmd.pfn)();
 
             delete cmd.pfn;
@@ -547,7 +556,11 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
             if (te->next)
                 te->next->prev = te->prev;
             if (te->finalizerProc) {
-                if (!ulock.owns_lock()) ulock.lock();
+                if (!ulock.owns_lock()) {
+                    g_forkLock->releaseRead();
+                    ulock.lock();
+                    g_forkLock->acquireRead();
+                }
                 te->finalizerProc(eventLoop, te->clientData);
                 now = getMonotonicUs();
             }
@@ -567,7 +580,11 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
         }
 
         if (te->when <= now) {
-            if (!ulock.owns_lock()) ulock.lock();
+            if (!ulock.owns_lock()) {
+                g_forkLock->releaseRead();
+                ulock.lock();
+                g_forkLock->acquireRead();
+            }
             int retval;
 
             id = te->id;
@@ -591,8 +608,11 @@ extern "C" void ProcessEventCore(aeEventLoop *eventLoop, aeFileEvent *fe, int ma
 {
 #define LOCK_IF_NECESSARY(fe, tsmask) \
     std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock); \
-    if (!(fe->mask & tsmask)) \
-        ulock.lock()
+    if (!(fe->mask & tsmask)) { \
+        g_forkLock->releaseRead(); \
+        ulock.lock(); \
+        g_forkLock->acquireRead(); \
+    }
 
     int fired = 0; /* Number of events fired for current fd. */
 
@@ -704,8 +724,11 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
 
         if (eventLoop->beforesleep != NULL && flags & AE_CALL_BEFORE_SLEEP) {
             std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
-            if (!(eventLoop->beforesleepFlags & AE_SLEEP_THREADSAFE))
+            if (!(eventLoop->beforesleepFlags & AE_SLEEP_THREADSAFE)) {
+                g_forkLock->releaseRead();
                 ulock.lock();
+                g_forkLock->acquireRead();
+            }
             eventLoop->beforesleep(eventLoop);
         }
 
@@ -716,8 +739,11 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         /* After sleep callback. */
         if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP) {
             std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
-            if (!(eventLoop->aftersleepFlags & AE_SLEEP_THREADSAFE))
+            if (!(eventLoop->aftersleepFlags & AE_SLEEP_THREADSAFE)) {
+                g_forkLock->releaseRead();
                 ulock.lock();
+                g_forkLock->acquireRead();
+            }
             eventLoop->aftersleep(eventLoop);
         }
 

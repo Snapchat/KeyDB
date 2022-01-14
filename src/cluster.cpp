@@ -2447,7 +2447,10 @@ void clusterSendMessage(clusterLink *link, unsigned char *msg, size_t msglen) {
     if (sdslen(link->sndbuf) == 0 && msglen != 0)
     {
         aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [link] {
-            connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
+            /* The connection could be timed out before this posted function executes (thanks to TCP keepalive).
+             * So check that the connection is still there before setting the write handler, otherwise you segfault */
+            if (link->conn != nullptr)
+                connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
         });
     }
 

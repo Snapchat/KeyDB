@@ -11,6 +11,7 @@ Build-Depends:
 # liblua5.1-dev,
 # lua-bitop-dev,
 # lua-cjson-dev,
+ libsystemd-dev <!nocheck>,
  procps <!nocheck>,
  build-essential <!nocheck>,
  tcl <!nocheck>,

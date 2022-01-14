@@ -2034,7 +2034,9 @@ void ProcessPendingAsyncWrites()
                 bool fResult = c->postFunction([](client *c) {
                     c->fPendingAsyncWriteHandler = false;
                     clientInstallWriteHandler(c);
+                    c->lock.unlock();
                     handleClientsWithPendingWrites(c->iel, g_pserver->aof_state);
+                    c->lock.lock();
                 }, false);
 
                 if (!fResult)
@@ -4042,68 +4044,32 @@ int checkClientPauseTimeoutAndReturnIfPaused(void) {
  *
  * The function returns the total number of events processed. */
 void processEventsWhileBlocked(int iel) {
-    serverAssert(GlobalLocksAcquired());
-    int iterations = 4; /* See the function top-comment. */
 
-    std::vector<client*> vecclients;
-    listIter li;
-    listNode *ln;
-    listRewind(g_pserver->clients, &li);
-
-    // All client locks must be acquired *after* the global lock is reacquired to prevent deadlocks
-    //  so unlock here, and save them for reacquisition later
-    while ((ln = listNext(&li)) != nullptr)
-    {
-        client *c = (client*)listNodeValue(ln);
-        if (c->lock.fOwnLock()) {
-            serverAssert(c->flags & CLIENT_PROTECTED);  // If the client is not protected we have no gurantee they won't be free'd in the event loop
-            c->lock.unlock();
-            vecclients.push_back(c);
+    int eventsCount = 0;
+    executeWithoutGlobalLock([&](){
+        int iterations = 4; /* See the function top-comment. */
+        try
+        {
+            ProcessingEventsWhileBlocked = 1;
+            while (iterations--) {
+                long long startval = g_pserver->events_processed_while_blocked;
+                long long ae_events = aeProcessEvents(g_pserver->rgthreadvar[iel].el,
+                    AE_FILE_EVENTS|AE_DONT_WAIT|
+                    AE_CALL_BEFORE_SLEEP|AE_CALL_AFTER_SLEEP);
+                /* Note that g_pserver->events_processed_while_blocked will also get
+                * incremeted by callbacks called by the event loop handlers. */
+                eventsCount += ae_events;
+                long long events = eventsCount - startval;
+                if (!events) break;
+            }
+            ProcessingEventsWhileBlocked = 0;
         }
-    }
-    
-    /* Since we're about to release our lock we need to flush the repl backlog queue */
-    bool fReplBacklog = g_pserver->repl_batch_offStart >= 0;
-    if (fReplBacklog) {
-        flushReplBacklogToClients();
-        g_pserver->repl_batch_idxStart = -1;
-        g_pserver->repl_batch_offStart = -1;
-    }
-
-    long long eventsCount = 0;
-    aeReleaseLock();
-    serverAssert(!GlobalLocksAcquired());
-    try
-    {
-        ProcessingEventsWhileBlocked = 1;
-        while (iterations--) {
-            long long startval = g_pserver->events_processed_while_blocked;
-            long long ae_events = aeProcessEvents(g_pserver->rgthreadvar[iel].el,
-                AE_FILE_EVENTS|AE_DONT_WAIT|
-                AE_CALL_BEFORE_SLEEP|AE_CALL_AFTER_SLEEP);
-            /* Note that g_pserver->events_processed_while_blocked will also get
-            * incremeted by callbacks called by the event loop handlers. */
-            eventsCount += ae_events;
-            long long events = eventsCount - startval;
-            if (!events) break;
+        catch (...)
+        {
+            ProcessingEventsWhileBlocked = 0;
+            throw;
         }
-        ProcessingEventsWhileBlocked = 0;
-    }
-    catch (...)
-    {
-        // Caller expects us to be locked so fix and rethrow
-        ProcessingEventsWhileBlocked = 0;
-        AeLocker locker;
-        locker.arm(nullptr);
-        locker.release();
-        for (client *c : vecclients)
-            c->lock.lock();
-        throw;
-    }
-    
-    AeLocker locker;
-    locker.arm(nullptr);
-    locker.release();
+    });
 
     // Try to complete any async rehashes (this would normally happen in dbCron, but that won't run here)
     for (int idb = 0; idb < cserver.dbnum; ++idb) {
@@ -4117,15 +4083,6 @@ void processEventsWhileBlocked(int iel) {
     g_pserver->events_processed_while_blocked += eventsCount;
 
     whileBlockedCron();
-
-    // Restore it so the calling code is not confused
-    if (fReplBacklog && !serverTL->el->stop) {
-        g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
-        g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
-    }
-
-    for (client *c : vecclients)
-        c->lock.lock();
 
     // If a different thread processed the shutdown we need to abort the lua command or we will hang
     if (serverTL->el->stop)

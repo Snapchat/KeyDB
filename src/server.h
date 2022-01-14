@@ -101,6 +101,7 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "connection.h" /* Connection abstraction */
 #include "serverassert.h"
 #include "expire.h"
+#include "readwritelock.h"
 
 #define REDISMODULE_CORE 1
 #include "redismodule.h"    /* Redis modules API defines. */
@@ -812,6 +813,9 @@ typedef enum {
 /* Bit flags for moduleTypeAuxSaveFunc */
 #define REDISMODULE_AUX_BEFORE_RDB (1<<0)
 #define REDISMODULE_AUX_AFTER_RDB (1<<1)
+
+/* Number of cycles before time thread gives up fork lock */
+#define MAX_CYCLES_TO_HOLD_FORK_LOCK 10
 
 struct RedisModule;
 struct RedisModuleIO;
@@ -2751,6 +2755,7 @@ typedef struct {
  *----------------------------------------------------------------------------*/
 
 //extern struct redisServer server;
+extern readWriteLock *g_forkLock;
 extern struct redisServerConst cserver;
 extern thread_local struct redisServerThreadVars *serverTL;   // thread local server vars
 extern struct sharedObjectsStruct shared;
@@ -3146,6 +3151,7 @@ void sendChildInfo(childInfoType info_type, size_t keys, const char *pname);
 void receiveChildInfo(void);
 
 /* Fork helpers */
+void executeWithoutGlobalLock(std::function<void()> func);
 int redisFork(int type);
 int hasActiveChildProcess();
 void resetChildState();
@@ -3288,7 +3294,7 @@ void resetErrorTableStats(void);
 void adjustOpenFilesLimit(void);
 void incrementErrorCount(const char *fullerr, size_t namelen);
 void closeListeningSockets(int unlink_unix_socket);
-void updateCachedTime();
+void updateCachedTime(void);
 void resetServerStats(void);
 void activeDefragCycle(void);
 unsigned int getLRUClock(void);

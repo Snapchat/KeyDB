@@ -4595,7 +4595,9 @@ struct RemoteMasterState
 
     ~RemoteMasterState()
     {
+        g_forkLock->releaseRead();
         aeAcquireLock();
+        g_forkLock->acquireRead();
         freeClient(cFake);
         aeReleaseLock();
     }

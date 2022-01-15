@@ -1,3 +1,13 @@
+keydb (6:6.2.2-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * Acquire lock in module.cpp to fix module test break
+  * Fix usage of nanosleep() on Apple hardware
+  * Fix networking deadlock (#183)
+  * Remove redundant zfree() in keydb-benchmark
+  * Issues resolved: #378, #384
+
+-- Ben Schermel <ben@eqalpha.com>  Sat, 15 Jan 2022 20:00:37 +0000
+
 keydb (6:6.2.1-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * This release of KeyDB is at parity with Redis 6.2.6. In addition, the following changes were included:

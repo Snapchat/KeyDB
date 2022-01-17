@@ -365,7 +365,7 @@ typedef struct RedisModuleCommandFilter {
 static list *moduleCommandFilters;
 
 /* Module GIL Variables */
-static readWriteLock s_moduleGIL;
+static readWriteLock s_moduleGIL("Module GIL");
 thread_local bool g_fModuleThread = false;
 
 typedef void (*RedisModuleForkDoneHandler) (int exitcode, int bysignal, void *user_data);

@@ -92,7 +92,7 @@ double R_Zero, R_PosInf, R_NegInf, R_Nan;
 /* Global vars */
 namespace GlobalHidden {
 struct redisServer server; /* Server global state */
-readWriteLock forkLock;
+readWriteLock forkLock("Fork (global)");
 }
 redisServer *g_pserver = &GlobalHidden::server;
 readWriteLock *g_forkLock = &GlobalHidden::forkLock;

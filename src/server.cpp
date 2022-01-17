@@ -2632,7 +2632,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         sleeping_threads++;
         serverAssert(sleeping_threads <= cserver.cthreads);
     }
-    
+
+    g_forkLock->releaseRead();    
     /* Determine whether the modules are enabled before sleeping, and use that result
        both here, and after wakeup to avoid double acquire or release of the GIL */
     serverTL->modulesEnabledThisAeLoop = !!moduleCount();
@@ -2653,6 +2654,7 @@ void afterSleep(struct aeEventLoop *eventLoop) {
        Otherwise you may double acquire the GIL and cause deadlocks in the module */
     if (!ProcessingEventsWhileBlocked) {
         if (serverTL->modulesEnabledThisAeLoop) moduleAcquireGIL(TRUE /*fServerThread*/);
+        g_forkLock->acquireRead();
         wakeTimeThread();
     }
 }
@@ -6290,7 +6292,8 @@ int redisFork(int purpose) {
         openChildInfoPipe();
     }
     long long startWriteLock = ustime();
-    g_forkLock->acquireWrite();
+    g_forkLock->releaseRead();
+    executeWithoutGlobalLock([](){ g_forkLock->acquireWrite(); });
     latencyAddSampleIfNeeded("fork-lock",(ustime()-startWriteLock)/1000);
     if ((childpid = fork()) == 0) {
         /* Child */
@@ -6301,6 +6304,7 @@ int redisFork(int purpose) {
     } else {
         /* Parent */
         g_forkLock->releaseWrite();
+        g_forkLock->acquireRead();
         g_pserver->stat_total_forks++;
         g_pserver->stat_fork_time = ustime()-start;
         g_pserver->stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / g_pserver->stat_fork_time / (1024*1024*1024); /* GB per second. */
@@ -6672,6 +6676,7 @@ void *workerThreadMain(void *parg)
     }
 
     moduleAcquireGIL(true); // Normally afterSleep acquires this, but that won't be called on the first run
+    g_forkLock->acquireRead();
     aeEventLoop *el = g_pserver->rgthreadvar[iel].el;
     try
     {
@@ -6680,6 +6685,7 @@ void *workerThreadMain(void *parg)
     catch (ShutdownException)
     {
     }
+    g_forkLock->releaseRead();
     moduleReleaseGIL(true);
     serverAssert(!GlobalLocksAcquired());
     aeDeleteEventLoop(el);

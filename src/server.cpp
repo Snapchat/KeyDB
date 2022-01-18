@@ -2631,7 +2631,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         serverAssert(sleeping_threads <= cserver.cthreads);
     }
     
-    g_forkLock->releaseRead();
+    aeThreadOffline();
     /* Determine whether the modules are enabled before sleeping, and use that result
        both here, and after wakeup to avoid double acquire or release of the GIL */
     serverTL->modulesEnabledThisAeLoop = !!moduleCount();
@@ -2652,7 +2652,7 @@ void afterSleep(struct aeEventLoop *eventLoop) {
        Otherwise you may double acquire the GIL and cause deadlocks in the module */
     if (!ProcessingEventsWhileBlocked) {
         if (serverTL->modulesEnabledThisAeLoop) moduleAcquireGIL(TRUE /*fServerThread*/);
-        g_forkLock->acquireRead();
+        aeThreadOnline();
         wakeTimeThread();
     }
 }
@@ -6290,7 +6290,7 @@ int redisFork(int purpose) {
         openChildInfoPipe();
     }
     long long startWriteLock = ustime();
-    g_forkLock->upgradeWrite();
+    aeAcquireForkLock();
     latencyAddSampleIfNeeded("fork-lock",(ustime()-startWriteLock)/1000);
     if ((childpid = fork()) == 0) {
         /* Child */
@@ -6300,7 +6300,7 @@ int redisFork(int purpose) {
         closeChildUnusedResourceAfterFork();
     } else {
         /* Parent */
-        g_forkLock->downgradeWrite();
+        aeReleaseForkLock();
         g_pserver->stat_total_forks++;
         g_pserver->stat_fork_time = ustime()-start;
         g_pserver->stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / g_pserver->stat_fork_time / (1024*1024*1024); /* GB per second. */
@@ -6618,27 +6618,27 @@ void *timeThreadMain(void*) {
     delay.tv_sec = 0;
     delay.tv_nsec = 100;
     int cycle_count = 0;
-    g_forkLock->acquireRead();
+    aeThreadOnline();
     while (true) {
         {
             std::unique_lock<std::mutex> lock(time_thread_mutex);
             if (sleeping_threads >= cserver.cthreads) {
-                g_forkLock->releaseRead();
+                aeThreadOffline();
                 time_thread_cv.wait(lock);
-                g_forkLock->acquireRead();
+                aeThreadOnline();
                 cycle_count = 0;
             }
         }
         updateCachedTime();
         if (cycle_count == MAX_CYCLES_TO_HOLD_FORK_LOCK) {
-            g_forkLock->releaseRead();
-            g_forkLock->acquireRead();
+            aeThreadOffline();
+            aeThreadOnline();
             cycle_count = 0;
         }
         clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, NULL);
         cycle_count++;
     }
-    g_forkLock->releaseRead();
+    aeThreadOffline();
 }
 
 void *workerThreadMain(void *parg)
@@ -6656,7 +6656,7 @@ void *workerThreadMain(void *parg)
     }
 
     moduleAcquireGIL(true); // Normally afterSleep acquires this, but that won't be called on the first run
-    g_forkLock->acquireRead();
+    aeThreadOnline();
     aeEventLoop *el = g_pserver->rgthreadvar[iel].el;
     try
     {
@@ -6665,7 +6665,7 @@ void *workerThreadMain(void *parg)
     catch (ShutdownException)
     {
     }
-    g_forkLock->releaseRead();
+    aeThreadOffline();
     moduleReleaseGIL(true);
     serverAssert(!GlobalLocksAcquired());
     aeDeleteEventLoop(el);
@@ -6803,8 +6803,8 @@ int main(int argc, char **argv) {
     g_pserver->sentinel_mode = checkForSentinelMode(argc,argv);
     initServerConfig();
     serverTL = &g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN];
+    aeThreadOnline();
     aeAcquireLock();    // We own the lock on boot
-    g_forkLock->acquireRead();
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */
     moduleInitModulesSystem();
@@ -7033,8 +7033,8 @@ int main(int argc, char **argv) {
     }
 
     redisSetCpuAffinity(g_pserver->server_cpulist);
-    g_forkLock->releaseRead();
     aeReleaseLock();    //Finally we can dump the lock
+    aeThreadOffline();
     moduleReleaseGIL(true);
     
     setOOMScoreAdj(-1);

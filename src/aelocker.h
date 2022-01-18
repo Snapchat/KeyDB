@@ -35,9 +35,7 @@ public:
                         clientNesting = c->lock.unlock_recursive();
                         fOwnClientLock = false;
                     }
-                    g_forkLock->releaseRead();
                     aeAcquireLock();
-                    g_forkLock->acquireRead();
                     if (!c->lock.try_lock(false))   // ensure a strong try because aeAcquireLock is expensive
                     {
                         aeReleaseLock();
@@ -55,9 +53,7 @@ public:
         else if (!m_fArmed)
         {
             m_fArmed = true;
-            g_forkLock->releaseRead();
             aeAcquireLock();
-            g_forkLock->acquireRead();
         }
     }
 

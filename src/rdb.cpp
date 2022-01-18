@@ -1205,6 +1205,40 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             == -1) return -1;
         if (rdbSaveAuxFieldStrInt(rdb,"repl-offset",g_pserver->master_repl_offset)
             == -1) return -1;
+        if (g_pserver->fActiveReplica && listLength(g_pserver->masters) > 0) {
+            sdsstring val = sdsstring(sdsempty());
+            listNode *ln;
+            listIter li;
+            redisMaster* mi;
+            listRewind(g_pserver->masters,&li);
+            while ((ln = listNext(&li)) != NULL) {
+                mi = (redisMaster*)listNodeValue(ln);
+                if (!mi->master) {
+                    // If master client is not available, use info from master struct - better than nothing
+                    serverLog(LL_NOTICE, "saving master %s", mi->master_replid);
+                    if (mi->master_replid[0] == 0) {
+                        // if replid is null, there's no reason to save it
+                        continue;
+                    }
+                    val = val.catfmt("%s:%I:%s:%i;", mi->master_replid,
+                        mi->master_initial_offset,
+                        mi->masterhost,
+                        mi->masterport);
+                }
+                else {
+                    serverLog(LL_NOTICE, "saving master %s", mi->master->replid);
+                    if (mi->master->replid[0] == 0) {
+                        // if replid is null, there's no reason to save it
+                        continue;
+                    }
+                    val = val.catfmt("%s:%I:%s:%i;", mi->master->replid,
+                        mi->master->reploff,
+                        mi->masterhost,
+                        mi->masterport);
+                }
+            }
+            if (rdbSaveAuxFieldStrStr(rdb, "repl-masters",val.get()) == -1) return -1;
+        }
     }
     if (rdbSaveAuxFieldStrInt(rdb,"aof-preamble",aof_preamble) == -1) return -1;
     return 1;
@@ -2653,6 +2687,23 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                     memcpy(rsi->repl_id,ptrFromObj(auxval),CONFIG_RUN_ID_SIZE+1);
                     rsi->repl_id_is_set = 1;
                 }
+            } else if (!strcasecmp(szFromObj(auxkey),"repl-masters")) {
+                if (rsi) {
+                    struct redisMaster mi;
+                    char *masters = szFromObj(auxval);
+                    char *entry = strtok(masters, ":");
+                    while (entry != NULL) {
+                        memcpy(mi.master_replid, entry, sizeof(mi.master_replid));
+                        entry = strtok(NULL, ":");
+                        mi.master_initial_offset = atoi(entry);
+                        entry = strtok(NULL, ":");
+                        mi.masterhost = entry;
+                        entry = strtok(NULL, ";");
+                        mi.masterport = atoi(entry);
+                        entry = strtok(NULL, ":");
+                        rsi->addMaster(mi);
+                    }
+                }
             } else if (!strcasecmp(szFromObj(auxkey),"repl-offset")) {
                 if (rsi) rsi->repl_offset = strtoll(szFromObj(auxval),NULL,10);
             } else if (!strcasecmp(szFromObj(auxkey),"lua")) {
@@ -2817,11 +2868,11 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             bool fExpiredKey = iAmMaster() && !(rdbflags&RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now;
         
             if (fStaleMvccKey || fExpiredKey) {
-                if (fStaleMvccKey && !fExpiredKey && rsi != nullptr && rsi->mi != nullptr && rsi->mi->staleKeyMap != nullptr && lookupKeyRead(db, &keyobj) == nullptr) {
+                if (fStaleMvccKey && !fExpiredKey && rsi != nullptr && rsi->masters != nullptr && rsi->masters[0].staleKeyMap != nullptr && lookupKeyRead(db, &keyobj) == nullptr) {
                     // We have a key that we've already deleted and is not back in our database.
                     //  We'll need to inform the sending master of the delete if it is also a replica of us
                     robj_sharedptr objKeyDup(createStringObject(key, sdslen(key)));
-                    rsi->mi->staleKeyMap->operator[](db - g_pserver->db).push_back(objKeyDup);                
+                    rsi->masters[0].staleKeyMap->operator[](db - g_pserver->db).push_back(objKeyDup);                
                 }
                 fLastKeyExpired = true;
                 sdsfree(key);
@@ -3246,8 +3297,8 @@ void bgsaveCommand(client *c) {
  * is returned, and the RDB saving will not persist any replication related
  * information. */
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
-    rdbSaveInfo rsi_init = RDB_SAVE_INFO_INIT;
-    *rsi = rsi_init;
+    rdbSaveInfo rsi_init;
+    *rsi = std::move(rsi_init);
 
     /* If the instance is a master, we can populate the replication info
      * only when repl_backlog is not NULL. If the repl_backlog is NULL,

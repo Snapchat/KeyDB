@@ -53,7 +53,7 @@
 #include "zmalloc.h"
 #include "config.h"
 #include "serverassert.h"
-#include "server.h"
+#include "readwritelock.h"
 
 #ifdef USE_MUTEX
 thread_local int cOwnLock = 0;

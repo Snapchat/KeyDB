@@ -2177,7 +2177,6 @@ typedef struct {
 
 //extern struct redisServer server;
 extern redisServer *g_pserver;
-extern readWriteLock *g_forkLock;
 extern struct redisServerConst cserver;
 extern __thread struct redisServerThreadVars *serverTL;   // thread local server vars
 extern struct sharedObjectsStruct shared;

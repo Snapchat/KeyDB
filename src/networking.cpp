@@ -1321,7 +1321,7 @@ void acceptOnThread(connection *conn, int flags, char *cip)
             szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
             memcpy(szT, cip, NET_IP_STR_LEN);
         }
-        int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [conn, flags, ielTarget, szT, fBootLoad] {
+        int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [conn, flags, ielTarget, szT] {
             connMarshalThread(conn);
             acceptCommonHandler(conn,flags,szT,ielTarget);
             rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);

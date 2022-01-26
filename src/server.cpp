@@ -62,7 +62,6 @@
 #include <sys/socket.h>
 #include <algorithm>
 #include <uuid/uuid.h>
-#include <mutex>
 #include <condition_variable>
 #include "aelocker.h"
 #include "motd.h"
@@ -96,8 +95,8 @@ struct redisServer server; /* Server global state */
 redisServer *g_pserver = &GlobalHidden::server;
 struct redisServerConst cserver;
 thread_local struct redisServerThreadVars *serverTL = NULL;   // thread local server vars
-std::mutex time_thread_mutex;
-std::condition_variable time_thread_cv;
+fastlock time_thread_lock("Time thread lock");
+std::condition_variable_any time_thread_cv;
 int sleeping_threads = 0;
 void wakeTimeThread();
 
@@ -2959,7 +2958,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     // Scope lock_guard
     {
-        std::lock_guard<std::mutex> lock(time_thread_mutex);
+        std::unique_lock<fastlock> lock(time_thread_lock);
         sleeping_threads++;
         serverAssert(sleeping_threads <= cserver.cthreads);
     }
@@ -7206,7 +7205,7 @@ void OnTerminate()
 
 void wakeTimeThread() {
     updateCachedTime();
-    std::lock_guard<std::mutex> lock(time_thread_mutex);
+    std::unique_lock<fastlock> lock(time_thread_lock);
     if (sleeping_threads >= cserver.cthreads)
         time_thread_cv.notify_one();
     sleeping_threads--;
@@ -7221,7 +7220,7 @@ void *timeThreadMain(void*) {
     aeThreadOnline();
     while (true) {
         {
-            std::unique_lock<std::mutex> lock(time_thread_mutex);
+            std::unique_lock<fastlock> lock(time_thread_lock);
             if (sleeping_threads >= cserver.cthreads) {
                 aeThreadOffline();
                 time_thread_cv.wait(lock);

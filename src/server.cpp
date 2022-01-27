@@ -2623,6 +2623,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (!fSentReplies)
         handleClientsWithPendingWrites(iel, aof_state);
 
+    aeThreadOffline();
     // Scope lock_guard
     {
         std::unique_lock<fastlock> lock(time_thread_lock);
@@ -2630,7 +2631,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         serverAssert(sleeping_threads <= cserver.cthreads);
     }
     
-    aeThreadOffline();
     /* Determine whether the modules are enabled before sleeping, and use that result
        both here, and after wakeup to avoid double acquire or release of the GIL */
     serverTL->modulesEnabledThisAeLoop = !!moduleCount();
@@ -6617,7 +6617,9 @@ void OnTerminate()
 
 void wakeTimeThread() {
     updateCachedTime();
+    aeThreadOffline();
     std::unique_lock<fastlock> lock(time_thread_lock);
+    aeThreadOnline();
     if (sleeping_threads >= cserver.cthreads)
         time_thread_cv.notify_one();
     sleeping_threads--;
@@ -6632,7 +6634,9 @@ void *timeThreadMain(void*) {
     aeThreadOnline();
     while (true) {
         {
+            aeThreadOffline();
             std::unique_lock<fastlock> lock(time_thread_lock);
+            aeThreadOnline();
             if (sleeping_threads >= cserver.cthreads) {
                 aeThreadOffline();
                 time_thread_cv.wait(lock);

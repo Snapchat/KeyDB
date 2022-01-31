@@ -34,3 +34,26 @@ jobs:
     - name: rotation test
       run: |
           ./runtest-rotation
+        
+  build-ubuntu-old:
+    runs-on: ubuntu-18.04
+    steps:
+    - uses: actions/checkout@v1
+    - name: make -j2
+      run: | 
+        sudo apt-get update
+        sudo apt-get -y install uuid-dev libcurl4-openssl-dev
+        make -j2
+
+  build-macos-latest:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: make
+      run: make KEYDB_CFLAGS='-Werror' KEYDB_CXXFLAGS='-Werror' -j2
+
+  build-libc-malloc:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: make

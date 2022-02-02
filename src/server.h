@@ -1915,6 +1915,12 @@ typedef struct redisTLSContextConfig {
     int session_caching;
     int session_cache_size;
     int session_cache_timeout;
+    time_t cert_file_last_modified;
+    time_t key_file_last_modified;
+    time_t client_cert_file_last_modified;
+    time_t client_key_file_last_modified;
+    time_t ca_cert_file_last_modified;
+    time_t ca_cert_dir_last_modified;
 } redisTLSContextConfig;
 
 /*-----------------------------------------------------------------------------
@@ -2606,6 +2612,7 @@ struct redisServer {
     int tls_cluster;
     int tls_replication;
     int tls_auth_clients;
+    int tls_rotation;
     redisTLSContextConfig tls_ctx_config;
 
     /* cpu affinity */
@@ -3881,7 +3888,7 @@ void tlsInit(void);
 void tlsInitThread();
 void tlsCleanup(void);
 int tlsConfigure(redisTLSContextConfig *ctx_config);
-
+void tlsReload(void);
 
 
 class ShutdownException

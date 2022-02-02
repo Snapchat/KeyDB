@@ -31,3 +31,6 @@ jobs:
     - name: module tests
       run: |
           ./runtest-moduleapi
+    - name: rotation test
+      run: |
+          ./runtest-rotation

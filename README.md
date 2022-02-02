@@ -122,13 +122,6 @@ installed):
     % ./runtest --tls
 
 
-If TLS is built, running the tests with TLS enabled (you will need `tcl-tls`
-installed):
-
-    % ./utils/gen-test-certs.sh
-    % ./runtest --tls
-
-
 Fixing build problems with dependencies or cached build options
 ---------
 

@@ -1,4 +1,4 @@
-start_server {tags {"tls"}} {
+start_server {tags {"tls"} overrides {tls-rotation yes}} {
     if {$::tls} {
         package require tls
 

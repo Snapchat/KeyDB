@@ -2863,6 +2863,7 @@ standardConfig configs[] = {
     createEnumConfig("tls-auth-clients", NULL, MODIFIABLE_CONFIG, tls_auth_clients_enum, g_pserver->tls_auth_clients, TLS_CLIENT_AUTH_YES, NULL, NULL),
     createBoolConfig("tls-prefer-server-ciphers", NULL, MODIFIABLE_CONFIG, g_pserver->tls_ctx_config.prefer_server_ciphers, 0, NULL, updateTlsCfgBool),
     createBoolConfig("tls-session-caching", NULL, MODIFIABLE_CONFIG, g_pserver->tls_ctx_config.session_caching, 1, NULL, updateTlsCfgBool),
+    createBoolConfig("tls-rotation", NULL, MODIFIABLE_CONFIG, g_pserver->tls_rotation, 0, NULL, updateTlsCfgBool),
     createStringConfig("tls-cert-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->tls_ctx_config.cert_file, NULL, NULL, updateTlsCfg),
     createStringConfig("tls-key-file", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->tls_ctx_config.key_file, NULL, NULL, updateTlsCfg),
     createStringConfig("tls-key-file-pass", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->tls_ctx_config.key_file_pass, NULL, NULL, updateTlsCfg),

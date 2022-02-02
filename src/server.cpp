@@ -2578,6 +2578,13 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         fastlock_auto_adjust_waits();
     }
 
+    /* Reload the TLS cert if neccessary. This effectively rotates the 
+     * cert if a change has been made on disk, but the KeyDB server hasn't
+     * been notified. */
+    run_with_period(1000){
+        tlsReload();
+    }
+
     /* Resize tracking keys table if needed. This is also done at every
      * command execution, but we want to be sure that if the last command
      * executed changes the value via CONFIG SET, the server will perform

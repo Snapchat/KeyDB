@@ -35,12 +35,13 @@
 #include <mutex>
 
 #ifdef USE_OPENSSL
-
 #include <openssl/conf.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/pem.h>
+
+#include <sys/stat.h>
 
 #define REDIS_TLS_PROTO_TLSv1       (1<<0)
 #define REDIS_TLS_PROTO_TLSv1_1     (1<<1)
@@ -206,6 +207,18 @@ static int tlsPasswordCallback(char *buf, int size, int rwflag, void *u) {
     return (int) pass_len;
 }
 
+/* Given a path to a file, return the last time it was accessed (in seconds) */
+time_t getLastModifiedTime(const char* path){
+    struct stat path_stat;
+    stat(path, &path_stat);
+
+#ifdef __APPLE__
+    return path_stat.st_mtimespec.tv_sec;
+#else
+    return path_stat.st_mtime;
+#endif
+}
+
 /* Create a *base* SSL_CTX using the SSL configuration provided. The base context
  * includes everything that's common for both client-side and server-side connections.
  */
@@ -310,6 +323,14 @@ int tlsConfigure(redisTLSContextConfig *ctx_config) {
         goto error;
     }
 
+    /* Update the last modified times for the TLS elements */
+    ctx_config->key_file_last_modified = getLastModifiedTime(ctx_config->key_file);
+    ctx_config->cert_file_last_modified = getLastModifiedTime(ctx_config->cert_file);
+    ctx_config->client_cert_file_last_modified = getLastModifiedTime(ctx_config->client_cert_file);
+    ctx_config->client_key_file_last_modified = getLastModifiedTime(ctx_config->client_key_file);
+    ctx_config->ca_cert_dir_last_modified = getLastModifiedTime(ctx_config->ca_cert_dir);
+    ctx_config->ca_cert_file_last_modified = getLastModifiedTime(ctx_config->ca_cert_file);
+
     protocols = parseProtocolsConfig(ctx_config->protocols);
     if (protocols == -1) goto error;
 
@@ -383,6 +404,31 @@ error:
     if (ctx) SSL_CTX_free(ctx);
     if (client_ctx) SSL_CTX_free(client_ctx);
     return C_ERR;
+}
+
+/* Reload TLS certificate from disk, effectively rotating it */
+void tlsReload(void){
+    /* We will only bother checking keys and certs if TLS is enabled, otherwise we would be calling 'stat' for no reason */
+    if (g_pserver->tls_rotation && (g_pserver->tls_port || g_pserver->tls_replication || g_pserver->tls_cluster)){
+
+        bool cert_file_modified = getLastModifiedTime(g_pserver->tls_ctx_config.cert_file) != g_pserver->tls_ctx_config.cert_file_last_modified;
+        bool key_file_modified = getLastModifiedTime(g_pserver->tls_ctx_config.key_file) != g_pserver->tls_ctx_config.key_file_last_modified;
+
+        bool client_cert_file_modified = g_pserver->tls_ctx_config.client_cert_file != NULL && getLastModifiedTime(g_pserver->tls_ctx_config.client_cert_file) != g_pserver->tls_ctx_config.client_cert_file_last_modified;
+        bool client_key_file_modified = g_pserver->tls_ctx_config.client_key_file != NULL && getLastModifiedTime(g_pserver->tls_ctx_config.client_key_file) != g_pserver->tls_ctx_config.client_key_file_last_modified;
+
+        bool ca_cert_file_modified = g_pserver->tls_ctx_config.ca_cert_file != NULL && getLastModifiedTime(g_pserver->tls_ctx_config.ca_cert_file) != g_pserver->tls_ctx_config.ca_cert_file_last_modified;
+        bool ca_cert_dir_modified = g_pserver->tls_ctx_config.ca_cert_dir != NULL && getLastModifiedTime(g_pserver->tls_ctx_config.ca_cert_dir) != g_pserver->tls_ctx_config.ca_cert_dir_last_modified;
+
+        if (cert_file_modified || key_file_modified || ca_cert_file_modified || ca_cert_dir_modified || client_cert_file_modified || client_key_file_modified){
+            serverLog(LL_NOTICE, "TLS certificates changed on disk, attempting to rotate.");
+            if (tlsConfigure(&g_pserver->tls_ctx_config) == C_ERR) {
+                serverLog(LL_NOTICE, "Error trying to rotate TLS certificates, TLS credentials remain unchanged.");
+            } else {
+                serverLog(LL_NOTICE, "TLS certificates rotated successfully.");
+            }
+        }
+    }
 }
 
 #ifdef TLS_DEBUGGING
@@ -1091,6 +1137,9 @@ void tlsCleanup(void) {
 int tlsConfigure(redisTLSContextConfig *ctx_config) {
     UNUSED(ctx_config);
     return C_OK;
+}
+
+void tlsReload(void){
 }
 
 connection *connCreateTLS(void) { 

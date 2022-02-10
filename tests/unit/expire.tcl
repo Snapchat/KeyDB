@@ -423,7 +423,7 @@ start_server {tags {"expire"}} {
         r set foo bar EX 100
         r set foo bar KEEPTTL
         set ttl [r ttl foo]
-        assert {$ttl <= 100 && $ttl > 90}
+        assert {$ttl <= 100 && $ttl > 80}
     }
 
     test {Roundtrip for subkey expires works} {
@@ -482,7 +482,7 @@ start_server {tags {"expire"}} {
         after 2000
         r debug loadaof
         set ttl [r ttl foo]
-        assert {$ttl <= 98 && $ttl > 90}
+        assert {$ttl <= 98 && $ttl > 80}
     }
 
     test {GETEX use of PERSIST option should remove TTL} {

@@ -92,16 +92,11 @@ Init and clone submodule dependencies:
 
 Install dependencies:
 
-    % sudo apt install build-essential nasm autotools-dev autoconf libjemalloc-dev tcl tcl-dev uuid-dev libcurl4-openssl-dev libbz2-dev libzstd-dev liblz4-dev libsnappy-dev
+    % sudo apt install build-essential nasm autotools-dev autoconf libjemalloc-dev tcl tcl-dev uuid-dev libcurl4-openssl-dev libbz2-dev libzstd-dev liblz4-dev libsnappy-dev libssl-dev
 
 Compiling is as simple as:
 
     % make
-
-To build with TLS support, you'll need OpenSSL development libraries (e.g.
-libssl-dev on Debian/Ubuntu) and run:
-
-    % make BUILD_TLS=yes
 
 To build with systemd support, you'll need systemd development libraries (such 
 as libsystemd-dev on Debian/Ubuntu or systemd-devel on CentOS) and run:
@@ -115,7 +110,7 @@ To append a suffix to KeyDB program names, use:
 ***Note that the following dependencies may be needed: 
     % sudo apt-get install autoconf autotools-dev libnuma-dev libtool
 
-If TLS is built, running the tests with TLS enabled (you will need `tcl-tls`
+Running the tests with TLS enabled (you will need `tcl-tls`
 installed):
 
     % ./utils/gen-test-certs.sh
@@ -217,11 +212,11 @@ All the options in keydb.conf are also supported as options using the command
 line, with exactly the same name.
 
 
-Running Redis with TLS:
+Running KeyDB with TLS:
 ------------------
 
 Please consult the [TLS.md](TLS.md) file for more information on
-how to use Redis with TLS.
+how to use KeyDB with TLS.
 
 
 Playing with KeyDB

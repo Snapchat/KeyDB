@@ -1,4 +1,4 @@
-# Top level makefile, the real shit is at src/Makefile
+# Top level makefile, this just calls into src/Makefile where the real work is done. Changes should be made there.
 
 default: all
 

@@ -6,10 +6,7 @@ Getting Started
 
 ### Building
 
-To build with TLS support you'll need OpenSSL development libraries (e.g.
-libssl-dev on Debian/Ubuntu).
-
-Run `make BUILD_TLS=yes`.
+TLS support is enabled in the default build. To build without TLS, run `make BUILD_TLS=no`.
 
 ### Tests
 

@@ -23,9 +23,9 @@ RUN set -eux; \
         gosu --version; \
         gosu nobody true
 # build KeyDB
-ARG KEYDB_DIR
-COPY $KEYDB_DIR /tmp/keydb-internal/
-RUN set -eux; \
+ARG BRANCH
+RUN --mount=type=secret,id=PAT export $(cat /run/secrets/PAT | xargs); \
+        set -eux; \
         \
         savedAptMark="$(apt-mark showmanual)"; \
         apt-get update; \
@@ -46,7 +46,9 @@ RUN set -eux; \
                 libzstd-dev \
                 liblz4-dev \
                 libsnappy-dev \
-                libssl-dev; \
+                libssl-dev \
+                git; \
+        cd /tmp && git clone --branch $BRANCH https://$PAT_ID:$TOKEN@github.sc-corp.net/Snapchat/keydb-internal.git --recursive; \
         cd /tmp/keydb-internal; \
         # disable protected mode as it relates to docker
         grep -E '^ *createBoolConfig[(]"protected-mode",.*, *1 *,.*[)],$' ./src/config.cpp; \

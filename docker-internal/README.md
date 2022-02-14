@@ -7,7 +7,20 @@ This docker image builds KeyDB within the image and cleans up afterwards. A few 
 * keydb.conf added and linked to redis.conf for legacy compatibility and as default config file
 * use entrypoint and cmd for best practices. Remove protected-mode during build incase user specifies binary without .conf, or just wants append parameters
 
-## Building the Docker Image
+## Building the Docker Image Using Local KeyDB Directory
+
+If you have a local keydb-internal repository you would like to generate the binaries from, use the command below. This will simply copy over all the files within the local keydb-internal repo and then build the image. 
+
+Modify the DIR build argument to your local KeyDB repo and update your image tag in the line below
+
+```
+docker build --build-arg DIR=/path/to/keydb-internal -t myImageName:imageTag .
+```
+
+Please note that directories are relative to the docker build context. You can use the `-f /path/to/Dockerfile` to specify Dockerfile which will also set the build context, your repo location will be relative to it.
+
+
+## Building the Docker Image Using PAT & Clone
 
 This image clones the keydb-internal repo, hence a GHE PAT token or SSH access is needed. See more on [obtaining GHE PAT](https://wiki.sc-corp.net/display/TOOL/Using+the+GHE+API#UsingtheGHEAPI-Step1:PersonalTokens). It is not secure to pass tokens/credentials as build-args, env variables, or COPYing then deleting, so we use secrets. This option is only available with the [Docker BuildKit](https://docs.docker.com/develop/develop-images/build_enhancements/#new-docker-build-secret-information)so the docker build kit must be enabled via `DOCKER_BUILDKIT=1`, or permanently by appending `"features": { "buildkit": true }` to /etc/docker/daemon.json.
 
@@ -19,6 +32,7 @@ Run the command below updating your info as follows:
 * Add your PAT info to GHE_PersonalAccessToken.txt
 
 ```
+cd docker_PAT_build
 DOCKER_BUILDKIT=1 docker build --no-cache --build-arg BRANCH=keydbpro --secret id=PAT,src=GHE_PersonalAccessToken.txt . -t myImageName:imageTag
 ```
 

@@ -1,4 +1,4 @@
-FROM ubuntu:18.04
+FROM ubuntu:20.04
 SHELL ["/bin/bash","-c"]
 RUN groupadd -r keydb && useradd -r -g keydb keydb
 # use gosu for easy step-down from root: https://github.com/tianon/gosu/releases
@@ -62,6 +62,7 @@ RUN set -eux; \
         [ -z "$savedAptMark" ] || apt-mark manual $savedAptMark > /dev/null; \
         find /usr/local -type f -executable -exec ldd '{}' ';' \
                | awk '/=>/ { print $(NF-1) }' \
+               | sed 's:.*/::' \
                | sort -u \
                | xargs -r dpkg-query --search \
                | cut -d: -f1 \

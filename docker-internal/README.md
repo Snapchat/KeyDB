@@ -24,21 +24,34 @@ DOCKER_BUILDKIT=1 docker build --no-cache --build-arg BRANCH=keydbpro --secret i
 
 For a detailed conventional build view pass `--progress=plain` while building. Note that `--no-cache` must be used to ensure your credentials are pulled in as they are not cached.
 
+#### Troubleshooting
+
+If you are building on macOS or with docker frontend you may need to append the following line to the top of the Dockerfile:
+
+```
+# syntax=docker/dockerfile:1.3
+```
+
 ## Using The Image 
 
 #### Bind port
+
 Bind the container to the node/machine by passing the parameter `-p 6379:6379` when you run the docker container
 
 #### Configuration file
+
 By default KeyDB launches by specifiying its internal keydb.conf file at `/etc/keydb/keydb.conf`. If you would like to use your own config file you can link to the config file with `-v /path-to-config-file/keydb.conf:/etc/keydb/keydb.conf` then run the container whose default command is `keydb-server /etc/keydb/keydb.conf`
 
-Alternatively specify any config file location, by specifying the location following the binary to override default `docker run ThisDockerImage keydb-server /path/to/my/config-file/`. You can also just append parameters to default image with `docker run ThisDockerImage keydb-server /etc/keydb/keydb.conf --dir /data --server-threads 4`.
+Alternatively specify any config file location, by specifying the location following the binary to override default: `docker run ThisDockerImage keydb-server /path/to/my/config-file/`. You can also just append parameters to default image with `docker run ThisDockerImage keydb-server /etc/keydb/keydb.conf --dir /data --server-threads 4`.
 
 #### Persistent storage
-If persistence is enabled, data is stored in the VOLUME /data, which can be used with --volumes-from some-volume-container or -v /docker/host/dir:/data (see docs.docker volumes).
+
+If persistence is enabled, data is stored in the VOLUME /data, which can be used with --volumes-from some-volume-container or -v /docker/host/dir:/data (see [docs.docker volumes](https://docs.docker.com/storage/volumes/)).
 
 #### Connect via keydb-cli
+
 you can grab the ip of the container with `docker inspect --format '{{ .NetworkSettings.IPAddress }}' mycontainername` then run the following:
+
 ```
 docker run -it --rm ThisDockerImage keydb-cli -h <ipaddress-from-above> -p 6379
 ```

@@ -11,10 +11,12 @@ This docker image builds KeyDB within the image and cleans up afterwards. A few 
 
 If you have a local keydb-internal repository you would like to generate the binaries from, use the command below. This will simply copy over all the files within the local keydb-internal repo and then build the image. 
 
+One issue with COPY is that it creates an additional layer. If we remove the source directory in a later layer the size of the original COPY layer remains creating a large image, hence we need to squash the layers into one layer. This feature is available with experimental mode enabled. This can be done by modifying /etc/docker/daemon.json to include `"experimental": true,`. You may also be able to pass at the build line as shown below.
+
 Modify the DIR build argument to your local KeyDB repo and update your image tag in the line below
 
 ```
-docker build --build-arg DIR=/path/to/keydb-internal -t myImageName:imageTag .
+DOCKER_CLI_EXPERIMENTAL=enabled docker build --squash --build-arg DIR=/path/to/keydb-internal -t myImageName:imageTag .
 ```
 
 Please note that directories are relative to the docker build context. You can use the `-f /path/to/Dockerfile` to specify Dockerfile which will also set the build context, your repo location will be relative to it.

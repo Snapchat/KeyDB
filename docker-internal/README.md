@@ -13,13 +13,21 @@ If you have a local keydb-internal repository you would like to generate the bin
 
 One issue with COPY is that it creates an additional layer. If we remove the source directory in a later layer the size of the original COPY layer remains creating a large image, hence we need to squash the layers into one layer. This feature is available with experimental mode enabled. This can be done by modifying /etc/docker/daemon.json to include `"experimental": true,`. You may also be able to pass at the build line as shown below.
 
-Modify the DIR build argument to your local KeyDB repo and update your image tag in the line below
+Modify the KEYDB_DIR build argument to your local KeyDB repo and update your image tag in the line below
 
 ```
-DOCKER_CLI_EXPERIMENTAL=enabled docker build --squash --build-arg DIR=/path/to/keydb-internal -t myImageName:imageTag .
+DOCKER_CLI_EXPERIMENTAL=enabled docker build --squash --build-arg KEYDB_DIR=. -t myImageName:imageTag -f ./docker-internal/Dockerfile .
 ```
 
 Please note that directories are relative to the docker build context. You can use the `-f /path/to/Dockerfile` to specify Dockerfile which will also set the build context, your repo location will be relative to it.
+
+### Troubleshooting
+If you see error:
+```
+#11 354.1 g++: fatal error: Killed signal terminated program cc1plus
+```
+most likely you are hitting memory constraint. Check -j argument for the "make" command int the output. By default it uses the number of cores on the host. So if that is too high (like 8) and you are building locally
+on laptop, try to edit Dockerfile to reduce it to -j2.
 
 
 ## Building the Docker Image Using PAT & Clone

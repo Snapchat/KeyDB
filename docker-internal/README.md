@@ -21,14 +21,64 @@ DOCKER_CLI_EXPERIMENTAL=enabled docker build --squash --build-arg KEYDB_DIR=. -t
 
 Please note that directories are relative to the docker build context. You can use the `-f /path/to/Dockerfile` to specify Dockerfile which will also set the build context, your repo location will be relative to it.
 
+### Pushing
+
+#### AWS
+There is a script ./build-and-publish.sh to build and push image. This script will push images to caching-infra AWS account and caching-infra GCP project.
+
+If you are pushing to ECR, then you need to add this profile config in your ```~/.aws/config```:
+
+```
+[profile caching-infra-images-editor]
+role_arn = arn:aws:iam::520173307535:role/_Snap_ContainerEditor
+output = json
+region = us-east-1
+source_profile = default
+```
+and to get permission for assuming role [_Snap_ContainerEditor in account caching-infra](https://lease.sc-corp.net/v2/request_access/aws_resources/aws_account?resource=520173307535&roles=%5B_Snap_ContainerEditor%5D).
+
+Also, if you are using image different from "520173307535.dkr.ecr.us-east-1.amazonaws.com/keydb", then you need to give access to that image to snap-core-prod aws account. That is account where all mesh services are running. Go to your image in AWS Console and add policy:
+```
+{
+  "Version": "2008-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowImagePullApp",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::307862320347:root"
+      },
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer"
+      ]
+    }
+  ]
+}
+```
+
+#### GCP
+
+In order to publish to GCP, you will need to get [Storage Admin Role in project caching-infra](https://lease.sc-corp.net/v2/request_access/gcp_resources/gcp_project?resource=caching-infra&roles=%5Broles/storage.admin%5D)
+
+For reading image you will need to add your service account to [caching-infra project](https://lease.sc-corp.net/v2/view_iam?resourceType=PRJ&resource=caching-infra) with  "Container Registry Service Agent" role.
+
+#### Example
+
+```
+DOCKER_CLI_EXPERIMENTAL=enabled ./build-and-publish.sh
+```
+
 ### Troubleshooting
 If you see error:
 ```
 #11 354.1 g++: fatal error: Killed signal terminated program cc1plus
 ```
-most likely you are hitting memory constraint. Check -j argument for the "make" command int the output. By default it uses the number of cores on the host. So if that is too high (like 8) and you are building locally
-on laptop, try to edit Dockerfile to reduce it to -j2.
-
+most likely you are hitting memory constraint. If you are running docker build command from the above, then you can try to reduce number of jobs for "make" by adding "--build-arg MAKE_JOBS=<jobs>" argument to lower value (i.e. 2). If you are running ./build-and-publish.sh you can reduce the number of jobs by passing it in args:
+```
+DOCKER_CLI_EXPERIMENTAL=enabled ./build-and-publish.sh -j 2
+```
 
 ## Building the Docker Image Using PAT & Clone
 

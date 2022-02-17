@@ -24,6 +24,7 @@ RUN set -eux; \
         gosu nobody true
 # build KeyDB
 ARG KEYDB_DIR
+ARG MAKE_JOBS=""
 COPY $KEYDB_DIR /tmp/keydb-internal/
 RUN set -eux; \
         \
@@ -52,7 +53,7 @@ RUN set -eux; \
         grep -E '^ *createBoolConfig[(]"protected-mode",.*, *1 *,.*[)],$' ./src/config.cpp; \
         sed -ri 's!^( *createBoolConfig[(]"protected-mode",.*, *)1( *,.*[)],)$!\10\2!' ./src/config.cpp; \
         grep -E '^ *createBoolConfig[(]"protected-mode",.*, *0 *,.*[)],$' ./src/config.cpp; \
-        make -j$(nproc) BUILD_TLS=yes NO_LICENSE_CHECK=yes; \
+        make -j$([ -z "$MAKE_JOBS" ] &&  nproc || echo "$MAKE_JOBS") BUILD_TLS=yes NO_LICENSE_CHECK=yes; \
         cd src; \
         strip keydb-cli keydb-benchmark keydb-check-rdb keydb-check-aof keydb-diagnostic-tool keydb-sentinel; \
         mv keydb-server keydb-cli keydb-benchmark keydb-check-rdb keydb-check-aof keydb-diagnostic-tool keydb-sentinel /usr/local/bin/; \

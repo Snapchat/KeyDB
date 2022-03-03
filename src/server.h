@@ -63,6 +63,7 @@
 #include <map>
 #include <string>
 #include <mutex>
+#include <unordered_set>
 #ifdef __cplusplus
 extern "C" {
 #include <lua.h>
@@ -2613,6 +2614,9 @@ struct redisServer {
     int tls_replication;
     int tls_auth_clients;
     int tls_rotation;
+
+    int tls_whitelist_enabled;
+    std::unordered_set<char *> tls_whitelist;
     redisTLSContextConfig tls_ctx_config;
 
     /* cpu affinity */

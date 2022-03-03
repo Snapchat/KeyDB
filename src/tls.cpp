@@ -40,8 +40,12 @@
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/pem.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
+#include <cstring>
 
 #include <sys/stat.h>
+#include <arpa/inet.h>
 
 #define REDIS_TLS_PROTO_TLSv1       (1<<0)
 #define REDIS_TLS_PROTO_TLSv1_1     (1<<1)
@@ -474,6 +478,86 @@ typedef struct tls_connection {
     aeEventLoop *el;
 } tls_connection;
 
+/* Check to see if a given client name matches against our whitelist.
+ * Return true if it does */
+bool tlsCheckAgainstWhitelist(const char * client){
+    /* Because of wildcard matching, we need to iterate over the entire set.
+     * If we were doing simply straight matching, we could just directly 
+     * check to see if the client name is in the set in O(1) time */
+    for (char * client_pattern: g_pserver->tls_whitelist){
+        if (stringmatchlen(client_pattern, strlen(client_pattern), client, strlen(client), 1))
+            return true;
+    }
+    return false;
+}
+
+bool tlsValidateCertificateName(tls_connection* conn){
+    X509 * cert = SSL_get_peer_certificate(conn->ssl);
+    /* Check the common name (CN) of the certificate first */
+    X509_NAME_ENTRY * ne = X509_NAME_get_entry(X509_get_subject_name(cert), X509_NAME_get_index_by_NID(X509_get_subject_name(cert), NID_commonName, -1));
+    const char * commonName = reinterpret_cast<const char*>(ASN1_STRING_get0_data(X509_NAME_ENTRY_get_data(ne)));
+    
+    if (tlsCheckAgainstWhitelist(commonName))
+        return true;
+
+    /* If that fails, check through the subject alternative names (SANs) as well */
+    GENERAL_NAMES* subjectAltNames = (GENERAL_NAMES*)X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
+    if (subjectAltNames != nullptr){
+        for (int i = 0; i < sk_GENERAL_NAME_num(subjectAltNames); i++)
+        {
+            GENERAL_NAME* generalName = sk_GENERAL_NAME_value(subjectAltNames, i);
+            /* Short circuit if one of the SANs match. 
+             * We only support DNS, EMAIL, URI, and IP (specifically IPv4) */
+            switch (generalName->type)
+            {
+                case GEN_EMAIL:
+                    if (tlsCheckAgainstWhitelist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.rfc822Name)))){
+                        sk_GENERAL_NAME_pop_free(subjectAltNames, GENERAL_NAME_free);
+                        return true;
+                    }
+                    break;
+                case GEN_DNS:
+                    if (tlsCheckAgainstWhitelist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.dNSName)))){
+                        sk_GENERAL_NAME_pop_free(subjectAltNames, GENERAL_NAME_free);
+                        return true;
+                    }
+                    break;
+                case GEN_URI:
+                    if (tlsCheckAgainstWhitelist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.uniformResourceIdentifier)))){
+                        sk_GENERAL_NAME_pop_free(subjectAltNames, GENERAL_NAME_free);
+                        return true;
+                    }
+                    break;
+                case GEN_IPADD:
+                    {
+                        int ipLen = ASN1_STRING_length(generalName->d.iPAddress);
+                        if (ipLen == 4){ //IPv4 case
+                            char addr[INET_ADDRSTRLEN];
+                            inet_ntop(AF_INET, ASN1_STRING_get0_data(generalName->d.iPAddress), addr, INET_ADDRSTRLEN);
+                            if (tlsCheckAgainstWhitelist(addr)){
+                                sk_GENERAL_NAME_pop_free(subjectAltNames, GENERAL_NAME_free);
+                                return true;
+                            }
+                        } else if (ipLen == 16) { // IPv6 case
+                            /* We don't support IPv6 at the moment */
+                        }
+                    }
+                    break;     
+                default:
+                    break;
+            }
+        }
+        sk_GENERAL_NAME_pop_free(subjectAltNames, GENERAL_NAME_free);
+    }
+
+    /* If neither the CN nor the SANs match, update the SSL error and return false */
+    conn->c.last_errno = 0;
+    if (conn->ssl_error) zfree(conn->ssl_error);
+    conn->ssl_error = (char*)zmalloc(512);
+    snprintf(conn->ssl_error, 512, "Client CN (%s) and SANs not found in whitelist.", commonName);
+    return false;
+}
+
 static connection *createTLSConnection(int client_side) {
     SSL_CTX *ctx = redis_tls_ctx;
     if (client_side && redis_tls_client_ctx)
@@ -691,7 +775,12 @@ void tlsHandleEvent(tls_connection *conn, int mask) {
                 /* If not handled, it's an error */
                 conn->c.state = CONN_STATE_ERROR;
             } else {
-                conn->c.state = CONN_STATE_CONNECTED;
+                /* Validate name */
+                if (g_pserver->tls_whitelist_enabled && !tlsValidateCertificateName(conn)){
+                    conn->c.state = CONN_STATE_ERROR;
+                } else {
+                    conn->c.state = CONN_STATE_CONNECTED;
+                }
             }
 
             {

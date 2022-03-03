@@ -737,6 +737,11 @@ void loadServerConfigFromString(char *config) {
                 g_pserver->fActiveReplica = CONFIG_DEFAULT_ACTIVE_REPLICA;
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
+        } else if (!strcasecmp(argv[0], "tls-whitelist")) {
+            if (!g_pserver->tls_whitelist_enabled) 
+                g_pserver->tls_whitelist_enabled = true;
+            for (int i = 1; i < argc; i++)
+                g_pserver->tls_whitelist.insert(zstrdup(argv[i]));
         } else if (!strcasecmp(argv[0], "version-override") && argc == 2) {
             KEYDB_SET_VERSION = zstrdup(argv[1]);
             serverLog(LL_WARNING, "Warning version is overriden to: %s\n", KEYDB_SET_VERSION);

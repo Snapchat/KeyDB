@@ -33,19 +33,13 @@ Because of this difference of opinion features which are right for KeyDB may not
 Additional Resources
 --------------------
 
-Try our docker container: https://hub.docker.com/r/eqalpha/keydb
+Check out KeyDB's [Docker Image](https://hub.docker.com/r/eqalpha/keydb)
 
-Talk on Gitter: https://gitter.im/KeyDB
+Join us on [Slack](https://docs.keydb.dev/slack/)
 
-Visit our Website: https://keydb.dev
+Post to the [Community Forum](https://community.keydb.dev)
 
-See options for channel partners and support contracts: https://keydb.dev/support.html
-
-Learn with KeyDB’s official documentation site: https://docs.keydb.dev
-
-[Subscribe to the KeyDB mailing list](https://eqalpha.us20.list-manage.com/subscribe/post?u=978f486c2f95589b24591a9cc&id=4ab9220500)
-
-Management GUI: We recommend [FastoNoSQL](https://fastonosql.com/) which has official KeyDB support.
+Learn more through KeyDB's [Documentation & Learning Center](https://docs.keydb.dev)
 
 
 Benchmarking KeyDB

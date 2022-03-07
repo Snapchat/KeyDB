@@ -1286,8 +1286,6 @@ public:
     // These need to be fixed
     using redisDbPersistentData::size;
     using redisDbPersistentData::expireSize;
-
-    static const uint64_t msStaleThreshold = 500;
 };
 
 /* Redis database representation. There are multiple databases identified
@@ -2604,6 +2602,8 @@ struct redisServer {
 
     IStorageFactory *m_pstorageFactory = nullptr;
     int storage_flush_period;   // The time between flushes in the CRON job
+
+    long long snapshot_slip = 500;   // The amount of time in milliseconds we let a snapshot be behind the current database
 
     /* TLS Configuration */
     int tls_cluster;

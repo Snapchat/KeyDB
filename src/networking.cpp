@@ -208,7 +208,7 @@ client *createClient(connection *conn, int iel) {
     c->paused_list_node = NULL;
     c->client_tracking_redirection = 0;
     c->casyncOpsPending = 0;
-    c->mvccCheckpoint = getMvccTstamp();
+    c->mvccCheckpoint = 0;
     c->master_error = 0;
     memset(c->uuid, 0, UUID_BINARY_LEN);
 
@@ -2754,7 +2754,7 @@ void readQueryFromClient(connection *conn) {
             // Frequent writers aren't good candidates for this optimization, they cause us to renew the snapshot too often
             //  so we exclude them unless the snapshot we need already exists
             bool fSnapshotExists = c->db->mvccLastSnapshot >= c->mvccCheckpoint;
-            bool fWriteTooRecent = (((getMvccTstamp() - c->mvccCheckpoint) >> MVCC_MS_SHIFT) < redisDbPersistentDataSnapshot::msStaleThreshold/2);
+            bool fWriteTooRecent = (((getMvccTstamp() - c->mvccCheckpoint) >> MVCC_MS_SHIFT) < static_cast<uint64_t>(g_pserver->snapshot_slip)/2);
 
             // The check below avoids running async commands if this is a frequent writer unless a snapshot is already there to service it
             if (!fWriteTooRecent || fSnapshotExists) {

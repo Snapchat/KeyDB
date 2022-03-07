@@ -2776,7 +2776,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* end any snapshots created by fast async commands */
     for (int idb = 0; idb < cserver.dbnum; ++idb) {
-        if (serverTL->rgdbSnapshot[idb] != nullptr) {
+        if (serverTL->rgdbSnapshot[idb] != nullptr && serverTL->rgdbSnapshot[idb]->FStale()) {
             g_pserver->db[idb]->endSnapshot(serverTL->rgdbSnapshot[idb]);
             serverTL->rgdbSnapshot[idb] = nullptr;
         }

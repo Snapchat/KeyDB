@@ -190,7 +190,11 @@ int bg_unlink(const char *filename) {
 bool createDiskBacklog() {
     // Lets create some disk backed pages and add them here
     std::string path = "./repl-backlog-temp" + std::to_string(gettid());
+#ifdef __APPLE__
+    int fd = open(path.c_str(), O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+#else
     int fd = open(path.c_str(), O_CREAT | O_RDWR | O_LARGEFILE, S_IRUSR | S_IWUSR);
+#endif
     if (fd < 0) {
         return false;
     }
@@ -1559,14 +1563,7 @@ LError:
 
 void processReplconfLicense(client *c, robj *arg)
 {
-    if (cserver.license_key != nullptr)
-    {
-        if (strcmp(cserver.license_key, szFromObj(arg)) == 0) {
-            addReplyError(c, "Each replica must have a unique license key");
-            c->flags |= CLIENT_CLOSE_AFTER_REPLY;
-            return;
-        }
-    }
+    // Only for back-compat
     addReply(c, shared.ok);
 }
 
@@ -3632,41 +3629,6 @@ retry_connect:
         }
         sdsfree(err);
         err = NULL;
-        mi->repl_state = REPL_STATE_SEND_KEY;
-        // fallthrough
-    }
-
-    /* Send LICENSE Key */
-    if (mi->repl_state == REPL_STATE_SEND_KEY)
-    {
-        if (cserver.license_key == nullptr)
-        {
-            mi->repl_state = REPL_STATE_SEND_PSYNC;
-        }
-        else
-        {
-            err = sendCommand(conn,"REPLCONF","license",cserver.license_key,NULL);
-            if (err) goto write_error;
-            mi->repl_state = REPL_STATE_KEY_ACK;
-            return;
-        }
-    }
-
-    /* LICENSE Key Ack */
-    if (mi->repl_state == REPL_STATE_KEY_ACK)
-    {
-        err = receiveSynchronousResponse(mi, conn);
-        if (err[0] == '-') {
-            if (err[1] == 'E' && err[2] == 'R' && err[3] == 'R') {
-                // Replicating with non-enterprise
-                serverLog(LL_WARNING, "Replicating with non-enterprise server.");
-            } else {
-                serverLog(LL_WARNING, "Recieved error from client: %s", err);
-                sdsfree(err);
-                goto error;
-            }
-        }
-        sdsfree(err);
         mi->repl_state = REPL_STATE_SEND_PSYNC;
         // fallthrough
     }
@@ -5598,7 +5560,7 @@ void flushReplBacklogToClients()
     
     if (g_pserver->repl_batch_offStart != g_pserver->master_repl_offset) {
         bool fAsyncWrite = false;
-        long long min_offset = LONG_LONG_MAX;
+        long long min_offset = LLONG_MAX;
         // Ensure no overflow
         serverAssert(g_pserver->repl_batch_offStart < g_pserver->master_repl_offset);
         if (g_pserver->master_repl_offset - g_pserver->repl_batch_offStart > g_pserver->repl_backlog_size) {
@@ -5657,7 +5619,7 @@ LDone:
         // This may be called multiple times per "frame" so update with our progress flushing to clients
         g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
         g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
-        g_pserver->repl_lowest_off.store(min_offset == LONG_LONG_MAX ? -1 : min_offset, std::memory_order_seq_cst);
+        g_pserver->repl_lowest_off.store(min_offset == LLONG_MAX ? -1 : min_offset, std::memory_order_seq_cst);
     } 
 }
 

@@ -2766,9 +2766,9 @@ void readQueryFromClient(connection *conn) {
     } else {
         // If we're single threaded its actually better to just process the command here while the query is hot in the cache
         //  multithreaded lock contention dominates and batching is better
-        aeAcquireLock();
+        AeLocker locker;
+        locker.arm(c);
         runAndPropogateToReplicas(processInputBuffer, c, true /*fParse*/, CMD_CALL_FULL);
-        aeReleaseLock();
     }
 }
 

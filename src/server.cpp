@@ -65,7 +65,6 @@
 #include <mutex>
 #include <condition_variable>
 #include "aelocker.h"
-#include "keycheck.h"
 #include "motd.h"
 #include "t_nhash.h"
 #include "readwritelock.h"
@@ -2200,8 +2199,8 @@ void checkChildrenDone(void) {
     if (g_pserver->FRdbSaveInProgress() && !cserver.fForkBgSave)
     {
         void *rval = nullptr;
-        int err;
-        if ((err = pthread_tryjoin_np(g_pserver->rdbThreadVars.rdb_child_thread, &rval)))
+        int err = EAGAIN;
+        if (!g_pserver->rdbThreadVars.fDone || (err = pthread_join(g_pserver->rdbThreadVars.rdb_child_thread, &rval)))
         {
             if (err != EBUSY && err != EAGAIN)
                 serverLog(LL_WARNING, "Error joining the background RDB save thread: %s\n", strerror(errno));
@@ -2211,6 +2210,7 @@ void checkChildrenDone(void) {
             int exitcode = (int)reinterpret_cast<ptrdiff_t>(rval);
             backgroundSaveDoneHandler(exitcode,g_pserver->rdbThreadVars.fRdbThreadCancel);
             g_pserver->rdbThreadVars.fRdbThreadCancel = false;
+            g_pserver->rdbThreadVars.fDone = false;
             if (exitcode == 0) receiveChildInfo();
         }
     }
@@ -7512,13 +7512,6 @@ int main(int argc, char **argv) {
     } else {
         serverLog(LL_WARNING, "Configuration loaded");
     }
-
-#ifndef NO_LICENSE_CHECK
-    if (!g_pserver->sentinel_mode && (cserver.license_key == nullptr || !FValidKey(cserver.license_key, strlen(cserver.license_key)))){
-        serverLog(LL_WARNING, "Error: %s license key provided, exiting immediately.", cserver.license_key == nullptr ? "No" : "Invalid");
-        exit(1);
-    }
-#endif
 
     validateConfiguration();
 

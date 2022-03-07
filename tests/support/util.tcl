@@ -110,6 +110,7 @@ proc wait_for_ofs_sync {r1 r2} {
     } else {
         fail "replica didn't sync in time"
     }
+    $r2 lfence
 }
 
 proc wait_done_loading r {

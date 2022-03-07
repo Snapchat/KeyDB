@@ -243,7 +243,7 @@ void *ztryrealloc_usable(void *ptr, size_t size, size_t *usable) {
 #else
     realptr = (char*)ptr-PREFIX_SIZE;
     oldsize = *((size_t*)realptr);
-    newptr = realloc(realptr,size+PREFIX_SIZE);
+    newptr = realloc(realptr,size+PREFIX_SIZE, MALLOC_LOCAL);
     if (newptr == NULL) {
         if (usable) *usable = 0;
         return NULL;

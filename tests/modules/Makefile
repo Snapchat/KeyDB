@@ -32,6 +32,7 @@ TEST_MODULES = \
     auth.so \
     keyspace_events.so \
     blockedclient.so \
+    timers.so \
     getkeys.so \
     test_lazyfree.so \
     timer.so \

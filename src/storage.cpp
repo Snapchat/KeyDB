@@ -114,6 +114,7 @@ void pool_free(struct alloc_pool *ppool, void *pv)
     return;
 }
 
+extern size_t OBJ_ENCODING_EMBSTR_SIZE_LIMIT;
 #define EMBSTR_ROBJ_SIZE (sizeof(robj)+sizeof(struct sdshdr8)+OBJ_ENCODING_EMBSTR_SIZE_LIMIT+1)
 struct alloc_pool poolobj;
 struct alloc_pool poolembstrobj;

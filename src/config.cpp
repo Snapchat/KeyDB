@@ -35,9 +35,9 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#ifdef __linux__
 #include <sys/sysinfo.h>
-#include "keycheck.h"
-
+#endif
 
 const char *KEYDB_SET_VERSION = KEYDB_REAL_VERSION;
 
@@ -371,6 +371,7 @@ bool initializeStorageProvider(const char **err)
             // We need to set max memory to a sane default so keys are actually evicted properly
             if (g_pserver->maxmemory == 0 && g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
             {
+#ifdef __linux__
                 struct sysinfo sys;
                 if (sysinfo(&sys) == 0)
                 {
@@ -378,6 +379,9 @@ bool initializeStorageProvider(const char **err)
                     g_pserver->maxmemory = static_cast<unsigned long long>(sys.totalram / 2.2);
                     g_pserver->maxmemory_policy = MAXMEMORY_ALLKEYS_LRU;
                 }
+#else
+                serverLog(LL_WARNING, "Unable to dynamically set maxmemory, please set maxmemory and maxmemory-policy if you are using a storage provier");
+#endif
             }
             else if (g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
             {
@@ -753,15 +757,6 @@ void loadServerConfigFromString(char *config) {
             g_sdsProvider = sdsdup(argv[1]);
             if (argc > 2)
                 g_sdsArgs = sdsdup(argv[2]);
-        } else if (!strcasecmp(argv[0],"enable-enterprise") && (argc == 1 || argc == 2)) {
-            if (argc == 2)
-            {
-                if (!FValidKey(argv[1], strlen(argv[1]))) {
-                    err = "Invalid license key";
-                    goto loaderr;
-                }
-                cserver.license_key = zstrdup(argv[1]);
-            }
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -1904,7 +1899,6 @@ int rewriteConfig(char *path, int force_all) {
     rewriteConfigClientoutputbufferlimitOption(state);
     rewriteConfigYesNoOption(state,"active-replica",g_pserver->fActiveReplica,CONFIG_DEFAULT_ACTIVE_REPLICA);
     rewriteConfigStringOption(state, "version-override",KEYDB_SET_VERSION,KEYDB_REAL_VERSION);
-    rewriteConfigStringOption(state, "enable-enterprise", cserver.license_key, CONFIG_DEFAULT_LICENSE_KEY);
     rewriteConfigOOMScoreAdjValuesOption(state);
 
     /* Rewrite Sentinel config if in Sentinel mode. */

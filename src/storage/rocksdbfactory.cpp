@@ -21,6 +21,16 @@ rocksdb::Options DefaultRocksDBOptions() {
     options.allow_mmap_reads = true;
     options.avoid_unnecessary_blocking_io = true;
     options.prefix_extractor.reset(rocksdb::NewFixedPrefixTransform(0));
+
+    rocksdb::BlockBasedTableOptions table_options;
+    table_options.block_size = 16 * 1024;
+    table_options.cache_index_and_filter_blocks = true;
+    table_options.pin_l0_filter_and_index_blocks_in_cache = true;
+    table_options.data_block_index_type = rocksdb::BlockBasedTableOptions::kDataBlockBinaryAndHash;
+    table_options.checksum = rocksdb::kNoChecksum;
+    table_options.format_version = 4;
+    options.table_factory.reset(NewBlockBasedTableFactory(table_options));
+    
     return options;
 }
 
@@ -51,18 +61,8 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
     options.sst_file_manager = m_pfilemanager;
     options.create_if_missing = true;
     options.create_missing_column_families = true;
+    options.info_log_level = rocksdb::ERROR_LEVEL;
     rocksdb::DB *db = nullptr;
-
-    rocksdb::BlockBasedTableOptions table_options;
-    table_options.block_size = 16 * 1024;
-    table_options.cache_index_and_filter_blocks = true;
-    table_options.pin_l0_filter_and_index_blocks_in_cache = true;
-    table_options.data_block_index_type = rocksdb::BlockBasedTableOptions::kDataBlockBinaryAndHash;
-    table_options.checksum = rocksdb::kNoChecksum;
-    table_options.format_version = 4;
-    options.table_factory.reset(NewBlockBasedTableFactory(table_options));
-    options.table_factory.reset(
-        rocksdb::NewBlockBasedTableFactory(table_options));
 
     for (int idb = 0; idb < dbnum; ++idb)
     {

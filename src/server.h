@@ -3784,6 +3784,7 @@ void hrenameCommand(client *c);
 void stralgoCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+void lfenceCommand(client *c);
 
 
 int FBrokenLinkToMaster();

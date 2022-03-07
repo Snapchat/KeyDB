@@ -1177,6 +1177,10 @@ struct redisCommand redisCommandTable[] = {
 
     {"failover",failoverCommand,-1,
      "admin no-script ok-stale",
+     0,NULL,0,0,0,0,0,0},
+
+    {"lfence", lfenceCommand,1,
+     "read-only random ok-stale",
      0,NULL,0,0,0,0,0,0}
 };
 
@@ -4659,6 +4663,11 @@ void rejectCommand(client *c, robj *reply, int severity = ERR_CRITICAL) {
         /* using addReplyError* rather than addReply so that the error can be logged. */
         addReplyErrorObject(c, reply, severity);
     }
+}
+
+void lfenceCommand(client *c) {
+    c->mvccCheckpoint = getMvccTstamp();
+    addReply(c, shared.ok);
 }
 
 void rejectCommandFormat(client *c, const char *fmt, ...) {

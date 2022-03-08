@@ -2488,7 +2488,10 @@ void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add) {
     } else {
         fModified = raxRemove(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL);
     }
-    serverAssert(fModified);
+    // This assert is disabled when a snapshot depth is >0 because prepOverwriteForSnapshot will add in a tombstone,
+    //  this prevents ensure from adding the key to the dictionary which means the caller isn't aware we're already tracking
+    //  the key.
+    serverAssert(fModified || g_pserver->db[0]->snapshot_depth() > 0);
     if (indexed != buf) zfree(indexed);
 }
 

@@ -3571,6 +3571,7 @@ void initDb(void) {
         g_pserver->db[j].avg_ttl = 0;
         g_pserver->db[j].last_expire_set = 0;
         g_pserver->db[j].defrag_later = listCreate();
+        g_pserver->db[j].ns = nullptr;
         listSetFreeMethod(g_pserver->db[j].defrag_later,(void (*)(const void*))sdsfree);
     }
 }

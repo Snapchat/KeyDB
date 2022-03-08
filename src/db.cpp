@@ -680,6 +680,10 @@ void mapDb(redisNamespace *ns, int global_db, int ns_db, int do_propagate) {
             propagate(cserver.allocateCommand, -1, argv, 4, PROPAGATE_AOF|PROPAGATE_REPL);
         else
             alsoPropagate(cserver.allocateCommand, -1, argv, 4, PROPAGATE_AOF|PROPAGATE_REPL);
+        
+        decrRefCount(argv[1]);
+        decrRefCount(argv[2]);
+        decrRefCount(argv[3]);
     }
 }
 

@@ -1322,11 +1322,9 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
         if (rdbSaveAuxFieldStrStr(rdb,"keydb-namespace", db->ns->name) == -1) goto werr;
         if (rdbSaveAuxFieldStrInt(rdb,"keydb-namespace-dbid", db->mapped_id) == -1) goto werr;
 
-        if (db_size == 0) continue;
-
         /* Iterate this DB writing every entry */
         size_t ckeysExpired = 0;
-        while((de = dictNext(di)) != NULL) {
+        while(db_size != 0 && (de = dictNext(di)) != NULL) {
             sds keystr = (sds)dictGetKey(de);
             robj *o = (robj*)dictGetVal(de);
 
@@ -2571,7 +2569,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     bool fLastKeyExpired = false;
     int error;
     long long empty_keys_skipped = 0, expired_keys_skipped = 0, keys_loaded = 0;
-    client *lua_client = createClient(nullptr, IDX_EVENT_LOOP_MAIN);
+    client *lua_client = nullptr;
 
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = g_pserver->loading_process_events_interval_bytes;
@@ -2591,7 +2589,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
     now = mstime();
     lru_clock = LRU_CLOCK();
-    
+    lua_client = createClient(nullptr, IDX_EVENT_LOOP_MAIN);
     while(1) {
         robj *val;
 
@@ -2927,6 +2925,8 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         subexpireKey = nullptr;
     }
     
+    freeClient(lua_client);
+
     /* Verify the checksum if RDB version is >= 5 */
     if (rdbver >= 5) {
         uint64_t cksum, expected = rdb->cksum;
@@ -2972,6 +2972,8 @@ eoferr:
         decrRefCount(subexpireKey);
         subexpireKey = nullptr;
     }
+
+    freeClient(lua_client);
 
     serverLog(LL_WARNING,
         "Short read or OOM loading DB. Unrecoverable error, aborting now.");

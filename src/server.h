@@ -1106,7 +1106,8 @@ public:
     redisDbPersistentData();
     virtual ~redisDbPersistentData();
 
-    redisDbPersistentData(redisDbPersistentData &&) = default;
+    redisDbPersistentData(const redisDbPersistentData &) = delete;
+    redisDbPersistentData(redisDbPersistentData &&) = delete;
 
     size_t slots() const { return dictSlots(m_pdict); }
     size_t size(bool fCachedOnly = false) const;

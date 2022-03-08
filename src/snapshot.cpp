@@ -626,7 +626,7 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe_core(std::function<bool(c
     __atomic_load(&m_pdbSnapshot, &psnapshot, __ATOMIC_ACQUIRE);
     if (fResult && psnapshot != nullptr)
     {
-        std::function<bool(const char*, robj_roptr o)> fnNew = [this, &fn, &celem, dictTombstone](const char *key, robj_roptr o) {
+        std::function<bool(const char*, robj_roptr o)> fnNew = [&fn, &celem, dictTombstone](const char *key, robj_roptr o) {
             dictEntry *deTombstone = dictFind(dictTombstone, key);
             if (deTombstone != nullptr)
                 return true;

@@ -4289,10 +4289,9 @@ RedisModuleCallReply *RM_Call(RedisModuleCtx *ctx, const char *cmdname, const ch
     }
 
     {
-    aeAcquireLock();
+    AeLocker locker; locker.arm(nullptr);
     std::unique_lock<fastlock> ul(c->lock);
     call(c,call_flags);
-    aeReleaseLock();
     }
 
     g_pserver->replication_allowed = prev_replication_allowed;

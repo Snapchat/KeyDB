@@ -90,7 +90,6 @@ endif
 
 ifeq ($(COMPILER_NAME),clang)
 	CXXFLAGS+= -stdlib=libc++ 
-	LDFLAGS+= -latomic
 endif
 
 # To get ARM stack traces if KeyDB crashes we need a special C flag.
@@ -102,12 +101,6 @@ ifneq (,$(findstring armv,$(uname_M)))
         CFLAGS+=-funwind-tables
 	CXXFLAGS+=-funwind-tables
 endif
-endif
-
-ifneq (,$(filter aarch64 armv,$(uname_M)))
-	LICENSE_LIB_DIR=../deps/license/arm64/
-else
-	LICENSE_LIB_DIR=../deps/license/x64/
 endif
 
 # Backwards compatibility for selecting an allocator
@@ -135,11 +128,11 @@ endif
 # Override default settings if possible
 -include .make-settings
 
+DEBUG=-g -ggdb
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(KEYDB_CFLAGS) $(REDIS_CFLAGS)
 FINAL_CXXFLAGS=$(CXX_STD) $(WARN) $(OPT) $(DEBUG) $(CXXFLAGS) $(KEYDB_CFLAGS) $(REDIS_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(KEYDB_LDFLAGS) $(DEBUG)
-FINAL_LIBS+=-lm -lz -latomic -L$(LICENSE_LIB_DIR) -lkey -lcrypto -lbz2 -lzstd -llz4 -lsnappy
-DEBUG=-g -ggdb
+FINAL_LIBS+=-lm -lz -lcrypto -lbz2 -lzstd -llz4 -lsnappy
 
 ifneq ($(uname_S),Darwin)
 	FINAL_LIBS+=-latomic
@@ -249,14 +242,15 @@ endif
 
 ifdef OPENSSL_PREFIX
 	OPENSSL_CFLAGS=-I$(OPENSSL_PREFIX)/include
+	OPENSSL_CXXFLAGS=-I$(OPENSSL_PREFIX)/include
 	OPENSSL_LDFLAGS=-L$(OPENSSL_PREFIX)/lib
 	# Also export OPENSSL_PREFIX so it ends up in deps sub-Makefiles
 	export OPENSSL_PREFIX
 endif
 
 # Include paths to dependencies
-FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/license/
-FINAL_CXXFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/rocksdb/include/ -I../deps/license -I../deps/concurrentqueue
+FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram
+FINAL_CXXFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/rocksdb/include/ -I../deps/concurrentqueue
 
 # Determine systemd support and/or build preference (defaulting to auto-detection)
 BUILD_WITH_SYSTEMD=no

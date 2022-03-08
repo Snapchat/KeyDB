@@ -575,7 +575,7 @@ int dictRehashMilliseconds(dict *d, int ms) {
  * dictionary so that the hash table automatically migrates from H1 to H2
  * while it is actively used. */
 static void _dictRehashStep(dict *d) {
-    uint16_t pauserehash;
+    int16_t pauserehash;
     __atomic_load(&d->pauserehash, &pauserehash, __ATOMIC_RELAXED);
     if (pauserehash == 0) dictRehash(d,1);
 }
@@ -1519,7 +1519,7 @@ void dictGetStats(char *buf, size_t bufsize, dict *d) {
 
 void dictForceRehash(dict *d)
 {
-    uint16_t pauserehash;
+    int16_t pauserehash;
     __atomic_load(&d->pauserehash, &pauserehash, __ATOMIC_RELAXED);
     while (pauserehash == 0 && dictIsRehashing(d)) _dictRehashStep(d);
 }

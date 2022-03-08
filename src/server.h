@@ -373,8 +373,6 @@ inline bool operator!=(const void *p, const robj_sharedptr &rhs)
 #define CONFIG_DEFAULT_ACTIVE_REPLICA 0
 #define CONFIG_DEFAULT_ENABLE_MULTIMASTER 0
 
-#define CONFIG_DEFAULT_LICENSE_KEY ""
-
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 64 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_SUBKEY_LOOKUPS_PER_LOOP 16384 /* Subkey loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
@@ -586,8 +584,6 @@ typedef enum {
     REPL_STATE_RECEIVE_IP_REPLY,    /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_CAPA_REPLY,  /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_UUID,        /* they should ack with their UUID */
-    REPL_STATE_SEND_KEY,
-    REPL_STATE_KEY_ACK,
     REPL_STATE_SEND_PSYNC,          /* Send PSYNC */
     REPL_STATE_RECEIVE_PSYNC_REPLY, /* Wait for PSYNC reply */
     /* --- End of handshake states --- */
@@ -1110,7 +1106,8 @@ public:
     redisDbPersistentData();
     virtual ~redisDbPersistentData();
 
-    redisDbPersistentData(redisDbPersistentData &&) = default;
+    redisDbPersistentData(const redisDbPersistentData &) = delete;
+    redisDbPersistentData(redisDbPersistentData &&) = delete;
 
     size_t slots() const { return dictSlots(m_pdict); }
     size_t size(bool fCachedOnly = false) const;
@@ -1290,8 +1287,6 @@ public:
     // These need to be fixed
     using redisDbPersistentData::size;
     using redisDbPersistentData::expireSize;
-
-    static const uint64_t msStaleThreshold = 500;
 };
 
 /* Redis database representation. There are multiple databases identified
@@ -2179,7 +2174,6 @@ struct redisServerConst {
 
     int enable_motd;            /* Flag to retrieve the Message of today using CURL request*/
 
-    sds license_key = nullptr;
     int delete_on_evict = false;   // Only valid when a storage provider is set
     int thread_min_client_threshold = 50;
     int multimaster_no_forward;
@@ -2371,6 +2365,7 @@ struct redisServer {
     struct _rdbThreadVars
     {
         std::atomic<bool> fRdbThreadCancel {false};
+        std::atomic<bool> fDone {false};
         int tmpfileNum = 0;
         pthread_t rdb_child_thread;
         int fRdbThreadActive = false;
@@ -2608,6 +2603,8 @@ struct redisServer {
 
     IStorageFactory *m_pstorageFactory = nullptr;
     int storage_flush_period;   // The time between flushes in the CRON job
+
+    long long snapshot_slip = 500;   // The amount of time in milliseconds we let a snapshot be behind the current database
 
     /* TLS Configuration */
     int tls_cluster;
@@ -3788,6 +3785,7 @@ void hrenameCommand(client *c);
 void stralgoCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+void lfenceCommand(client *c);
 
 
 int FBrokenLinkToMaster();

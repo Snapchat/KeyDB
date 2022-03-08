@@ -1552,6 +1552,7 @@ struct rdbSaveThreadArgs
 
 void *rdbSaveThread(void *vargs)
 {
+    serverAssert(!g_pserver->rdbThreadVars.fDone);
     rdbSaveThreadArgs *args = reinterpret_cast<rdbSaveThreadArgs*>(vargs);
     serverAssert(serverTL == nullptr);
     redisServerThreadVars vars;
@@ -1577,6 +1578,7 @@ void *rdbSaveThread(void *vargs)
                 "RDB",cbDiff/(1024*1024));
     }
 
+    g_pserver->rdbThreadVars.fDone = true;
     return (retval == C_OK) ? (void*)0 : (void*)1;
 }
 
@@ -2945,6 +2947,7 @@ public:
         serverTL = &vars;
         aeSetThreadOwnsLockOverride(true);
 
+#ifdef __linux__
         // We will inheret the server thread's affinity mask, clear it as we want to run on a different core.
         cpu_set_t *cpuset = CPU_ALLOC(std::thread::hardware_concurrency());
         if (cpuset != nullptr) {
@@ -2956,6 +2959,7 @@ public:
             pthread_setaffinity_np(pthread_self(), size, cpuset);
             CPU_FREE(cpuset);
         }
+#endif
 
         for (;;) {
             if (queue.queueJobs.size_approx() == 0) {
@@ -3624,6 +3628,7 @@ struct rdbSaveSocketThreadArgs
 };
 void *rdbSaveToSlavesSocketsThread(void *vargs)
 {
+    serverAssert(!g_pserver->rdbThreadVars.fDone);
     /* Child */
     serverAssert(serverTL == nullptr);
     rdbSaveSocketThreadArgs *args = (rdbSaveSocketThreadArgs*)vargs;
@@ -3664,6 +3669,7 @@ void *rdbSaveToSlavesSocketsThread(void *vargs)
 
     close(args->safe_to_exit_pipe);
     zfree(args);
+    g_pserver->rdbThreadVars.fDone = true;
     return (retval == C_OK) ? (void*)0 : (void*)1;
 }
 

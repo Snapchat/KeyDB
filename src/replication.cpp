@@ -190,7 +190,11 @@ int bg_unlink(const char *filename) {
 bool createDiskBacklog() {
     // Lets create some disk backed pages and add them here
     std::string path = "./repl-backlog-temp" + std::to_string(gettid());
+#ifdef __APPLE__
+    int fd = open(path.c_str(), O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+#else
     int fd = open(path.c_str(), O_CREAT | O_RDWR | O_LARGEFILE, S_IRUSR | S_IWUSR);
+#endif
     if (fd < 0) {
         return false;
     }
@@ -991,6 +995,7 @@ need_full_resync:
 }
 
 int checkClientOutputBufferLimits(client *c);
+void clientInstallAsyncWriteHandler(client *c);
 class replicationBuffer {
     std::vector<client *> replicas;
     clientReplyBlock *reply = nullptr;
@@ -1020,6 +1025,17 @@ public:
         if (reply == nullptr)
             return;
         size_t written = reply->used;
+
+        for (auto replica : replicas) {
+            std::unique_lock<fastlock> ul(replica->lock);
+            while (checkClientOutputBufferLimits(replica)
+              && (replica->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_ASAP) == 0) {
+                ul.unlock();
+                usleep(0);
+                ul.lock();
+            }
+        }
+
         aeAcquireLock();
         for (size_t ireplica = 0; ireplica < replicas.size(); ++ireplica) {
             auto replica = replicas[ireplica];
@@ -1027,18 +1043,23 @@ public:
                 replica->replstate = REPL_STATE_NONE;
                 continue;
             }
-
-            while (checkClientOutputBufferLimits(replica)
-                && (replica->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_ASAP) == 0) {
-                aeReleaseLock();
-                usleep(10);
-                aeAcquireLock();
-            }
             
             std::unique_lock<fastlock> lock(replica->lock);
-            addReplyProto(replica, reply->buf(), reply->used);
+            if (ireplica == (replicas.size()-1) && replica->replyAsync == nullptr) {
+                replica->replyAsync = reply;
+                reply = nullptr;
+                if (!(replica->fPendingAsyncWrite)) clientInstallAsyncWriteHandler(replica);
+            } else {
+                addReplyProto(replica, reply->buf(), reply->used);
+            }
         }
         ProcessPendingAsyncWrites();
+        for (auto c : replicas) {
+            if (c->flags & CLIENT_CLOSE_ASAP) {
+                std::unique_lock<fastlock> ul(c->lock);
+                c->replstate = REPL_STATE_NONE;   // otherwise the client can't be free'd
+            }
+        }
         replicas.erase(std::remove_if(replicas.begin(), replicas.end(), [](const client *c)->bool{ return c->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_ASAP;}), replicas.end());
         aeReleaseLock();
         if (reply != nullptr) {
@@ -1058,7 +1079,7 @@ public:
         }
         
         if (reply == nullptr) {
-            reply = (clientReplyBlock*)zmalloc(sizeof(clientReplyBlock) + std::max(size, (unsigned long)(PROTO_REPLY_CHUNK_BYTES*2)));
+            reply = (clientReplyBlock*)zmalloc(sizeof(clientReplyBlock) + std::max(size, (unsigned long)(PROTO_REPLY_CHUNK_BYTES*64)));
             reply->size = zmalloc_usable_size(reply) - sizeof(clientReplyBlock);
             reply->used = 0;
         }
@@ -1183,7 +1204,7 @@ int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
             size_t snapshotDeclaredCount = spsnapshot->count();
             replBuf.addArrayLen(snapshotDeclaredCount);
             size_t count = 0;
-            bool result = spsnapshot->enumerate([&replBuf, &count, &cbData, &lastLogTime, timeStart, &cbLastUpdate](const char *rgchKey, size_t cchKey, const void *rgchVal, size_t cchVal) -> bool{
+            bool result = spsnapshot->enumerate([&replBuf, &count, &cbData, &lastLogTime, &cbLastUpdate](const char *rgchKey, size_t cchKey, const void *rgchVal, size_t cchVal) -> bool{
                 replBuf.addArrayLen(2);
 
                 replBuf.addString(rgchKey, cchKey);
@@ -1557,16 +1578,9 @@ LError:
     return;
 }
 
-void processReplconfLicense(client *c, robj *arg)
+void processReplconfLicense(client *c, robj *)
 {
-    if (cserver.license_key != nullptr)
-    {
-        if (strcmp(cserver.license_key, szFromObj(arg)) == 0) {
-            addReplyError(c, "Each replica must have a unique license key");
-            c->flags |= CLIENT_CLOSE_AFTER_REPLY;
-            return;
-        }
-    }
+    // Only for back-compat
     addReply(c, shared.ok);
 }
 
@@ -3632,41 +3646,6 @@ retry_connect:
         }
         sdsfree(err);
         err = NULL;
-        mi->repl_state = REPL_STATE_SEND_KEY;
-        // fallthrough
-    }
-
-    /* Send LICENSE Key */
-    if (mi->repl_state == REPL_STATE_SEND_KEY)
-    {
-        if (cserver.license_key == nullptr)
-        {
-            mi->repl_state = REPL_STATE_SEND_PSYNC;
-        }
-        else
-        {
-            err = sendCommand(conn,"REPLCONF","license",cserver.license_key,NULL);
-            if (err) goto write_error;
-            mi->repl_state = REPL_STATE_KEY_ACK;
-            return;
-        }
-    }
-
-    /* LICENSE Key Ack */
-    if (mi->repl_state == REPL_STATE_KEY_ACK)
-    {
-        err = receiveSynchronousResponse(mi, conn);
-        if (err[0] == '-') {
-            if (err[1] == 'E' && err[2] == 'R' && err[3] == 'R') {
-                // Replicating with non-enterprise
-                serverLog(LL_WARNING, "Replicating with non-enterprise server.");
-            } else {
-                serverLog(LL_WARNING, "Recieved error from client: %s", err);
-                sdsfree(err);
-                goto error;
-            }
-        }
-        sdsfree(err);
         mi->repl_state = REPL_STATE_SEND_PSYNC;
         // fallthrough
     }
@@ -5598,7 +5577,7 @@ void flushReplBacklogToClients()
     
     if (g_pserver->repl_batch_offStart != g_pserver->master_repl_offset) {
         bool fAsyncWrite = false;
-        long long min_offset = LONG_LONG_MAX;
+        long long min_offset = LLONG_MAX;
         // Ensure no overflow
         serverAssert(g_pserver->repl_batch_offStart < g_pserver->master_repl_offset);
         if (g_pserver->master_repl_offset - g_pserver->repl_batch_offStart > g_pserver->repl_backlog_size) {
@@ -5657,7 +5636,7 @@ LDone:
         // This may be called multiple times per "frame" so update with our progress flushing to clients
         g_pserver->repl_batch_idxStart = g_pserver->repl_backlog_idx;
         g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
-        g_pserver->repl_lowest_off.store(min_offset == LONG_LONG_MAX ? -1 : min_offset, std::memory_order_seq_cst);
+        g_pserver->repl_lowest_off.store(min_offset == LLONG_MAX ? -1 : min_offset, std::memory_order_seq_cst);
     } 
 }
 

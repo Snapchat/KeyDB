@@ -145,7 +145,7 @@ client *createClient(connection *conn, int iel) {
     client_id = g_pserver->next_client_id.fetch_add(1);
     c->iel = iel;
     c->id = client_id;
-    sprintf(c->lock.szName, "client %lu", client_id);
+    sprintf(c->lock.szName, "client %" PRIu64, client_id);
     c->resp = 2;
     c->conn = conn;
     c->name = NULL;
@@ -208,7 +208,7 @@ client *createClient(connection *conn, int iel) {
     c->paused_list_node = NULL;
     c->client_tracking_redirection = 0;
     c->casyncOpsPending = 0;
-    c->mvccCheckpoint = getMvccTstamp();
+    c->mvccCheckpoint = 0;
     c->master_error = 0;
     memset(c->uuid, 0, UUID_BINARY_LEN);
 
@@ -1345,7 +1345,7 @@ void acceptOnThread(connection *conn, int flags, char *cip)
             szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
             memcpy(szT, cip, NET_IP_STR_LEN);
         }
-        int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [conn, flags, ielTarget, szT, fBootLoad] {
+        int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [conn, flags, ielTarget, szT] {
             connMarshalThread(conn);
             acceptCommonHandler(conn,flags,szT,ielTarget);
             rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);
@@ -2754,7 +2754,7 @@ void readQueryFromClient(connection *conn) {
             // Frequent writers aren't good candidates for this optimization, they cause us to renew the snapshot too often
             //  so we exclude them unless the snapshot we need already exists
             bool fSnapshotExists = c->db->mvccLastSnapshot >= c->mvccCheckpoint;
-            bool fWriteTooRecent = (((getMvccTstamp() - c->mvccCheckpoint) >> MVCC_MS_SHIFT) < redisDbPersistentDataSnapshot::msStaleThreshold/2);
+            bool fWriteTooRecent = (((getMvccTstamp() - c->mvccCheckpoint) >> MVCC_MS_SHIFT) < static_cast<uint64_t>(g_pserver->snapshot_slip)/2);
 
             // The check below avoids running async commands if this is a frequent writer unless a snapshot is already there to service it
             if (!fWriteTooRecent || fSnapshotExists) {
@@ -2766,9 +2766,9 @@ void readQueryFromClient(connection *conn) {
     } else {
         // If we're single threaded its actually better to just process the command here while the query is hot in the cache
         //  multithreaded lock contention dominates and batching is better
-        aeAcquireLock();
+        AeLocker locker;
+        locker.arm(c);
         runAndPropogateToReplicas(processInputBuffer, c, true /*fParse*/, CMD_CALL_FULL);
-        aeReleaseLock();
     }
 }
 

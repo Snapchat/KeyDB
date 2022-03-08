@@ -1204,7 +1204,7 @@ int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
             size_t snapshotDeclaredCount = spsnapshot->count();
             replBuf.addArrayLen(snapshotDeclaredCount);
             size_t count = 0;
-            bool result = spsnapshot->enumerate([&replBuf, &count, &cbData, &lastLogTime, timeStart, &cbLastUpdate](const char *rgchKey, size_t cchKey, const void *rgchVal, size_t cchVal) -> bool{
+            bool result = spsnapshot->enumerate([&replBuf, &count, &cbData, &lastLogTime, &cbLastUpdate](const char *rgchKey, size_t cchKey, const void *rgchVal, size_t cchVal) -> bool{
                 replBuf.addArrayLen(2);
 
                 replBuf.addString(rgchKey, cchKey);
@@ -1578,7 +1578,7 @@ LError:
     return;
 }
 
-void processReplconfLicense(client *c, robj *arg)
+void processReplconfLicense(client *c, robj *)
 {
     // Only for back-compat
     addReply(c, shared.ok);

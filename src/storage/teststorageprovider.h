@@ -8,7 +8,7 @@ class TestStorageFactory : public IStorageFactory
     virtual class IStorage *createMetadataDb() override;
     virtual const char *name() const override;
     virtual size_t totalDiskspaceUsed() const override { return 0; }
-    virtual bool FSlow() const { return false; }
+    virtual bool FSlow() const override { return false; }
 };
 
 class TestStorageProvider final : public IStorage

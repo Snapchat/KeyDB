@@ -121,9 +121,9 @@ void StorageCache::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, si
                 * the element already exists. */
             long index;
             if ((index = _dictKeyIndex(m_pdict, de->key, (uint64_t)de->key, nullptr)) == -1) {
-                dictEntry *de = dictFind(m_pdict, de->key);
-                serverAssert(de != nullptr);
-                de->v.s64++;
+                dictEntry *deLocal = dictFind(m_pdict, de->key);
+                serverAssert(deLocal != nullptr);
+                deLocal->v.s64++;
                 m_collisionCount++;
                 zfree(de);
             } else {

@@ -44,7 +44,7 @@ public:
 
     virtual void flush() override;
 
-    size_t count() const;
+    size_t count() const override;
 
 protected:
     bool FKeyExists(const char *key, size_t cchKey) const;

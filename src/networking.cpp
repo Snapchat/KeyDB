@@ -145,7 +145,7 @@ client *createClient(connection *conn, int iel) {
     client_id = g_pserver->next_client_id.fetch_add(1);
     c->iel = iel;
     c->id = client_id;
-    sprintf(c->lock.szName, "client %lu", client_id);
+    sprintf(c->lock.szName, "client %" PRIu64, client_id);
     c->resp = 2;
     c->conn = conn;
     c->name = NULL;
@@ -1345,7 +1345,7 @@ void acceptOnThread(connection *conn, int flags, char *cip)
             szT = (char*)zmalloc(NET_IP_STR_LEN, MALLOC_LOCAL);
             memcpy(szT, cip, NET_IP_STR_LEN);
         }
-        int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [conn, flags, ielTarget, szT, fBootLoad] {
+        int res = aePostFunction(g_pserver->rgthreadvar[ielTarget].el, [conn, flags, ielTarget, szT] {
             connMarshalThread(conn);
             acceptCommonHandler(conn,flags,szT,ielTarget);
             rgacceptsInFlight[ielTarget].fetch_sub(1, std::memory_order_relaxed);

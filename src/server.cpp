@@ -2923,12 +2923,15 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         but if there is a pending async close we need to ensure the writes happen
         first so perform it here */
     bool fSentReplies = false;
+
+    std::unique_lock<fastlock> ul(g_lockasyncfree);
     if (listLength(g_pserver->clients_to_close)) {
         locker.disarm();
         handleClientsWithPendingWrites(iel, aof_state);
         locker.arm();
         fSentReplies = true;
     }
+    ul.unlock();
     
     if (!serverTL->gcEpoch.isReset())
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);

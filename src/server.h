@@ -2784,6 +2784,7 @@ extern dictType replScriptCacheDictType;
 extern dictType dbExpiresDictType;
 extern dictType modulesDictType;
 extern dictType sdsReplyDictType;
+extern fastlock g_lockasyncfree;
 
 /*-----------------------------------------------------------------------------
  * Functions prototypes

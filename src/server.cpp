@@ -2926,12 +2926,14 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     std::unique_lock<fastlock> ul(g_lockasyncfree);
     if (listLength(g_pserver->clients_to_close)) {
+        ul.unlock();
         locker.disarm();
         handleClientsWithPendingWrites(iel, aof_state);
         locker.arm();
         fSentReplies = true;
+    } else {
+        ul.unlock();
     }
-    ul.unlock();
     
     if (!serverTL->gcEpoch.isReset())
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch, true /*fNoFree*/);

@@ -1601,6 +1601,7 @@ bool freeClient(client *c) {
      * we may call replicationCacheMaster() and the client should already
      * be removed from the list of clients to free. */
     if (c->flags & CLIENT_CLOSE_ASAP) {
+        std::unique_lock<fastlock> ul(g_lockasyncfree);
         ln = listSearchKey(g_pserver->clients_to_close,c);
         serverAssert(ln != NULL);
         listDelNode(g_pserver->clients_to_close,ln);
@@ -1724,7 +1725,7 @@ bool freeClient(client *c) {
     return true;
 }
 
-fastlock lockasyncfree {"async free lock"};
+fastlock g_lockasyncfree {"async free lock"};
 
 /* Schedule a client to free it at a safe time in the serverCron() function.
  * This function is useful when we need to terminate a client but we are in
@@ -1738,24 +1739,22 @@ void freeClientAsync(client *c) {
      * idle. */
     if (c->flags & CLIENT_CLOSE_ASAP || c->flags & CLIENT_LUA) return;  // check without the lock first
     std::lock_guard<decltype(c->lock)> clientlock(c->lock);
-    AeLocker lock;
-    lock.arm(c);
     if (c->flags & CLIENT_CLOSE_ASAP || c->flags & CLIENT_LUA) return;  // race condition after we acquire the lock
     c->flags |= CLIENT_CLOSE_ASAP;
     c->repl_down_since = g_pserver->unixtime;
-    std::unique_lock<fastlock> ul(lockasyncfree);
+    std::unique_lock<fastlock> ul(g_lockasyncfree);
     listAddNodeTail(g_pserver->clients_to_close,c);
 }
 
 int freeClientsInAsyncFreeQueue(int iel) {
     serverAssert(GlobalLocksAcquired());
+    std::unique_lock<fastlock> ul(g_lockasyncfree);
     listIter li;
     listNode *ln;
     listRewind(g_pserver->clients_to_close,&li);
 
     // Store the clients in a temp vector since freeClient will modify this list
     std::vector<client*> vecclientsFree;
-    std::unique_lock<fastlock> ul(lockasyncfree);
     while((ln = listNext(&li))) 
     {
         client *c = (client*)listNodeValue(ln);

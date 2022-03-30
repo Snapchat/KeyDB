@@ -24,7 +24,7 @@ Please note that directories are relative to the docker build context. You can u
 ### Pushing
 
 #### AWS
-There is a script ./build-and-publish.sh to build and push image. This script will push images to caching-infra AWS account and caching-infra GCP project.
+There is a script ./build-and-publish.sh to build and push image. This script will push images to caching-infra AWS account and caching-infra GCP project. Make sure this script is not run using root/sudo otherwise you may not be able to access the correct AWS profile, even if everything else is configured correctly.
 
 If you are pushing to ECR, then you need to add this profile config in your ```~/.aws/config```:
 

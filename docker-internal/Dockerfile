@@ -53,6 +53,7 @@ RUN set -eux; \
         grep -E '^ *createBoolConfig[(]"protected-mode",.*, *1 *,.*[)],$' ./src/config.cpp; \
         sed -ri 's!^( *createBoolConfig[(]"protected-mode",.*, *)1( *,.*[)],)$!\10\2!' ./src/config.cpp; \
         grep -E '^ *createBoolConfig[(]"protected-mode",.*, *0 *,.*[)],$' ./src/config.cpp; \
+        make distclean; \
         make -j$([ -z "$MAKE_JOBS" ] &&  nproc || echo "$MAKE_JOBS") BUILD_TLS=yes NO_LICENSE_CHECK=yes; \
         cd src; \
         strip keydb-cli keydb-benchmark keydb-check-rdb keydb-check-aof keydb-diagnostic-tool keydb-sentinel; \

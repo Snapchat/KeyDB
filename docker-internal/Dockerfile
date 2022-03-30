@@ -47,7 +47,8 @@ RUN set -eux; \
                 libzstd-dev \
                 liblz4-dev \
                 libsnappy-dev \
-                libssl-dev; \
+                libssl-dev \
+                git; \
         cd /tmp/keydb-internal; \
         # disable protected mode as it relates to docker
         grep -E '^ *createBoolConfig[(]"protected-mode",.*, *1 *,.*[)],$' ./src/config.cpp; \

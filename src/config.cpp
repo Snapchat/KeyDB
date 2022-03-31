@@ -742,10 +742,14 @@ void loadServerConfigFromString(char *config) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
         } else if (!strcasecmp(argv[0], "tls-allowlist")) {
-            if (!g_pserver->tls_allowlist_enabled) 
-                g_pserver->tls_allowlist_enabled = true;
+            if (argc < 2) {
+                err = "must supply at least one element in the allow list"; goto loaderr;
+            }
+            if (!g_pserver->tls_allowlist.empty()) {
+                err = "tls-allowlist may only be set once"; goto loaderr;
+            }
             for (int i = 1; i < argc; i++)
-                g_pserver->tls_allowlist.insert(zstrdup(argv[i]));
+                g_pserver->tls_allowlist.emplace(argv[i], strlen(argv[i]));
         } else if (!strcasecmp(argv[0], "version-override") && argc == 2) {
             KEYDB_SET_VERSION = zstrdup(argv[1]);
             serverLog(LL_WARNING, "Warning version is overriden to: %s\n", KEYDB_SET_VERSION);
@@ -866,8 +870,18 @@ void configSetCommand(client *c) {
     int err;
     const char *errstr = NULL;
     serverAssertWithInfo(c,c->argv[2],sdsEncodedObject(c->argv[2]));
-    serverAssertWithInfo(c,c->argv[3],sdsEncodedObject(c->argv[3]));
-    o = c->argv[3];
+
+    if (c->argc < 4 || c->argc > 4) {
+        o = nullptr;
+        // Variadic set is only supported for tls-allowlist
+        if (strcasecmp(szFromObj(c->argv[2]), "tls-allowlist")) {
+            addReplySubcommandSyntaxError(c);
+            return;
+        }
+    } else {
+        o = c->argv[3];
+        serverAssertWithInfo(c,c->argv[3],sdsEncodedObject(c->argv[3]));
+    }
 
     /* Iterate the configs that are standard */
     for (standardConfig *config = configs; config->name != NULL; config++) {
@@ -1029,6 +1043,12 @@ void configSetCommand(client *c) {
             enableWatchdog(ll);
         else
             disableWatchdog();
+    } config_set_special_field("tls-allowlist") {
+        g_pserver->tls_allowlist.clear();
+        for (int i = 3; i < c->argc; ++i) {
+            robj *val = c->argv[i];
+            g_pserver->tls_allowlist.emplace(szFromObj(val), sdslen(szFromObj(val)));
+        }
     /* Everything else is an error... */
     } config_set_else {
         addReplyErrorFormat(c,"Unsupported CONFIG parameter: %s",
@@ -1230,6 +1250,14 @@ void configGetCommand(client *c) {
     if (stringmatch(pattern,"active-replica",1)) {
         addReplyBulkCString(c,"active-replica");
         addReplyBulkCString(c, g_pserver->fActiveReplica ? "yes" : "no");
+        matches++;
+    }
+    if (stringmatch(pattern, "tls-allowlist", 1)) {
+        addReplyBulkCString(c,"tls-allowlist");
+        addReplyArrayLen(c, (long)g_pserver->tls_allowlist.size());
+        for (auto &elem : g_pserver->tls_allowlist) {
+            addReplyBulkCBuffer(c, elem.get(), elem.size()); // addReplyBulkSds will free which we absolutely don't want
+        }
         matches++;
     }
 
@@ -1900,6 +1928,20 @@ int rewriteConfig(char *path, int force_all) {
     rewriteConfigYesNoOption(state,"active-replica",g_pserver->fActiveReplica,CONFIG_DEFAULT_ACTIVE_REPLICA);
     rewriteConfigStringOption(state, "version-override",KEYDB_SET_VERSION,KEYDB_REAL_VERSION);
     rewriteConfigOOMScoreAdjValuesOption(state);
+
+    if (!g_pserver->tls_allowlist.empty()) {
+        sds conf = sdsnew("tls-allowlist ");
+        for (auto &elem : g_pserver->tls_allowlist) {
+            conf = sdscatsds(conf, (sds)elem.get());
+            conf = sdscat(conf, " ");
+        }
+        // trim the trailing space
+        sdsrange(conf, 0, -1);
+        rewriteConfigRewriteLine(state,"tls-allowlist",conf,1 /*force*/);
+        // note: conf is owned by rewriteConfigRewriteLine - no need to free
+    } else {
+        rewriteConfigMarkAsProcessed(state, "tls-allowlist"); // ensure the line is removed if it existed
+    }
 
     /* Rewrite Sentinel config if in Sentinel mode. */
     if (g_pserver->sentinel_mode) rewriteConfigSentinelOption(state);
@@ -2907,7 +2949,7 @@ NULL
         };
 
         addReplyHelp(c, help);
-    } else if (!strcasecmp(szFromObj(c->argv[1]),"set") && c->argc == 4) {
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"set") && c->argc >= 3) {
         configSetCommand(c);
     } else if (!strcasecmp(szFromObj(c->argv[1]),"get") && c->argc == 3) {
         configGetCommand(c);

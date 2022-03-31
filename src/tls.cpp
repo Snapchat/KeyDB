@@ -484,14 +484,17 @@ bool tlsCheckAgainstAllowlist(const char * client){
     /* Because of wildcard matching, we need to iterate over the entire set.
      * If we were doing simply straight matching, we could just directly 
      * check to see if the client name is in the set in O(1) time */
-    for (char * client_pattern: g_pserver->tls_allowlist){
-        if (stringmatchlen(client_pattern, strlen(client_pattern), client, strlen(client), 1))
+    for (auto &client_pattern: g_pserver->tls_allowlist){
+        if (stringmatchlen(client_pattern.get(), client_pattern.size(), client, strlen(client), 1))
             return true;
     }
     return false;
 }
 
 bool tlsValidateCertificateName(tls_connection* conn){
+    if (g_pserver->tls_allowlist.empty())
+        return true;    // Empty list implies acceptance of all
+
     X509 * cert = SSL_get_peer_certificate(conn->ssl);
     /* Check the common name (CN) of the certificate first */
     X509_NAME_ENTRY * ne = X509_NAME_get_entry(X509_get_subject_name(cert), X509_NAME_get_index_by_NID(X509_get_subject_name(cert), NID_commonName, -1));
@@ -776,7 +779,7 @@ void tlsHandleEvent(tls_connection *conn, int mask) {
                 conn->c.state = CONN_STATE_ERROR;
             } else {
                 /* Validate name */
-                if (g_pserver->tls_allowlist_enabled && !tlsValidateCertificateName(conn)){
+                if (!tlsValidateCertificateName(conn)){
                     conn->c.state = CONN_STATE_ERROR;
                 } else {
                     conn->c.state = CONN_STATE_CONNECTED;

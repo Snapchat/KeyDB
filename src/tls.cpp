@@ -478,13 +478,13 @@ typedef struct tls_connection {
     aeEventLoop *el;
 } tls_connection;
 
-/* Check to see if a given client name matches against our whitelist.
+/* Check to see if a given client name matches against our allowlist.
  * Return true if it does */
-bool tlsCheckAgainstWhitelist(const char * client){
+bool tlsCheckAgainstAllowlist(const char * client){
     /* Because of wildcard matching, we need to iterate over the entire set.
      * If we were doing simply straight matching, we could just directly 
      * check to see if the client name is in the set in O(1) time */
-    for (char * client_pattern: g_pserver->tls_whitelist){
+    for (char * client_pattern: g_pserver->tls_allowlist){
         if (stringmatchlen(client_pattern, strlen(client_pattern), client, strlen(client), 1))
             return true;
     }
@@ -497,7 +497,7 @@ bool tlsValidateCertificateName(tls_connection* conn){
     X509_NAME_ENTRY * ne = X509_NAME_get_entry(X509_get_subject_name(cert), X509_NAME_get_index_by_NID(X509_get_subject_name(cert), NID_commonName, -1));
     const char * commonName = reinterpret_cast<const char*>(ASN1_STRING_get0_data(X509_NAME_ENTRY_get_data(ne)));
     
-    if (tlsCheckAgainstWhitelist(commonName))
+    if (tlsCheckAgainstAllowlist(commonName))
         return true;
 
     /* If that fails, check through the subject alternative names (SANs) as well */
@@ -511,19 +511,19 @@ bool tlsValidateCertificateName(tls_connection* conn){
             switch (generalName->type)
             {
                 case GEN_EMAIL:
-                    if (tlsCheckAgainstWhitelist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.rfc822Name)))){
+                    if (tlsCheckAgainstAllowlist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.rfc822Name)))){
                         sk_GENERAL_NAME_pop_free(subjectAltNames, GENERAL_NAME_free);
                         return true;
                     }
                     break;
                 case GEN_DNS:
-                    if (tlsCheckAgainstWhitelist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.dNSName)))){
+                    if (tlsCheckAgainstAllowlist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.dNSName)))){
                         sk_GENERAL_NAME_pop_free(subjectAltNames, GENERAL_NAME_free);
                         return true;
                     }
                     break;
                 case GEN_URI:
-                    if (tlsCheckAgainstWhitelist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.uniformResourceIdentifier)))){
+                    if (tlsCheckAgainstAllowlist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.uniformResourceIdentifier)))){
                         sk_GENERAL_NAME_pop_free(subjectAltNames, GENERAL_NAME_free);
                         return true;
                     }
@@ -534,7 +534,7 @@ bool tlsValidateCertificateName(tls_connection* conn){
                         if (ipLen == 4){ //IPv4 case
                             char addr[INET_ADDRSTRLEN];
                             inet_ntop(AF_INET, ASN1_STRING_get0_data(generalName->d.iPAddress), addr, INET_ADDRSTRLEN);
-                            if (tlsCheckAgainstWhitelist(addr)){
+                            if (tlsCheckAgainstAllowlist(addr)){
                                 sk_GENERAL_NAME_pop_free(subjectAltNames, GENERAL_NAME_free);
                                 return true;
                             }
@@ -554,7 +554,7 @@ bool tlsValidateCertificateName(tls_connection* conn){
     conn->c.last_errno = 0;
     if (conn->ssl_error) zfree(conn->ssl_error);
     conn->ssl_error = (char*)zmalloc(512);
-    snprintf(conn->ssl_error, 512, "Client CN (%s) and SANs not found in whitelist.", commonName);
+    snprintf(conn->ssl_error, 512, "Client CN (%s) and SANs not found in allowlist.", commonName);
     return false;
 }
 
@@ -776,7 +776,7 @@ void tlsHandleEvent(tls_connection *conn, int mask) {
                 conn->c.state = CONN_STATE_ERROR;
             } else {
                 /* Validate name */
-                if (g_pserver->tls_whitelist_enabled && !tlsValidateCertificateName(conn)){
+                if (g_pserver->tls_allowlist_enabled && !tlsValidateCertificateName(conn)){
                     conn->c.state = CONN_STATE_ERROR;
                 } else {
                     conn->c.state = CONN_STATE_CONNECTED;

@@ -2612,8 +2612,8 @@ struct redisServer {
     int tls_auth_clients;
     int tls_rotation;
 
-    int tls_whitelist_enabled;
-    std::unordered_set<char *> tls_whitelist;
+    int tls_allowlist_enabled;
+    std::unordered_set<char *> tls_allowlist;
     redisTLSContextConfig tls_ctx_config;
 
     /* cpu affinity */

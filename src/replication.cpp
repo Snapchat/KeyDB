@@ -1274,6 +1274,11 @@ int startBgsaveForReplication(int mincapa) {
     listIter li;
     listNode *ln;
 
+    if (g_pserver->loading && g_pserver->fActiveReplica) {
+        serverLog(LL_NOTICE, "Can't bgsave while loading in active replication mode");
+        return C_ERR;
+    }
+
     serverLog(LL_NOTICE,"Starting BGSAVE for SYNC with target: %s",
         socket_target ? "replicas sockets" : "disk");
 
@@ -4781,7 +4786,7 @@ void replicationCron(void) {
         }
 
         /* Check if we should connect to a MASTER */
-        if (mi->repl_state == REPL_STATE_CONNECT && !fInMasterConnection) {
+        if (mi->repl_state == REPL_STATE_CONNECT && !fInMasterConnection && !g_pserver->loading && !g_pserver->FRdbSaveInProgress()) {
             serverLog(LL_NOTICE,"Connecting to MASTER %s:%d",
                 mi->masterhost, mi->masterport);
             connectWithMaster(mi);

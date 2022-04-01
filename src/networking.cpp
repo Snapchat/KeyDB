@@ -1907,19 +1907,6 @@ void ProcessPendingAsyncWrites()
         zfree(c->replyAsync);
         c->replyAsync = nullptr;
         c->fPendingAsyncWrite = FALSE;
-
-        // Now install the write event handler
-        int ae_flags = AE_WRITABLE|AE_WRITE_THREADSAFE;
-        /* For the fsync=always policy, we want that a given FD is never
-            * served for reading and writing in the same event loop iteration,
-            * so that in the middle of receiving the query, and serving it
-            * to the client, we'll call beforeSleep() that will do the
-            * actual fsync of AOF to disk. AE_BARRIER ensures that. */
-        if (g_pserver->aof_state == AOF_ON &&
-            g_pserver->aof_fsync == AOF_FSYNC_ALWAYS)
-        {
-            ae_flags |= AE_BARRIER;
-        }
         
         if (!((c->replstate == REPL_STATE_NONE ||
          (c->replstate == SLAVE_STATE_ONLINE && !c->repl_put_online_on_ack))))

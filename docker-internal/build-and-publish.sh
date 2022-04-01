@@ -20,7 +20,7 @@ timestamp() {
 
 print_usage() {
     echo "Usage:"
-    echo "  ./{script} [flags]"
+    echo "  ./{script} {modstatsd-path} [flags]"
     echo ""
     echo "Flags:"
     echo "  -p, --provider: name of the cloud provider, can be 'gcp', 'aws' or 'both' (default)"
@@ -35,6 +35,15 @@ push_image () { # 1 - image, 2 - repo
    docker push "${IMAGE_WITH_REPO}"
    echo "`timestamp` image ${IMAGE_WITH_REPO} is pushed"
 }
+
+#Process Module Path Flag
+MOD_STATSD_PATH="$1"
+if [[ -z ${MOD_STATSD_PATH} ]]
+then
+    echo "Missing path to statsd module"
+    # exit 1
+fi
+shift
 
 # Processing flags
 while [ ! $# -eq 0 ]
@@ -73,9 +82,12 @@ do
     shift
 done
 
+echo "MOD_STATSD_PATH: ${MOD_STATSD_PATH}"
 echo "`timestamp` building image for ${FLAGS_tag}"
 export IMAGE_SUFFIX="keydb:${FLAGS_tag}"
-docker build --squash --build-arg KEYDB_DIR=. --build-arg MAKE_JOBS=${FLAGS_jobs} -t keydb:latest -f ${DIR}/Dockerfile ${DIR}/..
+cp -r ${MOD_STATSD_PATH} ./modstatsd
+docker build --squash --build-arg MODSTATSD_DIR=docker-internal/modstatsd --build-arg KEYDB_DIR=. --build-arg MAKE_JOBS=${FLAGS_jobs} -t keydb:latest -f ${DIR}/Dockerfile ${DIR}/..
+rm -rf ./modstatsd
 
 # Build and publish
 if [[ ${FLAGS_provider} == "aws" ]] || [[ ${FLAGS_provider} == "both" ]]

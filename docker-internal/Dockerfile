@@ -24,8 +24,10 @@ RUN set -eux; \
         gosu nobody true
 # build KeyDB
 ARG KEYDB_DIR
+ARG MODSTATSD_DIR
 ARG MAKE_JOBS=""
 COPY $KEYDB_DIR /tmp/keydb-internal/
+COPY $MODSTATSD_DIR /tmp/modstatsd/
 RUN set -eux; \
         \
         savedAptMark="$(apt-mark showmanual)"; \
@@ -49,6 +51,10 @@ RUN set -eux; \
                 libsnappy-dev \
                 libssl-dev \
                 git; \
+	cd /tmp/modstatsd/; \
+	make clean; \
+	make; \
+	mv modstatsd.so /usr/local/lib/; \
         cd /tmp/keydb-internal; \
         # disable protected mode as it relates to docker
         grep -E '^ *createBoolConfig[(]"protected-mode",.*, *1 *,.*[)],$' ./src/config.cpp; \
@@ -85,6 +91,7 @@ RUN \
         sed -i 's/^\(logfile .*\)$/# \1/' /etc/keydb/keydb.conf; \
         sed -i 's/protected-mode yes/protected-mode no/g' /etc/keydb/keydb.conf; \
         sed -i 's/^\(bind .*\)$/# \1/' /etc/keydb/keydb.conf; \
+	echo "loadmodule /usr/local/lib/modstatsd.so" >> /etc/keydb/keydb.conf; \
         ln -s keydb-cli redis-cli; \
         cd /etc/keydb; \
         ln -s keydb.conf redis.conf; \

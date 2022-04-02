@@ -5984,8 +5984,11 @@ sds genRedisInfoString(const char *section) {
             listLength(g_pserver->masters) == 0 ? "master" 
                 : g_pserver->fActiveReplica ? "active-replica" : "slave");
         if (listLength(g_pserver->masters)) {
+            int connectedMasters = 0;
             info = sdscatprintf(info, "master_global_link_status:%s\r\n",
-                FBrokenLinkToMaster() ? "down" : "up");
+                FBrokenLinkToMaster(&connectedMasters) ? "down" : "up");
+
+            info = sdscatprintf(info, "connected_masters:%d\r\n", connectedMasters);
 
             int cmasters = 0;
             listIter li;

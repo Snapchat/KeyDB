@@ -3788,7 +3788,7 @@ void failoverCommand(client *c);
 void lfenceCommand(client *c);
 
 
-int FBrokenLinkToMaster();
+int FBrokenLinkToMaster(int *pconnectMasters = nullptr);
 int FActiveMaster(client *c);
 struct redisMaster *MasterInfoFromClient(client *c);
 

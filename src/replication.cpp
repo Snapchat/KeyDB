@@ -5210,7 +5210,7 @@ void failoverCommand(client *c) {
     addReply(c,shared.ok);
 }
 
-int FBrokenLinkToMaster()
+int FBrokenLinkToMaster(int *pmastersOnline)
 {
     listIter li;
     listNode *ln;
@@ -5223,6 +5223,10 @@ int FBrokenLinkToMaster()
         if (mi->repl_state == REPL_STATE_CONNECTED)
             ++connected;
     }
+
+
+    if (pmastersOnline != nullptr)
+        *pmastersOnline = connected;
 
     if (g_pserver->repl_quorum < 0) {
         return connected < (int)listLength(g_pserver->masters);

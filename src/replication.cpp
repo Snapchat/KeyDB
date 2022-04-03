@@ -5445,6 +5445,7 @@ void replicaReplayCommand(client *c)
     processInputBuffer(cFake, true /*fParse*/, (CMD_CALL_FULL & (~CMD_CALL_PROPAGATE)));
     cFake->flags &= ~(CLIENT_MASTER | CLIENT_PREVENT_REPL_PROP);
     bool fExec = ccmdPrev != serverTL->commandsExecuted;
+    bool fNoPropogate = false;
     cFake->lock.unlock();
     if (cFake->master_error)
     {
@@ -5461,18 +5462,23 @@ void replicaReplayCommand(client *c)
             selectDb(c, cFake->db->id);
             if (mvcc > remoteState.mvcc)
                 remoteState.mvcc = mvcc;
+            serverAssert(sdslen(cFake->querybuf) == 0);
         }
         else
         {
             serverLog(LL_WARNING, "Command didn't execute: %s", cFake->buf);
             addReplyError(c, "command did not execute");
+            if (sdslen(cFake->querybuf)) {
+                serverLog(LL_WARNING, "Closing connection to MASTER because of an unrecoverable protocol error");
+                freeClientAsync(c);
+                fNoPropogate = true;    // don't keep transmitting corrupt data
+            }
         }
-        serverAssert(sdslen(cFake->querybuf) == 0);
     }
     serverTL->current_client = current_clientSave;
 
     // call() will not propogate this for us, so we do so here
-    if (!s_pstate->FCancelled() && s_pstate->FFirst() && !cserver.multimaster_no_forward)
+    if (!s_pstate->FCancelled() && s_pstate->FFirst() && !cserver.multimaster_no_forward && !fNoPropogate)
         alsoPropagate(cserver.rreplayCommand,c->db->id,c->argv,c->argc,PROPAGATE_AOF|PROPAGATE_REPL);
     
     s_pstate->Pop();

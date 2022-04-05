@@ -1191,24 +1191,26 @@ void zsetConvert(robj *zobj, int encoding) {
         zs->dict = dictCreate(&zsetDictType,NULL);
         zs->zsl = zslCreate();
 
-        eptr = ziplistIndex(zl,0);
-        serverAssertWithInfo(NULL,zobj,eptr != NULL);
-        sptr = ziplistNext(zl,eptr);
-        serverAssertWithInfo(NULL,zobj,sptr != NULL);
+        if (ziplistLen(zl) > 0) {
+            eptr = ziplistIndex(zl,0);
+            serverAssertWithInfo(NULL,zobj,eptr != NULL);
+            sptr = ziplistNext(zl,eptr);
+            serverAssertWithInfo(NULL,zobj,sptr != NULL);
 
-        while (eptr != NULL) {
-            score = zzlGetScore(sptr);
-            serverAssertWithInfo(NULL,zobj,ziplistGet(eptr,&vstr,&vlen,&vlong));
-            if (vstr == NULL)
-                ele = sdsfromlonglong(vlong);
-            else
-                ele = sdsnewlen((char*)vstr,vlen);
+            while (eptr != NULL) {
+                score = zzlGetScore(sptr);
+                serverAssertWithInfo(NULL,zobj,ziplistGet(eptr,&vstr,&vlen,&vlong));
+                if (vstr == NULL)
+                    ele = sdsfromlonglong(vlong);
+                else
+                    ele = sdsnewlen((char*)vstr,vlen);
 
-            node = zslInsert(zs->zsl,score,ele);
-            serverAssert(dictAdd(zs->dict,ele,&node->score) == DICT_OK);
-            zzlNext(zl,&eptr,&sptr);
+                node = zslInsert(zs->zsl,score,ele);
+                serverAssert(dictAdd(zs->dict,ele,&node->score) == DICT_OK);
+                zzlNext(zl,&eptr,&sptr);
+            }
         }
-
+        
         zfree(zobj->m_ptr);
         zobj->m_ptr = zs;
         zobj->encoding = OBJ_ENCODING_SKIPLIST;

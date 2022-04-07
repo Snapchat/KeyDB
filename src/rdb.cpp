@@ -2791,12 +2791,17 @@ public:
         }
     }
 
-    void enqueue(std::unique_ptr<rdbInsertJob> &spjob) {        
-        vecbatch.push_back(spjob.release());
-        if (vecbatch.size() >= 64) {
-            queueJobs.enqueue_bulk(vecbatch.data(), vecbatch.size());
-            vecbatch.clear();
-            throttle();
+    void enqueue(std::unique_ptr<rdbInsertJob> &spjob) {
+        if (!fLaunched) {
+            processJob(*spjob);
+            spjob = nullptr;
+        } else {
+            vecbatch.push_back(spjob.release());
+            if (vecbatch.size() >= 64) {
+                queueJobs.enqueue_bulk(vecbatch.data(), vecbatch.size());
+                vecbatch.clear();
+                throttle();
+            }
         }
     }
 
@@ -2809,9 +2814,13 @@ public:
     }
 
     void enqueue(std::function<void()> &&fn) {
-        std::unique_ptr<JobBase> spjob = std::make_unique<rdbFunctionJob>(std::move(fn));
-        queueJobs.enqueue(spjob.release());
-        throttle();
+        if (!fLaunched) {
+            fn();
+        } else {
+            std::unique_ptr<JobBase> spjob = std::make_unique<rdbFunctionJob>(std::move(fn));
+            queueJobs.enqueue(spjob.release());
+            throttle();
+        }
     }
 
     void ProcessWhileBlocked() {
@@ -2834,6 +2843,9 @@ public:
     size_t ckeys() { return ckeysLoaded; }
 
     size_t endWork() {
+        if (!fLaunched) {
+            return ckeysLoaded;
+        }
         if (!vecbatch.empty()) {
             queueJobs.enqueue_bulk(vecbatch.data(), vecbatch.size());
             vecbatch.clear();
@@ -3098,7 +3110,8 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     }
 
     lru_clock = LRU_CLOCK();
-    wqueue.start();
+    if (g_pserver->multithread_load_enabled)
+        wqueue.start();
 
     while(1) {
         robj *val;

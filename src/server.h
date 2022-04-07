@@ -2634,6 +2634,7 @@ struct redisServer {
     int failover_state; /* Failover state */
 
     int enable_async_commands;
+    int multithread_load_enabled = 0;
 
     long long repl_batch_offStart = -1;
     long long repl_batch_idxStart = -1;

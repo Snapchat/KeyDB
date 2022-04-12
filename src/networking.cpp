@@ -1239,6 +1239,7 @@ void clientAcceptHandler(connection *conn) {
 }
 
 #define MAX_ACCEPTS_PER_CALL 1000
+#define MAX_ACCEPTS_PER_CALL_TLS 1
 static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) {
     client *c;
     char conninfo[100];
@@ -1386,7 +1387,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 }
 
 void acceptTLSHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
-    int cport, cfd, max = MAX_ACCEPTS_PER_CALL;
+    int cport, cfd, max = MAX_ACCEPTS_PER_CALL_TLS;
     char cip[NET_IP_STR_LEN];
     UNUSED(el);
     UNUSED(mask);

@@ -2412,7 +2412,7 @@ int serverCronLite(struct aeEventLoop *eventLoop, long long id, void *clientData
 
 void blockingOperationStarts() {
     if(!g_pserver->blocking_op_nesting++){
-        g_pserver->blocked_last_cron = g_pserver->mstime;
+        __atomic_load(&g_pserver->mstime, &g_pserver->blocked_last_cron, __ATOMIC_ACQUIRE);
     }
 }
 

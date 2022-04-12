@@ -1239,7 +1239,7 @@ void clientAcceptHandler(connection *conn) {
 }
 
 #define MAX_ACCEPTS_PER_CALL 1000
-#define MAX_ACCEPTS_PER_CALL_TLS 1
+#define MAX_ACCEPTS_PER_CALL_TLS 100
 static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) {
     client *c;
     char conninfo[100];

@@ -132,6 +132,7 @@ static_assert(sizeof(aeCommand) <= PIPE_BUF, "aeCommand must be small enough to 
 
 void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
 {
+    std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
     aeCommand cmd;
     for (;;)
     {
@@ -153,8 +154,7 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
 
         case AE_ASYNC_OP::PostFunction:
             {
-            std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
-            if (cmd.fLock)
+            if (cmd.fLock && !ulock.owns_lock())
                 ulock.lock();
             ((aePostFunctionProc*)cmd.proc)(cmd.clientData);
             break;
@@ -162,8 +162,7 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
 
         case AE_ASYNC_OP::PostCppFunction:
         {
-            std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
-            if (cmd.fLock)
+            if (cmd.fLock && !ulock.owns_lock())
                 ulock.lock();
             (*cmd.pfn)();
 

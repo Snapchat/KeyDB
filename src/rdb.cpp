@@ -3030,15 +3030,18 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         (r->keys_since_last_callback >= g_pserver->loading_process_events_interval_keys)))
     {
         rdbAsyncWorkThread *pwthread = reinterpret_cast<rdbAsyncWorkThread*>(r->chksum_arg);
+        bool fUpdateReplication = (g_pserver->mstime - r->last_update) > 1000;
 
-        listIter li;
-        listNode *ln;
-        listRewind(g_pserver->masters, &li);
-        while ((ln = listNext(&li)))
-        {
-            struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
-            if (mi->masterhost && mi->repl_state == REPL_STATE_TRANSFER)
-                replicationSendNewlineToMaster(mi);
+        if (fUpdateReplication) {
+            listIter li;
+            listNode *ln;
+            listRewind(g_pserver->masters, &li);
+            while ((ln = listNext(&li)))
+            {
+                struct redisMaster *mi = (struct redisMaster*)listNodeValue(ln);
+                if (mi->masterhost && mi->repl_state == REPL_STATE_TRANSFER)
+                    replicationSendNewlineToMaster(mi);
+            }
         }
         loadingProgress(r->processed_bytes);
 
@@ -3050,12 +3053,15 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
 
         processModuleLoadingProgressEvent(0);
 
-        robj *ping_argv[1];
+        if (fUpdateReplication) {
+            robj *ping_argv[1];
 
-        ping_argv[0] = createStringObject("PING",4);
-        replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb, ping_argv, 1);
-        decrRefCount(ping_argv[0]);
+            ping_argv[0] = createStringObject("PING",4);
+            replicationFeedSlaves(g_pserver->slaves, g_pserver->replicaseldb, ping_argv, 1);
+            decrRefCount(ping_argv[0]);
+        }
 
+        if (fUpdateReplication) r->last_update = g_pserver->mstime;
         r->keys_since_last_callback = 0;
     }
 }

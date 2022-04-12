@@ -72,6 +72,9 @@ struct _rio {
     /* maximum single read or write chunk size */
     size_t max_processing_chunk;
 
+    /* last update time */
+    long long last_update;
+
     /* Backend-specific vars. */
     union {
         /* In-memory buffer target. */

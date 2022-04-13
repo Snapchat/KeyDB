@@ -45,11 +45,11 @@ robj *createObject(int type, void *ptr) {
     size_t mvccExtraBytes = g_pserver->fActiveReplica ? sizeof(redisObjectExtended) : 0;
     char *oB = (char*)zcalloc(sizeof(robj)+mvccExtraBytes, MALLOC_SHARED);
     robj *o = reinterpret_cast<robj*>(oB + mvccExtraBytes);
-    
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
     o->m_ptr = ptr;
-    o->setrefcount(1);
+    // NOTE: Maybe add assertion that the alignment/offset is true?
+    new (oB + sizeof(unsigned)) std::atomic<unsigned>(1);
     setMvccTstamp(o, OBJ_MVCC_INVALID);
 
     /* Set the LRU to the current lruclock (minutes resolution), or

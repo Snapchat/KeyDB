@@ -1552,6 +1552,7 @@ struct rdbSaveThreadArgs
 
 void *rdbSaveThread(void *vargs)
 {
+    aeThreadOnline();
     serverAssert(!g_pserver->rdbThreadVars.fDone);
     rdbSaveThreadArgs *args = reinterpret_cast<rdbSaveThreadArgs*>(vargs);
     serverAssert(serverTL == nullptr);
@@ -1577,7 +1578,7 @@ void *rdbSaveThread(void *vargs)
                 "%s: %zd MB of memory used by copy-on-write",
                 "RDB",cbDiff/(1024*1024));
     }
-
+    aeThreadOffline();
     g_pserver->rdbThreadVars.fDone = true;
     return (retval == C_OK) ? (void*)0 : (void*)1;
 }
@@ -3659,6 +3660,7 @@ void *rdbSaveToSlavesSocketsThread(void *vargs)
     serverTL = &vars;
     vars.gcEpoch = g_pserver->garbageCollector.startEpoch();
 
+    aeThreadOnline();
     rioInitWithFd(&rdb,args->rdb_pipe_write);
 
     retval = rdbSaveRioWithEOFMark(&rdb,args->rgpdb,NULL,&args->rsi);
@@ -3684,7 +3686,7 @@ void *rdbSaveToSlavesSocketsThread(void *vargs)
         g_pserver->db[idb]->endSnapshotAsync(args->rgpdb[idb]);
 
     g_pserver->garbageCollector.endEpoch(vars.gcEpoch);
-
+    aeThreadOffline();
 
     close(args->safe_to_exit_pipe);
     zfree(args);

@@ -1870,9 +1870,9 @@ struct redisMaster {
     off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
     off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
     off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
-    connection *repl_transfer_s;     /* Slave -> Master SYNC socket */
-    int repl_transfer_fd;    /* Slave -> Master SYNC temp file descriptor */
-    char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
+    connection *repl_transfer_s;     /* Replica -> Master SYNC socket */
+    int repl_transfer_fd;    /* Replica -> Master SYNC temp file descriptor */
+    char *repl_transfer_tmpfile; /* Replica-> master SYNC temp file name */
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
     time_t repl_down_since; /* Unix time at which link with master went down */
 

@@ -6855,6 +6855,7 @@ int redisFork(int purpose) {
     latencyAddSampleIfNeeded("fork-lock",(ustime()-startWriteLock)/1000);
     if ((childpid = fork()) == 0) {
         /* Child */
+        aeReleaseForkLock();
         g_pserver->in_fork_child = purpose;
         setOOMScoreAdj(CONFIG_OOM_BGCHILD);
         setupChildSignalHandlers();
@@ -7258,9 +7259,11 @@ void *workerThreadMain(void *parg)
 
     if (iel != IDX_EVENT_LOOP_MAIN)
     {
+        aeThreadOnline();
         aeAcquireLock();
         initNetworkingThread(iel, cserver.cthreads > 1);
         aeReleaseLock();
+        aeThreadOffline();
     }
 
     moduleAcquireGIL(true); // Normally afterSleep acquires this, but that won't be called on the first run

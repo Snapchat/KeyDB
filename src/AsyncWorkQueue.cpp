@@ -43,9 +43,11 @@ void AsyncWorkQueue::WorkerThreadMain()
         lock.unlock();
         serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
         if (listLength(serverTL->clients_pending_asyncwrite)) {
+            aeThreadOnline();
             aeAcquireLock();
             ProcessPendingAsyncWrites();
             aeReleaseLock();
+            aeThreadOffline();
         }
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
         serverTL->gcEpoch.reset();

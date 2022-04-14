@@ -3343,7 +3343,7 @@ int slaveTryPartialResynchronization(redisMaster *mi, connection *conn, int read
                     memcpy(g_pserver->replid,sznew,sizeof(g_pserver->replid));
                     memcpy(mi->cached_master->replid,sznew,sizeof(g_pserver->replid));
 
-                    /* Disconnect all the sub-slaves: they need to be notified. */
+                    /* Disconnect all the replicas: they need to be notified. */
                     disconnectSlaves();
                 }
             }

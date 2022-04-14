@@ -1665,7 +1665,7 @@ int launchRdbSaveThread(pthread_t &child, rdbSaveInfo *rsi)
         rdbSaveInfo rsiT;
         if (rsi == nullptr)
             rsi = &rsiT;
-        memcpy(&args->rsi, rsi, sizeof(rdbSaveInfo));
+        args->rsi = *(new (args) rdbSaveInfo(*rsi));
         memcpy(&args->rsi.repl_id, g_pserver->replid, sizeof(g_pserver->replid));
         args->rsi.master_repl_offset = g_pserver->master_repl_offset;
             
@@ -3772,7 +3772,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     args->rdb_pipe_write = pipefds[1]; /* write end */
     anetNonBlock(NULL, g_pserver->rdb_pipe_read);
 
-    memcpy(&args->rsi, rsi, sizeof(rdbSaveInfo));
+    args->rsi = *(new (args) rdbSaveInfo(*rsi));
     memcpy(&args->rsi.repl_id, g_pserver->replid, sizeof(g_pserver->replid));
     args->rsi.master_repl_offset = g_pserver->master_repl_offset;
 

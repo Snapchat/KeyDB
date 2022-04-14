@@ -65,7 +65,6 @@ public:
     void releaseRead() {
         std::unique_lock<fastlock> rm(m_readLock);
         m_readCount--;
-        serverAssert(m_readCount >= 0);
         m_cv.notify_all();
     }
 
@@ -75,7 +74,6 @@ public:
         if (exclusive)
             m_writeLock.unlock();
         m_writeCount--;
-        serverAssert(m_writeCount >= 0);
         m_cv.notify_all();
     }
 

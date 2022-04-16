@@ -1,2 +1,2 @@
 # Upstream do not provide signed tarballs.
-keydb-enterprise source: debian-watch-does-not-check-gpg-signature
+keydb source: debian-watch-does-not-check-gpg-signature

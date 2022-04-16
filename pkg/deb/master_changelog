@@ -1,5 +1,119 @@
-keydb-enterprise (6:6.0.12-1distribution_placeholder) codename_placeholder; urgency=medium
+keydb (6:6.2.2-1distribution_placeholder) codename_placeholder; urgency=medium
 
-  * 6.0.12 Enable SCAN for MVCC
+  * Acquire lock in module.cpp to fix module test break
+  * Fix usage of nanosleep() on Apple hardware
+  * Fix networking deadlock (#183)
+  * Remove redundant zfree() in keydb-benchmark
+  * Issues resolved: #378, #384
 
- -- Ben Schermel <ben@eqalpha.com>  Fri, 10 Jul 2020 20:00:37 +0000
+-- Ben Schermel <ben@eqalpha.com>  Sat, 15 Jan 2022 20:00:37 +0000
+
+keydb (6:6.2.1-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * This release of KeyDB is at parity with Redis 6.2.6. In addition, the following changes were included:
+  * Systemd support for release packages 
+  * Fixes to buffer overflows in the `BITOP SHIFT` and `CRON` commands 
+  * Server times are now computed on a seperate thread to improve performance 
+  * Now enforces syslog identity and facility as soon as possible 
+  * Removed erroneous use of LOG_... flags when using syslog 
+  * Fixed erroneous `#endif` leading to build errors on some platforms 
+  * Fixed the incorrect counting of client connections 
+  * Issues resolved: #355, #370
+
+ -- Ben Schermel <ben@eqalpha.com>  Wed, 17 Nov 2021 20:00:37 +0000
+
+keydb (6:6.2.0-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * Removed unused command line options(-a, -d, -P, -r, -q, --csv, -l, -I, -e, --precision, --cluster, --enable-tracking)
+  * --ms option changed to --time, added --clients, --host, --port, and --threads options
+  * Added keydb-diagnostic-tool
+  * Improved test reliability
+  * Fixed memory leak in keydb-benchmark
+  * Fixed a number of race conditions
+  * Fixed OSX build issues
+  * Feature parity with Redis 6.2.3
+  * Fixed Issues: #323 #325 #276
+
+ -- Ben Schermel <ben@eqalpha.com>  Thu, 12 Aug 2021 20:00:37 +0000
+
+keydb (6:6.0.18-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * 6.0.18 - This release contains a number of improvements to stability and performance. 
+  * Additional tests were added with improvements to existing test reliability
+  * Merged Redis 6.0.10 into KeyDB
+  * Issues resolved in this release: #214, #222, #238, #257, #273, #276, #285
+
+ -- Ben Schermel <ben@eqalpha.com>  Fri, 26 Mar 2021 16:00:00 +0000
+
+keydb (6:6.0.16-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * 6.0.16 - This release contains significant performance improvements as well as fixes to the following issues: #234, #236, #233, #207, #229, #231
+  * Reduced memory consumption when Active Replication is not used
+  * Reduced CPU consumption
+  * Improved TLS performance
+  * replica-quorum config for multi-master.Intended to be used with "replica-serve-stale-data no", if at least N replicas are connected we will consider our master link up and serve data.
+  * Subkey expires performance improvement for big sets
+
+ -- Ben Schermel <ben@eqalpha.com>  Mon, 28 Sep 2020 16:00:00 +0000
+
+keydb (6:6.0.13-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * 6.0.13 New features added: KEYDB.MEXISTS, REPLICAOF REMOVE, multi-master-no-forward configuration option
+  * KEYDB.MEXISTS - return exactly which keys exist in the database not just the count
+  * REPLICAOF REMOVE - Remove specific masters in a multi master setup
+  * multi-master-no-forward configuration option - Reduce network traffic in mesh topology multimaster setups
+  * Redis 6.0.5 feature parity
+  * Fixed Issues: 194 Bad directive or wrong number of arguments error on 'lazyfree-lazy-user-del no'; 209 Timeout using modules; 210 Databases are not merged on multi-master sync; 211 rpm packages now signed; 212 rpm file permissions updated
+
+ -- Ben Schermel <ben@eqalpha.com>  Mon, 13 Jul 2020 8:00:00 +0000
+
+keydb (6:6.0.9-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * 6.0.9 Addressing issues 187 - cpu lockup with subkey expire, 190 - missing sentinel binary in keydb-tools. 
+
+ -- Ben Schermel <ben@eqalpha.com>  Sun, 07 Jun 2020 18:00:37 +0000
+
+keydb (6:6.0.8-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * This is our first release to fully support all Redis 6.0.4 features, including but not limited to: TLS Support (fully supports multithreading!), Client side caching, RESP 3 Support
+  * KeyDB Has also added the following new features: Improved memory efficiency for short strings, Fastlock autotuning, KeyDB.HRENAME (rename a member of a hash)In addition we've spent a lot of time focussing on stability.
+  * The following bug fixes are resolved: 150 - Deadlock in ReplicationFeedMonitors, 170 - KeyDB dying via SIGABORT, 180 - crash after setting maxclients via cmd line, 169 - Write performance of a master dropped sharply when a slave is added
+  * In addition untracked issues were resolved: Potential deadlock when entering futex sleep, Pub/Sub Async messages may not be sent in a timely manner when load is low, Excessive logging during failed RREPLAY, KeyDB unresponsive handling clients on different threads during RDB load
+  * Updated deb package builds to build from source and phasing out init.d. dh_installsystemd from deb helper 11 used where applicable
+  * Naming conventions are now updated [ keydbpackage_version-build~distribution_architecture] and master changelog included and maintained
+  * keydb-pro-server binary is no longer inluded in the open source package
+
+ -- Ben Schermel <ben@eqalpha.com>  Mon, 1 Jun 2020 8:00:37 +0000
+
+keydb (5:5.3.3-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * 5.3.3 Updating deb source package, naming conventions, and build scripts.
+
+ -- Ben Schermel <ben@eqalpha.com>  Wed, 06 May 2020 8:00:37 +0000
+
+keydb (5:5.1.12-1chl1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * 5.1.1 update. This update fixes several rare deadlock scenarios. Deadlock detection is also added.  
+
+ -- Ben Schermel <ben@eqalpha.com>  Fri, 25 Oct 2019 8:00:37 +0000
+
+
+keydb (5:5.1.11-1chl1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * 5.1 release. This release includes subkey expires (EXPIREMEMBER/EXPIREMEMBERAT), with updates to PTTL/TTL accordingly. New OBJECT LASTMODIFIED, BITIOP LSHIFT & BITOP RSHIFT commands. See https://docs.keydb.dev/blog/2019/10/20/blog-post/ for detailed review of release.
+
+ -- Ben Schermel <ben@eqalpha.com>  Mon, 21 Oct 2019 8:00:37 +0000
+
+
+keydb (5:5.0.1-1chl1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * Arm build now included for bionic package
+
+ -- Ben Schermel <ben@eqalpha.com>  Wed, 21 Aug 2019 22:58:37 +0000
+
+
+keydb (5:5.0.0-1chl1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * Initial release of KeyDB PPA. This PPA was originally derived from https://launchpad.net/~chris-lea/+archive/ubuntu/redis-server
+
+ -- Ben Schermel <ben@eqalpha.com>  Wed, 21 Aug 2019 2:58:37 +0000

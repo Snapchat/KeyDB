@@ -198,8 +198,11 @@ static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
 static int connSocketAccept(connection *conn, ConnectionCallbackFunc accept_handler) {
     int ret = C_OK;
 
-    if (conn->state != CONN_STATE_ACCEPTING) return C_ERR;
-    conn->state = CONN_STATE_CONNECTED;
+    auto expected = CONN_STATE_ACCEPTING;
+    bool accepting = conn->state.compare_exchange_strong(
+        expected, CONN_STATE_CONNECTED,
+        std::memory_order_release, std::memory_order_relaxed);
+    if (!accepting) return C_ERR;
 
     connIncrRefs(conn);
     if (!callHandler(conn, accept_handler)) ret = C_ERR;

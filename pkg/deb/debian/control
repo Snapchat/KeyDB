@@ -1,4 +1,4 @@
-Source: keydb-enterprise
+Source: keydb
 Section: database
 Priority: optional
 Maintainer: Ben Schermel <ben@eqalpha.com>
@@ -26,14 +26,14 @@ Build-Depends:
  libzstd-dev <!nocheck>
 Standards-Version: 4.2.1
 Homepage: https://docs.keydb.dev/
-Vcs-Git: https://gitlab.eqalpha.com/keydb-dev/KeyDB-Pro.git
-Vcs-Browser: https://gitlab.eqalpha.com/keydb-dev/KeyDB-Pro
+Vcs-Git: https://github.com/EQ-Alpha/KeyDB.git
+Vcs-Browser: https://github.com/EQ-Alpha/KeyDB
 
-Package: keydb-enterprise
+Package: keydb
 Architecture: all
 Depends:
- keydb-enterprise-server (<< ${binary:Version}.1~),
- keydb-enterprise-server (>= ${binary:Version}),
+ keydb-server (<< ${binary:Version}.1~),
+ keydb-server (>= ${binary:Version}),
  ${misc:Depends},
 Description: Persistent key-value database with network interface (metapackage)
  keydb is a key-value database in a similar vein to memcache but the dataset
@@ -44,11 +44,11 @@ Description: Persistent key-value database with network interface (metapackage)
  .
  This package depends on the keydb-server package.
 
-Package: keydb-enterprise-sentinel
+Package: keydb-sentinel
 Architecture: any
 Depends:
  lsb-base (>= 3.2-14),
- keydb-enterprise-tools (= ${binary:Version}),
+ keydb-tools (= ${binary:Version}),
  ${misc:Depends},
 Description: Persistent key-value database with network interface (monitoring)
  keydb is a key-value database in a similar vein to memcache but the dataset
@@ -57,11 +57,11 @@ Description: Persistent key-value database with network interface (monitoring)
  .
  This package contains the keydb Sentinel monitoring software.
 
-Package: keydb-enterprise-server
+Package: keydb-server
 Architecture: any
 Depends:
  lsb-base (>= 3.2-14),
- keydb-enterprise-tools (= ${binary:Version}),
+ keydb-tools (= ${binary:Version}),
  ${misc:Depends},
 Description: Persistent key-value database with network interface
  keydb is a key-value database in a similar vein to memcache but the dataset
@@ -70,7 +70,7 @@ Description: Persistent key-value database with network interface
  .
  The dataset is stored entirely in memory and periodically flushed to disk.
 
-Package: keydb-enterprise-tools
+Package: keydb-tools
 Architecture: any
 Depends:
  adduser,

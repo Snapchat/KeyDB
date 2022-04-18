@@ -1405,6 +1405,8 @@ void acceptTLSHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
 
         acceptOnThread(connCreateAcceptedTLS(cfd, g_pserver->tls_auth_clients), 0, cip);
+        if (aeLockContention() >= 2)
+            break;
     }
 }
 

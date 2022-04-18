@@ -91,7 +91,7 @@ RUN \
         sed -i 's/^\(logfile .*\)$/# \1/' /etc/keydb/keydb.conf; \
         sed -i 's/protected-mode yes/protected-mode no/g' /etc/keydb/keydb.conf; \
         sed -i 's/^\(bind .*\)$/# \1/' /etc/keydb/keydb.conf; \
-	echo "loadmodule /usr/local/lib/modstatsd.so" >> /etc/keydb/keydb.conf; \
+	echo -e "\nloadmodule /usr/local/lib/modstatsd.so" >> /etc/keydb/keydb.conf; \
         ln -s keydb-cli redis-cli; \
         cd /etc/keydb; \
         ln -s keydb.conf redis.conf; \

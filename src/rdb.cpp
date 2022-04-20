@@ -3706,12 +3706,12 @@ void *rdbSaveToSlavesSocketsThread(void *vargs)
     int retval;
     rio rdb;
 
+    aeThreadOnline();
     serverAssert(serverTL == nullptr);
     redisServerThreadVars vars;
     serverTL = &vars;
     vars.gcEpoch = g_pserver->garbageCollector.startEpoch();
 
-    aeThreadOnline();
     rioInitWithFd(&rdb,args->rdb_pipe_write);
 
     retval = rdbSaveRioWithEOFMark(&rdb,args->rgpdb,NULL,&args->rsi);

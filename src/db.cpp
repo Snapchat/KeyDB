@@ -1068,9 +1068,7 @@ void keysCommand(client *c) {
         blockClient(c, BLOCKED_ASYNC);
         redisDb *db = c->db;
         g_pserver->asyncworkqueue->AddWorkFunction([el, c, db, patternCopy, snapshot]{
-            aeThreadOnline();
             keysCommandCore(c, snapshot, patternCopy);
-            aeThreadOffline();
             sdsfree(patternCopy);
             aePostFunction(el, [c, db, snapshot]{
                 aeReleaseLock();    // we need to lock with coordination of the client

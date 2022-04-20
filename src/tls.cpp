@@ -491,6 +491,12 @@ bool tlsCheckAgainstAllowlist(const char * client){
     return false;
 }
 
+/* ASN1_STRING_get0_data was introduced in OPENSSL 1.1.1
+ * use ASN1_STRING_data for older versions where it is not available */
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#define ASN1_STRING_get0_data ASN1_STRING_data 
+#endif 
+
 bool tlsValidateCertificateName(tls_connection* conn){
     if (g_pserver->tls_allowlist.empty())
         return true;    // Empty list implies acceptance of all

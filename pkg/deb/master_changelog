@@ -77,7 +77,7 @@ keydb (6:6.0.8-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * This is our first release to fully support all Redis 6.0.4 features, including but not limited to: TLS Support (fully supports multithreading!), Client side caching, RESP 3 Support
   * KeyDB Has also added the following new features: Improved memory efficiency for short strings, Fastlock autotuning, KeyDB.HRENAME (rename a member of a hash)In addition we've spent a lot of time focussing on stability.
-  * The following bug fixes are resolved: 150 - Deadlock in ReplicationFeedMonitors, 170 - KeyDB dying via SIGABORT, 180 - crash after setting maxclients via cmd line, 169 - Write performance of a master dropped sharply when a slave is added
+  * The following bug fixes are resolved: 150 - Deadlock in ReplicationFeedMonitors, 170 - KeyDB dying via SIGABORT, 180 - crash after setting maxclients via cmd line, 169 - Write performance of a master dropped sharply when a replica is added
   * In addition untracked issues were resolved: Potential deadlock when entering futex sleep, Pub/Sub Async messages may not be sent in a timely manner when load is low, Excessive logging during failed RREPLAY, KeyDB unresponsive handling clients on different threads during RDB load
   * Updated deb package builds to build from source and phasing out init.d. dh_installsystemd from deb helper 11 used where applicable
   * Naming conventions are now updated [ keydbpackage_version-build~distribution_architecture] and master changelog included and maintained

@@ -6,7 +6,7 @@ Source: https://github.com/EQ-Alpha/KeyDB
 Files: *
 Copyright: 
  © 2006-2014 Salvatore Sanfilippo <antirez@gmail.com>
- © 2019-2021 John Sully
+ © 2019 John Sully
  © 2019-2021 EQ Alpha Technology Ltd.
 
 License: BSD-3-clause

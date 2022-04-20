@@ -1196,7 +1196,6 @@ int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
         size_t cbData = 0;
         size_t cbLastUpdate = 0;
         auto &replBuf = *spreplBuf;
-        aeThreadOnline();
         // Databases
         replBuf.addArrayLen(cserver.dbnum);
         for (int idb = 0; idb < cserver.dbnum; ++idb) {
@@ -1244,7 +1243,6 @@ int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
             replBuf.putSlavesOnline();
             aeReleaseLock();
         }
-        aeThreadOffline();
     });
 
     return retval;

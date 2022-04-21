@@ -19,12 +19,12 @@ elif [ "$distributor" == "Ubuntu" ]; then
 fi
 codename=$(lsb_release --codename --short)
 date=$(date +%a," "%d" "%b" "%Y" "%T)
-pkg_name=keydb-enterprise-$majorv:$version$distname
+pkg_name=keydb-$majorv:$version$distname
 
 # create build tree
 cd ../../../
-tar -czvf keydb-enterprise_$version.orig.tar.gz --force-local KeyDB-Pro
-cd KeyDB-Pro/pkg/deb/
+tar -czvf keydb_$version.orig.tar.gz --force-local keydb-internal
+cd keydb-internal/pkg/deb/
 mkdir -p $pkg_name/tmp
 if [[ "$codename" == "xenial" ]] || [[ "$codename" == "stretch" ]]; then
 	cp -r debian_dh9 $pkg_name/tmp/debian
@@ -32,9 +32,9 @@ else
 	cp -r debian $pkg_name/tmp
 fi
 cp master_changelog $pkg_name/tmp/debian/changelog
-mv ../../../keydb-enterprise_$version.orig.tar.gz ./$pkg_name
+mv ../../../keydb_$version.orig.tar.gz ./$pkg_name
 cd $pkg_name/tmp
-changelog_str="keydb-enterprise ($majorv:$version-$build$distname) $codename; urgency=medium\n\n  * $version $changelog_comments \n\n -- Ben Schermel <ben@eqalpha.com>  $date +0000\n\n"
+changelog_str="keydb ($majorv:$version-$build$distname) $codename; urgency=medium\n\n  * $version $changelog_comments \n\n -- Ben Schermel <ben@eqalpha.com>  $date +0000\n\n"
 if [ $# -eq 0 ]; then
         sed -i "1s/^/$changelog_str\n/" debian/changelog
 elif [ $# -eq 1 ] && [ "$1" != "None" ]; then

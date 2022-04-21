@@ -2249,24 +2249,6 @@ void changeReplicationId(void) {
     saveMasterStatusToStorage(false);
 }
 
-
-int hexchToInt(char ch)
-{
-    if (ch >= '0' && ch <= '9')
-        return ch - '0';
-    if (ch >= 'a' && ch <= 'f')
-        return (ch - 'a') + 10;
-    return (ch - 'A') + 10;
-}
-void mergeReplicationId(const char *id)
-{
-    for (int i = 0; i < CONFIG_RUN_ID_SIZE; ++i)
-    {
-        const char *charset = "0123456789abcdef";
-        g_pserver->replid[i] = charset[hexchToInt(g_pserver->replid[i]) ^ hexchToInt(id[i])];
-    }
-}
-
 /* Clear (invalidate) the secondary replication ID. This happens, for
  * example, after a full resynchronization, when we start a new replication
  * history. */
@@ -3008,9 +2990,6 @@ void readSyncBulkPayload(connection *conn) {
             return;
     }
 
-    // Should we update our database, or create from scratch?
-    int fUpdate = g_pserver->fActiveReplica || g_pserver->enable_multimaster;
-
     /* Final setup of the connected slave <- master link */
     replicationCreateMasterClient(mi,mi->repl_transfer_s,rsi.repl_stream_db);
     if (mi->isRocksdbSnapshotRepl) {
@@ -3037,11 +3016,7 @@ void readSyncBulkPayload(connection *conn) {
     /* After a full resynchronization we use the replication ID and
      * offset of the master. The secondary ID / offset are cleared since
      * we are starting a new history. */
-    if (fUpdate)
-    {
-        mergeReplicationId(mi->master->replid);
-    }
-    else if (!g_pserver->fActiveReplica)
+    if (!g_pserver->fActiveReplica)
     {
         /* After a full resynchroniziation we use the replication ID and
         * offset of the master. The secondary ID / offset are cleared since

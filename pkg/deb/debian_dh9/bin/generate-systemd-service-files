@@ -9,6 +9,7 @@ else
     SYSTEMD_EXTRA=$(cat <<EOF
 
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+#MemoryDenyWriteExecute=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
@@ -77,6 +78,8 @@ do
 #
 #   $ systemctl start ${BINARY}@myname.service
 #   $ keydb-cli -s /var/run/${NAME}-myname/${BINARY}.sock info | grep config_file
+#
+#  -- Chris Lamb <lamby@debian.org>  Mon, 09 Oct 2017 22:17:24 +0100
 EOF
 		fi
 

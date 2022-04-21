@@ -21,6 +21,4 @@ then
 	find /etc/keydb -maxdepth 1 -type d -name 'keydb-server.*.d' -empty -delete
 fi
 
-systemctl daemon-reload
-
 exit 0

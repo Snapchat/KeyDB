@@ -1,5 +1,7 @@
-In order to create a docker image, generate the keydb binaries, copy them to the app directory, copy keydb.conf and sentinel.conf to the app directory as well, then run the following command:
+This Dockerfile will clone the KeyDB repo, build, and generate a Docker image you can use
+
+To build, use experimental mode to enable use of build args. Tag the build and specify branch name. The command below will generate your docker image:
 
 ```
-$ sudo docker build . -t <yourimagename>
+DOCKER_CLI_EXPERIMENTAL=enabled docker build --build-arg BRANCH=<keydbBranch> -t <yourImageName>
 ```

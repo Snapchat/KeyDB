@@ -1319,7 +1319,7 @@ void acceptOnThread(connection *conn, int flags, char *cip)
     int ielCur = ielFromEventLoop(serverTL->el);
     bool fBootLoad = (g_pserver->loading == LOADING_BOOT);
 
-    int ielTarget = 0;
+    int ielTarget = ielCur;
     if (fBootLoad)
     {
         ielTarget = IDX_EVENT_LOOP_MAIN;    // During load only the main thread is active
@@ -1330,7 +1330,7 @@ void acceptOnThread(connection *conn, int flags, char *cip)
         while (cserver.cthreads > 1 && ielTarget == IDX_EVENT_LOOP_MAIN)
             ielTarget = rand() % cserver.cthreads;
     }
-    else
+    else if (g_pserver->active_client_balancing)
     {
         // Cluster connections are more transient, so its not worth the cost to balance
         //  we can trust that SO_REUSEPORT is doing its job of distributing connections
@@ -1405,6 +1405,8 @@ void acceptTLSHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
 
         acceptOnThread(connCreateAcceptedTLS(cfd, g_pserver->tls_auth_clients), 0, cip);
+        if (aeLockContention() >= 2)
+            break;
     }
 }
 

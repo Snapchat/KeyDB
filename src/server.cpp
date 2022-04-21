@@ -3772,7 +3772,7 @@ static void initNetworkingThread(int iel, int fReusePort)
     makeThreadKillable();
 
     for (int j = 0; j < g_pserver->rgthreadvar[iel].tlsfd.count; j++) {
-        if (aeCreateFileEvent(g_pserver->rgthreadvar[iel].el, g_pserver->rgthreadvar[iel].tlsfd.fd[j], AE_READABLE,
+        if (aeCreateFileEvent(g_pserver->rgthreadvar[iel].el, g_pserver->rgthreadvar[iel].tlsfd.fd[j], AE_READABLE|AE_READ_THREADSAFE,
             acceptTLSHandler,NULL) == AE_ERR)
             {
                 serverPanic(

@@ -180,6 +180,12 @@ void tlsInitThread(void)
     pending_list = listCreate();
 }
 
+void tlsCleanupThread(void)
+{
+    if (pending_list)
+        listRelease(pending_list);
+}
+
 void tlsCleanup(void) {
     if (redis_tls_ctx) {
         SSL_CTX_free(redis_tls_ctx);
@@ -1260,6 +1266,7 @@ int tlsProcessPendingData() {
 }
 
 void tlsInitThread() {}
+void tlsCleanupThread(void) {}
 
 sds connTLSGetPeerCert(connection *conn_) {
     (void) conn_;

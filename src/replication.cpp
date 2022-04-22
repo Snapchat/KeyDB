@@ -2856,6 +2856,7 @@ bool readSyncBulkPayloadRdb(connection *conn, redisMaster *mi, rdbSaveInfo &rsi,
              * gets promoted. */
             return false;
         }
+        if (g_pserver->fActiveReplica) updateActiveReplicaMastersFromRsi(&rsi);
 
         /* RDB loading succeeded if we reach this point. */
         if (g_pserver->repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
@@ -2934,7 +2935,7 @@ bool readSyncBulkPayloadRdb(connection *conn, redisMaster *mi, rdbSaveInfo &rsi,
                 mi->staleKeyMap->clear();
             else
                 mi->staleKeyMap = new (MALLOC_LOCAL) std::map<int, std::vector<robj_sharedptr>>();
-            rsi.addMaster(*mi);
+            rsi.mi = mi;
         }
         if (rdbLoadFile(rdb_filename,&rsi,RDBFLAGS_REPLICATION) != C_OK) {
             serverLog(LL_WARNING,
@@ -2951,6 +2952,7 @@ bool readSyncBulkPayloadRdb(connection *conn, redisMaster *mi, rdbSaveInfo &rsi,
                it'll be restarted when sync succeeds or replica promoted. */
             return false;
         }
+        if (g_pserver->fActiveReplica) updateActiveReplicaMastersFromRsi(&rsi);
 
         /* Cleanup. */
         if (g_pserver->rdb_del_sync_files && allPersistenceDisabled()) {

@@ -56,7 +56,6 @@
 void streamFreeCG(streamCG *cg);
 void streamFreeNACK(streamNACK *na);
 size_t streamReplyWithRangeFromConsumerPEL(client *c, stream *s, streamID *start, streamID *end, size_t count, streamConsumer *consumer);
-bool FInReplicaReplay();
 int streamParseStrictIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq);
 int streamParseIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq);
 

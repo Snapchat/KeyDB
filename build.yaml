@@ -1,0 +1,18 @@
+# Doc: https://wiki.sc-corp.net/pages/viewpage.action?pageId=121500284
+version: 1
+machamp:
+  keydb-build:
+    # Optional - build counter is linked to the build def
+    tag_template: 0.0.%build.counter%
+    # Optional - value in seconds before a build is terminated, default is 3600 seconds
+    timeout: 3600
+    # Optional - update ghe or not, default to true
+    update_ghe: true
+    code_coverage: false
+    # Required
+    steps:
+      make-build:
+        type: cmd
+        # Dockerfile for the builder img is in https://github.sc-corp.net/Snapchat/img/tree/master/build/ubuntu/ubuntu-20-04/keydb
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/build/keydb-ubuntu-20-04@sha256:6e3e3b99d89522bf25066d6caeb700207429be99fff8c25866c83896bb1fa811
+        command: ./build_test.sh

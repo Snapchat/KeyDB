@@ -14,5 +14,5 @@ machamp:
       make-build:
         type: cmd
         # Dockerfile for the builder img is in https://github.sc-corp.net/Snapchat/img/tree/master/build/ubuntu/ubuntu-20-04/keydb
-        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/build/keydb-ubuntu-20-04@sha256:6e3e3b99d89522bf25066d6caeb700207429be99fff8c25866c83896bb1fa811
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/build/keydb-ubuntu-20-04@sha256:c8e6ecf3c8b385509cc4e0521d7e28d6eef1f70dc7ca0a29f26ec02344870c42
         command: ./build_test.sh

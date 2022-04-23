@@ -7,10 +7,8 @@ on:
       - workflow_type: backend_workflow
         # references a build defined in build.yaml
         build_name: keydb-build
-        arch_types: ["amd64", "arm64"]
   push:
     - branches: [master]
       workflows:
         - workflow_type: backend_workflow
           build_name: keydb-build
-          arch_types: ["amd64", "arm64"]

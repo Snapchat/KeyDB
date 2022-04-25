@@ -14,35 +14,35 @@ machamp:
       make-build:
         type: cmd
         # Dockerfile for the builder img is in https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-latest
-        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/build/keydb-ubuntu-20-04@sha256:c8e6ecf3c8b385509cc4e0521d7e28d6eef1f70dc7ca0a29f26ec02344870c42
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-latest@sha256:abb764c7c19a6b5ffa24db1568b6ab40b16fe1326bff6154f05f774cea990700
         command: ./machamp_scripts/build.sh
       tls-test:
         type: cmd
         parent: make-build
         # Dockerfile for the builder img is in https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-latest
-        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/build/keydb-ubuntu-20-04@sha256:c8e6ecf3c8b385509cc4e0521d7e28d6eef1f70dc7ca0a29f26ec02344870c42
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-latest@sha256:abb764c7c19a6b5ffa24db1568b6ab40b16fe1326bff6154f05f774cea990700
         command: ./runtest --clients $(nproc) --verbose --tls
       cluster-test:
         type: cmd
         parent: make-build
         # Dockerfile for the builder img is in https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-latest
-        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/build/keydb-ubuntu-20-04@sha256:c8e6ecf3c8b385509cc4e0521d7e28d6eef1f70dc7ca0a29f26ec02344870c42
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-latest@sha256:abb764c7c19a6b5ffa24db1568b6ab40b16fe1326bff6154f05f774cea990700
         command: ./runtest-cluster --tls
       sentinel-test:
         type: cmd
         parent: make-build
         # Dockerfile for the builder img is in https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-latest
-        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/build/keydb-ubuntu-20-04@sha256:c8e6ecf3c8b385509cc4e0521d7e28d6eef1f70dc7ca0a29f26ec02344870c42
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-latest@sha256:abb764c7c19a6b5ffa24db1568b6ab40b16fe1326bff6154f05f774cea990700
         command: ./runtest-sentinel
       module-test:
         type: cmd
         parent: make-build
         # Dockerfile for the builder img is in https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-latest
-        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/build/keydb-ubuntu-20-04@sha256:c8e6ecf3c8b385509cc4e0521d7e28d6eef1f70dc7ca0a29f26ec02344870c42
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-latest@sha256:abb764c7c19a6b5ffa24db1568b6ab40b16fe1326bff6154f05f774cea990700
         command: ./runtest-moduleapi
       rotation-test:
         type: cmd
         parent: make-build
         # Dockerfile for the builder img is in https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-latest
-        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/build/keydb-ubuntu-20-04@sha256:c8e6ecf3c8b385509cc4e0521d7e28d6eef1f70dc7ca0a29f26ec02344870c42
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-latest@sha256:abb764c7c19a6b5ffa24db1568b6ab40b16fe1326bff6154f05f774cea990700
         command: ./runtest-rotation

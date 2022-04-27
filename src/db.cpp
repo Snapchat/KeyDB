@@ -2706,7 +2706,7 @@ void redisDbPersistentData::clear(void(callback)(void*))
     delete m_setexpire;
     m_setexpire = new (MALLOC_LOCAL) expireset();
     if (m_spstorage != nullptr)
-        m_spstorage->clear();
+        m_spstorage->clear(callback);
     dictEmpty(m_pdictTombstone,callback);
     m_pdbSnapshot = nullptr;
 }
@@ -2926,7 +2926,7 @@ bool redisDbPersistentData::processChanges(bool fSnapshot)
             if (m_fAllChanged)
             {
                 if (dictSize(m_pdict) > 0 || m_spstorage->count() > 0) { // in some cases we may have pre-sized the StorageCache's dict, and we don't want clear to ruin it
-                    m_spstorage->clear();
+                    m_spstorage->clearAsync();
                     storeDatabase();
                 }
                 m_fAllChanged = 0;

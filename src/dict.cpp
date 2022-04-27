@@ -790,15 +790,30 @@ dictEntry *dictGetFairRandomKey(dict *d) {
 }
 
 /* Function to reverse bits. Algorithm from:
- * http://graphics.stanford.edu/~seander/bithacks.html#ReverseParallel */
-static unsigned long rev(unsigned long v) {
-    unsigned long s = CHAR_BIT * sizeof(v); // bit size; must be power of 2
-    unsigned long mask = ~0UL;
-    while ((s >>= 1) > 0) {
-        mask ^= (mask << s);
-        v = ((v >> s) & mask) | ((v << s) & ~mask);
-    }
-    return v;
+ * 1. Hacker's Delight (2nd Edition) Chapter 7
+ * 2. Practically efficient methods for performing bit-reversedpermutation in C++11 on the x86-64 architecture
+ *    https://arxiv.org/pdf/1708.01873.pdf
+ *    with sources at https://bitbucket.org/orserang/bit-reversal-methods/src/master/src_and_bin/src/algorithms/BitReversal.hpp
+ * This is my extension to handle either 64 or 32 bits unsgined longs conditionally
+ * TODO: upgrade to constexpr if when moving to C++17
+ * */
+
+static unsigned long rev(unsigned long x) {
+#if ULONG_MAX == 0xFFFFFFFFUL
+    x = (x & 0x55555555) <<  1 | (x & 0xAAAAAAAA) >>  1;        
+    x = (x & 0x33333333) <<  2 | (x & 0xCCCCCCCC) >>  2;
+    x = (x & 0x0F0F0F0F) <<  4 | (x & 0xF0F0F0F0) >>  4;
+    x = (x & 0x00FF00FF) <<  8 | (x & 0xFF00FF00) >>  8;
+    x = (x << 16) | (x  >> 16);
+#elif ULONG_MAX == 0xFFFFFFFFFFFFFFFFUL
+    x = (x & 0x5555555555555555) <<  1 | (x & 0xAAAAAAAAAAAAAAAA) >>  1;
+    x = (x & 0x3333333333333333) <<  2 | (x & 0xCCCCCCCCCCCCCCCC) >>  2;
+    x = (x & 0x0F0F0F0F0F0F0F0F) <<  4 | (x & 0xF0F0F0F0F0F0F0F0) >>  4;
+    x = (x & 0x00FF00FF00FF00FF) <<  8 | (x & 0xFF00FF00FF00FF00) >>  8;
+    x = (x & 0x0000FFFF0000FFFF) << 16 | (x & 0xFFFF0000FFFF0000) >> 16;
+    x = (x << 32) | (x >> 32);
+#endif
+    return x;
 }
 
 /* dictScan() is used to iterate over the elements of a dictionary.

@@ -39,6 +39,17 @@ IStorageFactory *CreateRocksDBStorageFactory(const char *path, int dbnum, const 
     return new RocksDBStorageFactory(path, dbnum, rgchConfig, cchConfig);
 }
 
+rocksdb::Options RocksDBStorageFactory::RocksDbOptions()
+{
+    rocksdb::Options options = DefaultRocksDBOptions();
+    options.max_open_files = filedsRequired();
+    options.sst_file_manager = m_pfilemanager;
+    options.create_if_missing = true;
+    options.create_missing_column_families = true;
+    options.info_log_level = rocksdb::ERROR_LEVEL;
+    return options;
+}
+
 RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, const char *rgchConfig, size_t cchConfig)
     : m_path(dbfile)
 {
@@ -56,13 +67,9 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
 
     m_pfilemanager = std::shared_ptr<rocksdb::SstFileManager>(rocksdb::NewSstFileManager(rocksdb::Env::Default()));
 
-    rocksdb::Options options = DefaultRocksDBOptions();
-    options.max_open_files = filedsRequired();
-    options.sst_file_manager = m_pfilemanager;
-    options.create_if_missing = true;
-    options.create_missing_column_families = true;
-    options.info_log_level = rocksdb::ERROR_LEVEL;
     rocksdb::DB *db = nullptr;
+
+    auto options = RocksDbOptions();
 
     for (int idb = 0; idb < dbnum; ++idb)
     {

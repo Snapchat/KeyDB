@@ -86,6 +86,11 @@ static_assert((PREFIX_SIZE % 16) == 0, "Our prefix must be modulo 16-bytes or ou
 #define free(ptr) je_free(ptr)
 #define mallocx(size,flags) je_mallocx(size,flags)
 #define dallocx(ptr,flags) je_dallocx(ptr,flags)
+#elif defined(USE_MIMALLOC)
+#define malloc(size, type) mi_malloc(size)
+#define calloc(count,size,type) mi_calloc(count,size)
+#define realloc(ptr,size,type) mi_realloc(ptr,size)
+#define free(ptr) mi_free(ptr)
 #else
 #define malloc(size, type) malloc(size)
 #define calloc(count,size,type) calloc(count,size)

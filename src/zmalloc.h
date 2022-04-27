@@ -60,6 +60,10 @@
 #error "Newer version of jemalloc required"
 #endif
 
+#elif defined(USE_MIMALLOC)
+#define ZMALLOC_LIB ("mimalloc-" __xstr(MIMALLOC_VERSION_MAJOR) "." __xstr(MIMALLOC_VERSION_MINOR) "." __xstr(MIMALLOC_VERSION_BUGFIX))
+#include <mimalloc.h>
+
 #elif defined(__APPLE__)
 #include <malloc/malloc.h>
 #define HAVE_MALLOC_SIZE 1

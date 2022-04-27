@@ -1,0 +1,1 @@
+/usr/bin/cc -O3 -DNDEBUG -rdynamic CMakeFiles/mimalloc-test-stress.dir/test/test-stress.c.o -o mimalloc-test-stress  -Wl,-rpath,/home/hbina/git/KeyDB/deps/mimalloc/bin libmimalloc.so.1.6 -lpthread -lrt 

@@ -113,6 +113,10 @@ ifeq ($(USE_JEMALLOC),no)
 	MALLOC=libc
 endif
 
+ifeq ($(USE_MIMALLOC),no)
+	MALLOC=mimalloc
+endif
+
 # Override default settings if possible
 -include .make-settings
 
@@ -291,6 +295,20 @@ ifeq ($(MALLOC),memkind)
 	FINAL_CFLAGS+= -DUSE_MEMKIND -I../deps/memkind/src/include
 	FINAL_CXXFLAGS+= -DUSE_MEMKIND -I../deps/memkind/src/include
 	FINAL_LIBS := ../deps/memkind/src/.libs/libmemkind.a -lnuma $(FINAL_LIBS)
+endif
+
+ifeq ($(MIMALLOC),memkind)
+	DEPENDENCY_TARGETS+= memkind
+	FINAL_CFLAGS+= -DUSE_MEMKIND -I../deps/memkind/src/include
+	FINAL_CXXFLAGS+= -DUSE_MEMKIND -I../deps/memkind/src/include
+	FINAL_LIBS := ../deps/memkind/src/.libs/libmemkind.a -lnuma $(FINAL_LIBS)
+endif
+
+ifeq ($(MALLOC),mimalloc)
+	DEPENDENCY_TARGETS+= mimalloc
+	FINAL_CFLAGS+= -DUSE_MIMALLOC -I../deps/mimalloc/include
+	FINAL_CXXFLAGS+= -DUSE_MIMALLOC -I../deps/mimalloc/include
+	FINAL_LIBS := ../deps/mimalloc/bin/libmimalloc.a $(FINAL_LIBS)
 endif
 
 ifeq ($(BUILD_TLS),yes)

@@ -9,6 +9,7 @@ else
     SYSTEMD_EXTRA=$(cat <<EOF
 
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+#MemoryDenyWriteExecute=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectControlGroups=true

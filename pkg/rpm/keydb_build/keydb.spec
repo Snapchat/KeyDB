@@ -1,9 +1,9 @@
-Name        : keydb-enterprise
+Name        : keydb
 Version     : 6.0.5
 Release     : 1%{?dist}
 Group       : Unspecified
 License     : BSD
-Packager    : EQ Alpha Technology
+Packager    : Snap Inc.
 
 URL         : https://keydb.dev
 Summary     : A persistent key-value database

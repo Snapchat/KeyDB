@@ -1,0 +1,48 @@
+# Doc: https://wiki.sc-corp.net/pages/viewpage.action?pageId=121500284
+version: 1
+machamp:
+  keydb-build:
+    # Optional - build counter is linked to the build def
+    tag_template: 0.0.%build.counter%
+    # Optional - value in seconds before a build is terminated, default is 3600 seconds
+    timeout: 3600
+    # Optional - update ghe or not, default to true
+    update_ghe: true
+    code_coverage: false
+    # Required
+    steps:
+      make-build:
+        type: cmd
+        # https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-20-04
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-20-04@sha256:cf869a3f5d1de1e1d976bb906689c37b7031938eb68661b844a38c532f27248c
+        command: ./machamp_scripts/build.sh
+      tls-test:
+        type: cmd
+        parent: make-build
+        # https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-20-04
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-20-04@sha256:cf869a3f5d1de1e1d976bb906689c37b7031938eb68661b844a38c532f27248c
+        command: ./runtest --clients $(nproc) --verbose --tls
+      cluster-test:
+        type: cmd
+        parent: make-build
+        # https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-20-04
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-20-04@sha256:cf869a3f5d1de1e1d976bb906689c37b7031938eb68661b844a38c532f27248c
+        command: ./runtest-cluster --tls
+      sentinel-test:
+        type: cmd
+        parent: make-build
+        # https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-20-04
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-20-04@sha256:cf869a3f5d1de1e1d976bb906689c37b7031938eb68661b844a38c532f27248c
+        command: ./runtest-sentinel
+      module-test:
+        type: cmd
+        parent: make-build
+        # https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-20-04
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-20-04@sha256:cf869a3f5d1de1e1d976bb906689c37b7031938eb68661b844a38c532f27248c
+        command: ./runtest-moduleapi
+      rotation-test:
+        type: cmd
+        parent: make-build
+        # https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-20-04
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-20-04@sha256:cf869a3f5d1de1e1d976bb906689c37b7031938eb68661b844a38c532f27248c
+        command: ./runtest-rotation

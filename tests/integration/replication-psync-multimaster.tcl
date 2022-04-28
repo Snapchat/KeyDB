@@ -142,12 +142,3 @@ foreach mdl {no yes} {
         } $mdl $sdl 1
     }
 }
-
-foreach mdl {no} {
-    foreach sdl {swapdb} {
-        test_psync {backlog expired} 3 100000000 1 3 {
-        assert {[s -1 sync_partial_err] > 0}
-        } $mdl $sdl 1
-    }
-}
-

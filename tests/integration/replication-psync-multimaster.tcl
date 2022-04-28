@@ -24,6 +24,12 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
             $master config set repl-diskless-sync $mdl
             $master config set repl-diskless-sync-delay 1
             $replica config set repl-diskless-load $sdl
+            
+            $replica config set repl-backlog-size $backlog_size
+            $replica config set repl-backlog-ttl $backlog_ttl
+            $replica config set repl-diskless-sync $mdl
+            $replica config set repl-diskless-sync-delay 1
+            $master config set repl-diskless-load $sdl
 
             test {Replica should be able to synchronize with the master} {
                 $replica replicaof $master_host $master_port

@@ -24,6 +24,8 @@ public:
     virtual size_t filedsRequired() const override;
     std::string getTempFolder();
 
+    rocksdb::Options RocksDbOptions();
+
 private:
     void setVersion(rocksdb::ColumnFamilyHandle*);
 };

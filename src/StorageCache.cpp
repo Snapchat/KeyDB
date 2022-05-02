@@ -31,11 +31,25 @@ StorageCache::~StorageCache()
         dictRelease(m_pdict);
 }
 
-void StorageCache::clear()
+void StorageCache::clear(void(callback)(void*))
 {
     std::unique_lock<fastlock> ul(m_lock);
     if (m_pdict != nullptr)
-        dictEmpty(m_pdict, nullptr);
+        dictEmpty(m_pdict, callback);
+    m_spstorage->clear();
+    m_collisionCount = 0;
+}
+
+void StorageCache::clearAsync()
+{
+    std::unique_lock<fastlock> ul(m_lock);
+    if (m_pdict != nullptr) {
+        dict *dSav = m_pdict;
+        m_pdict = dictCreate(&dbStorageCacheType, nullptr);
+        g_pserver->asyncworkqueue->AddWorkFunction([dSav]{
+            dictEmpty(dSav, nullptr);
+        });
+    }
     m_spstorage->clear();
     m_collisionCount = 0;
 }

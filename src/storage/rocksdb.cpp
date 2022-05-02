@@ -132,7 +132,8 @@ size_t RocksDBStorageProvider::clear()
     auto strName = m_spcolfamily->GetName();
 
     rocksdb::ColumnFamilyHandle *handle = nullptr;
-    m_spdb->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), strName, &handle);
+    rocksdb::ColumnFamilyOptions cf_options(m_pfactory->RocksDbOptions());
+    m_spdb->CreateColumnFamily(cf_options, strName, &handle);
     m_spcolfamily = std::shared_ptr<rocksdb::ColumnFamilyHandle>(handle);
 
     if (!status.ok())

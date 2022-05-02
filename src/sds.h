@@ -429,6 +429,21 @@ public:
         return *this;
     }
 
+    sdsstring &operator=(sdsstring &&other)
+    {
+        sds tmp = m_str;
+        m_str = other.m_str;
+        other.m_str = tmp;
+        return *this;
+    }
+
+    template<typename... Args>
+    sdsstring catfmt(const char *fmt, Args... args)
+    {
+        m_str = sdscatfmt(m_str, fmt, args...);
+        return *this;
+    }
+
     sds release() {
         sds sdsT = m_str;
         m_str = nullptr;

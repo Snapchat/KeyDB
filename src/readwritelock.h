@@ -2,22 +2,24 @@
 #include <condition_variable>
 
 class readWriteLock {
-    std::mutex m_readLock;
-    std::recursive_mutex m_writeLock;
-    std::condition_variable m_cv;
+    fastlock m_readLock;
+    fastlock m_writeLock;
+    std::condition_variable_any m_cv;
     int m_readCount = 0;
     int m_writeCount = 0;
     bool m_writeWaiting = false;
 public:
+    readWriteLock(const char *name) : m_readLock(name), m_writeLock(name) {}
+
     void acquireRead() {
-        std::unique_lock<std::mutex> rm(m_readLock);
+        std::unique_lock<fastlock> rm(m_readLock);
         while (m_writeCount > 0 || m_writeWaiting)
             m_cv.wait(rm);
         m_readCount++;
     }
     
     bool tryAcquireRead() {
-        std::unique_lock<std::mutex> rm(m_readLock, std::defer_lock);
+        std::unique_lock<fastlock> rm(m_readLock, std::defer_lock);
         if (!rm.try_lock())
             return false;
         if (m_writeCount > 0 || m_writeWaiting)
@@ -27,7 +29,7 @@ public:
     }
 
     void acquireWrite(bool exclusive = true) {
-        std::unique_lock<std::mutex> rm(m_readLock);
+        std::unique_lock<fastlock> rm(m_readLock);
         m_writeWaiting = true;
         while (m_readCount > 0)
             m_cv.wait(rm);
@@ -43,24 +45,12 @@ public:
     }
 
     void upgradeWrite(bool exclusive = true) {
-        std::unique_lock<std::mutex> rm(m_readLock);
-        m_writeWaiting = true;
-        while (m_readCount > 1)
-            m_cv.wait(rm);
-        if (exclusive) {
-            /* Another thread might have the write lock while we have the read lock
-               but won't be able to release it until they can acquire the read lock
-               so release the read lock and try again instead of waiting to avoid deadlock */
-            while(!m_writeLock.try_lock())
-                m_cv.wait(rm);
-        }
-        m_writeCount++;
-        m_readCount--;
-        m_writeWaiting = false;
+        releaseRead();
+        acquireWrite(exclusive);
     }
 
     bool tryAcquireWrite(bool exclusive = true) {
-        std::unique_lock<std::mutex> rm(m_readLock, std::defer_lock);
+        std::unique_lock<fastlock> rm(m_readLock, std::defer_lock);
         if (!rm.try_lock())
             return false;
         if (m_readCount > 0)
@@ -73,14 +63,13 @@ public:
     }
 
     void releaseRead() {
-        std::unique_lock<std::mutex> rm(m_readLock);
-        serverAssert(m_readCount > 0);
+        std::unique_lock<fastlock> rm(m_readLock);
         m_readCount--;
         m_cv.notify_all();
     }
 
     void releaseWrite(bool exclusive = true) {
-        std::unique_lock<std::mutex> rm(m_readLock);
+        std::unique_lock<fastlock> rm(m_readLock);
         serverAssert(m_writeCount > 0);
         if (exclusive)
             m_writeLock.unlock();
@@ -89,14 +78,8 @@ public:
     }
 
     void downgradeWrite(bool exclusive = true) {
-        std::unique_lock<std::mutex> rm(m_readLock);
-        serverAssert(m_writeCount > 0);
-        if (exclusive)
-            m_writeLock.unlock();
-        m_writeCount--;
-        while (m_writeCount > 0 || m_writeWaiting)
-            m_cv.wait(rm);
-        m_readCount++;
+        releaseWrite(exclusive);
+        acquireRead();
     }
 
     bool hasReader() {

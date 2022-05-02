@@ -28,6 +28,7 @@ void AsyncWorkQueue::WorkerThreadMain()
         if (m_workqueue.empty())
             m_cvWakeup.wait(lock);
 
+        aeThreadOnline();
         while (!m_workqueue.empty())
         {
             WorkItem task = std::move(m_workqueue.front());
@@ -49,6 +50,7 @@ void AsyncWorkQueue::WorkerThreadMain()
         }
         g_pserver->garbageCollector.endEpoch(serverTL->gcEpoch);
         serverTL->gcEpoch.reset();
+        aeThreadOffline();
     }
 
     listRelease(vars.clients_pending_asyncwrite);

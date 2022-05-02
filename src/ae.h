@@ -164,9 +164,13 @@ void aeSetDontWait(aeEventLoop *eventLoop, int noWait);
 void aeClosePipesForForkChild(aeEventLoop *eventLoop);
 
 void setAeLockSetThreadSpinWorker(spin_worker worker);
+void aeThreadOnline();
 void aeAcquireLock();
+void aeAcquireForkLock();
 int aeTryAcquireLock(int fWeak);
+void aeThreadOffline();
 void aeReleaseLock();
+void aeReleaseForkLock();
 int aeThreadOwnsLock();
 void aeSetThreadOwnsLockOverride(int fOverride);
 int aeLockContested(int threshold);

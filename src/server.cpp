@@ -62,7 +62,6 @@
 #include <sys/socket.h>
 #include <algorithm>
 #include <uuid/uuid.h>
-#include <mutex>
 #include <condition_variable>
 #include "aelocker.h"
 #include "motd.h"
@@ -92,14 +91,12 @@ double R_Zero, R_PosInf, R_NegInf, R_Nan;
 /* Global vars */
 namespace GlobalHidden {
 struct redisServer server; /* Server global state */
-readWriteLock forkLock;
 }
 redisServer *g_pserver = &GlobalHidden::server;
-readWriteLock *g_forkLock = &GlobalHidden::forkLock;
 struct redisServerConst cserver;
 thread_local struct redisServerThreadVars *serverTL = NULL;   // thread local server vars
-std::mutex time_thread_mutex;
-std::condition_variable time_thread_cv;
+fastlock time_thread_lock("Time thread lock");
+std::condition_variable_any time_thread_cv;
 int sleeping_threads = 0;
 void wakeTimeThread();
 
@@ -2697,7 +2694,7 @@ extern "C" void asyncFreeDictTable(dictEntry **de)
 
 void blockingOperationStarts() {
     if(!g_pserver->blocking_op_nesting++){
-        g_pserver->blocked_last_cron = g_pserver->mstime;
+        __atomic_load(&g_pserver->mstime, &g_pserver->blocked_last_cron, __ATOMIC_ACQUIRE);
     }
 }
 
@@ -2959,9 +2956,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (!fSentReplies)
         handleClientsWithPendingWrites(iel, aof_state);
 
+    aeThreadOffline();
     // Scope lock_guard
     {
-        std::lock_guard<std::mutex> lock(time_thread_mutex);
+        std::unique_lock<fastlock> lock(time_thread_lock);
         sleeping_threads++;
         serverAssert(sleeping_threads <= cserver.cthreads);
     }
@@ -2975,7 +2973,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
             g_pserver->garbageCollector.endEpoch(epoch);
         }, true /*fHiPri*/);
     }
-
+    
     /* Determine whether the modules are enabled before sleeping, and use that result
        both here, and after wakeup to avoid double acquire or release of the GIL */
     serverTL->modulesEnabledThisAeLoop = !!moduleCount();
@@ -2995,8 +2993,9 @@ void afterSleep(struct aeEventLoop *eventLoop) {
        Don't check here that modules are enabled, rather use the result from beforeSleep
        Otherwise you may double acquire the GIL and cause deadlocks in the module */
     if (!ProcessingEventsWhileBlocked) {
-        wakeTimeThread();
         if (serverTL->modulesEnabledThisAeLoop) moduleAcquireGIL(TRUE /*fServerThread*/);
+        aeThreadOnline();
+        wakeTimeThread();
 
         serverAssert(serverTL->gcEpoch.isReset());
         serverTL->gcEpoch = g_pserver->garbageCollector.startEpoch();
@@ -6852,17 +6851,18 @@ int redisFork(int purpose) {
         openChildInfoPipe();
     }
     long long startWriteLock = ustime();
-    g_forkLock->acquireWrite();
+    aeAcquireForkLock();
     latencyAddSampleIfNeeded("fork-lock",(ustime()-startWriteLock)/1000);
     if ((childpid = fork()) == 0) {
         /* Child */
+        aeReleaseForkLock();
         g_pserver->in_fork_child = purpose;
         setOOMScoreAdj(CONFIG_OOM_BGCHILD);
         setupChildSignalHandlers();
         closeChildUnusedResourceAfterFork();
     } else {
         /* Parent */
-        g_forkLock->releaseWrite();
+        aeReleaseForkLock();
         g_pserver->stat_total_forks++;
         g_pserver->stat_fork_time = ustime()-start;
         g_pserver->stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / g_pserver->stat_fork_time / (1024*1024*1024); /* GB per second. */
@@ -6940,7 +6940,7 @@ void loadDataFromDisk(void) {
         if (loadAppendOnlyFile(g_pserver->aof_filename) == C_OK)
             serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     } else if (g_pserver->rdb_filename != NULL || g_pserver->rdb_s3bucketpath != NULL) {
-        rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+        rdbSaveInfo rsi;
         rsi.fForceSetKey = false;
         errno = 0; /* Prevent a stale value from affecting error checking */
         if (rdbLoad(&rsi,RDBFLAGS_NONE) == C_OK) {
@@ -6969,11 +6969,23 @@ void loadDataFromDisk(void) {
                 while ((ln = listNext(&li)))
                 {
                     redisMaster *mi = (redisMaster*)listNodeValue(ln);
-                    /* If we are a replica, create a cached master from this
-                    * information, in order to allow partial resynchronizations
-                    * with masters. */
-                    replicationCacheMasterUsingMyself(mi);
-                    selectDb(mi->cached_master,rsi.repl_stream_db);
+                    if (g_pserver->fActiveReplica) {
+                        for (size_t i = 0; i < rsi.numMasters(); i++) {
+                            if (!strcmp(mi->masterhost, rsi.masters[i].masterhost) && mi->masterport == rsi.masters[i].masterport) {
+                                memcpy(mi->master_replid, rsi.masters[i].master_replid, sizeof(mi->master_replid));
+                                mi->master_initial_offset = rsi.masters[i].master_initial_offset;
+                                replicationCacheMasterUsingMaster(mi);
+                                serverLog(LL_NOTICE, "Cached master recovered from RDB for %s:%d", mi->masterhost, mi->masterport);
+                            }
+                        }
+                    }
+                    else {
+                        /* If we are a replica, create a cached master from this
+                        * information, in order to allow partial resynchronizations
+                        * with masters. */
+                        replicationCacheMasterUsingMyself(mi);
+                        selectDb(mi->cached_master,rsi.repl_stream_db);
+                    }
                 }
             }
         } else if (errno != ENOENT) {
@@ -7207,7 +7219,9 @@ void OnTerminate()
 
 void wakeTimeThread() {
     updateCachedTime();
-    std::lock_guard<std::mutex> lock(time_thread_mutex);
+    aeThreadOffline();
+    std::unique_lock<fastlock> lock(time_thread_lock);
+    aeThreadOnline();
     if (sleeping_threads >= cserver.cthreads)
         time_thread_cv.notify_one();
     sleeping_threads--;
@@ -7219,21 +7233,23 @@ void *timeThreadMain(void*) {
     delay.tv_sec = 0;
     delay.tv_nsec = 100;
     int cycle_count = 0;
-    g_forkLock->acquireRead();
+    aeThreadOnline();
     while (true) {
         {
-            std::unique_lock<std::mutex> lock(time_thread_mutex);
+            aeThreadOffline();
+            std::unique_lock<fastlock> lock(time_thread_lock);
+            aeThreadOnline();
             if (sleeping_threads >= cserver.cthreads) {
-                g_forkLock->releaseRead();
+                aeThreadOffline();
                 time_thread_cv.wait(lock);
-                g_forkLock->acquireRead();
+                aeThreadOnline();
                 cycle_count = 0;
             }
         }
         updateCachedTime();
         if (cycle_count == MAX_CYCLES_TO_HOLD_FORK_LOCK) {
-            g_forkLock->releaseRead();
-            g_forkLock->acquireRead();
+            aeThreadOffline();
+            aeThreadOnline();
             cycle_count = 0;
         }
 #if defined(__APPLE__)
@@ -7243,7 +7259,7 @@ void *timeThreadMain(void*) {
 #endif
         cycle_count++;
     }
-    g_forkLock->releaseRead();
+    aeThreadOffline();
 }
 
 void *workerThreadMain(void *parg)
@@ -7255,12 +7271,15 @@ void *workerThreadMain(void *parg)
 
     if (iel != IDX_EVENT_LOOP_MAIN)
     {
+        aeThreadOnline();
         aeAcquireLock();
         initNetworkingThread(iel, cserver.cthreads > 1);
         aeReleaseLock();
+        aeThreadOffline();
     }
 
     moduleAcquireGIL(true); // Normally afterSleep acquires this, but that won't be called on the first run
+    aeThreadOnline();
     aeEventLoop *el = g_pserver->rgthreadvar[iel].el;
     try
     {
@@ -7269,6 +7288,7 @@ void *workerThreadMain(void *parg)
     catch (ShutdownException)
     {
     }
+    aeThreadOffline();
     moduleReleaseGIL(true);
     serverAssert(!GlobalLocksAcquired());
     aeDeleteEventLoop(el);
@@ -7417,8 +7437,8 @@ int main(int argc, char **argv) {
     g_pserver->sentinel_mode = checkForSentinelMode(argc,argv);
     initServerConfig();
     serverTL = &g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN];
+    aeThreadOnline();
     aeAcquireLock();    // We own the lock on boot
-
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */
     moduleInitModulesSystem();
@@ -7588,7 +7608,7 @@ int main(int argc, char **argv) {
             __AFL_INIT();
 #endif
             rio rdb;
-            rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+            rdbSaveInfo rsi;
             startLoadingFile(stdin, (char*)"stdin", 0);
             rioInitWithFile(&rdb,stdin);
             rdbLoadRio(&rdb,0,&rsi);
@@ -7653,6 +7673,7 @@ int main(int argc, char **argv) {
 
     redisSetCpuAffinity(g_pserver->server_cpulist);
     aeReleaseLock();    //Finally we can dump the lock
+    aeThreadOffline();
     moduleReleaseGIL(true);
     
     setOOMScoreAdj(-1);

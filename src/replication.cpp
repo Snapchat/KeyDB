@@ -1196,7 +1196,6 @@ int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
         size_t cbData = 0;
         size_t cbLastUpdate = 0;
         auto &replBuf = *spreplBuf;
-
         // Databases
         replBuf.addArrayLen(cserver.dbnum);
         for (int idb = 0; idb < cserver.dbnum; ++idb) {
@@ -2250,24 +2249,6 @@ void changeReplicationId(void) {
     saveMasterStatusToStorage(false);
 }
 
-
-int hexchToInt(char ch)
-{
-    if (ch >= '0' && ch <= '9')
-        return ch - '0';
-    if (ch >= 'a' && ch <= 'f')
-        return (ch - 'a') + 10;
-    return (ch - 'A') + 10;
-}
-void mergeReplicationId(const char *id)
-{
-    for (int i = 0; i < CONFIG_RUN_ID_SIZE; ++i)
-    {
-        const char *charset = "0123456789abcdef";
-        g_pserver->replid[i] = charset[hexchToInt(g_pserver->replid[i]) ^ hexchToInt(id[i])];
-    }
-}
-
 /* Clear (invalidate) the secondary replication ID. This happens, for
  * example, after a full resynchronization, when we start a new replication
  * history. */
@@ -2953,7 +2934,7 @@ bool readSyncBulkPayloadRdb(connection *conn, redisMaster *mi, rdbSaveInfo &rsi,
                 mi->staleKeyMap->clear();
             else
                 mi->staleKeyMap = new (MALLOC_LOCAL) std::map<int, std::vector<robj_sharedptr>>();
-            rsi.mi = mi;
+            rsi.addMaster(*mi);
         }
         if (rdbLoadFile(rdb_filename,&rsi,RDBFLAGS_REPLICATION) != C_OK) {
             serverLog(LL_WARNING,
@@ -2993,7 +2974,7 @@ error:
 }
 
 void readSyncBulkPayload(connection *conn) {
-    rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+    rdbSaveInfo rsi;
     redisMaster *mi = (redisMaster*)connGetPrivateData(conn);
     static int usemark = 0;
     if (mi == nullptr) {
@@ -3008,9 +2989,6 @@ void readSyncBulkPayload(connection *conn) {
         if (!readSyncBulkPayloadRdb(conn, mi, rsi, usemark))
             return;
     }
-
-    // Should we update our database, or create from scratch?
-    int fUpdate = g_pserver->fActiveReplica || g_pserver->enable_multimaster;
 
     /* Final setup of the connected slave <- master link */
     replicationCreateMasterClient(mi,mi->repl_transfer_s,rsi.repl_stream_db);
@@ -3038,11 +3016,7 @@ void readSyncBulkPayload(connection *conn) {
     /* After a full resynchronization we use the replication ID and
      * offset of the master. The secondary ID / offset are cleared since
      * we are starting a new history. */
-    if (fUpdate)
-    {
-        mergeReplicationId(mi->master->replid);
-    }
-    else
+    if (!g_pserver->fActiveReplica)
     {
         /* After a full resynchroniziation we use the replication ID and
         * offset of the master. The secondary ID / offset are cleared since
@@ -3237,7 +3211,7 @@ int slaveTryPartialResynchronization(redisMaster *mi, connection *conn, int read
          * client structure representing the master into g_pserver->master. */
         mi->master_initial_offset = -1;
 
-        if (mi->cached_master && !g_pserver->fActiveReplica) {
+        if (mi->cached_master) {
             psync_replid = mi->cached_master->replid;
             snprintf(psync_offset,sizeof(psync_offset),"%lld", mi->cached_master->reploff+1);
             serverLog(LL_NOTICE,"Trying a partial resynchronization (request %s:%s).", psync_replid, psync_offset);
@@ -3336,14 +3310,15 @@ int slaveTryPartialResynchronization(redisMaster *mi, connection *conn, int read
                     sizeof(g_pserver->replid2));
                 g_pserver->second_replid_offset = g_pserver->master_repl_offset+1;
 
-                /* Update the cached master ID and our own primary ID to the
-                 * new one. */
-                memcpy(g_pserver->replid,sznew,sizeof(g_pserver->replid));
-                memcpy(mi->cached_master->replid,sznew,sizeof(g_pserver->replid));
+                if (!g_pserver->fActiveReplica) {
+                    /* Update the cached master ID and our own primary ID to the
+                     * new one. */
+                    memcpy(g_pserver->replid,sznew,sizeof(g_pserver->replid));
+                    memcpy(mi->cached_master->replid,sznew,sizeof(g_pserver->replid));
 
-                /* Disconnect all the sub-slaves: they need to be notified. */
-                if (!g_pserver->fActiveReplica)
+                    /* Disconnect all the replicas: they need to be notified. */
                     disconnectSlaves();
+                }
             }
         }
 
@@ -3723,18 +3698,6 @@ retry_connect:
     {
         disconnectSlavesExcept(mi->master_uuid); /* Force our slaves to resync with us as well. */
         freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
-    }
-    else
-    {
-        if (listLength(g_pserver->slaves))
-        {
-            changeReplicationId();
-            clearReplicationId2();
-        }
-        else
-        {
-            freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
-        }
     }
 
     /* Fall back to SYNC if needed. Otherwise psync_result == PSYNC_FULLRESYNC
@@ -4399,6 +4362,26 @@ void replicationCacheMasterUsingMyself(redisMaster *mi) {
     memcpy(mi->master->replid, g_pserver->replid, sizeof(g_pserver->replid));
 
     /* Set as cached master. */
+    unlinkClient(mi->master);
+    mi->cached_master = mi->master;
+    mi->master = NULL;
+}
+
+/* This function is called when reloading master info from an RDB in Active Replica mode.
+ * It creates a cached master client using the info contained in the redisMaster struct.
+ *
+ * Assumes that the passed struct contains valid master info. */
+void replicationCacheMasterUsingMaster(redisMaster *mi) {
+    if (mi->cached_master) {
+        freeClient(mi->cached_master);
+    }
+
+    replicationCreateMasterClient(mi, NULL, -1);
+    std::lock_guard<decltype(mi->master->lock)> lock(mi->master->lock);
+
+    memcpy(mi->master->replid, mi->master_replid, sizeof(mi->master_replid));
+    mi->master->reploff = mi->master_initial_offset;
+
     unlinkClient(mi->master);
     mi->cached_master = mi->master;
     mi->master = NULL;

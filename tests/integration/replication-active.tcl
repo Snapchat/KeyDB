@@ -241,10 +241,18 @@ start_server {tags {"active-repl"} overrides {active-replica yes}} {
         $slave replicaof $master_host $master_port
         after 1000
         $master replicaof $slave_host $slave_port
-        after 1000
 
-        assert_equal {bar} [$slave get testkey]  {replica is correct}
-        assert_equal {bar} [$master get testkey] {master is correct}
+        wait_for_condition 50 100 {
+            [string match bar [$slave get testkey]]
+        } else {
+            fail "Replica is not correct"
+        }
+
+        wait_for_condition 50 100 {
+            [string match bar [$master get testkey]]
+        } else {
+            fail "Master is not correct"
+        }
     }
 
     test {Active replica merge works with client blocked} {

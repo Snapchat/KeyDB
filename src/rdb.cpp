@@ -1218,37 +1218,15 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             == -1) return -1;
         if (rdbSaveAuxFieldStrInt(rdb,"repl-offset",rsi->master_repl_offset)
             == -1) return -1;
-        if (g_pserver->fActiveReplica && listLength(g_pserver->masters) > 0) {
+        if (g_pserver->fActiveReplica) {
             sdsstring val = sdsstring(sdsempty());
-            listNode *ln;
-            listIter li;
-            redisMaster* mi;
-            listRewind(g_pserver->masters,&li);
-            while ((ln = listNext(&li)) != NULL) {
-                mi = (redisMaster*)listNodeValue(ln);
-                if (!mi->master) {
-                    // If master client is not available, use info from master struct - better than nothing
-                    serverLog(LL_NOTICE, "saving master %s", mi->master_replid);
-                    if (mi->master_replid[0] == 0) {
-                        // if replid is null, there's no reason to save it
-                        continue;
-                    }
-                    val = val.catfmt("%s:%I:%s:%i;", mi->master_replid,
-                        mi->master_initial_offset,
-                        mi->masterhost,
-                        mi->masterport);
-                }
-                else {
-                    serverLog(LL_NOTICE, "saving master %s", mi->master->replid);
-                    if (mi->master->replid[0] == 0) {
-                        // if replid is null, there's no reason to save it
-                        continue;
-                    }
-                    val = val.catfmt("%s:%I:%s:%i;", mi->master->replid,
-                        mi->master->reploff,
-                        mi->masterhost,
-                        mi->masterport);
-                }
+
+            for (auto &msi : rsi->vecmastersaveinfo) {
+                val = val.catfmt("%s:%I:%s:%i:%i;", msi.master_replid,
+                    msi.master_initial_offset,
+                    msi.masterhost.get(),
+                    msi.masterport,
+                    msi.selected_db);
             }
             if (rdbSaveAuxFieldStrStr(rdb, "repl-masters",val.get()) == -1) return -1;
         }
@@ -1661,11 +1639,12 @@ int launchRdbSaveThread(pthread_t &child, rdbSaveInfo *rsi)
         return rdbSaveBackgroundFork(rsi);
     } else
     {
-        rdbSaveThreadArgs *args = (rdbSaveThreadArgs*)zmalloc(sizeof(rdbSaveThreadArgs) + ((cserver.dbnum-1)*sizeof(redisDbPersistentDataSnapshot*)), MALLOC_LOCAL);
+        rdbSaveThreadArgs *args = (rdbSaveThreadArgs*)zcalloc(sizeof(rdbSaveThreadArgs) + ((cserver.dbnum-1)*sizeof(redisDbPersistentDataSnapshot*)), MALLOC_LOCAL);
+        // Placement new
         rdbSaveInfo rsiT;
         if (rsi == nullptr)
             rsi = &rsiT;
-        args->rsi = *(new (args) rdbSaveInfo(*rsi));
+        args->rsi = *rsi;
         memcpy(&args->rsi.repl_id, g_pserver->replid, sizeof(g_pserver->replid));
         args->rsi.master_repl_offset = g_pserver->master_repl_offset;
             
@@ -2922,11 +2901,11 @@ public:
         * snapshot taken by the master may not be reflected on the replica. */
         bool fExpiredKey = iAmMaster() && !(this->rdbflags&RDBFLAGS_AOF_PREAMBLE) && job.expiretime != INVALID_EXPIRE && job.expiretime < this->now;
         if (fStaleMvccKey || fExpiredKey) {
-            if (fStaleMvccKey && !fExpiredKey && this->rsi != nullptr && this->rsi->masters != nullptr && this->rsi->masters->staleKeyMap != nullptr && lookupKeyRead(job.db, &keyobj) == nullptr) {
+            if (fStaleMvccKey && !fExpiredKey && this->rsi != nullptr && this->rsi->mi != nullptr && this->rsi->mi->staleKeyMap != nullptr && lookupKeyRead(job.db, &keyobj) == nullptr) {
                 // We have a key that we've already deleted and is not back in our database.
                 //  We'll need to inform the sending master of the delete if it is also a replica of us
                 robj_sharedptr objKeyDup(createStringObject(job.key, sdslen(job.key)));
-                this->rsi->masters->staleKeyMap->operator[](job.db->id).push_back(objKeyDup);                
+                this->rsi->mi->staleKeyMap->operator[](job.db->id).push_back(objKeyDup);
             }
             sdsfree(job.key);
             job.key = nullptr;
@@ -3242,19 +3221,26 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 }
             } else if (!strcasecmp(szFromObj(auxkey),"repl-masters")) {
                 if (rsi) {
-                    struct redisMaster mi;
+                    MasterSaveInfo msi;
                     char *masters = szFromObj(auxval);
-                    char *entry = strtok(masters, ":");
+                    char *saveptr;
+                    char *entry = strtok_r(masters, ":", &saveptr);
                     while (entry != NULL) {
-                        memcpy(mi.master_replid, entry, sizeof(mi.master_replid));
-                        entry = strtok(NULL, ":");
-                        mi.master_initial_offset = atoi(entry);
-                        entry = strtok(NULL, ":");
-                        mi.masterhost = entry;
-                        entry = strtok(NULL, ";");
-                        mi.masterport = atoi(entry);
-                        entry = strtok(NULL, ":");
-                        rsi->addMaster(mi);
+                        memcpy(msi.master_replid, entry, sizeof(msi.master_replid));
+                        entry = strtok_r(NULL, ":", &saveptr);
+                        if (entry == nullptr) break;
+                        msi.master_initial_offset = atoll(entry);
+                        entry = strtok_r(NULL, ":", &saveptr);
+                        if (entry == nullptr) break;
+                        msi.masterhost = sdsstring(sdsnew(entry));
+                        entry = strtok_r(NULL, ":", &saveptr);
+                        if (entry == nullptr) break;
+                        msi.masterport = atoi(entry);
+                        entry = strtok_r(NULL, ";", &saveptr);
+                        if (entry == nullptr) break;
+                        msi.selected_db = atoi(entry);
+                        entry = strtok_r(NULL, ":", &saveptr);
+                        rsi->addMaster(msi);
                     }
                 }
             } else if (!strcasecmp(szFromObj(auxkey),"repl-offset")) {
@@ -3531,6 +3517,32 @@ eoferr:
         "Short read or OOM loading DB. Unrecoverable error, aborting now.");
     rdbReportReadError("Unexpected EOF reading RDB file");
     return C_ERR;
+}
+
+void updateActiveReplicaMastersFromRsi(rdbSaveInfo *rsi) {
+    if (rsi != nullptr && g_pserver->fActiveReplica) {
+        serverLog(LL_NOTICE, "RDB contains information on %d masters", (int)rsi->numMasters());
+        listIter li;
+        listNode *ln;
+        
+        listRewind(g_pserver->masters, &li);
+        while ((ln = listNext(&li)))
+        {
+            redisMaster *mi = (redisMaster*)listNodeValue(ln);
+            if (mi->master != nullptr) {
+                continue; //ignore connected masters
+            }
+            for (size_t i = 0; i < rsi->numMasters(); i++) {
+                if (!sdscmp(mi->masterhost, (sds)rsi->vecmastersaveinfo[i].masterhost.get()) && mi->masterport == rsi->vecmastersaveinfo[i].masterport) {
+                    memcpy(mi->master_replid, rsi->vecmastersaveinfo[i].master_replid, sizeof(mi->master_replid));
+                    mi->master_initial_offset = rsi->vecmastersaveinfo[i].master_initial_offset;
+                    replicationCacheMasterUsingMaster(mi);
+                    serverLog(LL_NOTICE, "Cached master recovered from RDB for %s:%d", mi->masterhost, mi->masterport);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 int rdbLoad(rdbSaveInfo *rsi, int rdbflags)
@@ -3913,10 +3925,21 @@ void bgsaveCommand(client *c) {
  * information. */
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
     rdbSaveInfo rsi_init;
-    *rsi = std::move(rsi_init);
+    *rsi = rsi_init;
 
     memcpy(rsi->repl_id, g_pserver->replid, sizeof(g_pserver->replid));
     rsi->master_repl_offset = g_pserver->master_repl_offset;
+
+    if (g_pserver->fActiveReplica) {
+        listIter li;
+        listNode *ln = nullptr;
+        listRewind(g_pserver->masters, &li);
+        while ((ln = listNext(&li))) {
+            redisMaster *mi = (redisMaster*)listNodeValue(ln);
+            MasterSaveInfo msi(*mi);
+            rsi->addMaster(msi);
+        }
+    }
 
     /* If the instance is a master, we can populate the replication info
      * only when repl_backlog is not NULL. If the repl_backlog is NULL,
@@ -3935,11 +3958,6 @@ rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
         return rsi;
     }
 
-    if (listLength(g_pserver->masters) > 1)
-    {
-        // BUGBUG, warn user about this incomplete implementation
-        serverLog(LL_WARNING, "Warning: Only backing up first master's information in RDB");
-    }
     struct redisMaster *miFirst = (redisMaster*)(listLength(g_pserver->masters) ? listNodeValue(listFirst(g_pserver->masters)) : NULL);
 
     /* If the instance is a replica we need a connected master

@@ -1141,7 +1141,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"rreplay",replicaReplayCommand,-3,
-     "read-only fast noprop",
+     "read-only fast noprop ok-stale",
      0,NULL,0,0,0,0,0,0},
 
     {"keydb.cron",cronCommand,-5,
@@ -4938,7 +4938,8 @@ int processCommand(client *c, int callFlags) {
         if (FBrokenLinkToMaster() &&
             g_pserver->repl_serve_stale_data == 0 &&
             is_denystale_command &&
-            !(g_pserver->fActiveReplica && c->cmd->proc == syncCommand))
+            !(g_pserver->fActiveReplica && c->cmd->proc == syncCommand)
+            && !FInReplicaReplay())
         {
             rejectCommand(c, shared.masterdownerr);
             return C_OK;
@@ -6962,31 +6963,15 @@ void loadDataFromDisk(void) {
                 g_pserver->master_repl_offset = rsi.repl_offset;
                 if (g_pserver->repl_batch_offStart >= 0)
                     g_pserver->repl_batch_offStart = g_pserver->master_repl_offset;
-                listIter li;
-                listNode *ln;
-                
-                listRewind(g_pserver->masters, &li);
-                while ((ln = listNext(&li)))
-                {
-                    redisMaster *mi = (redisMaster*)listNodeValue(ln);
-                    if (g_pserver->fActiveReplica) {
-                        for (size_t i = 0; i < rsi.numMasters(); i++) {
-                            if (!strcmp(mi->masterhost, rsi.masters[i].masterhost) && mi->masterport == rsi.masters[i].masterport) {
-                                memcpy(mi->master_replid, rsi.masters[i].master_replid, sizeof(mi->master_replid));
-                                mi->master_initial_offset = rsi.masters[i].master_initial_offset;
-                                replicationCacheMasterUsingMaster(mi);
-                                serverLog(LL_NOTICE, "Cached master recovered from RDB for %s:%d", mi->masterhost, mi->masterport);
-                            }
-                        }
-                    }
-                    else {
-                        /* If we are a replica, create a cached master from this
-                        * information, in order to allow partial resynchronizations
-                        * with masters. */
-                        replicationCacheMasterUsingMyself(mi);
-                        selectDb(mi->cached_master,rsi.repl_stream_db);
-                    }
-                }
+            }
+            updateActiveReplicaMastersFromRsi(&rsi);
+            if (!g_pserver->fActiveReplica && listLength(g_pserver->masters)) {
+                redisMaster *mi = (redisMaster*)listNodeValue(listFirst(g_pserver->masters));
+                /* If we are a replica, create a cached master from this
+                * information, in order to allow partial resynchronizations
+                * with masters. */
+                replicationCacheMasterUsingMyself(mi);
+                selectDb(mi->cached_master,rsi.repl_stream_db);
             }
         } else if (errno != ENOENT) {
             serverLog(LL_WARNING,"Fatal error loading the DB: %s. Exiting.",strerror(errno));
@@ -7293,6 +7278,7 @@ void *workerThreadMain(void *parg)
     serverAssert(!GlobalLocksAcquired());
     aeDeleteEventLoop(el);
 
+    tlsCleanupThread();
     return NULL;
 }
 

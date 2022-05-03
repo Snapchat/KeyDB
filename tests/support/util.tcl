@@ -543,8 +543,17 @@ proc start_bg_complex_data {host port db ops} {
     exec $tclsh tests/helpers/bg_complex_data.tcl $host $port $db $ops $::tls &
 }
 
+proc start_climbing_load {host port db ops} {
+    set tclsh [info nameofexecutable]
+    exec $tclsh tests/helpers/gen_climbing_load.tcl $host $port $db $ops $::tls &
+}
+
 # Stop a process generating write load executed with start_bg_complex_data.
 proc stop_bg_complex_data {handle} {
+    catch {exec /bin/kill -9 $handle}
+}
+
+proc stop_climbing_load {handle} {
     catch {exec /bin/kill -9 $handle}
 }
 

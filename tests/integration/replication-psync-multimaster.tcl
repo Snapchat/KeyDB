@@ -76,9 +76,9 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
                         }
                     }
                 }
-                stop_bg_complex_data $load_handle0
-                stop_bg_complex_data $load_handle1
-                stop_bg_complex_data $load_handle2
+                stop_climbing_load $load_handle0
+                stop_climbing_load $load_handle1
+                stop_climbing_load $load_handle2
 
                 # Wait for the replica to reach the "online"
                 # state from the POV of the master.

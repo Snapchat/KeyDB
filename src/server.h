@@ -1887,6 +1887,40 @@ struct redisMaster {
     int ielReplTransfer = -1;
 };
 
+struct MasterSaveInfo {
+    MasterSaveInfo() = default;
+    MasterSaveInfo(const redisMaster &mi) {
+        memcpy(master_replid, mi.master_replid, sizeof(mi.master_replid));
+        if (mi.master) {
+            master_initial_offset = mi.master->reploff;
+            selected_db = mi.master->db->id;
+        } else if (mi.cached_master) {
+            master_initial_offset = mi.cached_master->reploff;
+            selected_db = mi.cached_master->db->id;
+        } else {
+            master_initial_offset = -1;
+            selected_db = 0;
+        }
+        masterport = mi.masterport;
+        masterhost = sdsstring(sdsdup(mi.masterhost));
+        masterport = mi.masterport;
+    }
+
+    MasterSaveInfo &operator=(const MasterSaveInfo &other) {
+        masterhost = other.masterhost;
+        masterport = other.masterport;
+        memcpy(master_replid, other.master_replid, sizeof(master_replid));
+        master_initial_offset = other.master_initial_offset;
+        return *this;
+    }
+
+    sdsstring masterhost;
+    int masterport;
+    char master_replid[CONFIG_RUN_ID_SIZE+1];
+    long long master_initial_offset;
+    int selected_db;
+};
+
 /* This structure can be optionally passed to RDB save/load functions in
  * order to implement additional functionalities, by storing and loading
  * metadata to the RDB file.
@@ -1904,8 +1938,6 @@ public:
         repl_offset = -1;
         fForceSetKey = TRUE;
         mvccMinThreshold = 0;
-        masters = nullptr;
-        masterCount = 0;
     }
     rdbSaveInfo(const rdbSaveInfo &other) {
         repl_stream_db = other.repl_stream_db;
@@ -1914,45 +1946,31 @@ public:
         repl_offset = other.repl_offset;
         fForceSetKey = other.fForceSetKey;
         mvccMinThreshold = other.mvccMinThreshold;
-        masters = (struct redisMaster*)malloc(sizeof(struct redisMaster) * other.masterCount);
-        memcpy(masters, other.masters, sizeof(struct redisMaster) * other.masterCount);
-        masterCount = other.masterCount;
+        vecmastersaveinfo = other.vecmastersaveinfo;
+        master_repl_offset = other.master_repl_offset;
+        mi = other.mi;
     }
-    rdbSaveInfo(rdbSaveInfo &&other) : rdbSaveInfo() {
-        swap(*this, other);
-    }
-    rdbSaveInfo &operator=(rdbSaveInfo other) {
-        swap(*this, other);
+
+    rdbSaveInfo &operator=(const rdbSaveInfo &other) {
+        repl_stream_db = other.repl_stream_db;
+        repl_id_is_set = other.repl_id_is_set;
+        memcpy(repl_id, other.repl_id, sizeof(repl_id));
+        repl_offset = other.repl_offset;
+        fForceSetKey = other.fForceSetKey;
+        mvccMinThreshold = other.mvccMinThreshold;
+        vecmastersaveinfo = other.vecmastersaveinfo;
+        master_repl_offset = other.master_repl_offset;
+        mi = other.mi;
+
         return *this;
     }
-    ~rdbSaveInfo() {
-        free(masters);
-    }
-    friend void swap(rdbSaveInfo &first, rdbSaveInfo &second) {
-        std::swap(first.repl_stream_db, second.repl_stream_db);
-        std::swap(first.repl_id_is_set, second.repl_id_is_set);
-        std::swap(first.repl_id, second.repl_id);
-        std::swap(first.repl_offset, second.repl_offset);
-        std::swap(first.fForceSetKey, second.fForceSetKey);
-        std::swap(first.mvccMinThreshold, second.mvccMinThreshold);
-        std::swap(first.masters, second.masters);
-        std::swap(first.masterCount, second.masterCount);
 
-    }
-
-    void addMaster(const struct redisMaster &mi) {
-        masterCount++;
-        if (masters == nullptr) {
-            masters = (struct redisMaster*)malloc(sizeof(struct redisMaster));
-        }
-        else {
-            masters = (struct redisMaster*)realloc(masters, sizeof(struct redisMaster) * masterCount);
-        }
-        memcpy(masters + masterCount - 1, &mi, sizeof(struct redisMaster));
+    void addMaster(const MasterSaveInfo &si) {
+        vecmastersaveinfo.push_back(si);
     }
 
     size_t numMasters() {
-        return masterCount;
+        return vecmastersaveinfo.size();
     }
 
     /* Used saving and loading. */
@@ -1968,10 +1986,8 @@ public:
     long long master_repl_offset;
 
     uint64_t mvccMinThreshold;
-    struct redisMaster *masters;
-
-private:
-    size_t masterCount;
+    std::vector<MasterSaveInfo> vecmastersaveinfo;
+    struct redisMaster *mi = nullptr;
 };
 
 struct malloc_stats {
@@ -3853,6 +3869,8 @@ void lfenceCommand(client *c);
 int FBrokenLinkToMaster(int *pconnectMasters = nullptr);
 int FActiveMaster(client *c);
 struct redisMaster *MasterInfoFromClient(client *c);
+bool FInReplicaReplay();
+void updateActiveReplicaMastersFromRsi(rdbSaveInfo *rsi);
 
 /* MVCC */
 uint64_t getMvccTstamp();
@@ -3950,6 +3968,7 @@ void makeThreadKillable(void);
 /* TLS stuff */
 void tlsInit(void);
 void tlsInitThread();
+void tlsCleanupThread();
 void tlsCleanup(void);
 int tlsConfigure(redisTLSContextConfig *ctx_config);
 void tlsReload(void);

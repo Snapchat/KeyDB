@@ -53,12 +53,12 @@ start_server {overrides {active-replica {yes} multi-master {yes} client-output-b
         set elapsed [expr {[clock milliseconds]-$cycle_start_time}]
         if {$elapsed > $duration*1000} break
         if {rand() < .05} {
-            test "PSYNC2 #3899 regression: kill first replica" {
+            test "PSYNC2 #3899 regression (multi-master): kill first replica" {
                 $R(1) client kill type master
             }
         }
         if {rand() < .05} {
-            test "PSYNC2 #3899 regression: kill chained replica" {
+            test "PSYNC2 #3899 regression (multi-master): kill chained replica" {
                 $R(2) client kill type master
             }
         }
@@ -99,4 +99,8 @@ start_server {overrides {active-replica {yes} multi-master {yes} client-output-b
             fail [format "The three instances have different data sets:\n\tnode 1: %s\n\tnode 2: %s\n\tnode 3: %s\nRun diff -u against /tmp/repldump*.txt for more info" [$R(0) debug digest] [$R(1) debug digest] [$R(2) debug digest] ]
         }
     }
+
+    assert {[s -2 sync_partial_ok] > 0}
+    assert {[s -1 sync_partial_ok] > 0}
+    assert {[s 0 sync_partial_ok] > 0}
 }}}

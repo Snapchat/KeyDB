@@ -1888,7 +1888,9 @@ struct redisMaster {
 };
 
 struct MasterSaveInfo {
-    MasterSaveInfo() = default;
+    MasterSaveInfo() {
+        memcpy(master_replid, "0000000000000000000000000000000000000000", sizeof(master_replid));
+    }
     MasterSaveInfo(const redisMaster &mi) {
         memcpy(master_replid, mi.master_replid, sizeof(mi.master_replid));
         if (mi.master) {
@@ -1935,6 +1937,7 @@ public:
         repl_stream_db = -1;
         repl_id_is_set = 0;
         memcpy(repl_id, "0000000000000000000000000000000000000000", sizeof(repl_id));
+        repl_id[CONFIG_RUN_ID_SIZE] = '\0';
         repl_offset = -1;
         fForceSetKey = TRUE;
         mvccMinThreshold = 0;

@@ -61,6 +61,7 @@ set ::all_tests {
     integration/keydb-cli
     integration/keydb-benchmark
     integration/replication-fast
+    integration/replication-psync-multimaster
     unit/pubsub
     unit/slowlog
     unit/scripting

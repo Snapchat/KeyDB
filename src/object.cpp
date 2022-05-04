@@ -97,6 +97,7 @@ robj *createRawStringObject(const char *ptr, size_t len) {
  * allocated in the same chunk as the object itself. */
 robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     serverAssert(len <= UINT8_MAX);
+    // Note: If the size changes update serializeStoredStringObject
     size_t allocsize = sizeof(struct sdshdr8)+len+1;
     if (allocsize < sizeof(void*))
         allocsize = sizeof(void*);
@@ -1585,20 +1586,13 @@ sds serializeStoredStringObject(sds str, robj_roptr o)
     static_assert((sizeof(robj) + sizeof(mvcc)) == sizeof(redisObjectStack), "");
     switch (o->encoding)
     {
+    case OBJ_ENCODING_EMBSTR:
     case OBJ_ENCODING_RAW:
         str = sdscatsds(str, (sds)szFromObj(o));
         break;
 
     case OBJ_ENCODING_INT:
         break;  //nop
-
-    case OBJ_ENCODING_EMBSTR:
-        size_t cb = zmalloc_size(o.unsafe_robjcast());
-        if (cb > sizeof(robj))
-        {
-            str = sdscatlen(str, o.unsafe_robjcast() + 1, cb - sizeof(robj));
-        }
-        break;
     }
         
     return str;
@@ -1618,7 +1612,7 @@ robj *deserializeStoredStringObject(const char *data, size_t cb)
         break;
 
     case OBJ_ENCODING_EMBSTR:
-        newObject = createEmbeddedStringObject(szFromObj(oT), sdslen(szFromObj(oT)));
+        newObject = createEmbeddedStringObject(data+sizeof(robj)+sizeof(mvcc), cb-sizeof(robj)-sizeof(uint64_t));
         break;
 
     case OBJ_ENCODING_RAW:

@@ -6694,10 +6694,10 @@ static void sigShutdownHandler(int sig) {
         serverLogFromHandler(LL_WARNING, "You insist... exiting now.");
         rdbRemoveTempFile(g_pserver->rdbThreadVars.tmpfileNum, 1);
         g_pserver->garbageCollector.shutdown();
-        exit(1); /* Exit with an error since this was not a clean shutdown. */
+        _Exit(1); /* Exit with an error since this was not a clean shutdown. */
     } else if (g_pserver->loading) {
         serverLogFromHandler(LL_WARNING, "Received shutdown signal during loading, exiting now.");
-        exit(0);
+        _Exit(0);   // calling dtors is undesirable, exit immediately
     }
 
     serverLogFromHandler(LL_WARNING, msg);

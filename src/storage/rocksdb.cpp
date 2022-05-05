@@ -74,8 +74,8 @@ void RocksDBStorageProvider::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **
 
         auto ingestOptions = rocksdb::IngestExternalFileOptions();
         ingestOptions.move_files = true;
-        //ingestOptions.verify_file_checksum = false;
         ingestOptions.write_global_seqno = false;
+        ingestOptions.failed_move_fall_back_to_copy = false;
 
         // Ingest the external SST file into the DB
         s = m_spdb->IngestExternalFile(m_spcolfamily.get(), {file_path}, ingestOptions);
@@ -83,8 +83,6 @@ void RocksDBStorageProvider::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **
             unlink(file_path.c_str());
             goto LFallback;
         }
-
-        unlink(file_path.c_str());
     } else {
     LFallback:
         auto spbatch = std::make_unique<rocksdb::WriteBatch>();

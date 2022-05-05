@@ -1580,6 +1580,8 @@ void *rdbSaveThread(void *vargs)
     ssize_t cbStart = zmalloc_used_memory();
     for (int idb = 0; idb < cserver.dbnum; ++idb)
         g_pserver->db[idb]->endSnapshotAsync(args->rgpdb[idb]);
+
+    args->~rdbSaveThreadArgs();
     zfree(args);
     ssize_t cbDiff = (cbStart - (ssize_t)zmalloc_used_memory());
     g_pserver->garbageCollector.endEpoch(vars.gcEpoch);
@@ -1640,7 +1642,7 @@ int launchRdbSaveThread(pthread_t &child, rdbSaveInfo *rsi)
     } else
     {
         rdbSaveThreadArgs *args = (rdbSaveThreadArgs*)zcalloc(sizeof(rdbSaveThreadArgs) + ((cserver.dbnum-1)*sizeof(redisDbPersistentDataSnapshot*)), MALLOC_LOCAL);
-        // Placement new
+        args = new (args) rdbSaveThreadArgs();
         rdbSaveInfo rsiT;
         if (rsi == nullptr)
             rsi = &rsiT;
@@ -1656,6 +1658,7 @@ int launchRdbSaveThread(pthread_t &child, rdbSaveInfo *rsi)
         if (pthread_create(&child, NULL, rdbSaveThread, args)) {
             for (int idb = 0; idb < cserver.dbnum; ++idb)
                 g_pserver->db[idb]->endSnapshot(args->rgpdb[idb]);
+            args->~rdbSaveThreadArgs();
             zfree(args);
             return C_ERR;
         }
@@ -3201,7 +3204,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
              * are required to skip AUX fields they don't understand.
              *
              * An AUX field is composed of two strings: key and value. */
-            robj *auxkey, *auxval;
+            robj *auxkey = nullptr, *auxval = nullptr;
             if ((auxkey = rdbLoadStringObject(rdb)) == NULL) goto eoferr;
             if ((auxval = rdbLoadStringObject(rdb)) == NULL) goto eoferr;
 
@@ -3221,12 +3224,16 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 }
             } else if (!strcasecmp(szFromObj(auxkey),"repl-masters")) {
                 if (rsi) {
-                    MasterSaveInfo msi;
                     char *masters = szFromObj(auxval);
                     char *saveptr;
                     char *entry = strtok_r(masters, ":", &saveptr);
                     while (entry != NULL) {
-                        memcpy(msi.master_replid, entry, sizeof(msi.master_replid));
+                        MasterSaveInfo msi;
+                        bool fSet = true;
+                        if (strlen(entry) == sizeof(msi.master_replid)-1)
+                            memcpy(msi.master_replid, entry, sizeof(msi.master_replid));
+                        else
+                            fSet = false;
                         entry = strtok_r(NULL, ":", &saveptr);
                         if (entry == nullptr) break;
                         msi.master_initial_offset = atoll(entry);
@@ -3240,7 +3247,8 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                         if (entry == nullptr) break;
                         msi.selected_db = atoi(entry);
                         entry = strtok_r(NULL, ":", &saveptr);
-                        rsi->addMaster(msi);
+                        if (fSet)
+                            rsi->addMaster(msi);
                     }
                 }
             } else if (!strcasecmp(szFromObj(auxkey),"repl-offset")) {
@@ -3752,6 +3760,7 @@ void *rdbSaveToSlavesSocketsThread(void *vargs)
     aeThreadOffline();
 
     close(args->safe_to_exit_pipe);
+    args->rsi.~rdbSaveInfo();
     zfree(args);
     g_pserver->rdbThreadVars.fDone = true;
     return (retval == C_OK) ? (void*)0 : (void*)1;
@@ -3784,7 +3793,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     args->rdb_pipe_write = pipefds[1]; /* write end */
     anetNonBlock(NULL, g_pserver->rdb_pipe_read);
 
-    args->rsi = *(new (args) rdbSaveInfo(*rsi));
+    args->rsi = *(new (&args->rsi) rdbSaveInfo(*rsi));
     memcpy(&args->rsi.repl_id, g_pserver->replid, sizeof(g_pserver->replid));
     args->rsi.master_repl_offset = g_pserver->master_repl_offset;
 
@@ -3842,6 +3851,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
         g_pserver->rdb_pipe_conns = NULL;
         g_pserver->rdb_pipe_numconns = 0;
         g_pserver->rdb_pipe_numconns_writing = 0;
+        args->rsi.~rdbSaveInfo();
         zfree(args);
         closeChildInfoPipe();
         return C_ERR;

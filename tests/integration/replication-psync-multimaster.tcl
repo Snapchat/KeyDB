@@ -103,7 +103,7 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
                     [lindex [$replica role] 3] eq {connected}
                 } else {
                     fail "replica still not connected after some time"
-                }  
+                }
 
                 wait_for_condition 100 100 {
                     [$master debug digest] == [$replica debug digest]

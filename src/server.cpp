@@ -598,7 +598,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hget",hgetCommand,3,
-     "read-only fast async @hash",
+     "read-only fast @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hmset",hsetCommand,-4,
@@ -606,7 +606,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hmget",hmgetCommand,-3,
-     "read-only fast async @hash",
+     "read-only fast @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hincrby",hincrbyCommand,4,
@@ -630,15 +630,15 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hkeys",hkeysCommand,2,
-     "read-only to-sort async @hash",
+     "read-only to-sort @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hvals",hvalsCommand,2,
-     "read-only to-sort async @hash",
+     "read-only to-sort @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hgetall",hgetallCommand,2,
-     "read-only random async @hash",
+     "read-only random @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hexists",hexistsCommand,3,
@@ -650,7 +650,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hscan",hscanCommand,-3,
-     "read-only random async @hash",
+     "read-only random @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"incrby",incrbyCommand,3,

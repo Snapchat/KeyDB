@@ -1904,7 +1904,8 @@ struct MasterSaveInfo {
             selected_db = 0;
         }
         masterport = mi.masterport;
-        masterhost = sdsstring(sdsdup(mi.masterhost));
+        if (mi.masterhost)
+            masterhost = sdsstring(sdsdup(mi.masterhost));
         masterport = mi.masterport;
     }
 

@@ -1222,6 +1222,8 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             sdsstring val = sdsstring(sdsempty());
 
             for (auto &msi : rsi->vecmastersaveinfo) {
+                if (msi.masterhost == nullptr)
+                    continue;
                 val = val.catfmt("%s:%I:%s:%i:%i;", msi.master_replid,
                     msi.master_initial_offset,
                     msi.masterhost.get(),

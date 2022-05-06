@@ -1080,7 +1080,7 @@ public:
     dict_iter()
         : dict_const_iter(nullptr)
     {}
-    explicit dict_iter(nullptr_t)
+    explicit dict_iter(std::nullptr_t)
         : dict_const_iter(nullptr)
     {}
     explicit dict_iter(dict *d, dictEntry *de)

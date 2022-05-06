@@ -47,7 +47,6 @@ set ::all_tests {
     integration/replication-3
     integration/replication-4
     integration/replication-psync
-    integration/replication-psync-flash
     integration/replication-active
     integration/replication-multimaster
     integration/replication-multimaster-connect
@@ -60,13 +59,11 @@ set ::all_tests {
     integration/failover
     integration/keydb-cli
     integration/keydb-benchmark
-    integration/replication-fast
     integration/replication-psync-multimaster
     unit/pubsub
     unit/slowlog
     unit/scripting
     unit/maxmemory
-    unit/flash
     unit/introspection
     unit/introspection-2
     unit/limits

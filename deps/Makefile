@@ -101,11 +101,11 @@ jemalloc: .make-prerequisites
 .PHONY: jemalloc
 
 rocksdb: .make-prerequisites
-	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+#	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
 ifeq ($(uname_M),x86_64)
-	cd rocksdb && CFLAGS=-Wno-error PORTABLE=1 USE_SSE=1 FORCE_SSE42=1 $(MAKE) static_lib
+#	cd rocksdb && CFLAGS=-Wno-error PORTABLE=1 USE_SSE=1 FORCE_SSE42=1 $(MAKE) static_lib
 else
-	cd rocksdb && PORTABLE=1 $(MAKE) static_lib
+#	cd rocksdb && PORTABLE=1 $(MAKE) static_lib
 endif
 
 .PHONY: rocksdb

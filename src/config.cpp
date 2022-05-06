@@ -355,6 +355,11 @@ bool initializeStorageProvider(const char **err)
             return true;
         if (!strcasecmp(g_sdsProvider, "flash") && g_sdsArgs != nullptr)
         {
+            // Temporary: Disable FLASH
+            serverLog(LL_WARNING, "FLASH Is Not yet Supported");
+            _Exit(EXIT_FAILURE);
+
+
             // Create The Storage Factory (if necessary)
             serverLog(LL_NOTICE, "Initializing FLASH storage provider (this may take a long time)");
             adjustOpenFilesLimit();

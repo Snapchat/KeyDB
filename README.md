@@ -2,9 +2,9 @@
 ![CI](https://github.com/JohnSully/KeyDB/workflows/CI/badge.svg?branch=unstable)
 [![StackShare](http://img.shields.io/badge/tech-stack-0690fa.svg?style=flat)](https://stackshare.io/eq-alpha-technology-inc/eq-alpha-technology-inc)
 
-##### KeyDB is now a part of Snap Inc! Check out the announcement [here](https://docs.keydb.dev/news/2022/05/11/keydb-joins-snap) 
+##### KeyDB is now a part of Snap Inc! Check out the announcement [here](https://docs.keydb.dev/news/2022/05/12/keydb-joins-snap) 
 
-##### [Release 6.3.0](https://github.com/EQ-Alpha/KeyDB/releases/tag/v6.3.0) is here with major improvements as we consolodate our Open Source and Enterprise offerings into a single BSD-3 licensed project. See our [roadmap](https://docs.keydb.dev/docs/coming-soon) for details. 
+##### [Release v6.3.0](https://github.com/EQ-Alpha/KeyDB/releases/tag/v6.3.0) is here with major improvements as we consolodate our Open Source and Enterprise offerings into a single BSD-3 licensed project. See our [roadmap](https://docs.keydb.dev/docs/coming-soon) for details. 
 
 ##### Want to extend KeyDB with Javascript?  Try [ModJS](https://github.com/JohnSully/ModJS)
 
@@ -45,7 +45,7 @@ Additional Resources
 
 Try the KeyDB [Docker Image](https://hub.docker.com/r/eqalpha/keydb)
 
-Join us on [Slack](https://https://docs.keydb.dev/slack/)
+Join us on [Slack](https://docs.keydb.dev/slack/)
 
 Learn more using KeyDB's extensive [documentation](https://docs.keydb.dev)
 
@@ -304,10 +304,6 @@ Multithreading Architecture
 KeyDB works by running the normal Redis event loop on multiple threads.  Network IO, and query parsing are done concurrently.  Each connection is assigned a thread on accept().  Access to the core hash table is guarded by spinlock.  Because the hashtable access is extremely fast this lock has low contention.  Transactions hold the lock for the duration of the EXEC command.  Modules work in concert with the GIL which is only acquired when all server threads are paused.  This maintains the atomicity guarantees modules expect.
 
 Unlike most databases the core data structure is the fastest part of the system.  Most of the query time comes from parsing the REPL protocol and copying data to/from the network.
-
-Future work:
- - Allow rebalancing of connections to different threads after the connection
- - Allow multiple readers access to the hashtable concurrently
 
 
 Code contributions

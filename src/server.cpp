@@ -73,8 +73,8 @@
 #endif
 
 int g_fTestMode = false;
-const char *motd_url = "http://api.keydb.dev/motd/motd_server_pro.txt";
-const char *motd_cache_file = "/.keydb-enterprise-server-motd";
+const char *motd_url = "http://api.keydb.dev/motd/motd_server.txt";
+const char *motd_cache_file = "/.keydb-server-motd";
 
 /* Our shared "common" objects */
 
@@ -6272,10 +6272,7 @@ sds genRedisInfoString(const char *section) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, 
             "# KeyDB\r\n"
-            "variant:enterprise\r\n"
-            "license_status:%s\r\n"
             "mvcc_depth:%d\r\n",
-            "OK",
             mvcc_depth
         );
     }

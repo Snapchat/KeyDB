@@ -2,16 +2,20 @@
 ![CI](https://github.com/JohnSully/KeyDB/workflows/CI/badge.svg?branch=unstable)
 [![StackShare](http://img.shields.io/badge/tech-stack-0690fa.svg?style=flat)](https://stackshare.io/eq-alpha-technology-inc/eq-alpha-technology-inc)
 
+##### KeyDB is now a part of Snap Inc! Check out the announcement [here](https://docs.keydb.dev/news/2022/05/11/keydb-joins-snap) 
+
+##### [Release 6.3.0](https://github.com/EQ-Alpha/KeyDB/releases/tag/v6.3.0) is here with major improvements as we consolodate our Open Source and Enterprise offerings into a single BSD-3 licensed project. See our [roadmap](https://docs.keydb.dev/docs/coming-soon) for details. 
+
 ##### Want to extend KeyDB with Javascript?  Try [ModJS](https://github.com/JohnSully/ModJS)
 
 ##### Need Help? Check out our extensive [documentation](https://docs.keydb.dev).
 
-##### NEW!!! KeyDB now has a Slack Community Workspace. Click [here](https://docs.keydb.dev/slack/) to learn more and join the KeyDB Community Slack workspace.
+##### KeyDB is on Slack. Click [here](https://docs.keydb.dev/slack/) to learn more and join the KeyDB Community Slack workspace.
 
 What is KeyDB?
 --------------
 
-KeyDB is a high performance fork of Redis with a focus on multithreading, memory efficiency, and high throughput.  In addition to multithreading, KeyDB also has features only available in Redis Enterprise such as [Active Replication](https://github.com/JohnSully/KeyDB/wiki/Active-Replication), [FLASH storage](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) support, and some not available at all such as direct backup to AWS S3. 
+KeyDB is a high performance fork of Redis with a focus on multithreading, memory efficiency, and high throughput. In addition to performance improvements, KeyDB offers features such as Active Replication, FLASH Storage and Subkey Expires. KeyDB has a MVCC architecture that allows you to execute queries such as KEYS and SCAN without blocking the database and degrading performance.
 
 KeyDB maintains full compatibility with the Redis protocol, modules, and scripts.  This includes the atomicity guarantees for scripts and transactions.  Because KeyDB keeps in sync with Redis development KeyDB is a superset of Redis functionality, making KeyDB a drop in replacement for existing Redis deployments.
 
@@ -30,48 +34,75 @@ KeyDB has a different philosophy on how the codebase should evolve.  We feel tha
 
 Because of this difference of opinion features which are right for KeyDB may not be appropriate for Redis.  A fork allows us to explore this new development path and implement features which may never be a part of Redis.  KeyDB keeps in sync with upstream Redis changes, and where applicable we upstream bug fixes and changes. It is our hope that the two projects can continue to grow and learn from each other.
 
+Project Support
+-------------------
+
+The KeyDB team maintains this project as part of Snap Inc. KeyDB is used by Snap as part of its caching infrastructure and is fully open sourced. There is no separate commercial product and no paid support options available. We really value collaborating with the open source community and welcome PRs, bug reports, and open discussion. For community support or to get involved further with the project check out our community support options [here](https://docs.keydb.dev/docs/support) (slack, forum, meetup, github issues). Our team monitors these channlels regularly.
+
+
 Additional Resources
 --------------------
 
-Check out KeyDB's [Docker Image](https://hub.docker.com/r/eqalpha/keydb)
+Try the KeyDB [Docker Image](https://hub.docker.com/r/eqalpha/keydb)
 
-Join us on [Slack](https://docs.keydb.dev/slack/)
+Join us on [Slack](https://https://docs.keydb.dev/slack/)
 
-Post to the [Community Forum](https://community.keydb.dev)
+Learn more using KeyDB's extensive [documentation](https://docs.keydb.dev)
 
-Learn more through KeyDB's [Documentation & Learning Center](https://docs.keydb.dev)
+Post to our [Community Forum](https://community.keydb.dev)
+
+See the [KeyDB Roadmap](https://docs.keydb.dev/docs/coming-soon) to see what's in store
 
 
 Benchmarking KeyDB
 ------------------
 
-Please note keydb-benchmark and redis-benchmark are currently single threaded and too slow to properly benchmark KeyDB.  We recommend using a redis cluster benchmark tool such as [memtier](https://github.com/RedisLabs/memtier_benchmark).  Please ensure your machine has enough cores for both KeyDB and memteir if testing locally.  KeyDB expects exclusive use of any cores assigned to it.
+Please note keydb-benchmark and redis-benchmark are currently single threaded and too slow to properly benchmark KeyDB.  We recommend using a redis cluster benchmark tool such as [memtier](https://github.com/RedisLabs/memtier_benchmark).  Please ensure your machine has enough cores for both KeyDB and memtier if testing locally.  KeyDB expects exclusive use of any cores assigned to it.
 
-For more details on how we benchmarked KeyDB along with performance numbers check out our blog post: [Redis Should Be Multithreaded](https://medium.com/@john_63123/redis-should-be-multi-threaded-e28319cab744?source=friends_link&sk=7ce8e9fe3ec8224a4d27ef075d085457)
 
 New Configuration Options
 -------------------------
 
-With new features comes new options:
+With new features comes new options. All other configuration options behave as you'd expect.  Your existing configuration files should continue to work unchanged.
 
+```
     server-threads N
     server-thread-affinity [true/false]
+```
+The number of threads used to serve requests.  This should be related to the number of queues available in your network hardware, *not* the number of cores on your
+machine.  Because KeyDB uses spinlocks to reduce latency; making this too high will reduce performance.  We recommend using 4 here.  By default this is set to two.
 
-The number of threads used to serve requests.  This should be related to the number of queues available in your network hardware, *not* the number of cores on your machine.  Because KeyDB uses spinlocks to reduce latency; making this too high will reduce performance.  We recommend using 4 here.  By default this is set to one.
+```
+min-clients-per-thread 50
+```
+The minimum number of clients on a thread before KeyDB assigns new connections to a different thread. Tuning this parameter is a tradeoff between locking overhead and distributing the workload over multiple cores
 
-    scratch-file-path /path
+```
+replica-weighting-factor 2
+```
+KeyDB will attempt to balance clients across threads evenly; However, replica clients are usually much more expensive than a normal client, and so KeyDB will try to assign fewer clients to threads with a replica.  The weighting factor below is intented to help tune this behavior.  A replica weighting factor of 2 means we treat a replica as the equivalent of two normal clients.  Adjusting this value may improve performance when replication is used.  The best weighting is workload specific - e.g. read heavy workloads should set this to 1.  Very write heavy workloads may benefit from higher numbers.
 
-If you would like to use the [FLASH backed](https://github.com/JohnSully/KeyDB/wiki/FLASH-Storage) storage this option configures the directory for KeyDB's temporary files.  This feature relies on snapshotting to work so must be used on a BTRFS filesystem.  ZFS may also work but is untested.  With this feature KeyDB will use RAM as a cache and page to disk as necessary.  NOTE: This requires special compilation options, see Building KeyDB below.
-    
-    db-s3-object /path/to/bucket
+```
+active-client-balancing yes
+```
+Should KeyDB make active attempts at balancing clients across threads?  This can impact performance accepting new clients.  By default this is enabled.  If disabled there is still a best effort from the kernel to distribute across threads with SO_REUSEPORT but it will not be as fair. By default this is enabled
 
-If you would like KeyDB to dump and load directly to AWS S3 this option specifies the bucket.  Using this option with the traditional RDB options will result in KeyDB backing up twice to both locations.  If both are specified KeyDB will first attempt to load from the local dump file and if that fails load from S3.  This requires the AWS CLI tools to be installed and configured which are used under the hood to transfer the data.
-
+```
     active-replica yes
-
+```
 If you are using active-active replication set `active-replica` option to “yes”. This will enable both instances to accept reads and writes while remaining synced. [Click here](https://docs.keydb.dev/docs/active-rep/) to see more on active-rep in our docs section. There are also [docker examples]( https://docs.keydb.dev/docs/docker-active-rep/) on docs.
 
-All other configuration options behave as you'd expect.  Your existing configuration files should continue to work unchanged.
+```
+multi-master-no-forward no
+```
+Avoid forwarding RREPLAY messages to other masters? WARNING: This setting is dangerous! You must be certain all masters are connected to eachother in a true mesh topology or data loss will occur! This command can be used to reduce multimaster bus traffic
+
+
+```
+    scratch-file-path /path
+```
+If you would like KeyDB to dump and load directly to AWS S3 this option specifies the bucket.  Using this option with the traditional RDB options will result in KeyDB backing up twice to both locations.  If both are specified KeyDB will first attempt to load from the local dump file and if that fails load from S3.  This requires the AWS CLI tools to be installed and configured which are used under the hood to transfer the data.
+
 
 Building KeyDB
 --------------
@@ -103,6 +134,10 @@ To append a suffix to KeyDB program names, use:
 
 ***Note that the following dependencies may be needed: 
     % sudo apt-get install autoconf autotools-dev libnuma-dev libtool
+
+To buik=ld with TLS support, use:
+
+    % make BUILD_TLS=yes
 
 Running the tests with TLS enabled (you will need `tcl-tls`
 installed):
@@ -274,20 +309,6 @@ Future work:
  - Allow rebalancing of connections to different threads after the connection
  - Allow multiple readers access to the hashtable concurrently
 
-Docker Build
-------------
-Build the latest binaries from the github unstable branch within a docker container. Note this is built for Ubuntu 18.04.
-Simply make a directory you would like to have the latest binaries dumped in, then run the following commmand with your updated path:
-```
-$ docker run -it --rm -v /path-to-dump-binaries:/keydb_bin eqalpha/keydb-build-bin
-```
-You should receive the following files: keydb-benchmark,  keydb-check-aof,  keydb-check-rdb,  keydb-cli,  keydb-sentinel,  keydb-server
-
-If you are looking to enable flash support with the build (make MALLOC=memkind) then use the following command:
-```
-$ docker run -it --rm -v /path-to-dump-binaries:/keydb_bin eqalpha/keydb-build-bin:flash
-```
-Please note that you will need libcurl4-openssl-dev in order to run keydb. With flash version you may need libnuma-dev and libtool installed in order to run the binaries. Keep this in mind especially when running in a container. For a copy of all our Dockerfiles, please see them on [docs]( https://docs.keydb.dev/docs/dockerfiles/).
 
 Code contributions
 -----------------

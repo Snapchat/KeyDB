@@ -1,3 +1,17 @@
+keydb (6:6.3.0-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * This release open sources KeyDB Enterprise features into the open source project along with PSYNC for active replication
+  * Partial synchronization for active replication is introduced
+  * MVCC introduced into codebase from KeyDB Enterprise
+  * Async commands added: GET, MGET. These will see perf improvements
+  * KEYS and SCAN commands will no longer be blocking calls
+  * Async Rehash implemented for additional stability to perf
+  * IStorage interface added
+  * In-process background saving (forkless) to comply with maxmemory setting
+  * See v6.3.0 tagged release notes on github for a detailed explanation of these changes
+
+-- Ben Schermel <ben@eqalpha.com>  Wed, 11 May 2022 20:00:37 +0000
+
 keydb (6:6.2.2-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * Acquire lock in module.cpp to fix module test break

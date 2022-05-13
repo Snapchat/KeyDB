@@ -1,0 +1,10 @@
+{
+  "name": "keydb",
+  "version-string": "6.3.0",
+  "port-version": 1,
+  "homepage": "https://github.com/Snapchat/KeyDB",
+  "description": "KeyDB is a high performance fork of Redis with a focus on multithreading, memory efficiency, and high throughput. In addition to performance improvements, KeyDB offers features such as Active Replication, FLASH Storage and Subkey Expires. KeyDB has a MVCC architecture that allows you to execute queries such as KEYS and SCAN without blocking the database and degrading performance.",
+  "dependencies": [
+    "jemalloc", "rocksdb"
+  ]
+}

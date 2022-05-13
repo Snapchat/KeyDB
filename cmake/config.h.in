@@ -1,0 +1,9 @@
+#ifndef KEYDB_CONFIG_H
+#define KEYDB_CONFIG_H
+
+#define KEYDB_VERSION_MAJOR @keydb_VERSION_MAJOR@
+#define KEYDB_VERSION_MINOR @keydb_VERSION_MINOR@
+#define KEYDB_VERSION_PATCH @keydb_VERSION_PATCH@
+#define KEYDB_VERSION       "@keydb_VERSION@"
+
+#endif /* !KEYDB_CONFIG_H */

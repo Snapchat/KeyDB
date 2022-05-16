@@ -2109,8 +2109,10 @@ void databasesCron(bool fMainThread) {
                         aeAcquireLock();
                     }
 
-                    dictCompleteRehashAsync(serverTL->rehashCtl, true /*fFree*/);
-                    serverTL->rehashCtl = nullptr;
+                    if (serverTL->rehashCtl->done.load(std::memory_order_relaxed)) {
+                        dictCompleteRehashAsync(serverTL->rehashCtl, true /*fFree*/);
+                        serverTL->rehashCtl = nullptr;
+                    }
                 }
 
                 serverAssert(serverTL->rehashCtl == nullptr);

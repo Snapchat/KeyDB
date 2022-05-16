@@ -7606,7 +7606,7 @@ int main(int argc, char **argv) {
         try {
             loadDataFromDisk();
         } catch (ShutdownException) {
-            exit(EXIT_SUCCESS);
+            _Exit(EXIT_SUCCESS);
         }
 
         if (g_pserver->cluster_enabled) {
@@ -7723,7 +7723,9 @@ int main(int argc, char **argv) {
     g_pserver->garbageCollector.shutdown();
     delete g_pserver->m_pstorageFactory;
 
-    return 0;
+    // Don't return because we don't want to run any global dtors
+    _Exit(EXIT_SUCCESS);
+    return 0;   // Ensure we're well formed even though this won't get hit
 }
 
 /* The End */

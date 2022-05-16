@@ -128,6 +128,7 @@ int _dictInit(dict *d, dictType *type,
     d->pauserehash = 0;
     d->asyncdata = nullptr;
     d->refcount = 1;
+    d->noshrink = false;
     return DICT_OK;
 }
 

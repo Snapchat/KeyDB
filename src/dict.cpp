@@ -204,7 +204,7 @@ int dictMerge(dict *dst, dict *src)
     
     if (dictSize(dst) == 0)
     {
-        std::swap(*dst, *src);
+        dict::swap(*dst, *src);
         std::swap(dst->pauserehash, src->pauserehash);
         return DICT_OK;
     }
@@ -212,7 +212,7 @@ int dictMerge(dict *dst, dict *src)
     size_t expectedSize = dictSize(src) + dictSize(dst);
     if (dictSize(src) > dictSize(dst) && src->asyncdata == nullptr && dst->asyncdata == nullptr)
     {
-        std::swap(*dst, *src);
+        dict::swap(*dst, *src);
         std::swap(dst->pauserehash, src->pauserehash);
     }
 
@@ -463,6 +463,18 @@ bool dictRehashSomeAsync(dictAsyncRehashCtl *ctl, size_t hashes) {
 
     if (ctl->hashIdx == ctl->queue.size()) ctl->done = true;
     return ctl->hashIdx < ctl->queue.size();
+}
+
+
+void discontinueAsyncRehash(dict *d) {
+    if (d->asyncdata != nullptr) {
+        auto adata = d->asyncdata;
+        while (adata != nullptr) {
+            adata->abondon = true;
+            adata = adata->next;
+        }
+        d->rehashidx = 0;
+    }
 }
 
 void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl, bool fFree) {

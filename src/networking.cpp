@@ -2079,8 +2079,6 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
         * that may trigger write error or recreate handler. */
         if ((flags & CLIENT_PROTECTED) && !(flags & CLIENT_SLAVE)) continue;
 
-        //std::unique_lock<decltype(c->lock)> lock(c->lock);
-
         /* Don't write to clients that are going to be closed anyway. */
         if (c->flags & CLIENT_CLOSE_ASAP) continue;
 
@@ -2098,6 +2096,7 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
 
         /* If after the synchronous writes above we still have data to
         * output to the client, we need to install the writable handler. */
+        std::unique_lock<decltype(c->lock)> lock(c->lock);
         if (clientHasPendingReplies(c)) {
             if (connSetWriteHandlerWithBarrier(c->conn, sendReplyToClient, ae_flags, true) == C_ERR) {
                 freeClientAsync(c);

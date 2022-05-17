@@ -3049,7 +3049,9 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         (r->keys_since_last_callback >= g_pserver->loading_process_events_interval_keys)))
     {
         rdbAsyncWorkThread *pwthread = reinterpret_cast<rdbAsyncWorkThread*>(r->chksum_arg);
-        bool fUpdateReplication = (g_pserver->mstime - r->last_update) > 1000;
+        mstime_t mstime;
+        __atomic_load(&g_pserver->mstime, &mstime, __ATOMIC_RELAXED);
+        bool fUpdateReplication = (mstime - r->last_update) > 1000;
 
         if (fUpdateReplication) {
             listIter li;

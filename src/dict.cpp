@@ -468,13 +468,18 @@ bool dictRehashSomeAsync(dictAsyncRehashCtl *ctl, size_t hashes) {
 
 
 void discontinueAsyncRehash(dict *d) {
+    // We inform our async rehashers and the completion function the results are to be
+    //  abandoned.  We keep the asyncdata linked in so that dictEntry's are still added
+    //  to the GC list.  This is because we can't gurantee when the other threads will
+    //  stop looking at them.
     if (d->asyncdata != nullptr) {
         auto adata = d->asyncdata;
-        while (adata != nullptr) {
+        while (adata != nullptr && !adata->abondon.load(std::memory_order_relaxed)) {
             adata->abondon = true;
             adata = adata->next;
         }
-        d->rehashidx = 0;
+        if (dictIsRehashing(d))
+            d->rehashidx = 0;
     }
 }
 

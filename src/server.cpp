@@ -5534,6 +5534,8 @@ sds genRedisInfoString(const char *section) {
         }
 
         unsigned int lruclock = g_pserver->lruclock.load();
+        ustime_t ustime;
+        __atomic_load(&g_pserver->ustime, &ustime, __ATOMIC_RELAXED);
         info = sdscatfmt(info,
             "# Server\r\n"
             "redis_version:%s\r\n"
@@ -5576,7 +5578,7 @@ sds genRedisInfoString(const char *section) {
             supervised,
             g_pserver->runid,
             g_pserver->port ? g_pserver->port : g_pserver->tls_port,
-            (int64_t)g_pserver->ustime,
+            (int64_t)ustime,
             (int64_t)uptime,
             (int64_t)(uptime/(3600*24)),
             g_pserver->hz.load(),

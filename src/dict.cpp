@@ -403,7 +403,7 @@ int dictRehash(dict *d, int n) {
 
 dictAsyncRehashCtl::dictAsyncRehashCtl(struct dict *d, dictAsyncRehashCtl *next) : dict(d), next(next) {
     queue.reserve(c_targetQueueSize);
-    __atomic_fetch_add(&d->refcount, 1, __ATOMIC_RELEASE);
+    __atomic_fetch_add(&d->refcount, 1, __ATOMIC_ACQ_REL);
     this->rehashIdxBase = d->rehashidx;
 }
 
@@ -810,6 +810,8 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
         if (callback && (i & 65535) == 0) callback(d->privdata);
 
         if ((he = ht->table[i]) == NULL) continue;
+        dictEntry *deNull = nullptr;
+        __atomic_store(&ht->table[i], &deNull, __ATOMIC_RELEASE);
         while(he) {
             nextHe = he->next;
             if (d->asyncdata && (ssize_t)i < d->rehashidx) {

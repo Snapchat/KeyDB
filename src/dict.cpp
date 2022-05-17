@@ -447,6 +447,9 @@ LDone:
 }
 
 void dictRehashAsync(dictAsyncRehashCtl *ctl) {
+    if (ctl->abondon.load(std::memory_order_acquire)) {
+        ctl->hashIdx = ctl->queue.size();
+    }
     for (size_t idx = ctl->hashIdx; idx < ctl->queue.size(); ++idx) {
         auto &wi = ctl->queue[idx];
         wi.hash = dictHashKey(ctl->dict, dictGetKey(wi.de));
@@ -456,6 +459,9 @@ void dictRehashAsync(dictAsyncRehashCtl *ctl) {
 }
 
 bool dictRehashSomeAsync(dictAsyncRehashCtl *ctl, size_t hashes) {
+    if (ctl->abondon.load(std::memory_order_acquire)) {
+        ctl->hashIdx = ctl->queue.size();
+    }
     size_t max = std::min(ctl->hashIdx + hashes, ctl->queue.size());
     for (; ctl->hashIdx < max; ++ctl->hashIdx) {
         auto &wi = ctl->queue[ctl->hashIdx];

@@ -1080,7 +1080,7 @@ public:
     dict_iter()
         : dict_const_iter(nullptr)
     {}
-    explicit dict_iter(nullptr_t)
+    explicit dict_iter(std::nullptr_t)
         : dict_const_iter(nullptr)
     {}
     explicit dict_iter(dict *d, dictEntry *de)
@@ -1904,7 +1904,8 @@ struct MasterSaveInfo {
             selected_db = 0;
         }
         masterport = mi.masterport;
-        masterhost = sdsstring(sdsdup(mi.masterhost));
+        if (mi.masterhost)
+            masterhost = sdsstring(sdsdup(mi.masterhost));
         masterport = mi.masterport;
     }
 

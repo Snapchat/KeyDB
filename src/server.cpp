@@ -73,8 +73,8 @@
 #endif
 
 int g_fTestMode = false;
-const char *motd_url = "http://api.keydb.dev/motd/motd_server_pro.txt";
-const char *motd_cache_file = "/.keydb-enterprise-server-motd";
+const char *motd_url = "http://api.keydb.dev/motd/motd_server.txt";
+const char *motd_cache_file = "/.keydb-server-motd";
 
 /* Our shared "common" objects */
 
@@ -598,7 +598,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hget",hgetCommand,3,
-     "read-only fast async @hash",
+     "read-only fast @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hmset",hsetCommand,-4,
@@ -606,7 +606,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hmget",hmgetCommand,-3,
-     "read-only fast async @hash",
+     "read-only fast @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hincrby",hincrbyCommand,4,
@@ -630,15 +630,15 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hkeys",hkeysCommand,2,
-     "read-only to-sort async @hash",
+     "read-only to-sort @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hvals",hvalsCommand,2,
-     "read-only to-sort async @hash",
+     "read-only to-sort @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hgetall",hgetallCommand,2,
-     "read-only random async @hash",
+     "read-only random @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hexists",hexistsCommand,3,
@@ -650,7 +650,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,1,1,1,0,0,0},
 
     {"hscan",hscanCommand,-3,
-     "read-only random async @hash",
+     "read-only random @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"incrby",incrbyCommand,3,
@@ -2109,8 +2109,10 @@ void databasesCron(bool fMainThread) {
                         aeAcquireLock();
                     }
 
-                    dictCompleteRehashAsync(serverTL->rehashCtl, true /*fFree*/);
-                    serverTL->rehashCtl = nullptr;
+                    if (serverTL->rehashCtl->done.load(std::memory_order_relaxed)) {
+                        dictCompleteRehashAsync(serverTL->rehashCtl, true /*fFree*/);
+                        serverTL->rehashCtl = nullptr;
+                    }
                 }
 
                 serverAssert(serverTL->rehashCtl == nullptr);
@@ -5532,6 +5534,8 @@ sds genRedisInfoString(const char *section) {
         }
 
         unsigned int lruclock = g_pserver->lruclock.load();
+        ustime_t ustime;
+        __atomic_load(&g_pserver->ustime, &ustime, __ATOMIC_RELAXED);
         info = sdscatfmt(info,
             "# Server\r\n"
             "redis_version:%s\r\n"
@@ -5574,7 +5578,7 @@ sds genRedisInfoString(const char *section) {
             supervised,
             g_pserver->runid,
             g_pserver->port ? g_pserver->port : g_pserver->tls_port,
-            (int64_t)g_pserver->ustime,
+            (int64_t)ustime,
             (int64_t)uptime,
             (int64_t)(uptime/(3600*24)),
             g_pserver->hz.load(),
@@ -6272,10 +6276,7 @@ sds genRedisInfoString(const char *section) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, 
             "# KeyDB\r\n"
-            "variant:enterprise\r\n"
-            "license_status:%s\r\n"
             "mvcc_depth:%d\r\n",
-            "OK",
             mvcc_depth
         );
     }
@@ -7607,7 +7608,7 @@ int main(int argc, char **argv) {
         try {
             loadDataFromDisk();
         } catch (ShutdownException) {
-            exit(EXIT_SUCCESS);
+            _Exit(EXIT_SUCCESS);
         }
 
         if (g_pserver->cluster_enabled) {
@@ -7724,7 +7725,9 @@ int main(int argc, char **argv) {
     g_pserver->garbageCollector.shutdown();
     delete g_pserver->m_pstorageFactory;
 
-    return 0;
+    // Don't return because we don't want to run any global dtors
+    _Exit(EXIT_SUCCESS);
+    return 0;   // Ensure we're well formed even though this won't get hit
 }
 
 /* The End */

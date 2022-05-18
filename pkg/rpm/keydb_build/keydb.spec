@@ -27,11 +27,7 @@ getent group keydb &> /dev/null || \
 groupadd -r keydb &> /dev/null
 getent passwd keydb &> /dev/null || \
 useradd -r -g keydb -d /var/lib/keydb -s /sbin/nologin \
-<<<<<<< HEAD
--c 'KeyDB Enterprise Database Server' keydb &> /dev/null
-=======
 -c 'KeyDB Database Server' keydb &> /dev/null
->>>>>>> public/main
 exit 0
 
 #postinstall scriptlet (using /bin/sh):

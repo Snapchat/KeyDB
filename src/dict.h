@@ -110,11 +110,15 @@ struct dictAsyncRehashCtl {
     std::atomic<bool> abondon { false };
 
     dictAsyncRehashCtl(struct dict *d, dictAsyncRehashCtl *next);
+    dictAsyncRehashCtl(const dictAsyncRehashCtl&) = delete;
+    dictAsyncRehashCtl(dictAsyncRehashCtl&&) = delete;
     ~dictAsyncRehashCtl();
 };
 #else
 struct  dictAsyncRehashCtl;
 #endif
+
+void discontinueAsyncRehash(dict *d);
 
 typedef struct dict {
     dictType *type;
@@ -125,6 +129,24 @@ typedef struct dict {
     dictAsyncRehashCtl *asyncdata;
     int16_t pauserehash; /* If >0 rehashing is paused (<0 indicates coding error) */
     uint8_t noshrink = false;
+
+#ifdef __cplusplus
+    dict() = default;
+    dict(dict &) = delete;  // No Copy Ctor
+
+    static void swap(dict& a, dict& b) {
+        discontinueAsyncRehash(&a);
+        discontinueAsyncRehash(&b);
+        std::swap(a.type, b.type);
+        std::swap(a.privdata, b.privdata);
+        std::swap(a.ht[0], b.ht[0]);
+        std::swap(a.ht[1], b.ht[1]);
+        std::swap(a.rehashidx, b.rehashidx);
+        // Never swap refcount - they are attached to the specific dict obj
+        std::swap(a.pauserehash, b.pauserehash);
+        std::swap(a.noshrink, b.noshrink);
+    }
+#endif
 } dict;
 
 /* If safe is set to 1 this is a safe iterator, that means, you can call

@@ -1657,13 +1657,18 @@ int launchRdbSaveThread(pthread_t &child, rdbSaveInfo *rsi)
 
         g_pserver->rdbThreadVars.tmpfileNum++;
         g_pserver->rdbThreadVars.fRdbThreadCancel = false;
-        if (pthread_create(&child, NULL, rdbSaveThread, args)) {
+        pthread_attr_t tattr;
+        pthread_attr_init(&tattr);
+        pthread_attr_setstacksize(&tattr, 1 << 23); // 8 MB
+        if (pthread_create(&child, &tattr, rdbSaveThread, args)) {
+            pthread_attr_destroy(&tattr);
             for (int idb = 0; idb < cserver.dbnum; ++idb)
                 g_pserver->db[idb]->endSnapshot(args->rgpdb[idb]);
             args->~rdbSaveThreadArgs();
             zfree(args);
             return C_ERR;
         }
+        pthread_attr_destroy(&tattr);
         g_pserver->child_type = CHILD_TYPE_RDB;
     }
     return C_OK;
@@ -3049,7 +3054,9 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         (r->keys_since_last_callback >= g_pserver->loading_process_events_interval_keys)))
     {
         rdbAsyncWorkThread *pwthread = reinterpret_cast<rdbAsyncWorkThread*>(r->chksum_arg);
-        bool fUpdateReplication = (g_pserver->mstime - r->last_update) > 1000;
+        mstime_t mstime;
+        __atomic_load(&g_pserver->mstime, &mstime, __ATOMIC_RELAXED);
+        bool fUpdateReplication = (mstime - r->last_update) > 1000;
 
         if (fUpdateReplication) {
             listIter li;
@@ -3832,7 +3839,11 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
 
     g_pserver->rdbThreadVars.tmpfileNum++;
     g_pserver->rdbThreadVars.fRdbThreadCancel = false;
-    if (pthread_create(&child, nullptr, rdbSaveToSlavesSocketsThread, args)) {
+    pthread_attr_t tattr;
+    pthread_attr_init(&tattr);
+    pthread_attr_setstacksize(&tattr, 1 << 23); // 8 MB
+    if (pthread_create(&child, &tattr, rdbSaveToSlavesSocketsThread, args)) {
+        pthread_attr_destroy(&tattr);
         serverLog(LL_WARNING,"Can't save in background: fork: %s",
             strerror(errno));
 
@@ -3858,6 +3869,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
         closeChildInfoPipe();
         return C_ERR;
     }
+    pthread_attr_destroy(&tattr);
     g_pserver->child_type = CHILD_TYPE_RDB;
 
     serverLog(LL_NOTICE,"Background RDB transfer started");

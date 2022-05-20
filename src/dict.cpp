@@ -128,6 +128,7 @@ int _dictInit(dict *d, dictType *type,
     d->pauserehash = 0;
     d->asyncdata = nullptr;
     d->refcount = 1;
+    d->noshrink = false;
     return DICT_OK;
 }
 
@@ -204,7 +205,7 @@ int dictMerge(dict *dst, dict *src)
     
     if (dictSize(dst) == 0)
     {
-        std::swap(*dst, *src);
+        dict::swap(*dst, *src);
         std::swap(dst->pauserehash, src->pauserehash);
         return DICT_OK;
     }
@@ -212,7 +213,7 @@ int dictMerge(dict *dst, dict *src)
     size_t expectedSize = dictSize(src) + dictSize(dst);
     if (dictSize(src) > dictSize(dst) && src->asyncdata == nullptr && dst->asyncdata == nullptr)
     {
-        std::swap(*dst, *src);
+        dict::swap(*dst, *src);
         std::swap(dst->pauserehash, src->pauserehash);
     }
 
@@ -402,7 +403,7 @@ int dictRehash(dict *d, int n) {
 
 dictAsyncRehashCtl::dictAsyncRehashCtl(struct dict *d, dictAsyncRehashCtl *next) : dict(d), next(next) {
     queue.reserve(c_targetQueueSize);
-    __atomic_fetch_add(&d->refcount, 1, __ATOMIC_RELEASE);
+    __atomic_fetch_add(&d->refcount, 1, __ATOMIC_ACQ_REL);
     this->rehashIdxBase = d->rehashidx;
 }
 
@@ -446,6 +447,9 @@ LDone:
 }
 
 void dictRehashAsync(dictAsyncRehashCtl *ctl) {
+    if (ctl->abondon.load(std::memory_order_acquire)) {
+        ctl->hashIdx = ctl->queue.size();
+    }
     for (size_t idx = ctl->hashIdx; idx < ctl->queue.size(); ++idx) {
         auto &wi = ctl->queue[idx];
         wi.hash = dictHashKey(ctl->dict, dictGetKey(wi.de));
@@ -455,6 +459,9 @@ void dictRehashAsync(dictAsyncRehashCtl *ctl) {
 }
 
 bool dictRehashSomeAsync(dictAsyncRehashCtl *ctl, size_t hashes) {
+    if (ctl->abondon.load(std::memory_order_acquire)) {
+        ctl->hashIdx = ctl->queue.size();
+    }
     size_t max = std::min(ctl->hashIdx + hashes, ctl->queue.size());
     for (; ctl->hashIdx < max; ++ctl->hashIdx) {
         auto &wi = ctl->queue[ctl->hashIdx];
@@ -463,6 +470,23 @@ bool dictRehashSomeAsync(dictAsyncRehashCtl *ctl, size_t hashes) {
 
     if (ctl->hashIdx == ctl->queue.size()) ctl->done = true;
     return ctl->hashIdx < ctl->queue.size();
+}
+
+
+void discontinueAsyncRehash(dict *d) {
+    // We inform our async rehashers and the completion function the results are to be
+    //  abandoned.  We keep the asyncdata linked in so that dictEntry's are still added
+    //  to the GC list.  This is because we can't gurantee when the other threads will
+    //  stop looking at them.
+    if (d->asyncdata != nullptr) {
+        auto adata = d->asyncdata;
+        while (adata != nullptr && !adata->abondon.load(std::memory_order_relaxed)) {
+            adata->abondon = true;
+            adata = adata->next;
+        }
+        if (dictIsRehashing(d))
+            d->rehashidx = 0;
+    }
 }
 
 void dictCompleteRehashAsync(dictAsyncRehashCtl *ctl, bool fFree) {
@@ -786,6 +810,8 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
         if (callback && (i & 65535) == 0) callback(d->privdata);
 
         if ((he = ht->table[i]) == NULL) continue;
+        dictEntry *deNull = nullptr;
+        __atomic_store(&ht->table[i], &deNull, __ATOMIC_RELEASE);
         while(he) {
             nextHe = he->next;
             if (d->asyncdata && (ssize_t)i < d->rehashidx) {

@@ -2669,6 +2669,11 @@ void redisDbPersistentData::prepOverwriteForSnapshot(char *key)
         auto itr = m_pdbSnapshot->find_cached_threadsafe(key);
         if (itr.key() != nullptr)
         {
+            if (itr.val()->FExpires()) {
+                // Note: I'm sure we could handle this, but its too risky at the moment.
+                //  There are known bugs doing this with expires
+                return;
+            }
             sds keyNew = sdsdupshared(itr.key());
             if (dictAdd(m_pdictTombstone, keyNew, (void*)dictHashKey(m_pdict, key)) != DICT_OK)
                 sdsfree(keyNew);
@@ -3263,10 +3268,11 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
                     dictEntry **table;
                     __atomic_load(&c->db->m_pdict->ht[iht].table, &table, __ATOMIC_RELAXED);
                     if (table != nullptr) {
-                        dictEntry *de = table[hT];
+                        dictEntry *de;
+                        __atomic_load(&table[hT], &de, __ATOMIC_ACQUIRE);
                         while (de != nullptr) {
                             _mm_prefetch(dictGetKey(de), _MM_HINT_T2);
-                            de = de->next;
+                            __atomic_load(&de->next, &de, __ATOMIC_ACQUIRE);
                         }
                     }
                     if (!dictIsRehashing(c->db->m_pdict))

@@ -2669,6 +2669,11 @@ void redisDbPersistentData::prepOverwriteForSnapshot(char *key)
         auto itr = m_pdbSnapshot->find_cached_threadsafe(key);
         if (itr.key() != nullptr)
         {
+            if (itr.val()->FExpires()) {
+                // Note: I'm sure we could handle this, but its too risky at the moment.
+                //  There are known bugs doing this with expires
+                return;
+            }
             sds keyNew = sdsdupshared(itr.key());
             if (dictAdd(m_pdictTombstone, keyNew, (void*)dictHashKey(m_pdict, key)) != DICT_OK)
                 sdsfree(keyNew);

@@ -2743,9 +2743,10 @@ void readQueryFromClient(connection *conn) {
         parseClientCommandBuffer(c);
         if (g_pserver->enable_async_commands && !serverTL->disable_async_commands && listLength(g_pserver->monitors) == 0 && (aeLockContention() || serverTL->rgdbSnapshot[c->db->id] || g_fTestMode)) {
             // Frequent writers aren't good candidates for this optimization, they cause us to renew the snapshot too often
-            //  so we exclude them unless the snapshot we need already exists
+            //  so we exclude them unless the snapshot we need already exists.
+            // Note: In test mode we want to create snapshots as often as possibl to excercise them - we don't care about perf
             bool fSnapshotExists = c->db->mvccLastSnapshot >= c->mvccCheckpoint;
-            bool fWriteTooRecent = (((getMvccTstamp() - c->mvccCheckpoint) >> MVCC_MS_SHIFT) < static_cast<uint64_t>(g_pserver->snapshot_slip)/2);
+            bool fWriteTooRecent = !g_fTestMode && (((getMvccTstamp() - c->mvccCheckpoint) >> MVCC_MS_SHIFT) < static_cast<uint64_t>(g_pserver->snapshot_slip)/2);
 
             // The check below avoids running async commands if this is a frequent writer unless a snapshot is already there to service it
             if (!fWriteTooRecent || fSnapshotExists) {

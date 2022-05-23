@@ -5,17 +5,14 @@ on: [push, pull_request]
 jobs:
 
   test-ubuntu-latest:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v1
-      with:
-        submodules: true
+    - uses: actions/checkout@v2
     - name: make
       run: |
           sudo apt-get update
-          sudo apt-get -y remove libzstd || true
-          sudo apt-get -y install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
-          make BUILD_TLS=yes -j2 KEYDB_CFLAGS='-Werror' KEYDB_CXXFLAGS='-Werror'
+          sudo apt-get -y install uuid-dev libcurl4-openssl-dev
+          make KEYDB_CFLAGS='-Werror' KEYDB_CXXFLAGS='-Werror' BUILD_TLS=yes -j2
     - name: gen-cert
       run: ./utils/gen-test-certs.sh
     - name: test-tls
@@ -31,9 +28,6 @@ jobs:
     - name: module tests
       run: |
           ./runtest-moduleapi
-    - name: rotation test
-      run: |
-          ./runtest-rotation
         
   build-ubuntu-old:
     runs-on: ubuntu-18.04
@@ -44,7 +38,6 @@ jobs:
         sudo apt-get update
         sudo apt-get -y install uuid-dev libcurl4-openssl-dev
         make -j2
-
   build-macos-latest:
     runs-on: macos-latest
     steps:
@@ -57,3 +50,17 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: make
+      run: |
+          sudo apt-get update
+          sudo apt-get -y install uuid-dev libcurl4-openssl-dev
+          make KEYDB_CFLAGS='-Werror' KEYDB_CXXFLAGS='-Werror' MALLOC=libc -j2
+  build-ubuntu-32bit:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: make
+      run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get -y install gcc-multilib g++-multilib libc6-dev-i386 lib32z1 uuid-dev:i386 libcurl4-openssl-dev:i386
+          make KEYDB_CFLAGS='-Werror' KEYDB_CXXFLAGS='-Werror' 32bit -j2

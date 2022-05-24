@@ -1462,6 +1462,11 @@ void shutdownCommand(client *c) {
             flags |= SHUTDOWN_NOSAVE;
         } else if (!strcasecmp(szFromObj(c->argv[1]),"save")) {
             flags |= SHUTDOWN_SAVE;
+        } else if (!strcasecmp(szFromObj(c->argv[1]), "soft")) {
+            g_pserver->soft_shutdown = true;
+            serverLog(LL_WARNING, "Soft Shutdown Initiated");
+            addReply(c, shared.ok);
+            return;
         } else {
             addReplyErrorObject(c,shared.syntaxerr);
             return;

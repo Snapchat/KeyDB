@@ -2721,6 +2721,9 @@ struct redisServer {
     long long repl_batch_offStart = -1;
     long long repl_batch_idxStart = -1;
 
+    int config_soft_shutdown = false;
+    bool soft_shutdown = false;
+
     /* Lock Contention Ring Buffer */
     static const size_t s_lockContentionSamples = 64;
     uint16_t rglockSamples[s_lockContentionSamples];

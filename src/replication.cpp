@@ -264,9 +264,8 @@ void resizeReplicationBacklog(long long newsize) {
         newsize = CONFIG_REPL_BACKLOG_MIN_SIZE;
     if (g_pserver->repl_backlog_size == newsize) return;
 
-    std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
-
     if (g_pserver->repl_backlog != NULL) {
+        std::unique_lock<fastlock> repl_backlog_lock(g_pserver->repl_backlog_lock);
         /* What we actually do is to flush the old buffer and realloc a new
          * empty one. It will refill with new data incrementally.
          * The reason is that copying a few gigabytes adds latency and even
@@ -357,7 +356,7 @@ void freeReplicationBacklog(void) {
 void feedReplicationBacklog(const void *ptr, size_t len) {
     serverAssert(GlobalLocksAcquired());
     const unsigned char *p = (const unsigned char*)ptr;
-
+    std::unique_lock<fastlock> repl_backlog_lock(g_pserver->repl_backlog_lock, std::defer_lock);
 
     if (g_pserver->repl_batch_idxStart >= 0) {
         /* We are lower bounded by the lowest replica offset, or the batch offset start if not applicable */
@@ -417,6 +416,8 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
                 // We need to update a few variables or later asserts will notice we dropped data
                 g_pserver->repl_batch_offStart = g_pserver->master_repl_offset + len;
                 g_pserver->repl_lowest_off = -1;
+                if (!repl_backlog_lock.owns_lock())
+                    repl_backlog_lock.lock();   // we need to acquire the lock if we'll be overwriting data that writeToClient may be reading
             }
         }
     }
@@ -5598,6 +5599,9 @@ void flushReplBacklogToClients()
         // Ensure no overflow if we get here
         serverAssert(g_pserver->master_repl_offset - g_pserver->repl_batch_offStart <= g_pserver->repl_backlog_size);
         serverAssert(g_pserver->repl_batch_idxStart != g_pserver->repl_backlog_idx);
+
+        // Repl backlog writes must become visible to all threads at this point
+        std::atomic_thread_fence(std::memory_order_release);
 
         listIter li;
         listNode *ln;

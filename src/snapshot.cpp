@@ -26,17 +26,6 @@ public:
     std::vector<dictEntry*> vecde;
 };
 
-void discontinueAsyncRehash(dict *d) {
-    if (d->asyncdata != nullptr) {
-        auto adata = d->asyncdata;
-        while (adata != nullptr) {
-            adata->abondon = true;
-            adata = adata->next;
-        }
-        d->rehashidx = 0;
-    }
-}
-
 const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint64_t mvccCheckpoint, bool fOptional)
 {
     serverAssert(GlobalLocksAcquired());

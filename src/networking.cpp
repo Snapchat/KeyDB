@@ -1810,6 +1810,8 @@ int writeToClient(client *c, int handler_installed) {
        is a replica, so only attempt to do so if that's the case. */
     if (c->flags & CLIENT_SLAVE && !(c->flags & CLIENT_MONITOR) && c->replstate == SLAVE_STATE_ONLINE) {
         std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
+        // Ensure all writes to the repl backlog are visible
+        std::atomic_thread_fence(std::memory_order_acquire);
 
         while (clientHasPendingReplies(c)) {
             long long repl_end_idx = getReplIndexFromOffset(c->repl_end_off);
@@ -2077,8 +2079,6 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
         * that may trigger write error or recreate handler. */
         if ((flags & CLIENT_PROTECTED) && !(flags & CLIENT_SLAVE)) continue;
 
-        //std::unique_lock<decltype(c->lock)> lock(c->lock);
-
         /* Don't write to clients that are going to be closed anyway. */
         if (c->flags & CLIENT_CLOSE_ASAP) continue;
 
@@ -2096,6 +2096,7 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
 
         /* If after the synchronous writes above we still have data to
         * output to the client, we need to install the writable handler. */
+        std::unique_lock<decltype(c->lock)> lock(c->lock);
         if (clientHasPendingReplies(c)) {
             if (connSetWriteHandlerWithBarrier(c->conn, sendReplyToClient, ae_flags, true) == C_ERR) {
                 freeClientAsync(c);

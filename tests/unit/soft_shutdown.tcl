@@ -23,7 +23,7 @@ start_server {tags {"soft_shutdown"} } {
 }
 
 start_server {tags {"soft_shutdown"} } {
-    test {soft shutdown prevents allows commands to execute while waiting} {
+    test {soft shutdown allows commands to execute while waiting} {
         assert_equal [r shutdown soft] "OK"
         r set test val
         assert_equal [r get test] {val}

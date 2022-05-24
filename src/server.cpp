@@ -2656,13 +2656,15 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         bool fActiveClient = false;
         while ((ln = listNext(&li)) && !fActiveClient) {
             client *c = (client*)listNodeValue(ln);
-            if (c->flags & (CLIENT_MASTER | CLIENT_SLAVE | CLIENT_BLOCKED | CLIENT_MONITOR))
+            if (c->flags & CLIENT_IGNORE_SOFT_SHUTDOWN)
                 continue;
             fActiveClient = true;
         }
         if (!fActiveClient) {
-            serverLog(LL_WARNING, "All active clients have disconnected while a soft shutdown is pending.  Shutting down now.");
-            throw ShutdownException();
+            if (prepareForShutdown(SHUTDOWN_NOFLAGS) == C_OK) {
+                serverLog(LL_WARNING, "All active clients have disconnected while a soft shutdown is pending.  Shutting down now.");
+                throw ShutdownException();
+            }
         }
     }
 
@@ -5315,7 +5317,7 @@ void pingCommand(client *c) {
         return;
     }
 
-    if (g_pserver->soft_shutdown) {
+    if (g_pserver->soft_shutdown && !(c->flags & CLIENT_IGNORE_SOFT_SHUTDOWN)) {
         addReplyError(c, "-SHUTDOWN PENDING");
         return;
     }

@@ -89,6 +89,7 @@ set ::all_tests {
     integration/logging
     integration/corrupt-dump
     integration/corrupt-dump-fuzzer
+    unit/soft_shutdown
 }
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0

@@ -779,7 +779,7 @@ struct redisCommand redisCommandTable[] = {
      0,NULL,0,0,0,0,0,0},
 
     {"shutdown",shutdownCommand,-1,
-     "admin no-script ok-loading ok-stale",
+     "admin no-script ok-loading ok-stale noprop",
      0,NULL,0,0,0,0,0,0},
 
     {"lastsave",lastsaveCommand,1,
@@ -2645,6 +2645,24 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                 auto epoch = g_pserver->garbageCollector.startEpoch();
                 g_pserver->garbageCollector.endEpoch(epoch);
             });
+        }
+    }
+
+    if (g_pserver->soft_shutdown) {
+        /* Loop through our clients list and see if there are any active clients */
+        listIter li;
+        listNode *ln;
+        listRewind(g_pserver->clients, &li);
+        bool fActiveClient = false;
+        while ((ln = listNext(&li)) && !fActiveClient) {
+            client *c = (client*)listNodeValue(ln);
+            if (c->flags & (CLIENT_MASTER | CLIENT_SLAVE | CLIENT_BLOCKED | CLIENT_MONITOR))
+                continue;
+            fActiveClient = true;
+        }
+        if (!fActiveClient) {
+            serverLog(LL_WARNING, "All active clients have disconnected while a soft shutdown is pending.  Shutting down now.");
+            throw ShutdownException();
         }
     }
 
@@ -5297,6 +5315,11 @@ void pingCommand(client *c) {
         return;
     }
 
+    if (g_pserver->soft_shutdown) {
+        addReplyError(c, "-SHUTDOWN PENDING");
+        return;
+    }
+
     if (c->flags & CLIENT_PUBSUB && c->resp == 2) {
         addReply(c,shared.mbulkhdr[2]);
         addReplyBulkCBuffer(c,"pong",4);
@@ -6691,7 +6714,7 @@ static void sigShutdownHandler(int sig) {
      * If we receive the signal the second time, we interpret this as
      * the user really wanting to quit ASAP without waiting to persist
      * on disk. */
-    if (g_pserver->shutdown_asap && sig == SIGINT) {
+    if ((g_pserver->shutdown_asap || g_pserver->soft_shutdown) && sig == SIGINT) {
         serverLogFromHandler(LL_WARNING, "You insist... exiting now.");
         rdbRemoveTempFile(g_pserver->rdbThreadVars.tmpfileNum, 1);
         g_pserver->garbageCollector.shutdown();
@@ -6702,7 +6725,10 @@ static void sigShutdownHandler(int sig) {
     }
 
     serverLogFromHandler(LL_WARNING, msg);
-    g_pserver->shutdown_asap = 1;
+    if (g_pserver->config_soft_shutdown)
+        g_pserver->soft_shutdown = true;
+    else
+        g_pserver->shutdown_asap = 1;
 }
 
 void setupSignalHandlers(void) {

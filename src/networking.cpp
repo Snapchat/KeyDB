@@ -1256,6 +1256,20 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) 
         return;
     }
 
+    /* Prevent new connections if we're in a soft shutdown situation */
+    if (g_pserver->soft_shutdown) {
+        const char *err = "-SHUTDOWN";
+        /* That's a best effort error message, don't check write errors.
+         * Note that for TLS connections, no handshake was done yet so nothing
+         * is written and the connection will just drop. */
+        if (connWrite(conn,err,strlen(err)) == -1) {
+            /* Nothing to do, Just to avoid the warning... */
+        }
+        g_pserver->stat_rejected_conn++;
+        connClose(conn);
+        return;
+    }
+
     /* Limit the number of connections we take at the same time.
      *
      * Admission control will happen before a client is created and connAccept()

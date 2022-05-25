@@ -2897,6 +2897,7 @@ standardConfig configs[] = {
     createBoolConfig("multi-master-no-forward", NULL, MODIFIABLE_CONFIG, cserver.multimaster_no_forward, 0, validateMultiMasterNoForward, NULL),
     createBoolConfig("allow-write-during-load", NULL, MODIFIABLE_CONFIG, g_pserver->fWriteDuringActiveLoad, 0, NULL, NULL),
     createBoolConfig("force-backlog-disk-reserve", NULL, MODIFIABLE_CONFIG, cserver.force_backlog_disk, 0, NULL, NULL),
+    createBoolConfig("soft-shutdown", NULL, MODIFIABLE_CONFIG, g_pserver->config_soft_shutdown, 0, NULL, NULL),
 
 #ifdef USE_OPENSSL
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->tls_port, 0, INTEGER_CONFIG, NULL, updateTLSPort), /* TCP port. */

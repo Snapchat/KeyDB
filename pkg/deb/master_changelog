@@ -1,3 +1,11 @@
+keydb (6:6.3.1-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * This point release contains fixes to bugs related to expires, active-rep, and rdb saving
+  * Issues fixed: #419, #422, #428
+  * PRs: #426, #429, #431, #433
+
+-- Ben Schermel <ben@eqalpha.com>  Mon, 23 May 2022 20:00:37 +0000
+
 keydb (6:6.3.0-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * This release open sources KeyDB Enterprise features into the open source project along with PSYNC for active replication

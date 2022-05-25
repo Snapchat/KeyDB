@@ -552,7 +552,7 @@ static int evictionTimeProc(
     UNUSED(clientData);
     serverAssert(GlobalLocksAcquired());
 
-    if (performEvictions(false) == EVICT_RUNNING) return 0;  /* keep evicting */
+    if (performEvictions((bool)clientData) == EVICT_RUNNING) return 0;  /* keep evicting */
 
     /* For EVICT_OK - things are good, no need to keep evicting.
      * For EVICT_FAIL - there is nothing left to evict.  */
@@ -832,12 +832,12 @@ int performEvictions(bool fPreSnapshot) {
                 /* After some time, exit the loop early - even if memory limit
                  * hasn't been reached.  If we suddenly need to free a lot of
                  * memory, don't want to spend too much time here.  */
-                if (g_pserver->m_pstorageFactory == nullptr && elapsedUs(evictionTimer) > eviction_time_limit_us) {
+                if (elapsedUs(evictionTimer) > eviction_time_limit_us) {
                     // We still need to free memory - start eviction timer proc
                     if (!isEvictionProcRunning && serverTL->el != nullptr) {
                         isEvictionProcRunning = 1;
                         aeCreateTimeEvent(serverTL->el, 0,
-                                evictionTimeProc, NULL, NULL);
+                                evictionTimeProc, (void*)fPreSnapshot, NULL);
                     }
                     break;
                 }

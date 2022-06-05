@@ -1657,13 +1657,18 @@ int launchRdbSaveThread(pthread_t &child, rdbSaveInfo *rsi)
 
         g_pserver->rdbThreadVars.tmpfileNum++;
         g_pserver->rdbThreadVars.fRdbThreadCancel = false;
-        if (pthread_create(&child, NULL, rdbSaveThread, args)) {
+        pthread_attr_t tattr;
+        pthread_attr_init(&tattr);
+        pthread_attr_setstacksize(&tattr, 1 << 23); // 8 MB
+        if (pthread_create(&child, &tattr, rdbSaveThread, args)) {
+            pthread_attr_destroy(&tattr);
             for (int idb = 0; idb < cserver.dbnum; ++idb)
                 g_pserver->db[idb]->endSnapshot(args->rgpdb[idb]);
             args->~rdbSaveThreadArgs();
             zfree(args);
             return C_ERR;
         }
+        pthread_attr_destroy(&tattr);
         g_pserver->child_type = CHILD_TYPE_RDB;
     }
     return C_OK;
@@ -3834,7 +3839,11 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
 
     g_pserver->rdbThreadVars.tmpfileNum++;
     g_pserver->rdbThreadVars.fRdbThreadCancel = false;
-    if (pthread_create(&child, nullptr, rdbSaveToSlavesSocketsThread, args)) {
+    pthread_attr_t tattr;
+    pthread_attr_init(&tattr);
+    pthread_attr_setstacksize(&tattr, 1 << 23); // 8 MB
+    if (pthread_create(&child, &tattr, rdbSaveToSlavesSocketsThread, args)) {
+        pthread_attr_destroy(&tattr);
         serverLog(LL_WARNING,"Can't save in background: fork: %s",
             strerror(errno));
 
@@ -3860,6 +3869,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
         closeChildInfoPipe();
         return C_ERR;
     }
+    pthread_attr_destroy(&tattr);
     g_pserver->child_type = CHILD_TYPE_RDB;
 
     serverLog(LL_NOTICE,"Background RDB transfer started");

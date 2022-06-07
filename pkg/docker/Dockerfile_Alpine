@@ -1,0 +1,77 @@
+FROM alpine:3.12
+# add our user and group first to make sure their IDs get assigned consistently, regardless of whatever dependencies get added
+RUN addgroup -S -g 1000 keydb && adduser -S -G keydb -u 999 keydb
+RUN mkdir -p /etc/keydb
+ARG BRANCH
+RUN set -eux; \
+        \
+        apk add --no-cache su-exec; \
+        apk add --no-cache --virtual .build-deps \
+                coreutils \
+                gcc \
+                linux-headers \
+                make \
+                musl-dev \
+                openssl-dev \
+                git \
+                util-linux-dev \
+                curl-dev \
+                g++ \
+                libunwind-dev \
+                bash \
+                perl \
+                git \
+        ; \
+        cd /tmp && git clone --branch $BRANCH https://github.com/Snapchat/KeyDB.git --recursive; \
+        cd /tmp/KeyDB; \
+        # disable protected mode as it relates to docker
+        grep -E '^ *createBoolConfig[(]"protected-mode",.*, *1 *,.*[)],$' ./src/config.cpp; \
+        sed -ri 's!^( *createBoolConfig[(]"protected-mode",.*, *)1( *,.*[)],)$!\10\2!' ./src/config.cpp; \
+        grep -E '^ *createBoolConfig[(]"protected-mode",.*, *0 *,.*[)],$' ./src/config.cpp; \
+        make -j$(nproc) BUILD_TLS=yes; \
+        cd src; \
+        strip keydb-cli keydb-benchmark keydb-check-rdb keydb-check-aof keydb-diagnostic-tool keydb-sentinel keydb-server; \
+        mv keydb-server keydb-cli keydb-benchmark keydb-check-rdb keydb-check-aof keydb-diagnostic-tool keydb-sentinel /usr/local/bin/; \
+        runDeps="$( \
+                scanelf --needed --nobanner --format '%n#p' --recursive /usr/local \
+                        | tr ',' '\n' \
+                        | sort -u \
+                        | awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
+        )"; \
+        apk add --no-network --virtual .keydb-rundeps $runDeps; \
+        apk del --no-network .build-deps; \
+        # create working directories and organize files
+        mkdir /data && chown keydb:keydb /data; \
+        mkdir /flash && chown keydb:keydb /flash; \
+        mkdir -p /etc/keydb; \
+        cp /tmp/KeyDB/keydb.conf /etc/keydb/; \
+        sed -i 's/^\(daemonize .*\)$/# \1/' /etc/keydb/keydb.conf; \
+        sed -i 's/^\(dir .*\)$/# \1\ndir \/data/' /etc/keydb/keydb.conf; \
+        sed -i 's/^\(logfile .*\)$/# \1/' /etc/keydb/keydb.conf; \
+        sed -i 's/protected-mode yes/protected-mode no/g' /etc/keydb/keydb.conf; \
+        sed -i 's/^\(bind .*\)$/# \1/' /etc/keydb/keydb.conf; \
+        ln -s keydb-cli redis-cli; \
+        cd /etc/keydb; \
+        ln -s keydb.conf redis.conf; \
+        rm -rf /tmp/*
+# generate entrypoint script
+RUN set -eux; \
+        echo '#!/bin/sh' > /usr/local/bin/docker-entrypoint.sh; \
+        echo 'set -e' >> /usr/local/bin/docker-entrypoint.sh; \
+        echo "# first arg is '-f' or '--some-option'" >> /usr/local/bin/docker-entrypoint.sh; \
+        echo "# or first arg is `something.conf`" >> /usr/local/bin/docker-entrypoint.sh; \
+        echo 'if [ "${1#-}" != "$1" ] || [ "${1%.conf}" != "$1" ]; then' >> /usr/local/bin/docker-entrypoint.sh; \
+        echo '        set -- keydb-server "$@"' >> /usr/local/bin/docker-entrypoint.sh; \
+        echo 'fi' >> /usr/local/bin/docker-entrypoint.sh; \
+        echo "# allow the container to be started with `--user`" >> /usr/local/bin/docker-entrypoint.sh; \
+        echo 'if [ "$1" = "keydb-server" -a "$(id -u)" = "0" ]; then' >> /usr/local/bin/docker-entrypoint.sh; \
+        echo "        find . \! -user keydb -exec chown keydb '{}' +" >> /usr/local/bin/docker-entrypoint.sh; \
+        echo '        exec su-exec keydb "$0" "$@"' >> /usr/local/bin/docker-entrypoint.sh; \
+        echo 'fi' >> /usr/local/bin/docker-entrypoint.sh; \
+        echo 'exec "$@"' >> /usr/local/bin/docker-entrypoint.sh; \
+        chmod +x /usr/local/bin/docker-entrypoint.sh
+VOLUME /data
+WORKDIR /data
+ENTRYPOINT ["docker-entrypoint.sh"]
+EXPOSE 6379
+CMD ["keydb-server", "/etc/keydb/keydb.conf"]

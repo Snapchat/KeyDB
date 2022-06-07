@@ -23,8 +23,8 @@ pkg_name=keydb-$majorv:$version$distname
 
 # create build tree
 cd ../../../
-tar -czvf keydb_$version.orig.tar.gz --force-local keydb-internal
-cd keydb-internal/pkg/deb/
+tar -czvf keydb_$version.orig.tar.gz --force-local KeyDB
+cd KeyDB/pkg/deb/
 mkdir -p $pkg_name/tmp
 if [[ "$codename" == "xenial" ]] || [[ "$codename" == "stretch" ]]; then
 	cp -r debian_dh9 $pkg_name/tmp/debian

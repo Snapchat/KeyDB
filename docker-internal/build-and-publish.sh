@@ -86,7 +86,7 @@ echo "MOD_STATSD_PATH: ${MOD_STATSD_PATH}"
 echo "`timestamp` building image for ${FLAGS_tag}"
 export IMAGE_SUFFIX="keydb:${FLAGS_tag}"
 cp -r ${MOD_STATSD_PATH} ./modstatsd
-docker build --squash --build-arg MODSTATSD_DIR=docker-internal/modstatsd --build-arg KEYDB_DIR=. --build-arg MAKE_JOBS=${FLAGS_jobs} -t keydb:latest -f ${DIR}/Dockerfile ${DIR}/..
+docker build --squash --build-arg MODSTATSD_DIR=docker-internal/modstatsd --build-arg KEYDB_DIR=. --build-arg MAKE_JOBS=${FLAGS_jobs} -t keydb:${FLAGS_tag} -f ${DIR}/Dockerfile ${DIR}/..
 rm -rf ./modstatsd
 
 # Build and publish

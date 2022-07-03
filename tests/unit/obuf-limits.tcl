@@ -111,7 +111,7 @@ start_server {tags {"obuf-limits"} overrides { server-threads 1 }} {
 
         # Read nothing
         set fd [$rd channel]
-        assert_equal {} [read $fd]
+        assert_equal {} [$rd rawread]
     }
 
     # Note: This test assumes that what's written with one write, will be read by redis in one read.
@@ -151,8 +151,7 @@ start_server {tags {"obuf-limits"} overrides { server-threads 1 }} {
         assert_equal "PONG" [r ping]
         set clients [r client list]
         assert_no_match "*name=multicommands*" $clients
-        set fd [$rd2 channel]
-        assert_equal {} [read $fd]
+        assert_equal {} [$rd2 rawread]
     }
 
     test {Execute transactions completely even if client output buffer limit is enforced} {

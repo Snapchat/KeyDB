@@ -126,6 +126,10 @@ start_server {tags {"scripting"}} {
         r select 9
         set res
     } {original value}
+    
+    test {EVAL background command} {
+	r eval {redis.call("SCAN", "0", "MATCH", "key*", "COUNT", 1000)} 0
+    } {}
 
     if 0 {
         test {EVAL - Script can't run more than configured time limit} {

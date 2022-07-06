@@ -190,7 +190,7 @@ int bg_unlink(const char *filename) {
 bool createDiskBacklog() {
     // Lets create some disk backed pages and add them here
     std::string path = "./repl-backlog-temp" + std::to_string(gettid());
-#ifdef __APPLE__
+#if (defined __APPLE__ || defined __FreeBSD__)
     int fd = open(path.c_str(), O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
 #else
     int fd = open(path.c_str(), O_CREAT | O_RDWR | O_LARGEFILE, S_IRUSR | S_IWUSR);

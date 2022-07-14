@@ -1525,7 +1525,9 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
                  * it's greater than our view but is not in the future
                  * (with 500 milliseconds tolerance) from the POV of our
                  * clock. */
-                if (pongtime <= (g_pserver->mstime+500) &&
+                mstime_t mstime;
+                __atomic_load(&g_pserver->mstime, &mstime, __ATOMIC_RELAXED);
+                if (pongtime <= (mstime+500) &&
                     pongtime > node->pong_received)
                 {
                     node->pong_received = pongtime;

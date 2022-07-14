@@ -503,11 +503,26 @@ bool tlsCheckAgainstAllowlist(const char * client){
 #define ASN1_STRING_get0_data ASN1_STRING_data 
 #endif 
 
+class TCleanup {
+    std::function<void()> fn;
+
+public:
+    TCleanup(std::function<void()> fn)
+        : fn(fn)
+    {}
+
+    ~TCleanup() {
+        fn();
+    }
+};
+
 bool tlsValidateCertificateName(tls_connection* conn){
     if (g_pserver->tls_allowlist.empty())
         return true;    // Empty list implies acceptance of all
 
     X509 * cert = SSL_get_peer_certificate(conn->ssl);
+    TCleanup certClen([cert]{X509_free(cert);});
+    
     /* Check the common name (CN) of the certificate first */
     X509_NAME_ENTRY * ne = X509_NAME_get_entry(X509_get_subject_name(cert), X509_NAME_get_index_by_NID(X509_get_subject_name(cert), NID_commonName, -1));
     const char * commonName = reinterpret_cast<const char*>(ASN1_STRING_get0_data(X509_NAME_ENTRY_get_data(ne)));

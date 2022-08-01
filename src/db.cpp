@@ -3292,6 +3292,10 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
     auto cmd = lookupCommand(szFromObj(command.argv[0]));
     if (cmd == nullptr)
         return false; // Bad command? It's not for us to judge, just bail
+    
+    if (command.argc < std::abs(cmd->arity))
+        return false; // Invalid number of args
+    
     int numkeys = getKeysFromCommand(cmd, command.argv, command.argc, &result);
     for (int ikey = 0; ikey < numkeys; ++ikey)
     {

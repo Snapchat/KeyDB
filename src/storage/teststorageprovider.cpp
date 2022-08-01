@@ -26,12 +26,10 @@ TestStorageProvider::~TestStorageProvider()
 {
 }
 
-void TestStorageProvider::insert(const char *key, size_t cchKey, void *data, size_t cb, bool fOverwrite)
+void TestStorageProvider::insert(const char *key, size_t cchKey, void *data, size_t cb, bool /*fOverwrite*/)
 {
     auto strkey = std::string(key, cchKey);
-    bool fActuallyExists = m_map.find(strkey) != m_map.end();
-    serverAssert(fActuallyExists == fOverwrite);
-    m_map.insert(std::make_pair(strkey, std::string((char*)data, cb)));
+    m_map[strkey] = std::string((char*)data, cb);
 }
 
 

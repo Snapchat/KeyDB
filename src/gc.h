@@ -16,7 +16,7 @@ class GarbageCollector
     struct EpochHolder
     {
         uint64_t tstamp;
-       	std::unique_ptr<std::vector<std::unique_ptr<T>>> m_spvecObjs;
+        std::unique_ptr<std::vector<std::unique_ptr<T>>> m_spvecObjs;
 
         EpochHolder() {
             m_spvecObjs = std::make_unique<std::vector<std::unique_ptr<T>>>();
@@ -134,4 +134,3 @@ private:
     std::unordered_set<uint64_t> m_setepochOutstanding;
     uint64_t m_epochNext = 0;
 };
-

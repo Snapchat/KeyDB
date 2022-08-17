@@ -3115,10 +3115,10 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     std::unique_ptr<rdbInsertJob> spjob;
 
     // If we're tracking changes we need to reset this
-    bool fTracking[cserver.dbnum];
+    std::vector<bool> fTracking(cserver.dbnum);
     // We don't want to track here because processChangesAsync is outside the normal scope handling
     for (int idb = 0; idb < cserver.dbnum; ++idb) {
-        if (fTracking[idb] = g_pserver->db[idb]->FTrackingChanges())
+        if ((fTracking[idb] = g_pserver->db[idb]->FTrackingChanges()))
             if (g_pserver->db[idb]->processChanges(false))
                 g_pserver->db[idb]->commitChanges();
     }

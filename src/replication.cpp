@@ -2980,7 +2980,7 @@ void readSyncBulkPayload(connection *conn) {
     rdbSaveInfo rsi;
     redisMaster *mi = (redisMaster*)connGetPrivateData(conn);
     static int usemark = 0;
-    if (mi == nullptr) {
+    if (mi == nullptr || conn != mi->repl_transfer_s) {
         // We're about to be free'd so bail out
         return;
     }

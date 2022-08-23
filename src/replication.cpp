@@ -2977,6 +2977,7 @@ error:
 }
 
 void readSyncBulkPayload(connection *conn) {
+    serverAssert(GlobalLocksAcquired());
     rdbSaveInfo rsi;
     redisMaster *mi = (redisMaster*)connGetPrivateData(conn);
     static int usemark = 0;
@@ -2992,6 +2993,9 @@ void readSyncBulkPayload(connection *conn) {
         if (!readSyncBulkPayloadRdb(conn, mi, rsi, usemark))
             return;
     }
+
+    if (conn != mi->repl_transfer_s)
+        return;
 
     /* Final setup of the connected slave <- master link */
     replicationCreateMasterClient(mi,mi->repl_transfer_s,rsi.repl_stream_db);
@@ -3801,12 +3805,14 @@ int connectWithMaster(redisMaster *mi) {
  * Never call this function directly, use cancelReplicationHandshake() instead.
  */
 void undoConnectWithMaster(redisMaster *mi) {
+    serverAssert(GlobalLocksAcquired());
     auto conn = mi->repl_transfer_s;
     connSetPrivateData(conn, nullptr);
-    aePostFunction(g_pserver->rgthreadvar[mi->ielReplTransfer].el, [conn]{
-        connClose(conn);
-    });
     mi->repl_transfer_s = NULL;
+    int result = aePostFunction(g_pserver->rgthreadvar[mi->ielReplTransfer].el, [conn]{
+        connClose(conn);
+    }, false);
+    serverAssert(result == AE_OK);
 }
 
 /* Abort the async download of the bulk dataset while SYNC-ing with master.
@@ -3961,6 +3967,10 @@ void freeMasterInfo(redisMaster *mi)
 {
     sdsfree(mi->masterauth);
     zfree(mi->masteruser);
+    if (g_pserver->rdb_filename != nullptr && g_pserver->rdb_filename == mi->repl_transfer_tmpfile) {
+        unlink(g_pserver->rdb_filename);
+        g_pserver->rdb_filename = nullptr;
+    }
     if (mi->repl_transfer_tmpfile)
         zfree(mi->repl_transfer_tmpfile);
     delete mi->staleKeyMap;

@@ -771,7 +771,7 @@ unsigned long getClusterConnectionsCount(void) {
     /* We decrement the number of nodes by one, since there is the
      * "myself" node too in the list. Each node uses two file descriptors,
      * one incoming and one outgoing, thus the multiplication by 2. */
-    return g_pserver->cluster_enabled ?
+    return g_pserver->cluster_enabled && g_pserver->cluster != nullptr ?
            ((dictSize(g_pserver->cluster->nodes)-1)*2) : 0;
 }
 

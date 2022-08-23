@@ -3961,6 +3961,10 @@ void freeMasterInfo(redisMaster *mi)
 {
     sdsfree(mi->masterauth);
     zfree(mi->masteruser);
+    if (g_pserver->rdb_filename != nullptr && g_pserver->rdb_filename == mi->repl_transfer_tmpfile) {
+        unlink(g_pserver->rdb_filename);
+        g_pserver->rdb_filename = nullptr;
+    }
     if (mi->repl_transfer_tmpfile)
         zfree(mi->repl_transfer_tmpfile);
     delete mi->staleKeyMap;

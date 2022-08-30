@@ -2795,6 +2795,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     AeLocker locker;
     int iel = ielFromEventLoop(eventLoop);
 
+    tlsProcessPendingData();
+
     locker.arm();
 
     /* end any snapshots created by fast async commands */
@@ -2825,7 +2827,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         uint64_t processed = 0;
         int aof_state = g_pserver->aof_state;
         locker.disarm();
-        processed += tlsProcessPendingData();
         processed += handleClientsWithPendingWrites(iel, aof_state);
         locker.arm();
         processed += freeClientsInAsyncFreeQueue(iel);
@@ -2835,13 +2836,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Handle precise timeouts of blocked clients. */
     handleBlockedClientsTimeout();
-
-    /* Handle TLS pending data. (must be done before flushAppendOnlyFile) */
-    if (tlsHasPendingData()) {
-        locker.disarm();
-        tlsProcessPendingData();
-        locker.arm();
-    }
 
     /* If tls still has pending unread data don't sleep at all. */
     aeSetDontWait(eventLoop, tlsHasPendingData());
@@ -2908,7 +2902,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     static thread_local bool fFirstRun = true;
     // note: we also copy the DB pointer in case a DB swap is done while the lock is released
     std::vector<redisDb*> vecdb;    // note we cache the database pointer in case a dbswap is done while the lock is released
-    if (cserver.storage_memory_model == STORAGE_WRITETHROUGH && g_pserver->m_pstorageFactory != nullptr && !g_pserver->loading)
+    if (cserver.storage_memory_model == STORAGE_WRITETHROUGH && !g_pserver->loading)
     {
         if (!fFirstRun) {
             mstime_t storage_process_latency;

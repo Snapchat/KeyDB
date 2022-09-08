@@ -2639,7 +2639,11 @@ bool redisDbPersistentData::insert(char *key, robj *o, bool fAssumeNew, dict_ite
         ensure(key);
     dictEntry *de;
     int res = dictAdd(m_pdict, key, o, &de);
-    serverAssert(FImplies(fAssumeNew, res == DICT_OK));
+    if (!FImplies(fAssumeNew, res == DICT_OK)) {
+        serverLog(LL_WARNING,
+            "Assumed new key %s existed in DB.", key);
+    }
+    // serverAssert(FImplies(fAssumeNew, res == DICT_OK));
     if (res == DICT_OK)
     {
 #ifdef CHECKED_BUILD

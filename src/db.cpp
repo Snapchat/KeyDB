@@ -2643,7 +2643,6 @@ bool redisDbPersistentData::insert(char *key, robj *o, bool fAssumeNew, dict_ite
         serverLog(LL_WARNING,
             "Assumed new key %s existed in DB.", key);
     }
-    // serverAssert(FImplies(fAssumeNew, res == DICT_OK));
     if (res == DICT_OK)
     {
 #ifdef CHECKED_BUILD

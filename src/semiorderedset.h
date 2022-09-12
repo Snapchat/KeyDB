@@ -240,14 +240,12 @@ public:
     bool empty() const noexcept { return celem == 0; }
     size_t size() const noexcept { return celem; }
 
-    size_t bytes_used() const
+    size_t estimated_bytes_used() const
     {
-        size_t cb = sizeof(this) + (m_data.capacity()-m_data.size())*sizeof(T);
-        for (auto &vec : m_data)
-        {
-            if (vec != nullptr)
-                cb += vec->bytes_used();
-        }
+        // This estimate does't include all the overhead of the internal vectors
+        size_t cb = sizeof(this)
+            + (m_data.capacity() * sizeof(m_data[0]))
+            + sizeof(T) * size();
         return cb;
     }
 

@@ -1132,6 +1132,14 @@ public:
             replica->repl_put_online_on_ack = 1;
         }
     }
+
+    void abort() {
+        for (auto replica : replicas) {
+            // Close the connection to force a resync
+            freeClientAsync(replica);
+        }
+        replicas.clear();
+    }
 };
 
 int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
@@ -1227,7 +1235,11 @@ int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
                 retval = C_ERR;
                 break;
             }
-            serverAssert(count == snapshotDeclaredCount);
+            if (count != snapshotDeclaredCount) {
+                serverLog(LL_WARNING, "Replication BUG: Count of keys sent does not match actual count.  Aborting full sync.");
+                replBuf.abort();
+                break;
+            }
         }
         
         replBuf.end();

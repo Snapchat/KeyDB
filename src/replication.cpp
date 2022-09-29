@@ -5620,7 +5620,6 @@ void flushReplBacklogToClients()
 
         // Ensure no overflow if we get here
         serverAssert(g_pserver->master_repl_offset - g_pserver->repl_batch_offStart <= g_pserver->repl_backlog_size);
-        serverAssert(g_pserver->repl_batch_idxStart != g_pserver->repl_backlog_idx);
 
         // Repl backlog writes must become visible to all threads at this point
         std::atomic_thread_fence(std::memory_order_release);

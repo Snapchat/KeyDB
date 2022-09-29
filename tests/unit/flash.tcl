@@ -1,3 +1,4 @@
+if {$::flash_enabled} {
 start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.db} delete-on-evict no storage-flush-period 10]] {
 
     test { FLASH - GET works after eviction } {
@@ -167,4 +168,4 @@ start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.
     }
 
 }
-
+}

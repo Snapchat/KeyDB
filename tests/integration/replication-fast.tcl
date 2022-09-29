@@ -6,6 +6,7 @@ proc prepare_value {size} {
     return $_v
 }
 
+if {$::flash_enabled} {
 start_server {tags {"replication-fast"} overrides {storage-provider {flash ./rocks.db.master} databases 256}} {
     set slave [srv 0 client]
     set slave_host [srv 0 host]
@@ -31,4 +32,5 @@ start_server {tags {"replication-fast"} overrides {storage-provider {flash ./roc
             $slave replicaof no one
         }
     }
+}
 }

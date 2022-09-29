@@ -8,6 +8,7 @@
 # If reconnect is > 0, the test actually try to break the connection and
 # reconnect with the master, otherwise just the initial synchronization is
 # checked for consistency.
+if {$::flash_enabled} {
 proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reconnect} {
     start_server [list tags {"repl"} overrides [list storage-provider {flash .rocks.db.m} repl-backlog-size 64m]] {
         start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.db} delete-on-evict no storage-flush-period 10]] {
@@ -132,4 +133,5 @@ foreach mdl {no yes} {
         assert {[s -1 sync_partial_err] > 0}
         } $mdl $sdl 1
     }
+}
 }

@@ -43,12 +43,14 @@ start_server {tags {"soft_shutdown"} } {
 start_server {tags {"soft_shutdown"} overrides {soft-shutdown yes} } {
     test {soft shutdown triggered by SIGINT} {
         exec kill -SIGINT [s process_id]
+        after 100
         catch {[r ping]} e
         assert_match {SHUTDOWN PENDING} $e
     }
 
     test {second SIGINT forces a shutdown during a soft shutdown} {
         exec kill -SIGINT [s process_id]
+        after 100
         catch {[r ping]} e
         assert_match {*I/O*} $e
     }

@@ -49,10 +49,13 @@ start_server {tags {"defrag"} overrides {appendonly yes auto-aof-rewrite-percent
             r config set maxmemory 100mb
             r config set maxmemory-policy allkeys-lru
 
-            populate 700000 asdf1 150
-            populate 170000 asdf2 300
-            after 120 ;# serverCron only updates the info once in 100ms
-            set frag [s allocator_frag_ratio]
+	    for {set i 0} {$i < 10} {incr i} {
+                populate 700000 asdf1 150
+                populate 170000 asdf2 300
+                after 120 ;# serverCron only updates the info once in 100ms
+                set frag [s allocator_frag_ratio]
+		if {$frag >= 1.4} {break}
+	    }
             if {$::verbose} {
                 puts "frag $frag"
             }
@@ -507,11 +510,14 @@ start_server {tags {"defrag"} overrides {server-threads 1 active-replica yes} } 
             r config set active-defrag-ignore-bytes 2mb
             r config set maxmemory 100mb
             r config set maxmemory-policy allkeys-lru
-            populate 700000 asdf1 150
-            populate 170000 asdf2 300
-            r ping ;# trigger eviction following the previous population
-            after 120 ;# serverCron only updates the info once in 100ms
-            set frag [s allocator_frag_ratio]
+            for {set i 0} {$i < 10} {incr i} {
+	        populate 700000 asdf1 150
+                populate 170000 asdf2 300
+                r ping ;# trigger eviction following the previous population
+                after 120 ;# serverCron only updates the info once in 100ms
+                set frag [s allocator_frag_ratio]
+                if {$frag >= 1.4} {break}
+            }
             if {$::verbose} {
                 puts "frag $frag"
             }

@@ -2644,7 +2644,10 @@ bool redisDbPersistentData::insert(char *key, robj *o, bool fAssumeNew, dict_ite
         ensure(key);
     dictEntry *de;
     int res = dictAdd(m_pdict, key, o, &de);
-    serverAssert(FImplies(fAssumeNew, res == DICT_OK));
+    if (!FImplies(fAssumeNew, res == DICT_OK)) {
+        serverLog(LL_WARNING,
+            "Assumed new key %s existed in DB.", key);
+    }
     if (res == DICT_OK)
     {
 #ifdef CHECKED_BUILD
@@ -3297,6 +3300,10 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
     auto cmd = lookupCommand(szFromObj(command.argv[0]));
     if (cmd == nullptr)
         return false; // Bad command? It's not for us to judge, just bail
+    
+    if (command.argc < std::abs(cmd->arity))
+        return false; // Invalid number of args
+    
     int numkeys = getKeysFromCommand(cmd, command.argv, command.argc, &result);
     for (int ikey = 0; ikey < numkeys; ++ikey)
     {

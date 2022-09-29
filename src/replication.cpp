@@ -190,7 +190,7 @@ int bg_unlink(const char *filename) {
 bool createDiskBacklog() {
     // Lets create some disk backed pages and add them here
     std::string path = "./repl-backlog-temp" + std::to_string(gettid());
-#ifdef __APPLE__
+#if (defined __APPLE__ || defined __FreeBSD__)
     int fd = open(path.c_str(), O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
 #else
     int fd = open(path.c_str(), O_CREAT | O_RDWR | O_LARGEFILE, S_IRUSR | S_IWUSR);
@@ -1132,6 +1132,14 @@ public:
             replica->repl_put_online_on_ack = 1;
         }
     }
+
+    void abort() {
+        for (auto replica : replicas) {
+            // Close the connection to force a resync
+            freeClientAsync(replica);
+        }
+        replicas.clear();
+    }
 };
 
 int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
@@ -1227,7 +1235,11 @@ int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
                 retval = C_ERR;
                 break;
             }
-            serverAssert(count == snapshotDeclaredCount);
+            if (count != snapshotDeclaredCount) {
+                serverLog(LL_WARNING, "Replication BUG: Count of keys sent does not match actual count.  Aborting full sync.");
+                replBuf.abort();
+                break;
+            }
         }
         
         replBuf.end();

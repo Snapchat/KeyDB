@@ -1999,9 +1999,9 @@ void ProcessPendingAsyncWrites()
          * writes may have been signalled without having been copied to the replyAsync buffer,
          * thus causing the buffer to be NULL */ 
         if (c->replyAsync != nullptr){
-            int size = c->replyAsync->used;
+            size_t size = c->replyAsync->used;
 
-            if (listLength(c->reply) == 0 && size <= (PROTO_REPLY_CHUNK_BYTES - c->bufpos)) {
+            if (listLength(c->reply) == 0 && size <= static_cast<size_t>(PROTO_REPLY_CHUNK_BYTES - c->bufpos)) {
                 memcpy(c->buf + c->bufpos, c->replyAsync->buf(), size);
                 c->bufpos += size;
             } else {

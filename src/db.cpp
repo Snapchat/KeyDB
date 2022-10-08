@@ -1568,6 +1568,12 @@ void moveCommand(client *c) {
         return;
     }
 
+    /* Return zero if the key already exists in the target DB */
+    if (lookupKeyWrite(dst,c->argv[1]) != NULL) {
+        addReply(c,shared.czero);
+        return;
+    }
+
     std::unique_ptr<expireEntry> spexpire;
     {   // scope pexpireOld
     std::unique_lock<fastlock> ul(g_expireLock);
@@ -1582,12 +1588,6 @@ void moveCommand(client *c) {
     dbDelete(src,c->argv[1]);
     g_pserver->dirty++;
 
-    /* Return zero if the key already exists in the target DB */
-    if (lookupKeyWrite(dst,c->argv[1]) != NULL) {
-        addReply(c,shared.czero);
-        decrRefCount(o);
-        return;
-    }
     dbAdd(dst,c->argv[1],o);
     if (spexpire != nullptr) setExpire(c,dst,c->argv[1],std::move(*spexpire));
 

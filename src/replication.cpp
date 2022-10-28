@@ -5652,7 +5652,7 @@ void flushReplBacklogToClients()
 
             /* Only if the there isn't already a pending write do we prepare the client to write */
             if (replica->repl_curr_off == g_pserver->master_repl_offset) {
-                serverLog(LL_NOTICE, "Pending write when it's on repl_offset=%lld", g_pserver->master_repl_offset);
+                serverLog(LL_DEBUG, "Pending write when it's on repl_offset=%lld", g_pserver->master_repl_offset);
                 continue;
             }
             prepareClientToWrite(replica);

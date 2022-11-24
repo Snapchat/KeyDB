@@ -43,6 +43,8 @@ void StorageCache::clear(void(callback)(void*))
 void StorageCache::clearAsync()
 {
     std::unique_lock<fastlock> ul(m_lock);
+    if (count() == 0)
+        return;
     if (m_pdict != nullptr) {
         dict *dSav = m_pdict;
         m_pdict = dictCreate(&dbStorageCacheType, nullptr);

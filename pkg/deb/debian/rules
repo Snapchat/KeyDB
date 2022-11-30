@@ -4,6 +4,7 @@ include /usr/share/dpkg/buildflags.mk
 
 export BUILD_TLS=yes
 export USE_SYSTEMD=yes
+export ENABLE_FLASH=yes
 export CFLAGS CPPFLAGS LDFLAGS
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 export DEB_LDFLAGS_MAINT_APPEND = -ldl -latomic $(LUA_LDFLAGS)

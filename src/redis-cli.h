@@ -97,9 +97,6 @@ extern "C" {
 #define CC_FORCE (1<<0)         /* Re-connect if already connected. */
 #define CC_QUIET (1<<1)         /* Don't log connecting errors. */
 
-struct clusterManagerLink;
-typedef struct clusterManagerLink clusterManagerLink;
-
 /* Dict Helpers */
 
 uint64_t dictSdsHash(const void *key);

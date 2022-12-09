@@ -97,8 +97,7 @@ extern "C" {
 #define CC_FORCE (1<<0)         /* Re-connect if already connected. */
 #define CC_QUIET (1<<1)         /* Don't log connecting errors. */
 
-struct _clusterManagerLink;
-typedef struct _clusterManagerLink clusterManagerLink;
+struct clusterManagerLink;
 
 /* Dict Helpers */
 
@@ -249,12 +248,12 @@ typedef struct clusterManagerReshardTableItem {
 
 /* Info about a cluster internal link. */
 
-typedef struct _clusterManagerLink {
+typedef struct clusterManagerLink {
     sds node_name;
     sds node_addr;
     int connected;
     int handshaking;
-} clusterManagerLink;
+};
 
 typedef struct typeinfo {
     char *name;

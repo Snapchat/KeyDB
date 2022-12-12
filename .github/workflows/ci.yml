@@ -36,7 +36,7 @@ jobs:
           ./runtest-rotation
         
   build-ubuntu-old:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
     steps:
     - uses: actions/checkout@v1
     - name: make -j2

@@ -62,6 +62,7 @@ endif
 endif
 
 USEASM?=true
+ENABLE_FLASH?=no
 
 ifneq ($(strip $(SANITIZE)),)
 	CFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE  -fno-omit-frame-pointer
@@ -70,6 +71,15 @@ ifneq ($(strip $(SANITIZE)),)
 	MALLOC=libc
 	USEASM=false
 endif
+
+ifeq ($(ENABLE_FLASH),yes)
+	FINAL_LIBS+= -lz -lcrypto -lbz2 -lzstd -llz4 -lsnappy
+	CXXFLAGS+= -I../deps/rocksdb/include/ -DENABLE_ROCKSDB
+	STORAGE_OBJ+= storage/rocksdb.o storage/rocksdbfactory.o
+	FINAL_LIBS+= ../deps/rocksdb/librocksdb.a 
+	DEPENDENCY_TARGETS+= rocksdb
+endif
+
 
 ifeq ($(CHECKED),true)
 	CXXFLAGS+= -DCHECKED_BUILD

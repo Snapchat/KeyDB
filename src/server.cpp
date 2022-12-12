@@ -5070,6 +5070,8 @@ bool client::asyncCommand(std::function<void(const redisDbPersistentDataSnapshot
                             std::function<void(const redisDbPersistentDataSnapshot *)> &&postFn) 
 {
     serverAssert(FCorrectThread(this));
+    if (serverTL->in_eval)
+        return false;   // we cannot block clients in EVAL
     const redisDbPersistentDataSnapshot *snapshot = nullptr;
     if (!(this->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
         snapshot = this->db->createSnapshot(this->mvccCheckpoint, false /* fOptional */);

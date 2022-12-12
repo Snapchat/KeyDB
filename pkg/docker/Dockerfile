@@ -77,7 +77,7 @@ RUN \
         mkdir /data && chown keydb:keydb /data; \
         mkdir /flash && chown keydb:keydb /flash; \
         mkdir -p /etc/keydb; \
-        cp /tmp/keydb-internal/keydb.conf /etc/keydb/; \
+        cp /tmp/KeyDB/keydb.conf /etc/keydb/; \
         sed -i 's/^\(daemonize .*\)$/# \1/' /etc/keydb/keydb.conf; \
         sed -i 's/^\(dir .*\)$/# \1\ndir \/data/' /etc/keydb/keydb.conf; \
         sed -i 's/^\(logfile .*\)$/# \1/' /etc/keydb/keydb.conf; \
@@ -110,8 +110,3 @@ ENV KEYDB_PRO_DIRECTORY=/usr/local/bin/
 ENTRYPOINT ["docker-entrypoint.sh"]
 EXPOSE 6379
 CMD ["keydb-server","/etc/keydb/keydb.conf"]
-
-
-
-
-

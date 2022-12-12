@@ -47,6 +47,7 @@ rocksdb::Options RocksDBStorageFactory::RocksDbOptions()
     options.create_if_missing = true;
     options.create_missing_column_families = true;
     options.info_log_level = rocksdb::ERROR_LEVEL;
+    options.max_total_wal_size = 1 * 1024 * 1024 * 1024;
     return options;
 }
 

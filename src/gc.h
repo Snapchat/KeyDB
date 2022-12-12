@@ -16,7 +16,17 @@ class GarbageCollector
     struct EpochHolder
     {
         uint64_t tstamp;
-        std::vector<std::unique_ptr<T>> m_vecObjs;
+        std::unique_ptr<std::vector<std::unique_ptr<T>>> m_spvecObjs;
+
+        EpochHolder() {
+            m_spvecObjs = std::make_unique<std::vector<std::unique_ptr<T>>>();
+        }
+
+        // Support move operators
+        EpochHolder(EpochHolder &&other) = default;
+        EpochHolder &operator=(EpochHolder &&) = default;
+
+
 
         bool operator<(uint64_t tstamp) const
         {
@@ -108,12 +118,12 @@ public:
         {
             EpochHolder e;
             e.tstamp = m_epochNext+1;
-            e.m_vecObjs.push_back(std::move(sp));
+            e.m_spvecObjs->push_back(std::move(sp));
             m_listepochs.emplace_back(std::move(e));
         }
         else
         {
-            itr->m_vecObjs.push_back(std::move(sp));
+            itr->m_spvecObjs->push_back(std::move(sp));
         }
     }
 

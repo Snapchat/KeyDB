@@ -739,6 +739,16 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     }
 }
 
+# Check if we compiled with flash
+set status [catch {exec src/keydb-server --is-flash-enabled}]
+if {$status == 0} {
+    puts "KeyDB was built with FLASH, including FLASH tests"
+    set ::flash_enabled 1
+} else {
+    puts "KeyDB was not built with FLASH.  Excluding FLASH tests"
+    set ::flash_enabled 0
+}
+
 set filtered_tests {}
 
 # Set the filtered tests to be the short list (single_tests) if exists.

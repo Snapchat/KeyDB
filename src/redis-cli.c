@@ -5485,8 +5485,8 @@ static int clusterManagerCommandRebalance(int argc, char **argv) {
             listAddNodeTail(lsrc, src);
             table = clusterManagerComputeReshardTable(lsrc, numslots);
             listRelease(lsrc);
-            int table_len = (int) listLength(table);
-            if (!table || table_len != numslots) {
+            int table_len = 0;
+            if (!table || (table_len = (int) listLength(table)) != numslots) {
                 clusterManagerLogErr("*** Assertion failed: Reshard table "
                                      "!= number of slots");
                 result = 0;

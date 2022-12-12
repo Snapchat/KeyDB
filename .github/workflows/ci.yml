@@ -44,7 +44,8 @@ jobs:
     - name: make -j2
       run: | 
         sudo apt-get update
-        sudo apt-get -y install uuid-dev libcurl4-openssl-dev
+        sudo apt-get -y remove libzstd || true
+        sudo apt-get -y install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
         make -j2
 
   build-macos-latest:
@@ -65,7 +66,8 @@ jobs:
     - name: make
       run: |
           sudo apt-get update
-          sudo apt-get -y install uuid-dev libcurl4-openssl-dev
+          sudo apt-get -y remove libzstd || true
+          sudo apt-get -y install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
           make KEYDB_CFLAGS='-Werror' KEYDB_CXXFLAGS='-Werror' MALLOC=libc -j2
   build-ubuntu-32bit:
     runs-on: ubuntu-latest

@@ -1,2 +1,0 @@
-PAT_ID=
-TOKEN=

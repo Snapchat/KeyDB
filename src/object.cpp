@@ -1091,7 +1091,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
     mem_total += g_pserver->initial_memory_usage;
 
     mem = 0;
-    if (g_pserver->repl_backlog)
+    if (g_pserver->repl_backlog && g_pserver->repl_backlog != g_pserver->repl_backlog_disk)
         mem += zmalloc_size(g_pserver->repl_backlog);
     mh->repl_backlog = mem;
     mem_total += mem;
@@ -1140,7 +1140,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
               db->size() * sizeof(robj);
         mh->db[mh->num_dbs].overhead_ht_main = mem;
         mem_total+=mem;
-
+        
         std::unique_lock<fastlock> ul(g_expireLock);
         mem = db->setexpire()->estimated_bytes_used();
         mh->db[mh->num_dbs].overhead_ht_expires = mem;

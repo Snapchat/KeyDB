@@ -205,6 +205,7 @@ void StorageCache::beginWriteBatch() {
 }
 
 void StorageCache::emergencyFreeCache() {
+    std::unique_lock<fastlock> ul(m_lock);
     dict *d = m_pdict;
     m_pdict = nullptr;
     if (d != nullptr) {

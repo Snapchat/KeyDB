@@ -355,11 +355,17 @@ bool initializeStorageProvider(const char **err)
             return true;
         if (!strcasecmp(g_sdsProvider, "flash") && g_sdsArgs != nullptr)
         {
+#ifdef ENABLE_ROCKSDB
             // Create The Storage Factory (if necessary)
             serverLog(LL_NOTICE, "Initializing FLASH storage provider (this may take a long time)");
             adjustOpenFilesLimit();
             g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(g_sdsArgs, cserver.dbnum, cserver.storage_conf, cserver.storage_conf ? strlen(cserver.storage_conf) : 0);
-        }
+#else
+            serverLog(LL_WARNING, "To use the flash storage provider please compile KeyDB with ENABLE_FLASH=yes");
+            serverLog(LL_WARNING, "Exiting due to the use of an unsupported storage provider");
+            exit(EXIT_FAILURE);
+#endif
+	    }
         else if (!strcasecmp(g_sdsProvider, "test") && g_sdsArgs == nullptr)
         {
             g_pserver->m_pstorageFactory = new (MALLOC_LOCAL) TestStorageFactory();
@@ -761,6 +767,12 @@ void loadServerConfigFromString(char *config) {
             g_sdsProvider = sdsdup(argv[1]);
             if (argc > 2)
                 g_sdsArgs = sdsdup(argv[2]);
+	    } else if (!strcasecmp(argv[0],"is-flash-enabled") && argc == 1) {
+#ifdef ENABLE_ROCKSDB
+            exit(EXIT_SUCCESS);
+#else
+            exit(EXIT_FAILURE);
+#endif
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }

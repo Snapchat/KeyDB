@@ -21,6 +21,10 @@ RUN set -eux; \
                 bash \
                 perl \
                 git \
+                bzip2-dev \
+                zstd-dev \
+                lz4-dev \
+                snappy-dev \
         ; \
         cd /tmp && git clone --branch $BRANCH https://github.com/Snapchat/KeyDB.git --recursive; \
         cd /tmp/KeyDB; \

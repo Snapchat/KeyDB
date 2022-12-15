@@ -1577,7 +1577,7 @@ char *stringFromLongLong(long long value) {
     int len;
     char *s;
 
-    len = sprintf(buf,"%lld",value);
+    len = snprintf(buf,32,"%lld",value);
     s = zmalloc(len+1);
     memcpy(s, buf, len);
     s[len] = '\0';

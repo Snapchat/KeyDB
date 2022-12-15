@@ -1142,7 +1142,7 @@ public:
     }
 };
 
-int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
+int rdbSaveSnapshotForReplication(rdbSaveInfo *rsi) {
     // TODO: This needs to be on a background thread
     int retval = C_OK;
     serverAssert(GlobalLocksAcquired());

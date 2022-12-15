@@ -2587,7 +2587,7 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
         adjustOpenFilesLimit();
         if (g_pserver->maxclients != val) {
             static char msg[128];
-            sprintf(msg, "The operating system is not able to handle the specified number of clients, try with %d", g_pserver->maxclients);
+            snprintf(msg, 128, "The operating system is not able to handle the specified number of clients, try with %d", g_pserver->maxclients);
             *err = msg;
             if (g_pserver->maxclients > prev) {
                 g_pserver->maxclients = prev;
@@ -2626,7 +2626,7 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
 
                 if (res != AE_OK){
                     static char msg[128];
-                    sprintf(msg, "Failed to post the request to change setsize for Thread %d", iel);
+                    snprintf(msg, 128,"Failed to post the request to change setsize for Thread %d", iel);
                     *err = msg;
                     return 0;
                 }

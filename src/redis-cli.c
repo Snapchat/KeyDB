@@ -6835,17 +6835,17 @@ void bytesToHuman(char *s, long long n) {
     }
     if (n < 1024) {
         /* Bytes */
-        sprintf(s,"%lldB",n);
+        snprintf(s,256,"%lldB",n);
         return;
     } else if (n < (1024*1024)) {
         d = (double)n/(1024);
-        sprintf(s,"%.2fK",d);
+        snprintf(s,256,"%.2fK",d);
     } else if (n < (1024LL*1024*1024)) {
         d = (double)n/(1024*1024);
-        sprintf(s,"%.2fM",d);
+        snprintf(s,256,"%.2fM",d);
     } else if (n < (1024LL*1024*1024*1024)) {
         d = (double)n/(1024LL*1024*1024);
-        sprintf(s,"%.2fG",d);
+        snprintf(s,256,"%.2fG",d);
     }
 }
 
@@ -6875,12 +6875,12 @@ static void statMode(void) {
         for (j = 0; j < 20; j++) {
             long k;
 
-            sprintf(buf,"db%d:keys",j);
+            snprintf(buf,64,"db%d:keys",j);
             k = getLongInfoField(reply->str,buf);
             if (k == LONG_MIN) continue;
             aux += k;
         }
-        sprintf(buf,"%ld",aux);
+        snprintf(buf,64,"%ld",aux);
         printf("%-11s",buf);
 
         /* Used memory */
@@ -6890,23 +6890,23 @@ static void statMode(void) {
 
         /* Clients */
         aux = getLongInfoField(reply->str,"connected_clients");
-        sprintf(buf,"%ld",aux);
+        snprintf(buf,64,"%ld",aux);
         printf(" %-8s",buf);
 
         /* Blocked (BLPOPPING) Clients */
         aux = getLongInfoField(reply->str,"blocked_clients");
-        sprintf(buf,"%ld",aux);
+        snprintf(buf,64,"%ld",aux);
         printf("%-8s",buf);
 
         /* Requests */
         aux = getLongInfoField(reply->str,"total_commands_processed");
-        sprintf(buf,"%ld (+%ld)",aux,requests == 0 ? 0 : aux-requests);
+        snprintf(buf,64,"%ld (+%ld)",aux,requests == 0 ? 0 : aux-requests);
         printf("%-19s",buf);
         requests = aux;
 
         /* Connections */
         aux = getLongInfoField(reply->str,"total_connections_received");
-        sprintf(buf,"%ld",aux);
+        snprintf(buf,64,"%ld",aux);
         printf(" %-12s",buf);
 
         /* Children */

@@ -112,15 +112,15 @@ int endianconvTest(int argc, char *argv[], int accurate) {
     UNUSED(argv);
     UNUSED(accurate);
 
-    sprintf(buf,"ciaoroma");
+    snprintf(buf,32,"ciaoroma");
     memrev16(buf);
     printf("%s\n", buf);
 
-    sprintf(buf,"ciaoroma");
+    snprintf(buf,32,"ciaoroma");
     memrev32(buf);
     printf("%s\n", buf);
 
-    sprintf(buf,"ciaoroma");
+    snprintf(buf,32,"ciaoroma");
     memrev64(buf);
     printf("%s\n", buf);
 

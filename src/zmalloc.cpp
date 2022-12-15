@@ -521,7 +521,7 @@ int jemalloc_purge() {
     unsigned narenas = 0;
     size_t sz = sizeof(unsigned);
     if (!je_mallctl("arenas.narenas", &narenas, &sz, NULL, 0)) {
-        sprintf(tmp, "arena.%d.purge", narenas);
+        snprintf(tmp, 32, "arena.%d.purge", narenas);
         if (!je_mallctl(tmp, NULL, 0, NULL, 0))
             return 0;
     }

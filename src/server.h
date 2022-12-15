@@ -1909,6 +1909,12 @@ struct MasterSaveInfo {
             masterhost = sdsstring(sdsdup(mi.masterhost));
         masterport = mi.masterport;
     }
+    MasterSaveInfo(const MasterSaveInfo &other) {
+        masterhost = other.masterhost;
+        masterport = other.masterport;
+        memcpy(master_replid, other.master_replid, sizeof(master_replid));
+        master_initial_offset = other.master_initial_offset;
+    }
 
     MasterSaveInfo &operator=(const MasterSaveInfo &other) {
         masterhost = other.masterhost;

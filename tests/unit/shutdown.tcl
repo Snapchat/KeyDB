@@ -20,7 +20,6 @@ start_server {tags {"shutdown"}} {
         catch {set rd [redis_deferring_client]} e
         assert_match {*connection refused*} $e
 
-        after 100
         # Temp rdb file must be deleted
         assert {![file exists $temp_rdb]}
     }

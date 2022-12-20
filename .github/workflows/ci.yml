@@ -21,7 +21,7 @@ jobs:
     - name: test-tls
       run: |
         sudo apt-get -y install tcl tcl-tls
-        ./runtest --clients 2 --verbose --tls
+        ./runtest --clients 2 --verbose --tls --server-threads 3
     - name: cluster-test
       run: |
         ./runtest-cluster --tls

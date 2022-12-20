@@ -104,6 +104,12 @@ Avoid forwarding RREPLAY messages to other masters? WARNING: This setting is dan
 If you would like KeyDB to dump and load directly to AWS S3 this option specifies the bucket.  Using this option with the traditional RDB options will result in KeyDB backing up twice to both locations.  If both are specified KeyDB will first attempt to load from the local dump file and if that fails load from S3.  This requires the AWS CLI tools to be installed and configured which are used under the hood to transfer the data.
 
 
+```
+storage-provider flash /path/to/flash
+```
+If you would like to use KeyDB FLASH storage, specify the storage medium followed by the directory path on your local SSD volume. Note that this feature is still considered experimental and should be used with discretion. See [FLASH Documentation](https://docs.keydb.dev/docs/flash) for more details on configuration and setting up your FLASH volume. 
+
+
 Building KeyDB
 --------------
 
@@ -144,6 +150,12 @@ installed):
 
     % ./utils/gen-test-certs.sh
     % ./runtest --tls
+
+To build with KeyDB FLASH support, use:
+
+    % make ENABLE_FLASH=yes
+
+***Note that the KeyDB FLASH feature is considered experimental (beta) and should used with discretion
 
 
 Fixing build problems with dependencies or cached build options

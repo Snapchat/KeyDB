@@ -21,10 +21,10 @@ jobs:
     - name: test-tls
       run: |
         sudo apt-get -y install tcl tcl-tls
-        ./runtest --clients 2 --verbose --tls
+        ./runtest --clients 1 --verbose --tls --config server-threads 3
     - name: cluster-test
       run: |
-        ./runtest-cluster --tls
+        ./runtest-cluster --tls --config server-threads 3
     - name: sentinel test
       run: |
           ./runtest-sentinel

@@ -19,6 +19,11 @@ elif [ "$distributor" == "Ubuntu" ]; then
 fi
 codename=$(lsb_release --codename --short)
 date=$(date +%a," "%d" "%b" "%Y" "%T)
+
+# overwrite debian bookworm version until updated
+if [ $codename == "bookworm" ]; then
+    distname=+deb12u1
+fi
 pkg_name=keydb-$majorv:$version$distname
 
 # create build tree

@@ -5167,7 +5167,7 @@ int prepareForShutdown(int flags) {
          * to unlink file actully) in background thread.
          * The temp rdb file fd may won't be closed when redis exits quickly,
          * but OS will close this fd when process exits. */
-        rdbRemoveTempFile(g_pserver->child_pid, 0);
+        rdbRemoveTempFile(g_pserver->child_pid, 1);
     }
 
     /* Kill module child if there is one. */

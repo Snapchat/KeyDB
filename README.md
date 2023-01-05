@@ -4,7 +4,7 @@
 
 ##### KeyDB is now a part of Snap Inc! Check out the announcement [here](https://docs.keydb.dev/news/2022/05/12/keydb-joins-snap) 
 
-##### [Release v6.3.0](https://github.com/EQ-Alpha/KeyDB/releases/tag/v6.3.0) is here with major improvements as we consolodate our Open Source and Enterprise offerings into a single BSD-3 licensed project. See our [roadmap](https://docs.keydb.dev/docs/coming-soon) for details. 
+##### [Release v6.3.0](https://github.com/EQ-Alpha/KeyDB/releases/tag/v6.3.0) is here with major improvements as we consolidate our Open Source and Enterprise offerings into a single BSD-3 licensed project. See our [roadmap](https://docs.keydb.dev/docs/coming-soon) for details. 
 
 ##### Want to extend KeyDB with Javascript?  Try [ModJS](https://github.com/JohnSully/ModJS)
 
@@ -37,7 +37,7 @@ Because of this difference of opinion features which are right for KeyDB may not
 Project Support
 -------------------
 
-The KeyDB team maintains this project as part of Snap Inc. KeyDB is used by Snap as part of its caching infrastructure and is fully open sourced. There is no separate commercial product and no paid support options available. We really value collaborating with the open source community and welcome PRs, bug reports, and open discussion. For community support or to get involved further with the project check out our community support options [here](https://docs.keydb.dev/docs/support) (slack, forum, meetup, github issues). Our team monitors these channlels regularly.
+The KeyDB team maintains this project as part of Snap Inc. KeyDB is used by Snap as part of its caching infrastructure and is fully open sourced. There is no separate commercial product and no paid support options available. We really value collaborating with the open source community and welcome PRs, bug reports, and open discussion. For community support or to get involved further with the project check out our community support options [here](https://docs.keydb.dev/docs/support) (slack, forum, meetup, github issues). Our team monitors these channels regularly.
 
 
 Additional Resources

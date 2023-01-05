@@ -2629,9 +2629,9 @@ void clusterSendPing(clusterLink *link, int type) {
      * Since we have non-voting slaves that lower the probability of an entry
      * to feature our node, we set the number of entries per packet as
      * 10% of the total nodes we have. */
-    wanted = floor(dictSize(g_pserver->cluster->nodes));
+    wanted = floor(dictSize(g_pserver->cluster->nodes)/10);
     if (wanted < 3) wanted = 3;
-    //if (wanted > freshnodes) wanted = freshnodes;
+    if (wanted > freshnodes) wanted = freshnodes;
 
     /* Include all the nodes in PFAIL state, so that failure reports are
      * faster to propagate to go from PFAIL to FAIL state. */

@@ -26,7 +26,6 @@ test "Cluster nodes are reachable" {
 }
 
 test "Cluster nodes hard reset" {
-    after 60000
     foreach_redis_id id {
         if {$::valgrind} {
             set node_timeout 10000

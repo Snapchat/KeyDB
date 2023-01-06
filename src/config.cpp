@@ -360,6 +360,18 @@ bool initializeStorageProvider(const char **err)
             serverLog(LL_NOTICE, "Initializing FLASH storage provider (this may take a long time)");
             adjustOpenFilesLimit();
             g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(g_sdsArgs, cserver.dbnum, cserver.storage_conf, cserver.storage_conf ? strlen(cserver.storage_conf) : 0);
+            if (g_pserver->config_notify_flash_load) {
+                moduleFireServerEvent(REDISMODULE_EVENT_LOADING, REDISMODULE_SUBEVENT_LOADING_FLASH_START, NULL);
+                for (int idb = 0; idb < cserver.dbnum; ++idb) {
+                    auto spsnapshot = g_pserver->db[idb]->CloneStorageCache();
+                    spsnapshot->enumerate([idb](const char *rgchKey, size_t cchKey, const void *, size_t) -> bool {
+                        robj *keyobj = createEmbeddedStringObject(rgchKey, cchKey); 
+                        moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", keyobj, idb);
+                        return true;
+                    });
+                }
+                moduleFireServerEvent(REDISMODULE_EVENT_LOADING, REDISMODULE_SUBEVENT_LOADING_ENDED, NULL);
+            }
 #else
             serverLog(LL_WARNING, "To use the flash storage provider please compile KeyDB with ENABLE_FLASH=yes");
             serverLog(LL_WARNING, "Exiting due to the use of an unsupported storage provider");
@@ -2910,6 +2922,7 @@ standardConfig configs[] = {
     createBoolConfig("allow-write-during-load", NULL, MODIFIABLE_CONFIG, g_pserver->fWriteDuringActiveLoad, 0, NULL, NULL),
     createBoolConfig("force-backlog-disk-reserve", NULL, MODIFIABLE_CONFIG, cserver.force_backlog_disk, 0, NULL, NULL),
     createBoolConfig("soft-shutdown", NULL, MODIFIABLE_CONFIG, g_pserver->config_soft_shutdown, 0, NULL, NULL),
+    createBoolConfig("module-notify-flash-load", NULL, MODIFIABLE_CONFIG, g_pserver->config_notify_flash_load, 0, NULL, NULL),
 
 #ifdef USE_OPENSSL
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->tls_port, 0, INTEGER_CONFIG, NULL, updateTLSPort), /* TCP port. */

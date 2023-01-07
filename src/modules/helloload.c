@@ -54,13 +54,13 @@ void loadCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *d
     }
 }
 
-void loadKeyCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void loadKeyCallback(RedisModuleCtx *ctx, int type,  const char *event, RedisModuleString *key)
 {
     REDISMODULE_NOT_USED(ctx);
-    REDISMODULE_NOT_USED(e);
-    REDISMODULE_NOT_USED(data);
+    REDISMODULE_NOT_USED(type);
+    REDISMODULE_NOT_USED(event);
 
-    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE, "Loaded key: %s", data);
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE, "Loaded key: %s", key);
 
     count++;
 }

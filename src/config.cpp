@@ -360,19 +360,6 @@ bool initializeStorageProvider(const char **err)
             serverLog(LL_NOTICE, "Initializing FLASH storage provider (this may take a long time)");
             adjustOpenFilesLimit();
             g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(g_sdsArgs, cserver.dbnum, cserver.storage_conf, cserver.storage_conf ? strlen(cserver.storage_conf) : 0);
-            if (g_pserver->config_notify_flash_load) {
-                moduleFireServerEvent(REDISMODULE_EVENT_LOADING, REDISMODULE_SUBEVENT_LOADING_FLASH_START, NULL);
-                for (int idb = 0; idb < cserver.dbnum; ++idb) {
-                    auto spsnapshot = g_pserver->db[idb]->CloneStorageCache();
-                    spsnapshot->enumerate([idb](const char *rgchKey, size_t cchKey, const void *, size_t) -> bool {
-                        robj *keyobj = createEmbeddedStringObject(rgchKey, cchKey); 
-                        serverLog(LL_NOTICE, "Loaded key %.*s", cchKey, rgchKey);
-                        moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", keyobj, idb);
-                        return true;
-                    });
-                }
-                moduleFireServerEvent(REDISMODULE_EVENT_LOADING, REDISMODULE_SUBEVENT_LOADING_ENDED, NULL);
-            }
 #else
             serverLog(LL_WARNING, "To use the flash storage provider please compile KeyDB with ENABLE_FLASH=yes");
             serverLog(LL_WARNING, "Exiting due to the use of an unsupported storage provider");

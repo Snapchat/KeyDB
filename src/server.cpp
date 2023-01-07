@@ -6953,6 +6953,19 @@ void loadDataFromDisk(void) {
 
     if (g_pserver->m_pstorageFactory)
     {
+        if (g_pserver->config_notify_flash_load) {
+            moduleFireServerEvent(REDISMODULE_EVENT_LOADING, REDISMODULE_SUBEVENT_LOADING_FLASH_START, NULL);
+            for (int idb = 0; idb < cserver.dbnum; ++idb) {
+                auto spsnapshot = g_pserver->db[idb]->CloneStorageCache();
+                spsnapshot->enumerate([idb](const char *rgchKey, size_t cchKey, const void *, size_t) -> bool {
+                    robj *keyobj = createEmbeddedStringObject(rgchKey, cchKey); 
+                    serverLog(LL_NOTICE, "Loaded key %.*s", cchKey, rgchKey);
+                    moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", keyobj, idb);
+                    return true;
+                });
+            }
+            moduleFireServerEvent(REDISMODULE_EVENT_LOADING, REDISMODULE_SUBEVENT_LOADING_ENDED, NULL);
+        }
         for (int idb = 0; idb < cserver.dbnum; ++idb)
         {
             if (g_pserver->db[idb]->size() > 0)

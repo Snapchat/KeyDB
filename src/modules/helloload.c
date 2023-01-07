@@ -60,6 +60,8 @@ void loadKeyCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void
     REDISMODULE_NOT_USED(e);
     REDISMODULE_NOT_USED(data);
 
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE, "Loaded key: %s", data);
+
     count++;
 }
 

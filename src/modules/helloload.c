@@ -60,6 +60,8 @@ int loadKeyCallback(RedisModuleCtx *ctx, int type,  const char *event, RedisModu
     REDISMODULE_NOT_USED(type);
     REDISMODULE_NOT_USED(event);
 
+    const char *keyname = RedisModule_StringPtrLen(key, NULL);
+
     RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE, "Loaded key: %s", key);
 
     count++;

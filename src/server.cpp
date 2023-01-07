@@ -6958,8 +6958,7 @@ void loadDataFromDisk(void) {
             for (int idb = 0; idb < cserver.dbnum; ++idb) {
                 auto spsnapshot = g_pserver->db[idb]->CloneStorageCache();
                 spsnapshot->enumerate([idb](const char *rgchKey, size_t cchKey, const void *, size_t) -> bool {
-                    robj *keyobj = createEmbeddedStringObject(rgchKey, cchKey); 
-                    serverLog(LL_NOTICE, "Loaded key %.*s", cchKey, rgchKey);
+                    robj *keyobj = createEmbeddedStringObject(rgchKey, cchKey);
                     moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", keyobj, idb);
                     return true;
                 });

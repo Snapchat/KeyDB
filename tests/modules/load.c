@@ -66,13 +66,13 @@ int loadKeyCallback(RedisModuleCtx *ctx, int type,  const char *event, RedisModu
     return 0;
 }
 
-int LoadCheck_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int LoadCount_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     REDISMODULE_NOT_USED(argv);
     RedisModule_AutoMemory(ctx); /* Use automatic memory management. */
 
     if (argc != 1) return RedisModule_WrongArity(ctx);
 
-    RedisModule_ReplyWithLongLong(ctx, RedisModule_DbSize(ctx) == finalCount);
+    RedisModule_ReplyWithLongLong(ctx, finalCount);
 
     return REDISMODULE_OK;
 }
@@ -91,8 +91,8 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
     RedisModule_SubscribeToKeyspaceEvents(ctx,
         REDISMODULE_NOTIFY_LOADED, loadKeyCallback);
 
-    if (RedisModule_CreateCommand(ctx,"load.check",
-        LoadCheck_RedisCommand,"readonly",1,1,1) == REDISMODULE_ERR)
+    if (RedisModule_CreateCommand(ctx,"load.count",
+        LoadCount_RedisCommand,"readonly",1,1,1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
     return REDISMODULE_OK;
 }

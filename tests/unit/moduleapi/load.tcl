@@ -9,7 +9,7 @@ if {$::flash_enabled} {
     }
     start_server {tags {"modules"} overrides {storage-provider {flash ./rocks.db.master} databases 256}} {
         test "Module is notified of keys loaded from flash" {
-            r load.check
-        } {1}
+            assert_equal [r load.count] [r dbsize]
+        }
     }
 }

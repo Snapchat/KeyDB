@@ -31,11 +31,7 @@
  */
 
 #define REDISMODULE_EXPERIMENTAL_API
-#include "../redismodule.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <ctype.h>
-#include <string.h>
+#include "redismodule.h"
 
 size_t count, finalCount;
 

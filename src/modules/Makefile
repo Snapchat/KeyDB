@@ -58,7 +58,5 @@ helloacl.xo: ../redismodule.h
 helloacl.so: helloacl.xo
 	$(LD) -o $@ $< $(SHOBJ_LDFLAGS) $(LIBS) -lc
 
-helloload.xo: ../redismodule.h
-
 clean:
 	rm -rf *.xo *.so

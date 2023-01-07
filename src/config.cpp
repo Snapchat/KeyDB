@@ -366,6 +366,7 @@ bool initializeStorageProvider(const char **err)
                     auto spsnapshot = g_pserver->db[idb]->CloneStorageCache();
                     spsnapshot->enumerate([idb](const char *rgchKey, size_t cchKey, const void *, size_t) -> bool {
                         robj *keyobj = createEmbeddedStringObject(rgchKey, cchKey); 
+                        serverLog(LL_NOTICE, "Loaded key %.s", cchKey, rhchKey);
                         moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", keyobj, idb);
                         return true;
                     });

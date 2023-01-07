@@ -87,7 +87,7 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
     RedisModule_SubscribeToKeyspaceEvents(ctx,
         REDISMODULE_NOTIFY_LOADED, loadKeyCallback);
 
-    if (RedisModule_CreateCommand(ctx,"load.count",
+    if (RedisModule_CreateCommand(ctx, "load.count",
         LoadCount_RedisCommand,"readonly",1,1,1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
     return REDISMODULE_OK;

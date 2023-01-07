@@ -66,7 +66,7 @@ int loadKeyCallback(RedisModuleCtx *ctx, int type,  const char *event, RedisModu
     return 0;
 }
 
-int HelloLoadCheck_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int LoadCheck_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     REDISMODULE_NOT_USED(argv);
     RedisModule_AutoMemory(ctx); /* Use automatic memory management. */
 
@@ -83,7 +83,7 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
     REDISMODULE_NOT_USED(argv);
     REDISMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx,"hellohook",1,REDISMODULE_APIVER_1)
+    if (RedisModule_Init(ctx,"load",1,REDISMODULE_APIVER_1)
         == REDISMODULE_ERR) return REDISMODULE_ERR;
 
     RedisModule_SubscribeToServerEvent(ctx,
@@ -91,8 +91,8 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
     RedisModule_SubscribeToKeyspaceEvents(ctx,
         REDISMODULE_NOTIFY_LOADED, loadKeyCallback);
 
-    if (RedisModule_CreateCommand(ctx,"helloload.check",
-        HelloLoadCheck_RedisCommand,"readonly",1,1,1) == REDISMODULE_ERR)
+    if (RedisModule_CreateCommand(ctx,"load.check",
+        LoadCheck_RedisCommand,"readonly",1,1,1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
     return REDISMODULE_OK;
 }

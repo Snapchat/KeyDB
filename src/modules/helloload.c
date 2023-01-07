@@ -37,11 +37,10 @@
 #include <ctype.h>
 #include <string.h>
 
-int count, finalCount;
+size_t count, finalCount;
 
 /* Client state change callback. */
-void loadCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
-{
+void loadCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data) {
     REDISMODULE_NOT_USED(ctx);
     REDISMODULE_NOT_USED(e);
     REDISMODULE_NOT_USED(data);
@@ -54,8 +53,7 @@ void loadCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *d
     }
 }
 
-int loadKeyCallback(RedisModuleCtx *ctx, int type,  const char *event, RedisModuleString *key)
-{
+int loadKeyCallback(RedisModuleCtx *ctx, int type,  const char *event, RedisModuleString *key) {
     REDISMODULE_NOT_USED(ctx);
     REDISMODULE_NOT_USED(type);
     REDISMODULE_NOT_USED(event);
@@ -69,6 +67,7 @@ int loadKeyCallback(RedisModuleCtx *ctx, int type,  const char *event, RedisModu
 }
 
 int HelloLoadCheck_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    REDISMODULE_NOT_USED(argv);
     RedisModule_AutoMemory(ctx); /* Use automatic memory management. */
 
     if (argc != 1) return RedisModule_WrongArity(ctx);

@@ -1,6 +1,7 @@
 [submodule "deps/rocksdb"]
 	path = deps/rocksdb
-	url = https://github.com/facebook/rocksdb.git
+	url = https://github.com/msotheeswaran/rocksdb.git
+	branch = keydb_6_3_2
 [submodule "deps/depot_tools"]
 	path = deps/depot_tools
 	url = https://chromium.googlesource.com/chromium/tools/depot_tools.git

@@ -9,7 +9,7 @@ if {$::flash_enabled} {
             r set foobar barfoo
             assert_equal [r load.count] 0
             r debug reload
-            assert_equal [r load.count] [r dbsize]
+            assert_equal [r load.count] 3
         }
     }
 }

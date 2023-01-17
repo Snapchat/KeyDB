@@ -194,8 +194,8 @@ void sortCommand(client *c) {
     list *operations;
     unsigned int outputlen = 0;
     int desc = 0, alpha = 0;
-    long limit_start = 0, limit_count = -1, start, end;
-    int j, dontsort = 0, vectorlen;
+    long limit_start = 0, limit_count = -1, start, end, vectorlen;
+    int j, dontsort = 0;
     int getop = 0; /* GET operation counter */
     int int_conversion_error = 0;
     int syntax_error = 0;
@@ -323,8 +323,8 @@ void sortCommand(client *c) {
 
     /* Perform LIMIT start,count sanity checking.
      * And avoid integer overflow by limiting inputs to object sizes. */
-    start = min(max(limit_start, 0), vectorlen);
-    limit_count = min(max(limit_count, -1), vectorlen);
+    start = std::min(std::max(limit_start, (long)0), vectorlen);
+    limit_count = std::min(std::max(limit_count, (long)-1), vectorlen);
     end = (limit_count < 0) ? vectorlen-1 : start+limit_count-1;
     if (start >= vectorlen) {
         start = vectorlen-1;

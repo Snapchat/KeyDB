@@ -1,3 +1,27 @@
+keydb (6:6.3.2-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * This release contains Beta level support for KeyDB FLASH, new ASYNC commands, latency improvements and a number of bug fixes. 
+  * KeyDB FLASH is included as a Beta feature. FLASH allows KeyDB to persist data to the storage medium it is written to, avoiding the need for AOF/RDB files. KeyDB uses rocksdb as the persistent storage provider and can be enabled with config "storage-provider flash /path/to/rocksdb/output". Read more at https://docs.keydb.dev/docs/flash/
+  * In addition to GET/MGET, ASYNC support has been added for the following commands: HGET, HMGET, HKEYS, HVALS, HGETALL, HSCAN and can be enable with config "enable-async-commands yes”
+  * Packaging support for Ubuntu 22.04 (Jammy) and Debian 12 (Bookworm) has been included with this release
+  * Added new soft shutdown feature, can be enabled with config "soft-shutdown yes".
+  * If soft shutdown is enabled, instead of shutting down right away, the server will wait until all clients have disconnected, and will reject all new connection attempts.
+  * Fixed memory leak with tls certificates when tls allowlist is enabled
+  * Fixed bug in rdb load with flash enabled to ensure all dbs are safe to load (previously only checked db[0])
+  * Fixed race conditions in rdb load and replication
+  * Fixed memory access of rdb file after it should have been deleted
+  * Fixed integer overflow bug in flash(Issue #486)
+  * Improve TLS latency by queueing new commands before executing instead of after
+  * Removed O(n) count of memory usage from info command(replaced by O(1) estimate)
+  * Improved latency of clearing large number of flash DBs(Thanks to Paul Chen for this fix)(Issue #516)
+  * replaced sprintf with snprintf to avoid potential security bugs
+  * Fixed bug where a failed move due to key already existing in move target would result in the key being removed from move source(Thanks to Paul Chen for this fix)(Issue #497)
+  * Fixed usage of deprecated OpenSSL api in OpenSSL v>3.0.1(Issue #392)
+  * Imported security fixes from Redis (CVE-2023-22458 CVE-2022-35977)
+  * Other fixed issues: #480 #477 #454 #452 #303 #425 #492 #541
+
+-- Ben Schermel <ben@eqalpha.com>  Fri, 20 Jan 2023 20:00:37 +0000
+
 keydb (6:6.3.1-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * This point release contains fixes to bugs related to expires, active-rep, and rdb saving

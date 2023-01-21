@@ -3,6 +3,7 @@
 #include <memory>
 #include "../IStorage.h"
 #include <rocksdb/db.h>
+#include <rocksdb/utilities/write_batch_with_index.h>
 #include "../fastlock.h"
 
 #define INTERNAL_KEY_PREFIX "\x00\x04\x03\x00\x05\x02\x04"
@@ -15,7 +16,7 @@ class RocksDBStorageProvider : public IStorage
 {
     RocksDBStorageFactory *m_pfactory;
     std::shared_ptr<rocksdb::DB> m_spdb;    // Note: This must be first so it is deleted last
-    std::unique_ptr<rocksdb::WriteBatch> m_spbatch;
+    std::unique_ptr<rocksdb::WriteBatchWithIndex> m_spbatch;
     const rocksdb::Snapshot *m_psnapshot = nullptr;
     std::shared_ptr<rocksdb::ColumnFamilyHandle> m_spcolfamily;
     rocksdb::ReadOptions m_readOptionsTemplate;

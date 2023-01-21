@@ -100,14 +100,14 @@ bool RocksDBStorageProvider::erase(const char *key, size_t cchKey)
 {
     rocksdb::Status status;
     std::unique_lock<fastlock> l(m_lock);
+    if (!FKeyExists(key, cchKey))
+        return false;
     if (m_spbatch != nullptr)
     {
         status = m_spbatch->Delete(m_spcolfamily.get(), rocksdb::Slice(key, cchKey));
     }
     else
     {
-        if (!FKeyExists(key, cchKey))
-            return false;
         status = m_spdb->Delete(WriteOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cchKey));
     }
     if (status.ok())
@@ -202,12 +202,12 @@ rocksdb::WriteOptions RocksDBStorageProvider::WriteOptions() const
 void RocksDBStorageProvider::beginWriteBatch()
 {
     m_lock.lock();
-    m_spbatch = std::make_unique<rocksdb::WriteBatch>();
+    m_spbatch = std::make_unique<rocksdb::WriteBatchWithIndex>();
 }
 
 void RocksDBStorageProvider::endWriteBatch()
 {
-    m_spdb->Write(WriteOptions(), m_spbatch.get());
+    m_spdb->Write(WriteOptions(), m_spbatch.get()->GetWriteBatch());
     m_spbatch = nullptr;
     m_lock.unlock();
 }
@@ -230,5 +230,7 @@ void RocksDBStorageProvider::flush()
 bool RocksDBStorageProvider::FKeyExists(const char *key, size_t cch) const
 {
     rocksdb::PinnableSlice slice;
+    if (m_spbatch)
+        return m_spbatch->GetFromBatchAndDB(m_spdb.get(), ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cch), &slice).ok();
     return m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cch), &slice).ok();
 }

@@ -322,7 +322,7 @@ handle_wrap:
     return 1;
 }
 
-int checkSignedBitfieldOverflow(int64_t value, int64_t incr, uint64_t bits, int owtype, int64_t *limit) {
+int checkSignedBitfieldOverflow(int64_t value, int64_t incr, int bits, int owtype, int64_t *limit) {
     int64_t max = (bits == 64) ? INT64_MAX : (((int64_t)1<<(bits-1))-1);
     int64_t min = (-max)-1;
 

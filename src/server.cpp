@@ -7566,6 +7566,29 @@ int main(int argc, char **argv) {
 
     validateConfiguration();
 
+    if (!g_pserver->sentinel_mode) {
+    #ifdef __linux__
+        linuxMemoryWarnings();
+    #if defined (__arm64__)
+        int ret;
+        if ((ret = linuxMadvFreeForkBugCheck())) {
+            if (ret == 1)
+                serverLog(LL_WARNING,"WARNING Your kernel has a bug that could lead to data corruption during background save. "
+                                        "Please upgrade to the latest stable kernel.");
+            else
+                serverLog(LL_WARNING, "Failed to test the kernel for a bug that could lead to data corruption during background save. "
+                                        "Your system could be affected, please report this error.");
+            if (!checkIgnoreWarning("ARM64-COW-BUG")) {
+                serverLog(LL_WARNING,"KeyDB will now exit to prevent data corruption. "
+                                        "Note that it is possible to suppress this warning by setting the following config: ignore-warnings ARM64-COW-BUG");
+                exit(1);
+            }
+        }
+    #endif /* __arm64__ */
+    #endif /* __linux__ */
+    }
+
+
     const char *err;
     if (!initializeStorageProvider(&err))
     {
@@ -7591,25 +7614,6 @@ int main(int argc, char **argv) {
     if (!g_pserver->sentinel_mode) {
         /* Things not needed when running in Sentinel mode. */
         serverLog(LL_WARNING,"Server initialized");
-    #ifdef __linux__
-        linuxMemoryWarnings();
-    #if defined (__arm64__)
-        int ret;
-        if ((ret = linuxMadvFreeForkBugCheck())) {
-            if (ret == 1)
-                serverLog(LL_WARNING,"WARNING Your kernel has a bug that could lead to data corruption during background save. "
-                                     "Please upgrade to the latest stable kernel.");
-            else
-                serverLog(LL_WARNING, "Failed to test the kernel for a bug that could lead to data corruption during background save. "
-                                      "Your system could be affected, please report this error.");
-            if (!checkIgnoreWarning("ARM64-COW-BUG")) {
-                serverLog(LL_WARNING,"KeyDB will now exit to prevent data corruption. "
-                                     "Note that it is possible to suppress this warning by setting the following config: ignore-warnings ARM64-COW-BUG");
-                exit(1);
-            }
-        }
-    #endif /* __arm64__ */
-    #endif /* __linux__ */
         moduleInitModulesSystemLast();
         moduleLoadFromQueue();
         ACLLoadUsersAtStartup();

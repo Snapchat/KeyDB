@@ -3892,13 +3892,13 @@ void incrementMvccTstamp();
 
 #if __GNUC__ >= 7 && !defined(NO_DEPRECATE_FREE)
  [[deprecated]]
-void *calloc(size_t count, size_t size);
+void *calloc(size_t count, size_t size) noexcept;
  [[deprecated]]
-void free(void *ptr);
+void free(void *ptr) noexcept;
  [[deprecated]]
-void *malloc(size_t size);
+void *malloc(size_t size) noexcept;
  [[deprecated]]
-void *realloc(void *ptr, size_t size);
+void *realloc(void *ptr, size_t size) noexcept;
 #endif
 
 /* Debugging stuff */

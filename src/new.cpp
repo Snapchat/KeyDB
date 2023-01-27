@@ -43,7 +43,7 @@ void operator delete(void *p, std::size_t) noexcept
 #endif
 
 #if defined(USE_JEMALLOC)
-extern "C" size_t malloc_usable_size(void *ptr)
+extern "C" size_t malloc_usable_size(void *ptr) noexcept
 {
     return zmalloc_usable_size(ptr);
 }

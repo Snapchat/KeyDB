@@ -1541,7 +1541,7 @@ void memoryCommand(client *c) {
     } else if (!strcasecmp(szFromObj(c->argv[1]),"malloc-stats") && c->argc == 2) {
 #if defined(USE_JEMALLOC)
         sds info = sdsempty();
-        je_malloc_stats_print(inputCatSds, &info, NULL);
+        malloc_stats_print(inputCatSds, &info, NULL);
         addReplyVerbatim(c,info,sdslen(info),"txt");
         sdsfree(info);
 #else

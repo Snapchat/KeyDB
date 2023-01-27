@@ -80,12 +80,12 @@ static_assert((PREFIX_SIZE % 16) == 0, "Our prefix must be modulo 16-bytes or ou
 #define realloc(ptr,size, type) tc_realloc(ptr,size)
 #define free(ptr) tc_free(ptr)
 #elif defined(USE_JEMALLOC)
-#define malloc(size, type) je_malloc(size)
-#define calloc(count,size,type) je_calloc(count,size)
-#define realloc(ptr,size,type) je_realloc(ptr,size)
-#define free(ptr) je_free(ptr)
-#define mallocx(size,flags) je_mallocx(size,flags)
-#define dallocx(ptr,flags) je_dallocx(ptr,flags)
+#define malloc(size, type) malloc(size)
+#define calloc(count,size,type) calloc(count,size)
+#define realloc(ptr,size,type) realloc(ptr,size)
+#define free(ptr) free(ptr)
+#define mallocx(size,flags) mallocx(size,flags)
+#define dallocx(ptr,flags) dallocx(ptr,flags)
 #else
 #define malloc(size, type) malloc(size)
 #define calloc(count,size,type) calloc(count,size)
@@ -494,17 +494,17 @@ int zmalloc_get_allocator_info(size_t *allocated,
     *allocated = *resident = *active = 0;
     /* Update the statistics cached by mallctl. */
     sz = sizeof(epoch);
-    je_mallctl("epoch", &epoch, &sz, &epoch, sz);
+    mallctl("epoch", &epoch, &sz, &epoch, sz);
     sz = sizeof(size_t);
     /* Unlike RSS, this does not include RSS from shared libraries and other non
      * heap mappings. */
-    je_mallctl("stats.resident", resident, &sz, NULL, 0);
+    mallctl("stats.resident", resident, &sz, NULL, 0);
     /* Unlike resident, this doesn't not include the pages jemalloc reserves
      * for re-use (purge will clean that). */
-    je_mallctl("stats.active", active, &sz, NULL, 0);
+    mallctl("stats.active", active, &sz, NULL, 0);
     /* Unlike zmalloc_used_memory, this matches the stats.resident by taking
      * into account all allocations done by this process (not only zmalloc). */
-    je_mallctl("stats.allocated", allocated, &sz, NULL, 0);
+    mallctl("stats.allocated", allocated, &sz, NULL, 0);
     return 1;
 }
 
@@ -512,7 +512,7 @@ void set_jemalloc_bg_thread(int enable) {
     /* let jemalloc do purging asynchronously, required when there's no traffic 
      * after flushdb */
     char val = !!enable;
-    je_mallctl("background_thread", NULL, 0, &val, 1);
+    mallctl("background_thread", NULL, 0, &val, 1);
 }
 
 int jemalloc_purge() {
@@ -520,9 +520,9 @@ int jemalloc_purge() {
     char tmp[32];
     unsigned narenas = 0;
     size_t sz = sizeof(unsigned);
-    if (!je_mallctl("arenas.narenas", &narenas, &sz, NULL, 0)) {
+    if (!mallctl("arenas.narenas", &narenas, &sz, NULL, 0)) {
         snprintf(tmp, 32, "arena.%d.purge", narenas);
-        if (!je_mallctl(tmp, NULL, 0, NULL, 0))
+        if (!mallctl(tmp, NULL, 0, NULL, 0))
             return 0;
     }
     return -1;

@@ -2815,9 +2815,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     runAndPropogateToReplicas(processClients);
 
-    /* Handle precise timeouts of blocked clients. */
-    handleBlockedClientsTimeout();
-
     /* Just call a subset of vital functions in case we are re-entering
      * the event loop from processEventsWhileBlocked(). Note that in this
      * case we keep track of the number of events we are processing, since

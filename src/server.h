@@ -3254,6 +3254,7 @@ void receiveChildInfo(void);
 void executeWithoutGlobalLock(std::function<void()> func);
 int redisFork(int type);
 int hasActiveChildProcess();
+int hasActiveChildProcessOrBGSave();
 void resetChildState();
 int isMutuallyExclusiveChildType(int type);
 

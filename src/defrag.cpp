@@ -1145,7 +1145,7 @@ void activeDefragCycle(void) {
         return;
     }
 
-    if (g_pserver->child_pid != -1)
+    if (hasActiveChildProcess())
         return; /* Defragging memory while there's a fork will just do damage. */
 
     /* Once a second, check if the fragmentation justfies starting a scan

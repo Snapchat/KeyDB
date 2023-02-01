@@ -93,7 +93,7 @@ static void lookupKeyUpdateObj(robj *val, int flags)
     /* Update the access time for the ageing algorithm.
      * Don't do it if we have a saving child, as this will trigger
      * a copy on write madness. */
-    if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH))
+    if (!(hasActiveChildProcessOrBGSave()) && !(flags & LOOKUP_NOTOUCH))
     {
         if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
             updateLFU(val);

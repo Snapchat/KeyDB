@@ -3782,7 +3782,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     int pipefds[2];
     rdbSaveSocketThreadArgs *args = nullptr;
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveChildProcessOrBGSave()) return C_ERR;
 
     /* Even if the previous fork child exited, don't start a new one until we
      * drained the pipe. */

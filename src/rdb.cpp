@@ -1679,7 +1679,7 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
     pthread_t child;
     long long start;
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveChildProcessOrBGSave()) return C_ERR;
 
     g_pserver->dirty_before_bgsave = g_pserver->dirty;
     g_pserver->lastbgsave_try = time(NULL);

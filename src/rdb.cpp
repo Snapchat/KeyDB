@@ -1686,6 +1686,7 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
     openChildInfoPipe();
 
     start = ustime();
+    latencyStartMonitor(g_pserver->rdb_save_latency);
 
     
     g_pserver->stat_fork_time = ustime()-start;
@@ -3601,6 +3602,8 @@ static void backgroundSaveDoneHandlerDisk(int exitcode, bool fCancelled) {
         g_pserver->dirty = g_pserver->dirty - g_pserver->dirty_before_bgsave;
         g_pserver->lastsave = time(NULL);
         g_pserver->lastbgsave_status = C_OK;
+        latencyEndMonitor(g_pserver->rdb_save_latency);
+        latencyAddSampleIfNeeded("rdb-save",g_pserver->rdb_save_latency);
     } else if (!fCancelled && exitcode != 0) {
         serverLog(LL_WARNING, "Background saving error");
         g_pserver->lastbgsave_status = C_ERR;

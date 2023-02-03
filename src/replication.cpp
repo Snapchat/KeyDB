@@ -1538,7 +1538,7 @@ void syncCommand(client *c) {
         } else {
             /* We don't have a BGSAVE in progress, let's start one. Diskless
              * or disk-based mode is determined by replica's capacity. */
-            if (!hasActiveChildProcess()) {
+            if (!hasActiveChildProcessOrBGSave()) {
                 startBgsaveForReplication(c->slave_capa);
             } else {
                 serverLog(LL_NOTICE,
@@ -4984,7 +4984,7 @@ void replicationStartPendingFork(void) {
      * In case of diskless replication, we make sure to wait the specified
      * number of seconds (according to configuration) so that other slaves
      * have the time to arrive before we start streaming. */
-    if (!hasActiveChildProcess()) {
+    if (!hasActiveChildProcessOrBGSave()) {
         time_t idle, max_idle = 0;
         int slaves_waiting = 0;
         int mincapa = -1;

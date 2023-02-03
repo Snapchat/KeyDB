@@ -2470,7 +2470,8 @@ struct redisServer {
     time_t lastbgsave_try;          /* Unix time of last attempted bgsave */
     time_t rdb_save_time_last;      /* Time used by last RDB save run. */
     time_t rdb_save_time_start;     /* Current RDB save start time. */
-    pid_t rdb_child_pid = -1;            /* Used only during fork bgsave */
+    mstime_t rdb_save_latency;      /* Used to track end to end latency of rdb save*/
+    pid_t rdb_child_pid = -1;       /* Used only during fork bgsave */
     int rdb_bgsave_scheduled;       /* BGSAVE when possible if true. */
     int rdb_child_type;             /* Type of save by active child. */
     int lastbgsave_status;          /* C_OK or C_ERR */
@@ -3254,6 +3255,7 @@ void receiveChildInfo(void);
 void executeWithoutGlobalLock(std::function<void()> func);
 int redisFork(int type);
 int hasActiveChildProcess();
+int hasActiveChildProcessOrBGSave();
 void resetChildState();
 int isMutuallyExclusiveChildType(int type);
 

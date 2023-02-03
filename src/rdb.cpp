@@ -1679,17 +1679,15 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
     pthread_t child;
     long long start;
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveChildProcessOrBGSave()) return C_ERR;
 
     g_pserver->dirty_before_bgsave = g_pserver->dirty;
     g_pserver->lastbgsave_try = time(NULL);
     openChildInfoPipe();
 
     start = ustime();
+    latencyStartMonitor(g_pserver->rdb_save_latency);
 
-    
-    g_pserver->stat_fork_time = ustime()-start;
-    g_pserver->stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / g_pserver->stat_fork_time / (1024*1024*1024); /* GB per second. */
     if (launchRdbSaveThread(child, rsi) != C_OK) {
         closeChildInfoPipe();
         g_pserver->lastbgsave_status = C_ERR;
@@ -1697,6 +1695,9 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
             strerror(errno));
         return C_ERR;
     }
+
+    g_pserver->stat_fork_time = ustime()-start;
+    g_pserver->stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / g_pserver->stat_fork_time / (1024*1024*1024); /* GB per second. */
     latencyAddSampleIfNeeded("fork",g_pserver->stat_fork_time/1000);
     serverLog(LL_NOTICE,"Background saving started");
     g_pserver->rdb_save_time_start = time(NULL);
@@ -3601,6 +3602,8 @@ static void backgroundSaveDoneHandlerDisk(int exitcode, bool fCancelled) {
         g_pserver->dirty = g_pserver->dirty - g_pserver->dirty_before_bgsave;
         g_pserver->lastsave = time(NULL);
         g_pserver->lastbgsave_status = C_OK;
+        latencyEndMonitor(g_pserver->rdb_save_latency);
+        latencyAddSampleIfNeeded("rdb-save",g_pserver->rdb_save_latency);
     } else if (!fCancelled && exitcode != 0) {
         serverLog(LL_WARNING, "Background saving error");
         g_pserver->lastbgsave_status = C_ERR;
@@ -3782,7 +3785,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     int pipefds[2];
     rdbSaveSocketThreadArgs *args = nullptr;
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveChildProcessOrBGSave()) return C_ERR;
 
     /* Even if the previous fork child exited, don't start a new one until we
      * drained the pipe. */

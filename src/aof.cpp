@@ -285,7 +285,7 @@ int startAppendOnly(void) {
             strerror(errno));
         return C_ERR;
     }
-    if (hasActiveChildProcess() && g_pserver->child_type != CHILD_TYPE_AOF) {
+    if (hasActiveChildProcessOrBGSave() && g_pserver->child_type != CHILD_TYPE_AOF) {
         g_pserver->aof_rewrite_scheduled = 1;
         serverLog(LL_WARNING,"AOF was enabled but there is already another background operation. An AOF background was scheduled to start when possible.");
     } else {
@@ -438,7 +438,7 @@ void flushAppendOnlyFile(int force) {
      * useful for graphing / monitoring purposes. */
     if (sync_in_progress) {
         latencyAddSampleIfNeeded("aof-write-pending-fsync",latency);
-    } else if (hasActiveChildProcess()) {
+    } else if (hasActiveChildProcessOrBGSave()) {
         latencyAddSampleIfNeeded("aof-write-active-child",latency);
     } else {
         latencyAddSampleIfNeeded("aof-write-alone",latency);
@@ -535,7 +535,7 @@ void flushAppendOnlyFile(int force) {
 try_fsync:
     /* Don't fsync if no-appendfsync-on-rewrite is set to yes and there are
      * children doing I/O in the background. */
-    if (g_pserver->aof_no_fsync_on_rewrite && hasActiveChildProcess())
+    if (g_pserver->aof_no_fsync_on_rewrite && hasActiveChildProcessOrBGSave())
         return;
 
     /* Perform the fsync if needed. */
@@ -1887,7 +1887,7 @@ void aofClosePipes(void) {
 int rewriteAppendOnlyFileBackground(void) {
     pid_t childpid;
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveChildProcessOrBGSave()) return C_ERR;
     if (aofCreatePipes() != C_OK) return C_ERR;
     if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0) {
         char tmpfile[256];
@@ -1930,7 +1930,7 @@ int rewriteAppendOnlyFileBackground(void) {
 void bgrewriteaofCommand(client *c) {
     if (g_pserver->child_type == CHILD_TYPE_AOF) {
         addReplyError(c,"Background append only file rewriting already in progress");
-    } else if (hasActiveChildProcess()) {
+    } else if (hasActiveChildProcessOrBGSave()) {
         g_pserver->aof_rewrite_scheduled = 1;
         addReplyStatus(c,"Background append only file rewriting scheduled");
     } else if (rewriteAppendOnlyFileBackground() == C_OK) {

@@ -1706,7 +1706,7 @@ int redisDbPersistentData::incrementallyRehash() {
  * for dict.c to resize the hash tables accordingly to the fact we have an
  * active fork child running. */
 void updateDictResizePolicy(void) {
-    if (!hasActiveChildProcess() || (g_pserver->FRdbSaveInProgress() && !cserver.fForkBgSave))
+    if (!hasActiveChildProcess())
         dictEnableResize();
     else
         dictDisableResize();
@@ -1725,7 +1725,11 @@ const char *strChildType(int type) {
 /* Return true if there are active children processes doing RDB saving,
  * AOF rewriting, or some side process spawned by a loaded module. */
 int hasActiveChildProcess() {
-    return g_pserver->FRdbSaveInProgress() || g_pserver->child_pid != -1;
+    return g_pserver->child_pid != -1;
+}
+
+int hasActiveChildProcessOrBGSave() {
+    return g_pserver->FRdbSaveInProgress() || hasActiveChildProcess();
 }
 
 void resetChildState() {
@@ -2074,7 +2078,7 @@ void databasesCron(bool fMainThread) {
     /* Perform hash tables rehashing if needed, but only if there are no
      * other processes saving the DB on disk. Otherwise rehashing is bad
      * as will cause a lot of copy-on-write of memory pages. */
-    if (!hasActiveChildProcess() || g_pserver->FRdbSaveInProgress()) {
+    if (!hasActiveChildProcess()) {
         /* We use global counters so if we stop the computation at a given
          * DB we'll be able to start from the successive in the next
          * cron loop iteration. */
@@ -2468,14 +2472,14 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
-    if (!hasActiveChildProcess() &&
+    if (!hasActiveChildProcessOrBGSave() &&
         g_pserver->aof_rewrite_scheduled)
     {
         rewriteAppendOnlyFileBackground();
     }
 
     /* Check if a background saving or AOF rewrite in progress terminated. */
-    if (hasActiveChildProcess() || ldbPendingChildren())
+    if (hasActiveChildProcessOrBGSave() || ldbPendingChildren())
     {
         run_with_period(1000) receiveChildInfo();
         checkChildrenDone();
@@ -2517,7 +2521,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
         /* Trigger an AOF rewrite if needed. */
         if (g_pserver->aof_state == AOF_ON &&
-            !hasActiveChildProcess() &&
+            !hasActiveChildProcessOrBGSave() &&
             g_pserver->aof_rewrite_perc &&
             g_pserver->aof_current_size > g_pserver->aof_rewrite_min_size)
         {
@@ -2601,7 +2605,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * Note: this code must be after the replicationCron() call above so
      * make sure when refactoring this file to keep this order. This is useful
      * because we want to give priority to RDB savings for replication. */
-    if (!hasActiveChildProcess() &&
+    if (!hasActiveChildProcessOrBGSave() &&
         g_pserver->rdb_bgsave_scheduled &&
         (g_pserver->unixtime-g_pserver->lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY ||
          g_pserver->lastbgsave_status == C_OK))

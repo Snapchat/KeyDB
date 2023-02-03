@@ -6825,7 +6825,7 @@ static long getLongInfoField(char *info, char *field) {
 
 /* Convert number of bytes into a human readable string of the form:
  * 100B, 2G, 100M, 4K, and so forth. */
-void bytesToHuman(char *s, long long n) {
+void bytesToHuman(char *s, long long n, size_t bufsize) {
     double d;
 
     if (n < 0) {
@@ -6835,17 +6835,17 @@ void bytesToHuman(char *s, long long n) {
     }
     if (n < 1024) {
         /* Bytes */
-        snprintf(s,sizeof(s),"%lldB",n);
+        snprintf(s,bufsize,"%lldB",n);
         return;
     } else if (n < (1024*1024)) {
         d = (double)n/(1024);
-        snprintf(s,sizeof(s),"%.2fK",d);
+        snprintf(s,bufsize,"%.2fK",d);
     } else if (n < (1024LL*1024*1024)) {
         d = (double)n/(1024*1024);
-        snprintf(s,sizeof(s),"%.2fM",d);
+        snprintf(s,bufsize,"%.2fM",d);
     } else if (n < (1024LL*1024*1024*1024)) {
         d = (double)n/(1024LL*1024*1024);
-        snprintf(s,sizeof(s),"%.2fG",d);
+        snprintf(s,bufsize,"%.2fG",d);
     }
 }
 
@@ -6885,7 +6885,7 @@ static void statMode(void) {
 
         /* Used memory */
         aux = getLongInfoField(reply->str,"used_memory");
-        bytesToHuman(buf,aux);
+        bytesToHuman(buf,aux,sizeof(buf));
         printf("%-8s",buf);
 
         /* Clients */

@@ -5471,30 +5471,30 @@ NULL
 
 /* Convert an amount of bytes into a human readable string in the form
  * of 100B, 2G, 100M, 4K, and so forth. */
-void bytesToHuman(char *s, unsigned long long n) {
+void bytesToHuman(char *s, unsigned long long n, size_t bufsize) {
     double d;
 
     if (n < 1024) {
         /* Bytes */
-        snprintf(s,sizeof(s),"%lluB",n);
+        snprintf(s,bufsize,"%lluB",n);
     } else if (n < (1024*1024)) {
         d = (double)n/(1024);
-        snprintf(s,sizeof(s),"%.2fK",d);
+        snprintf(s,bufsize,"%.2fK",d);
     } else if (n < (1024LL*1024*1024)) {
         d = (double)n/(1024*1024);
-        snprintf(s,sizeof(s),"%.2fM",d);
+        snprintf(s,bufsize,"%.2fM",d);
     } else if (n < (1024LL*1024*1024*1024)) {
         d = (double)n/(1024LL*1024*1024);
-        snprintf(s,sizeof(s),"%.2fG",d);
+        snprintf(s,bufsize,"%.2fG",d);
     } else if (n < (1024LL*1024*1024*1024*1024)) {
         d = (double)n/(1024LL*1024*1024*1024);
-        snprintf(s,sizeof(s),"%.2fT",d);
+        snprintf(s,bufsize,"%.2fT",d);
     } else if (n < (1024LL*1024*1024*1024*1024*1024)) {
         d = (double)n/(1024LL*1024*1024*1024*1024);
-        snprintf(s,sizeof(s),"%.2fP",d);
+        snprintf(s,bufsize,"%.2fP",d);
     } else {
         /* Let's hope we never need this */
-        snprintf(s,sizeof(s),"%lluB",n);
+        snprintf(s,bufsize,"%lluB",n);
     }
 }
 
@@ -5670,13 +5670,13 @@ sds genRedisInfoString(const char *section) {
         if (zmalloc_used > g_pserver->stat_peak_memory)
             g_pserver->stat_peak_memory = zmalloc_used;
 
-        bytesToHuman(hmem,zmalloc_used);
-        bytesToHuman(peak_hmem,g_pserver->stat_peak_memory);
-        bytesToHuman(total_system_hmem,total_system_mem);
-        bytesToHuman(used_memory_lua_hmem,memory_lua);
-        bytesToHuman(used_memory_scripts_hmem,mh->lua_caches);
-        bytesToHuman(used_memory_rss_hmem,g_pserver->cron_malloc_stats.process_rss);
-        bytesToHuman(maxmemory_hmem,g_pserver->maxmemory);
+        bytesToHuman(hmem,zmalloc_used,sizeof(hmem));
+        bytesToHuman(peak_hmem,g_pserver->stat_peak_memory,sizeof(peak_hmem));
+        bytesToHuman(total_system_hmem,total_system_mem,sizeof(total_system_hmem));
+        bytesToHuman(used_memory_lua_hmem,memory_lua,sizeof(used_memory_lua_hmem));
+        bytesToHuman(used_memory_scripts_hmem,mh->lua_caches,sizeof(used_memory_scripts_hmem));
+        bytesToHuman(used_memory_rss_hmem,g_pserver->cron_malloc_stats.process_rss,sizeof(used_memory_rss_hmem));
+        bytesToHuman(maxmemory_hmem,g_pserver->maxmemory,sizeof(maxmemory_hmem));
 
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info,
@@ -6563,7 +6563,8 @@ void usage(void) {
 
 void redisAsciiArt(void) {
 #include "asciilogo.h"
-    char *buf = (char*)zmalloc(1024*16, MALLOC_LOCAL);
+    size_t bufsize = 1024*16;
+    char *buf = (char*)zmalloc(bufsize, MALLOC_LOCAL);
     const char *mode;
 
     if (g_pserver->cluster_enabled) mode = "cluster";
@@ -6585,7 +6586,7 @@ void redisAsciiArt(void) {
         );
     } else {
         sds motd = fetchMOTD(true, cserver.enable_motd);
-        snprintf(buf,sizeof(buf),ascii_logo,
+        snprintf(buf,bufsize,ascii_logo,
             KEYDB_REAL_VERSION,
             redisGitSHA1(),
             strtol(redisGitDirty(),NULL,10) > 0,

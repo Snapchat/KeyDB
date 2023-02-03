@@ -1658,7 +1658,7 @@ int rewriteAppendOnlyFile(char *filename) {
 { // BEGIN GOTO SCOPED VARIABLES
     /* Note that we have to use a different temp name here compared to the
      * one used by rewriteAppendOnlyFileBackground() function. */
-    snprintf(tmpfile,256,"temp-rewriteaof-%d.aof", (int) getpid());
+    snprintf(tmpfile,sizeof(tmpfile),"temp-rewriteaof-%d.aof", (int) getpid());
     fp = fopen(tmpfile,"w");
     if (!fp) {
         serverLog(LL_WARNING, "Opening the temp file for AOF rewrite in rewriteAppendOnlyFile(): %s", strerror(errno));
@@ -1895,7 +1895,7 @@ int rewriteAppendOnlyFileBackground(void) {
         /* Child */
         redisSetProcTitle("keydb-aof-rewrite");
         redisSetCpuAffinity(g_pserver->aof_rewrite_cpulist);
-        snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
+        snprintf(tmpfile,sizeof(tmpfile),"temp-rewriteaof-bg-%d.aof", (int) getpid());
         if (rewriteAppendOnlyFile(tmpfile) == C_OK) {
             sendChildCowInfo(CHILD_INFO_TYPE_AOF_COW_SIZE, "AOF rewrite");
             exitFromChild(0);
@@ -1944,10 +1944,10 @@ void bgrewriteaofCommand(client *c) {
 void aofRemoveTempFile(pid_t childpid) {
     char tmpfile[256];
 
-    snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) childpid);
+    snprintf(tmpfile,sizeof(tmpfile),"temp-rewriteaof-bg-%d.aof", (int) childpid);
     bg_unlink(tmpfile);
 
-    snprintf(tmpfile,256,"temp-rewriteaof-%d.aof", (int) childpid);
+    snprintf(tmpfile,sizeof(tmpfile),"temp-rewriteaof-%d.aof", (int) childpid);
     bg_unlink(tmpfile);
 }
 
@@ -1985,7 +1985,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
         /* Flush the differences accumulated by the parent to the
          * rewritten AOF. */
         latencyStartMonitor(latency);
-        snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof",
+        snprintf(tmpfile,sizeof(tmpfile),"temp-rewriteaof-bg-%d.aof",
             (int)g_pserver->child_pid);
         newfd = open(tmpfile,O_WRONLY|O_APPEND);
         if (newfd == -1) {

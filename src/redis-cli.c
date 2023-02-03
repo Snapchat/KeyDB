@@ -3293,8 +3293,8 @@ static redisReply *clusterManagerMigrateKeysInReply(clusterManagerNode *source,
     argv_len = zcalloc(argc * sizeof(size_t), MALLOC_LOCAL);
     char portstr[255];
     char timeoutstr[255];
-    snprintf(portstr, 10, "%d", target->port);
-    snprintf(timeoutstr, 10, "%d", timeout);
+    snprintf(portstr, sizeof(portstr), "%d", target->port);
+    snprintf(timeoutstr, sizeof(timeoutstr), "%d", timeout);
     argv[0] = "MIGRATE";
     argv_len[0] = 7;
     argv[1] = target->ip;
@@ -6835,17 +6835,17 @@ void bytesToHuman(char *s, long long n) {
     }
     if (n < 1024) {
         /* Bytes */
-        snprintf(s,256,"%lldB",n);
+        snprintf(s,sizeof(s),"%lldB",n);
         return;
     } else if (n < (1024*1024)) {
         d = (double)n/(1024);
-        snprintf(s,256,"%.2fK",d);
+        snprintf(s,sizeof(s),"%.2fK",d);
     } else if (n < (1024LL*1024*1024)) {
         d = (double)n/(1024*1024);
-        snprintf(s,256,"%.2fM",d);
+        snprintf(s,sizeof(s),"%.2fM",d);
     } else if (n < (1024LL*1024*1024*1024)) {
         d = (double)n/(1024LL*1024*1024);
-        snprintf(s,256,"%.2fG",d);
+        snprintf(s,sizeof(s),"%.2fG",d);
     }
 }
 
@@ -6875,12 +6875,12 @@ static void statMode(void) {
         for (j = 0; j < 20; j++) {
             long k;
 
-            snprintf(buf,64,"db%d:keys",j);
+            snprintf(buf,sizeof(buf),"db%d:keys",j);
             k = getLongInfoField(reply->str,buf);
             if (k == LONG_MIN) continue;
             aux += k;
         }
-        snprintf(buf,64,"%ld",aux);
+        snprintf(buf,sizeof(buf),"%ld",aux);
         printf("%-11s",buf);
 
         /* Used memory */
@@ -6890,23 +6890,23 @@ static void statMode(void) {
 
         /* Clients */
         aux = getLongInfoField(reply->str,"connected_clients");
-        snprintf(buf,64,"%ld",aux);
+        snprintf(buf,sizeof(buf),"%ld",aux);
         printf(" %-8s",buf);
 
         /* Blocked (BLPOPPING) Clients */
         aux = getLongInfoField(reply->str,"blocked_clients");
-        snprintf(buf,64,"%ld",aux);
+        snprintf(buf,sizeof(buf),"%ld",aux);
         printf("%-8s",buf);
 
         /* Requests */
         aux = getLongInfoField(reply->str,"total_commands_processed");
-        snprintf(buf,64,"%ld (+%ld)",aux,requests == 0 ? 0 : aux-requests);
+        snprintf(buf,sizeof(buf),"%ld (+%ld)",aux,requests == 0 ? 0 : aux-requests);
         printf("%-19s",buf);
         requests = aux;
 
         /* Connections */
         aux = getLongInfoField(reply->str,"total_connections_received");
-        snprintf(buf,64,"%ld",aux);
+        snprintf(buf,sizeof(buf),"%ld",aux);
         printf(" %-12s",buf);
 
         /* Children */

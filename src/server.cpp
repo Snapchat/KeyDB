@@ -5476,25 +5476,25 @@ void bytesToHuman(char *s, unsigned long long n) {
 
     if (n < 1024) {
         /* Bytes */
-        snprintf(s,256,"%lluB",n);
+        snprintf(s,sizeof(s),"%lluB",n);
     } else if (n < (1024*1024)) {
         d = (double)n/(1024);
-        snprintf(s,256,"%.2fK",d);
+        snprintf(s,sizeof(s),"%.2fK",d);
     } else if (n < (1024LL*1024*1024)) {
         d = (double)n/(1024*1024);
-        snprintf(s,256,"%.2fM",d);
+        snprintf(s,sizeof(s),"%.2fM",d);
     } else if (n < (1024LL*1024*1024*1024)) {
         d = (double)n/(1024LL*1024*1024);
-        snprintf(s,256,"%.2fG",d);
+        snprintf(s,sizeof(s),"%.2fG",d);
     } else if (n < (1024LL*1024*1024*1024*1024)) {
         d = (double)n/(1024LL*1024*1024*1024);
-        snprintf(s,256,"%.2fT",d);
+        snprintf(s,sizeof(s),"%.2fT",d);
     } else if (n < (1024LL*1024*1024*1024*1024*1024)) {
         d = (double)n/(1024LL*1024*1024*1024*1024);
-        snprintf(s,256,"%.2fP",d);
+        snprintf(s,sizeof(s),"%.2fP",d);
     } else {
         /* Let's hope we never need this */
-        snprintf(s,256,"%lluB",n);
+        snprintf(s,sizeof(s),"%lluB",n);
     }
 }
 
@@ -6585,7 +6585,7 @@ void redisAsciiArt(void) {
         );
     } else {
         sds motd = fetchMOTD(true, cserver.enable_motd);
-        snprintf(buf,1024*16,ascii_logo,
+        snprintf(buf,sizeof(buf),ascii_logo,
             KEYDB_REAL_VERSION,
             redisGitSHA1(),
             strtol(redisGitDirty(),NULL,10) > 0,

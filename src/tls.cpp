@@ -617,7 +617,7 @@ bool tlsValidateCertificateName(tls_connection* conn){
     conn->c.last_errno = 0;
     if (conn->ssl_error) zfree(conn->ssl_error);
     conn->ssl_error = (char*)zmalloc(512);
-    snprintf(conn->ssl_error, 512, "Client CN (%s) and SANs not found in allowlist.", commonName);
+    snprintf(conn->ssl_error, sizeof(conn->ssl_error), "Client CN (%s) and SANs not found in allowlist.", commonName);
     return false;
 }
 

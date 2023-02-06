@@ -39,7 +39,8 @@ TEST_MODULES = \
     defragtest.so \
     hash.so \
     zset.so \
-    stream.so
+    stream.so \
+    load.so
 
 
 .PHONY: all

@@ -4068,12 +4068,6 @@ void initServer(void) {
         }
     }
 
-    /* We have to initialize storage providers after the cluster has been initialized */
-    for (int idb = 0; idb < cserver.dbnum; ++idb)
-    {
-        g_pserver->db[idb]->storageProviderInitialize();
-    }
-
     saveMasterStatusToStorage(false); // eliminate the repl-offset field
     
     /* Initialize ACL default password if it exists */
@@ -4086,6 +4080,15 @@ void initServer(void) {
  * Thread Local Storage initialization collides with dlopen call.
  * see: https://sourceware.org/bugzilla/show_bug.cgi?id=19329 */
 void InitServerLast() {
+
+    /* We have to initialize storage providers after the cluster has been initialized */
+    moduleFireServerEvent(REDISMODULE_EVENT_LOADING, REDISMODULE_SUBEVENT_LOADING_FLASH_START, NULL);
+    for (int idb = 0; idb < cserver.dbnum; ++idb)
+    {
+        g_pserver->db[idb]->storageProviderInitialize();
+    }
+    moduleFireServerEvent(REDISMODULE_EVENT_LOADING, REDISMODULE_SUBEVENT_LOADING_ENDED, NULL);
+
     bioInit();
     set_jemalloc_bg_thread(cserver.jemalloc_bg_thread);
     g_pserver->initial_memory_usage = zmalloc_used_memory();

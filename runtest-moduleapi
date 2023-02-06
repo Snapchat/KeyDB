@@ -37,5 +37,6 @@ $TCLSH tests/test_helper.tcl \
 --single unit/moduleapi/hash \
 --single unit/moduleapi/zset \
 --single unit/moduleapi/stream \
+--single unit/moduleapi/load \
 --config server-threads 3 \
 "${@}"

@@ -752,7 +752,7 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
      * accumulate the differences between the child DB and the current one
      * in a buffer, so that when the child process will do its work we
      * can append the differences to the new append only file. */
-    if (g_pserver->child_type == CHILD_TYPE_AOF)
+    if (hasActiveChildProcess() && g_pserver->child_type == CHILD_TYPE_AOF)
         aofRewriteBufferAppend((unsigned char*)buf,sdslen(buf));
 
     sdsfree(buf);

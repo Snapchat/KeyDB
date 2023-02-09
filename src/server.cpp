@@ -6888,7 +6888,8 @@ int redisFork(int purpose) {
     latencyAddSampleIfNeeded("fork-lock",(ustime()-startWriteLock)/1000);
     if ((childpid = fork()) == 0) {
         /* Child */
-        aeReleaseForkLockChild();
+        aeForkLockInChild();
+        aeReleaseForkLock();
         g_pserver->in_fork_child = purpose;
         setOOMScoreAdj(CONFIG_OOM_BGCHILD);
         setupChildSignalHandlers();

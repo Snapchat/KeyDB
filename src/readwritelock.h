@@ -8,6 +8,7 @@ class readWriteLock {
     int m_readCount = 0;
     int m_writeCount = 0;
     bool m_writeWaiting = false;
+    bool m_notify = true;
 public:
     readWriteLock(const char *name) : m_readLock(name), m_writeLock(name) {}
 
@@ -65,7 +66,8 @@ public:
     void releaseRead() {
         std::unique_lock<fastlock> rm(m_readLock);
         m_readCount--;
-        m_cv.notify_all();
+        if (m_notify)
+            m_cv.notify_all();
     }
 
     void releaseWrite(bool exclusive = true) {
@@ -74,16 +76,8 @@ public:
         if (exclusive)
             m_writeLock.unlock();
         m_writeCount--;
-        m_cv.notify_all();
-    }
-
-    void releaseWriteChild(bool exclusive = true) {
-        std::unique_lock<fastlock> rm(m_readLock);
-        serverAssert(m_writeCount > 0);
-        if (exclusive)
-            m_writeLock.unlock();
-        m_writeCount--;
-        m_writeWaiting = false;
+        if (m_notify)
+            m_cv.notify_all();
     }
 
     void downgradeWrite(bool exclusive = true) {
@@ -91,9 +85,8 @@ public:
         acquireRead();
     }
 
-    void downgradeWriteChild(bool exclusive = true) {
-        releaseWriteChild(exclusive);
-        acquireRead();
+    void setNotify(bool notify) {
+        m_notify = notify;
     }
 
     bool hasReader() {

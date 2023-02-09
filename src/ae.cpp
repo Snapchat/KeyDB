@@ -859,9 +859,9 @@ void aeReleaseForkLock()
     g_forkLock.downgradeWrite();
 }
 
-void aeReleaseForkLockChild()
+void aeForkLockInChild()
 {
-    g_forkLock.downgradeWriteChild();
+    g_forkLock.setNotify(false);
 }
 
 int aeThreadOwnsLock()

@@ -77,8 +77,22 @@ public:
         m_cv.notify_all();
     }
 
+    void releaseWriteChild(bool exclusive = true) {
+        std::unique_lock<fastlock> rm(m_readLock);
+        serverAssert(m_writeCount > 0);
+        if (exclusive)
+            m_writeLock.unlock();
+        m_writeCount--;
+        m_writeWaiting = false;
+    }
+
     void downgradeWrite(bool exclusive = true) {
         releaseWrite(exclusive);
+        acquireRead();
+    }
+
+    void downgradeWriteChild(bool exclusive = true) {
+        releaseWriteChild(exclusive);
         acquireRead();
     }
 

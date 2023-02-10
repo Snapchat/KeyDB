@@ -120,6 +120,10 @@ if {$::flash_enabled} {
             assert_equal {2} [r scard set1]
         }
 
+        test { EVAL - keys command works? } {
+            r eval {return redis.call('keys', 'test')} 0
+        }
+
         r flushall
         # If a weak storage memory model is set, wait for any pending snapshot writes to finish
         after 500 

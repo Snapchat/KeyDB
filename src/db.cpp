@@ -1059,7 +1059,7 @@ void keysCommand(client *c) {
     sds pattern = szFromObj(c->argv[1]);
 
     const redisDbPersistentDataSnapshot *snapshot = nullptr;
-    if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
+    if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED | CLIENT_DENY_BLOCKING)))
         snapshot = c->db->createSnapshot(c->mvccCheckpoint, true /* fOptional */);
     if (snapshot != nullptr)
     {

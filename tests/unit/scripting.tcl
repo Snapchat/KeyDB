@@ -43,6 +43,10 @@ start_server {tags {"scripting"}} {
         r eval {return redis.call('get',KEYS[1])} 1 mykey
     } {myval}
 
+    test { EVAL - keys command works? } {
+        r eval {return redis.call('keys', 'test')} 0
+    }
+
     test {EVALSHA - Can we call a SHA1 if already defined?} {
         r evalsha fd758d1589d044dd850a6f05d52f2eefd27f033f 1 mykey
     } {myval}

@@ -3694,7 +3694,7 @@ void killRDBChild(bool fSynchronous) {
     serverAssert(GlobalLocksAcquired());
 
     if (cserver.fForkBgSave) {
-        kill(g_pserver->rdb_child_pid,SIGUSR1);
+        kill(g_pserver->child_pid,SIGUSR1);
     } else { 
         g_pserver->rdbThreadVars.fRdbThreadCancel = true;
         if (g_pserver->rdb_child_type == RDB_CHILD_TYPE_SOCKET) {

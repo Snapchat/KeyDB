@@ -370,7 +370,7 @@ size_t zmalloc_get_rss(void) {
     int fd, count;
     char *p, *x;
 
-    snprintf(filename,256,"/proc/%ld/stat",(long) getpid());
+    snprintf(filename,sizeof(filename),"/proc/%ld/stat",(long) getpid());
     if ((fd = open(filename,O_RDONLY)) == -1) return 0;
     if (read(fd,buf,4096) <= 0) {
         close(fd);
@@ -462,7 +462,7 @@ size_t zmalloc_get_rss(void) {
     char filename[256];
     int fd;
 
-    snprintf(filename,256,"/proc/%ld/psinfo",(long) getpid());
+    snprintf(filename,sizeof(filename),"/proc/%ld/psinfo",(long) getpid());
 
     if ((fd = open(filename,O_RDONLY)) == -1) return 0;
     if (ioctl(fd, PIOCPSINFO, &info) == -1) {
@@ -521,7 +521,7 @@ int jemalloc_purge() {
     unsigned narenas = 0;
     size_t sz = sizeof(unsigned);
     if (!je_mallctl("arenas.narenas", &narenas, &sz, NULL, 0)) {
-        snprintf(tmp, 32, "arena.%d.purge", narenas);
+        snprintf(tmp, sizeof(tmp), "arena.%d.purge", narenas);
         if (!je_mallctl(tmp, NULL, 0, NULL, 0))
             return 0;
     }

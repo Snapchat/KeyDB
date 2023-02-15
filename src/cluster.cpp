@@ -5107,7 +5107,7 @@ void createDumpPayload(rio *payload, robj_roptr o, robj *key) {
     serverAssert(rdbSaveObject(payload,o,key));
     char szT[32];
     uint64_t mvcc = mvccFromObj(o);
-    snprintf(szT, 32, "%" PRIu64, mvcc);
+    snprintf(szT, sizeof(szT), "%" PRIu64, mvcc);
     serverAssert(rdbSaveAuxFieldStrStr(payload,"mvcc-tstamp", szT) != -1);
 
     /* Write the footer, this is how it looks like:

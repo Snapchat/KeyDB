@@ -3736,7 +3736,7 @@ retry_connect:
         while(maxtries--) {
             auto dt = std::chrono::system_clock::now().time_since_epoch();
             auto dtMillisecond = std::chrono::duration_cast<std::chrono::milliseconds>(dt);
-            snprintf(tmpfile,256,
+            snprintf(tmpfile,sizeof(tmpfile),
                 "temp-%d.%ld.rdb",(int)dtMillisecond.count(),(long int)getpid());
             dfd = open(tmpfile,O_CREAT|O_WRONLY|O_EXCL,0644);
             if (dfd != -1) break;

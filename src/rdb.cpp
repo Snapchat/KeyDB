@@ -1163,7 +1163,7 @@ int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEn
 
     char szT[32];
     if (g_pserver->fActiveReplica) {
-        snprintf(szT, 32, "%" PRIu64, mvccFromObj(val));
+        snprintf(szT, sizeof(szT), "%" PRIu64, mvccFromObj(val));
         if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szT) == -1) return -1;
     }
 
@@ -1190,7 +1190,7 @@ int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEn
         {
             if (itr.subkey() == nullptr)
                 continue;   // already saved
-            snprintf(szT, 32, "%lld", itr.when());
+            snprintf(szT, sizeof(szT), "%lld", itr.when());
             rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-key",itr.subkey());
             rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-when",szT);
         }
@@ -1490,7 +1490,7 @@ int rdbSaveFile(char *filename, const redisDbPersistentDataSnapshot **rgpdb, rdb
     rio rdb;
     int error = 0;
 
-    snprintf(tmpfile,256,"temp-%d-%d.rdb", getpid(), g_pserver->rdbThreadVars.tmpfileNum);
+    snprintf(tmpfile,sizeof(tmpfile),"temp-%d-%d.rdb", getpid(), g_pserver->rdbThreadVars.tmpfileNum);
     fp = fopen(tmpfile,"w");
     if (!fp) {
         char *cwdp = getcwd(cwd,MAXPATHLEN);

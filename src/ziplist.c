@@ -1704,17 +1704,17 @@ static unsigned char *createIntList() {
     unsigned char *zl = ziplistNew();
     char buf[32];
 
-    snprintf(buf, 32, "100");
+    snprintf(buf, sizeof(buf), "100");
     zl = ziplistPush(zl, (unsigned char*)buf, strlen(buf), ZIPLIST_TAIL);
-    snprintf(buf, 32, "128000");
+    snprintf(buf, sizeof(buf), "128000");
     zl = ziplistPush(zl, (unsigned char*)buf, strlen(buf), ZIPLIST_TAIL);
-    snprintf(buf, 32, "-100");
+    snprintf(buf, sizeof(buf), "-100");
     zl = ziplistPush(zl, (unsigned char*)buf, strlen(buf), ZIPLIST_HEAD);
-    snprintf(buf, 32, "4294967296");
+    snprintf(buf, sizeof(buf), "4294967296");
     zl = ziplistPush(zl, (unsigned char*)buf, strlen(buf), ZIPLIST_HEAD);
-    snprintf(buf, 32, "non integer");
+    snprintf(buf, sizeof(buf), "non integer");
     zl = ziplistPush(zl, (unsigned char*)buf, strlen(buf), ZIPLIST_TAIL);
-    snprintf(buf, 32, "much much longer non integer");
+    snprintf(buf, sizeof(buf), "much much longer non integer");
     zl = ziplistPush(zl, (unsigned char*)buf, strlen(buf), ZIPLIST_TAIL);
     return zl;
 }
@@ -2228,7 +2228,7 @@ int ziplistTest(int argc, char **argv, int accurate) {
         char buf[32];
         int i,len;
         for (i = 0; i < 1000; i++) {
-            len = snprintf(buf,32,"%d",i);
+            len = snprintf(buf,sizeof(buf),"%d",i);
             zl = ziplistPush(zl,(unsigned char*)buf,len,ZIPLIST_TAIL);
         }
         for (i = 0; i < 1000; i++) {
@@ -2375,13 +2375,13 @@ int ziplistTest(int argc, char **argv, int accurate) {
                 } else {
                     switch(rand() % 3) {
                     case 0:
-                        buflen = snprintf(buf,1024,"%lld",(0LL + rand()) >> 20);
+                        buflen = snprintf(buf,sizeof(buf),"%lld",(0LL + rand()) >> 20);
                         break;
                     case 1:
-                        buflen = snprintf(buf,1024,"%lld",(0LL + rand()));
+                        buflen = snprintf(buf,sizeof(buf),"%lld",(0LL + rand()));
                         break;
                     case 2:
-                        buflen = snprintf(buf,1024,"%lld",(0LL + rand()) << 20);
+                        buflen = snprintf(buf,sizeof(buf),"%lld",(0LL + rand()) << 20);
                         break;
                     default:
                         assert(NULL);
@@ -2410,7 +2410,7 @@ int ziplistTest(int argc, char **argv, int accurate) {
 
                 assert(ziplistGet(p,&sstr,&slen,&sval));
                 if (sstr == NULL) {
-                    buflen = snprintf(buf,1024,"%lld",sval);
+                    buflen = snprintf(buf,sizeof(buf),"%lld",sval);
                 } else {
                     buflen = slen;
                     memcpy(buf,sstr,buflen);

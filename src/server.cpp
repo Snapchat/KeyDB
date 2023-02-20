@@ -2219,6 +2219,7 @@ void checkChildrenDone(void) {
             g_pserver->rdbThreadVars.fRdbThreadCancel = false;
             g_pserver->rdbThreadVars.fDone = false;
             if (exitcode == 0) receiveChildInfo();
+            closeChildInfoPipe();
         }
     }
     else if ((pid = waitpid(-1, &statloc, WNOHANG)) != 0) {

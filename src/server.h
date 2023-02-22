@@ -1217,7 +1217,7 @@ protected:
     uint64_t m_mvccCheckpoint = 0;
 
 private:
-    static void serializeAndStoreChange(StorageCache *storage, redisDbPersistentData *db, const char *key, bool fUpdate);
+    static sds serializeChange(redisDbPersistentData *db, const char *key);
 
     void ensure(const char *key);
     void ensure(const char *key, dictEntry **de);

@@ -41,7 +41,7 @@ public:
     void clear(void(callback)(void*));
     void clearAsync();
     void insert(sds key, const void *data, size_t cbdata, bool fOverwrite);
-    void bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem);
+    void bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, char *rgfOverwrite, size_t celem);
     void retrieve(sds key, IStorage::callbackSingle fn) const;
     bool erase(sds key);
     void emergencyFreeCache();

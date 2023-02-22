@@ -3265,7 +3265,7 @@ int dbnumFromDb(redisDb *db)
     serverPanic("invalid database pointer");
 }
 
-bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command, bool fExecOK)
+void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command)
 {
     if (m_spstorage == nullptr) {
 #if defined(__x86_64__) || defined(__i386__)

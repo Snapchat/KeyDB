@@ -2976,6 +2976,8 @@ bool redisDbPersistentData::processChanges(bool fSnapshot)
                     }
                 }
                 m_spstorage->bulkInsert(veckeys.data(), veccbkeys.data(), vecvals.data(), veccbvals.data(), vecoverwrite.data(), veckeys.size());
+                for (auto val : vecvals)
+                    sdsfree(val);
                 dictReleaseIterator(di);
             }
         }
@@ -3051,6 +3053,8 @@ void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **
             }
         }
         m_spstorage->bulkInsert(veckeys.data(), veccbkeys.data(), vecvals.data(), veccbvals.data(), vecoverwrite.data(), veckeys.size());
+        for (auto val : vecvals)
+            sdsfree(val);
         dictReleaseIterator(di);
         dictRelease(m_dictChangedStorageFlush);
         m_dictChangedStorageFlush = nullptr;

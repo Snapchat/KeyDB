@@ -3344,7 +3344,6 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
     }
 
     bool fNoInsert = false;
-    bool fShort = false;
     if (!vecInserts.empty()) {
         lock.arm(c);
         for (auto &tuple : vecInserts)
@@ -3390,15 +3389,8 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
                     sdsfree(sharedKey); // BUG but don't bother crashing
             }
         }
-        if (fExecOK && !fNoInsert && cmd->proc == getCommand) {
-            robj *o = std::get<1>(vecInserts[0]);
-            if (o != nullptr) {
-                addReplyBulk(c, o);
-                fShort = true;
-            }
-        }
         lock.disarm();
     }
 
-    return fShort;
+    return false;
 }

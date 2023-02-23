@@ -716,11 +716,6 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
             }
         }
 
-        if (eventLoop->flags & AE_DONT_WAIT) {
-            tv.tv_sec = tv.tv_usec = 0;
-            tvp = &tv;
-        }
-
         if (eventLoop->beforesleep != NULL && flags & AE_CALL_BEFORE_SLEEP) {
             std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
             if (!(eventLoop->beforesleepFlags & AE_SLEEP_THREADSAFE)) {
@@ -729,6 +724,11 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
                 g_forkLock.acquireRead();
             }
             eventLoop->beforesleep(eventLoop);
+        }
+
+        if (eventLoop->flags & AE_DONT_WAIT) {
+            tv.tv_sec = tv.tv_usec = 0;
+            tvp = &tv;
         }
 
         /* Call the multiplexing API, will return only on timeout or when
@@ -857,6 +857,11 @@ void aeSetThreadOwnsLockOverride(int fOverride)
 void aeReleaseForkLock()
 {
     g_forkLock.downgradeWrite();
+}
+
+void aeForkLockInChild()
+{
+    g_forkLock.setNotify(false);
 }
 
 int aeThreadOwnsLock()

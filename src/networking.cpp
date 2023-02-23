@@ -145,7 +145,7 @@ client *createClient(connection *conn, int iel) {
     client_id = g_pserver->next_client_id.fetch_add(1);
     c->iel = iel;
     c->id = client_id;
-    snprintf(c->lock.szName, 56, "client %" PRIu64, client_id);
+    snprintf(c->lock.szName, sizeof(c->lock.szName), "client %" PRIu64, client_id);
     c->resp = 2;
     c->conn = conn;
     c->name = NULL;
@@ -777,11 +777,11 @@ void setDeferredAggregateLen(client *c, void *node, long length, char prefix) {
          * we return NULL in addReplyDeferredLen() */
         if (node == NULL) return;
         char lenstr[128];
-        size_t lenstr_len = snprintf(lenstr, 128, "%c%ld\r\n", prefix, length);
+        size_t lenstr_len = snprintf(lenstr, sizeof(lenstr), "%c%ld\r\n", prefix, length);
         setDeferredReply(c, node, lenstr, lenstr_len);
     } else {
         char lenstr[128];
-        int lenstr_len = snprintf(lenstr, 128, "%c%ld\r\n", prefix, length);
+        int lenstr_len = snprintf(lenstr, sizeof(lenstr), "%c%ld\r\n", prefix, length);
 
         size_t idxSplice = (size_t)node;
         serverAssert(idxSplice <= c->replyAsync->used);
@@ -2595,9 +2595,7 @@ void parseClientCommandBuffer(client *c) {
             (g_pserver->m_pstorageFactory || aeLockContested(cserver.cthreads/2) || cserver.cthreads == 1) && !GlobalLocksAcquired()) {
             auto &query = c->vecqueuedcmd.back();
             if (query.argc > 0 && query.argc == query.argcMax) {
-                if (c->db->prefetchKeysAsync(c, query, c->vecqueuedcmd.size() == 1)) {
-                    c->vecqueuedcmd.erase(c->vecqueuedcmd.begin());
-                }
+                c->db->prefetchKeysAsync(c, query);
             }
         }
         c->reqtype = 0;

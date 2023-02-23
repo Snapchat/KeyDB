@@ -1,8 +1,8 @@
-/* Timer API example -- Register and handle timer events
+/* Server hooks API example
  *
  * -----------------------------------------------------------------------------
  *
- * Copyright (c) 2018, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2019, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,33 +31,46 @@
  */
 
 #define REDISMODULE_EXPERIMENTAL_API
-#include "../redismodule.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <ctype.h>
-#include <string.h>
+#include "redismodule.h"
 
-/* Timer callback. */
-void timerHandler(RedisModuleCtx *ctx, void *data) {
+size_t count, finalCount;
+
+/* Client state change callback. */
+void loadCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data) {
     REDISMODULE_NOT_USED(ctx);
-    printf("Fired %s!\n", (char *)data);
-    RedisModule_Free(data);
+    REDISMODULE_NOT_USED(e);
+    REDISMODULE_NOT_USED(data);
+
+    if (sub == REDISMODULE_SUBEVENT_LOADING_FLASH_START || sub == REDISMODULE_SUBEVENT_LOADING_RDB_START || sub == REDISMODULE_SUBEVENT_LOADING_AOF_START || sub == REDISMODULE_SUBEVENT_LOADING_REPL_START) {
+        count = 0;
+        finalCount = 0;
+    } else if (sub == REDISMODULE_SUBEVENT_LOADING_ENDED) {
+        finalCount = count;
+    }
 }
 
-/* HELLOTIMER.TIMER*/
-int TimerCommand_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+int loadKeyCallback(RedisModuleCtx *ctx, int type,  const char *event, RedisModuleString *key) {
+    REDISMODULE_NOT_USED(ctx);
+    REDISMODULE_NOT_USED(type);
+    REDISMODULE_NOT_USED(event);
 
-    for (int j = 0; j < 10; j++) {
-        int delay = rand() % 5000;
-        int bufsize = 256;
-        char *buf = RedisModule_Alloc(bufsize);
-        snprintf(buf,bufsize,"After %d", delay);
-        RedisModuleTimerID tid = RedisModule_CreateTimer(ctx,delay,timerHandler,buf);
-        REDISMODULE_NOT_USED(tid);
-    }
-    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+    const char *keyname = RedisModule_StringPtrLen(key, NULL);
+
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE, "Loaded key: %s", keyname);
+
+    count++;
+    return 0;
+}
+
+int LoadCount_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    REDISMODULE_NOT_USED(argv);
+    RedisModule_AutoMemory(ctx); /* Use automatic memory management. */
+
+    if (argc != 1) return RedisModule_WrongArity(ctx);
+
+    RedisModule_ReplyWithLongLong(ctx, finalCount);
+
+    return REDISMODULE_OK;
 }
 
 /* This function must be present on each Redis module. It is used in order to
@@ -66,12 +79,16 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
     REDISMODULE_NOT_USED(argv);
     REDISMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx,"hellotimer",1,REDISMODULE_APIVER_1)
+    if (RedisModule_Init(ctx,"load",1,REDISMODULE_APIVER_1)
         == REDISMODULE_ERR) return REDISMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"hellotimer.timer",
-        TimerCommand_RedisCommand,"readonly",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    RedisModule_SubscribeToServerEvent(ctx,
+        RedisModuleEvent_Loading, loadCallback);
+    RedisModule_SubscribeToKeyspaceEvents(ctx,
+        REDISMODULE_NOTIFY_LOADED, loadKeyCallback);
 
+    if (RedisModule_CreateCommand(ctx, "load.count",
+        LoadCount_RedisCommand,"readonly",1,1,1) == REDISMODULE_ERR)
+        return REDISMODULE_ERR;
     return REDISMODULE_OK;
 }

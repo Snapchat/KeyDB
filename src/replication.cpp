@@ -1538,7 +1538,7 @@ void syncCommand(client *c) {
         } else {
             /* We don't have a BGSAVE in progress, let's start one. Diskless
              * or disk-based mode is determined by replica's capacity. */
-            if (!hasActiveChildProcess()) {
+            if (!hasActiveChildProcessOrBGSave()) {
                 startBgsaveForReplication(c->slave_capa);
             } else {
                 serverLog(LL_NOTICE,
@@ -3736,7 +3736,7 @@ retry_connect:
         while(maxtries--) {
             auto dt = std::chrono::system_clock::now().time_since_epoch();
             auto dtMillisecond = std::chrono::duration_cast<std::chrono::milliseconds>(dt);
-            snprintf(tmpfile,256,
+            snprintf(tmpfile,sizeof(tmpfile),
                 "temp-%d.%ld.rdb",(int)dtMillisecond.count(),(long int)getpid());
             dfd = open(tmpfile,O_CREAT|O_WRONLY|O_EXCL,0644);
             if (dfd != -1) break;
@@ -4984,7 +4984,7 @@ void replicationStartPendingFork(void) {
      * In case of diskless replication, we make sure to wait the specified
      * number of seconds (according to configuration) so that other slaves
      * have the time to arrive before we start streaming. */
-    if (!hasActiveChildProcess()) {
+    if (!hasActiveChildProcessOrBGSave()) {
         time_t idle, max_idle = 0;
         int slaves_waiting = 0;
         int mincapa = -1;

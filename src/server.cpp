@@ -1706,7 +1706,7 @@ int redisDbPersistentData::incrementallyRehash() {
  * for dict.c to resize the hash tables accordingly to the fact we have an
  * active fork child running. */
 void updateDictResizePolicy(void) {
-    if (!hasActiveChildProcess() || (g_pserver->FRdbSaveInProgress() && !cserver.fForkBgSave))
+    if (!hasActiveChildProcess())
         dictEnableResize();
     else
         dictDisableResize();
@@ -1725,7 +1725,11 @@ const char *strChildType(int type) {
 /* Return true if there are active children processes doing RDB saving,
  * AOF rewriting, or some side process spawned by a loaded module. */
 int hasActiveChildProcess() {
-    return g_pserver->FRdbSaveInProgress() || g_pserver->child_pid != -1;
+    return g_pserver->child_pid != -1;
+}
+
+int hasActiveChildProcessOrBGSave() {
+    return g_pserver->FRdbSaveInProgress() || hasActiveChildProcess();
 }
 
 void resetChildState() {
@@ -2074,7 +2078,7 @@ void databasesCron(bool fMainThread) {
     /* Perform hash tables rehashing if needed, but only if there are no
      * other processes saving the DB on disk. Otherwise rehashing is bad
      * as will cause a lot of copy-on-write of memory pages. */
-    if (!hasActiveChildProcess() || g_pserver->FRdbSaveInProgress()) {
+    if (!hasActiveChildProcess()) {
         /* We use global counters so if we stop the computation at a given
          * DB we'll be able to start from the successive in the next
          * cron loop iteration. */
@@ -2215,6 +2219,7 @@ void checkChildrenDone(void) {
             g_pserver->rdbThreadVars.fRdbThreadCancel = false;
             g_pserver->rdbThreadVars.fDone = false;
             if (exitcode == 0) receiveChildInfo();
+            closeChildInfoPipe();
         }
     }
     else if ((pid = waitpid(-1, &statloc, WNOHANG)) != 0) {
@@ -2468,14 +2473,14 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
-    if (!hasActiveChildProcess() &&
+    if (!hasActiveChildProcessOrBGSave() &&
         g_pserver->aof_rewrite_scheduled)
     {
         rewriteAppendOnlyFileBackground();
     }
 
     /* Check if a background saving or AOF rewrite in progress terminated. */
-    if (hasActiveChildProcess() || ldbPendingChildren())
+    if (hasActiveChildProcessOrBGSave() || ldbPendingChildren())
     {
         run_with_period(1000) receiveChildInfo();
         checkChildrenDone();
@@ -2517,7 +2522,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
         /* Trigger an AOF rewrite if needed. */
         if (g_pserver->aof_state == AOF_ON &&
-            !hasActiveChildProcess() &&
+            !hasActiveChildProcessOrBGSave() &&
             g_pserver->aof_rewrite_perc &&
             g_pserver->aof_current_size > g_pserver->aof_rewrite_min_size)
         {
@@ -2601,7 +2606,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * Note: this code must be after the replicationCron() call above so
      * make sure when refactoring this file to keep this order. This is useful
      * because we want to give priority to RDB savings for replication. */
-    if (!hasActiveChildProcess() &&
+    if (!hasActiveChildProcessOrBGSave() &&
         g_pserver->rdb_bgsave_scheduled &&
         (g_pserver->unixtime-g_pserver->lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY ||
          g_pserver->lastbgsave_status == C_OK))
@@ -2814,9 +2819,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     serverAssert(g_pserver->repl_batch_offStart < 0);
 
     runAndPropogateToReplicas(processClients);
-
-    /* Handle precise timeouts of blocked clients. */
-    handleBlockedClientsTimeout();
 
     /* Just call a subset of vital functions in case we are re-entering
      * the event loop from processEventsWhileBlocked(). Note that in this
@@ -4067,12 +4069,6 @@ void initServer(void) {
         }
     }
 
-    /* We have to initialize storage providers after the cluster has been initialized */
-    for (int idb = 0; idb < cserver.dbnum; ++idb)
-    {
-        g_pserver->db[idb]->storageProviderInitialize();
-    }
-
     saveMasterStatusToStorage(false); // eliminate the repl-offset field
     
     /* Initialize ACL default password if it exists */
@@ -4085,6 +4081,15 @@ void initServer(void) {
  * Thread Local Storage initialization collides with dlopen call.
  * see: https://sourceware.org/bugzilla/show_bug.cgi?id=19329 */
 void InitServerLast() {
+
+    /* We have to initialize storage providers after the cluster has been initialized */
+    moduleFireServerEvent(REDISMODULE_EVENT_LOADING, REDISMODULE_SUBEVENT_LOADING_FLASH_START, NULL);
+    for (int idb = 0; idb < cserver.dbnum; ++idb)
+    {
+        g_pserver->db[idb]->storageProviderInitialize();
+    }
+    moduleFireServerEvent(REDISMODULE_EVENT_LOADING, REDISMODULE_SUBEVENT_LOADING_ENDED, NULL);
+
     bioInit();
     set_jemalloc_bg_thread(cserver.jemalloc_bg_thread);
     g_pserver->initial_memory_usage = zmalloc_used_memory();
@@ -5467,30 +5472,30 @@ NULL
 
 /* Convert an amount of bytes into a human readable string in the form
  * of 100B, 2G, 100M, 4K, and so forth. */
-void bytesToHuman(char *s, unsigned long long n) {
+void bytesToHuman(char *s, unsigned long long n, size_t bufsize) {
     double d;
 
     if (n < 1024) {
         /* Bytes */
-        snprintf(s,256,"%lluB",n);
+        snprintf(s,bufsize,"%lluB",n);
     } else if (n < (1024*1024)) {
         d = (double)n/(1024);
-        snprintf(s,256,"%.2fK",d);
+        snprintf(s,bufsize,"%.2fK",d);
     } else if (n < (1024LL*1024*1024)) {
         d = (double)n/(1024*1024);
-        snprintf(s,256,"%.2fM",d);
+        snprintf(s,bufsize,"%.2fM",d);
     } else if (n < (1024LL*1024*1024*1024)) {
         d = (double)n/(1024LL*1024*1024);
-        snprintf(s,256,"%.2fG",d);
+        snprintf(s,bufsize,"%.2fG",d);
     } else if (n < (1024LL*1024*1024*1024*1024)) {
         d = (double)n/(1024LL*1024*1024*1024);
-        snprintf(s,256,"%.2fT",d);
+        snprintf(s,bufsize,"%.2fT",d);
     } else if (n < (1024LL*1024*1024*1024*1024*1024)) {
         d = (double)n/(1024LL*1024*1024*1024*1024);
-        snprintf(s,256,"%.2fP",d);
+        snprintf(s,bufsize,"%.2fP",d);
     } else {
         /* Let's hope we never need this */
-        snprintf(s,256,"%lluB",n);
+        snprintf(s,bufsize,"%lluB",n);
     }
 }
 
@@ -5666,13 +5671,13 @@ sds genRedisInfoString(const char *section) {
         if (zmalloc_used > g_pserver->stat_peak_memory)
             g_pserver->stat_peak_memory = zmalloc_used;
 
-        bytesToHuman(hmem,zmalloc_used);
-        bytesToHuman(peak_hmem,g_pserver->stat_peak_memory);
-        bytesToHuman(total_system_hmem,total_system_mem);
-        bytesToHuman(used_memory_lua_hmem,memory_lua);
-        bytesToHuman(used_memory_scripts_hmem,mh->lua_caches);
-        bytesToHuman(used_memory_rss_hmem,g_pserver->cron_malloc_stats.process_rss);
-        bytesToHuman(maxmemory_hmem,g_pserver->maxmemory);
+        bytesToHuman(hmem,zmalloc_used,sizeof(hmem));
+        bytesToHuman(peak_hmem,g_pserver->stat_peak_memory,sizeof(peak_hmem));
+        bytesToHuman(total_system_hmem,total_system_mem,sizeof(total_system_hmem));
+        bytesToHuman(used_memory_lua_hmem,memory_lua,sizeof(used_memory_lua_hmem));
+        bytesToHuman(used_memory_scripts_hmem,mh->lua_caches,sizeof(used_memory_scripts_hmem));
+        bytesToHuman(used_memory_rss_hmem,g_pserver->cron_malloc_stats.process_rss,sizeof(used_memory_rss_hmem));
+        bytesToHuman(maxmemory_hmem,g_pserver->maxmemory,sizeof(maxmemory_hmem));
 
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info,
@@ -6559,7 +6564,8 @@ void usage(void) {
 
 void redisAsciiArt(void) {
 #include "asciilogo.h"
-    char *buf = (char*)zmalloc(1024*16, MALLOC_LOCAL);
+    size_t bufsize = 1024*16;
+    char *buf = (char*)zmalloc(bufsize, MALLOC_LOCAL);
     const char *mode;
 
     if (g_pserver->cluster_enabled) mode = "cluster";
@@ -6581,7 +6587,7 @@ void redisAsciiArt(void) {
         );
     } else {
         sds motd = fetchMOTD(true, cserver.enable_motd);
-        snprintf(buf,1024*16,ascii_logo,
+        snprintf(buf,bufsize,ascii_logo,
             KEYDB_REAL_VERSION,
             redisGitSHA1(),
             strtol(redisGitDirty(),NULL,10) > 0,
@@ -6884,6 +6890,7 @@ int redisFork(int purpose) {
     latencyAddSampleIfNeeded("fork-lock",(ustime()-startWriteLock)/1000);
     if ((childpid = fork()) == 0) {
         /* Child */
+        aeForkLockInChild();
         aeReleaseForkLock();
         g_pserver->in_fork_child = purpose;
         setOOMScoreAdj(CONFIG_OOM_BGCHILD);

@@ -1163,7 +1163,7 @@ int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEn
 
     char szT[32];
     if (g_pserver->fActiveReplica) {
-        snprintf(szT, 32, "%" PRIu64, mvccFromObj(val));
+        snprintf(szT, sizeof(szT), "%" PRIu64, mvccFromObj(val));
         if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szT) == -1) return -1;
     }
 
@@ -1190,7 +1190,7 @@ int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEn
         {
             if (itr.subkey() == nullptr)
                 continue;   // already saved
-            snprintf(szT, 32, "%lld", itr.when());
+            snprintf(szT, sizeof(szT), "%lld", itr.when());
             rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-key",itr.subkey());
             rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-when",szT);
         }
@@ -1490,7 +1490,7 @@ int rdbSaveFile(char *filename, const redisDbPersistentDataSnapshot **rgpdb, rdb
     rio rdb;
     int error = 0;
 
-    snprintf(tmpfile,256,"temp-%d-%d.rdb", getpid(), g_pserver->rdbThreadVars.tmpfileNum);
+    snprintf(tmpfile,sizeof(tmpfile),"temp-%d-%d.rdb", getpid(), g_pserver->rdbThreadVars.tmpfileNum);
     fp = fopen(tmpfile,"w");
     if (!fp) {
         char *cwdp = getcwd(cwd,MAXPATHLEN);
@@ -1679,17 +1679,15 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
     pthread_t child;
     long long start;
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveChildProcessOrBGSave()) return C_ERR;
 
     g_pserver->dirty_before_bgsave = g_pserver->dirty;
     g_pserver->lastbgsave_try = time(NULL);
     openChildInfoPipe();
 
     start = ustime();
+    latencyStartMonitor(g_pserver->rdb_save_latency);
 
-    
-    g_pserver->stat_fork_time = ustime()-start;
-    g_pserver->stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / g_pserver->stat_fork_time / (1024*1024*1024); /* GB per second. */
     if (launchRdbSaveThread(child, rsi) != C_OK) {
         closeChildInfoPipe();
         g_pserver->lastbgsave_status = C_ERR;
@@ -1697,6 +1695,9 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
             strerror(errno));
         return C_ERR;
     }
+
+    g_pserver->stat_fork_time = ustime()-start;
+    g_pserver->stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / g_pserver->stat_fork_time / (1024*1024*1024); /* GB per second. */
     latencyAddSampleIfNeeded("fork",g_pserver->stat_fork_time/1000);
     serverLog(LL_NOTICE,"Background saving started");
     g_pserver->rdb_save_time_start = time(NULL);
@@ -3601,6 +3602,8 @@ static void backgroundSaveDoneHandlerDisk(int exitcode, bool fCancelled) {
         g_pserver->dirty = g_pserver->dirty - g_pserver->dirty_before_bgsave;
         g_pserver->lastsave = time(NULL);
         g_pserver->lastbgsave_status = C_OK;
+        latencyEndMonitor(g_pserver->rdb_save_latency);
+        latencyAddSampleIfNeeded("rdb-save",g_pserver->rdb_save_latency);
     } else if (!fCancelled && exitcode != 0) {
         serverLog(LL_WARNING, "Background saving error");
         g_pserver->lastbgsave_status = C_ERR;
@@ -3691,7 +3694,7 @@ void killRDBChild(bool fSynchronous) {
     serverAssert(GlobalLocksAcquired());
 
     if (cserver.fForkBgSave) {
-        kill(g_pserver->rdb_child_pid,SIGUSR1);
+        kill(g_pserver->child_pid,SIGUSR1);
     } else { 
         g_pserver->rdbThreadVars.fRdbThreadCancel = true;
         if (g_pserver->rdb_child_type == RDB_CHILD_TYPE_SOCKET) {
@@ -3782,7 +3785,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     int pipefds[2];
     rdbSaveSocketThreadArgs *args = nullptr;
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveChildProcessOrBGSave()) return C_ERR;
 
     /* Even if the previous fork child exited, don't start a new one until we
      * drained the pipe. */

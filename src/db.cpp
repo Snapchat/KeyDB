@@ -93,7 +93,7 @@ static void lookupKeyUpdateObj(robj *val, int flags)
     /* Update the access time for the ageing algorithm.
      * Don't do it if we have a saving child, as this will trigger
      * a copy on write madness. */
-    if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH))
+    if (!hasActiveChildProcessOrBGSave() && !(flags & LOOKUP_NOTOUCH))
     {
         if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
             updateLFU(val);
@@ -1059,7 +1059,7 @@ void keysCommand(client *c) {
     sds pattern = szFromObj(c->argv[1]);
 
     const redisDbPersistentDataSnapshot *snapshot = nullptr;
-    if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
+    if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED | CLIENT_DENY_BLOCKING)))
         snapshot = c->db->createSnapshot(c->mvccCheckpoint, true /* fOptional */);
     if (snapshot != nullptr)
     {
@@ -2607,6 +2607,14 @@ void clusterStorageLoadCallback(const char *rgchkey, size_t cch, void *)
     slotToKeyUpdateKeyCore(rgchkey, cch, true /*add*/);
 }
 
+void moduleLoadCallback(const char * rgchKey, size_t cchKey, void *data) {
+    if (g_pserver->cluster_enabled) {
+        clusterStorageLoadCallback(rgchKey, cchKey, data);
+    }
+    robj *keyobj = createEmbeddedStringObject(rgchKey, cchKey);
+    moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", keyobj, *(int *)data);
+}
+
 void redisDb::initialize(int id)
 {
     redisDbPersistentData::initialize();
@@ -2625,8 +2633,8 @@ void redisDb::storageProviderInitialize()
 {
     if (g_pserver->m_pstorageFactory != nullptr)
     {
-        IStorageFactory::key_load_iterator itr = (g_pserver->cluster_enabled) ? clusterStorageLoadCallback : nullptr;
-        this->setStorageProvider(StorageCache::create(g_pserver->m_pstorageFactory, id, itr, nullptr));
+        IStorageFactory::key_load_iterator itr = moduleLoadCallback;
+        this->setStorageProvider(StorageCache::create(g_pserver->m_pstorageFactory, id, itr, &id));
     }
 }
 
@@ -3257,7 +3265,7 @@ int dbnumFromDb(redisDb *db)
     serverPanic("invalid database pointer");
 }
 
-bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command, bool fExecOK)
+void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command)
 {
     if (m_spstorage == nullptr) {
 #if defined(__x86_64__) || defined(__i386__)
@@ -3269,7 +3277,7 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
             const char *cmd = szFromObj(command.argv[0]);
             if (!strcasecmp(cmd, "set") || !strcasecmp(cmd, "get")) {
                 if (c->db->m_spdbSnapshotHOLDER != nullptr)
-                    return false; // this is dangerous enough without a snapshot around
+                    return; // this is dangerous enough without a snapshot around
                 auto h = dictSdsHash(szFromObj(command.argv[1]));
                 for (int iht = 0; iht < 2; ++iht) {
                     auto hT = h & c->db->m_pdict->ht[iht].sizemask;
@@ -3289,7 +3297,7 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
             }
         }
 #endif
-        return false;
+        return;
     }
 
     AeLocker lock;
@@ -3299,10 +3307,10 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
     getKeysResult result = GETKEYS_RESULT_INIT;
     auto cmd = lookupCommand(szFromObj(command.argv[0]));
     if (cmd == nullptr)
-        return false; // Bad command? It's not for us to judge, just bail
+        return; // Bad command? It's not for us to judge, just bail
     
     if (command.argc < std::abs(cmd->arity))
-        return false; // Invalid number of args
+        return; // Invalid number of args
     
     int numkeys = getKeysFromCommand(cmd, command.argv, command.argc, &result);
     for (int ikey = 0; ikey < numkeys; ++ikey)
@@ -3335,7 +3343,6 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
         }
     }
 
-    bool fNoInsert = false;
     if (!vecInserts.empty()) {
         lock.arm(c);
         for (auto &tuple : vecInserts)
@@ -3351,13 +3358,11 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
                     // While unlocked this was already ensured
                     decrRefCount(o);
                     sdsfree(sharedKey);
-                    fNoInsert = true;
                 }
                 else
                 {
                     if (spexpire != nullptr) {
                         if (spexpire->when() < mstime()) {
-                            fNoInsert = true;
                             break;
                         }
                     }
@@ -3384,12 +3389,5 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
         lock.disarm();
     }
 
-    if (fExecOK && !fNoInsert && cmd->proc == getCommand && !vecInserts.empty()) {
-        robj *o = std::get<1>(vecInserts[0]);
-        if (o != nullptr) {
-            addReplyBulk(c, o);
-            return true;
-        }
-    }
-    return false;
+    return;
 }

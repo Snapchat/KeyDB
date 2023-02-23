@@ -40,6 +40,7 @@
 #endif
 
 const char *KEYDB_SET_VERSION = KEYDB_REAL_VERSION;
+size_t g_semiOrderedSetTargetBucketSize = 0;    // Its a header only class so nowhere else for this to go
 
 /*-----------------------------------------------------------------------------
  * Config file name-value maps.
@@ -2587,7 +2588,7 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
         adjustOpenFilesLimit();
         if (g_pserver->maxclients != val) {
             static char msg[128];
-            snprintf(msg, 128, "The operating system is not able to handle the specified number of clients, try with %d", g_pserver->maxclients);
+            snprintf(msg, sizeof(msg), "The operating system is not able to handle the specified number of clients, try with %d", g_pserver->maxclients);
             *err = msg;
             if (g_pserver->maxclients > prev) {
                 g_pserver->maxclients = prev;
@@ -2626,7 +2627,7 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
 
                 if (res != AE_OK){
                     static char msg[128];
-                    snprintf(msg, 128,"Failed to post the request to change setsize for Thread %d", iel);
+                    snprintf(msg, sizeof(msg),"Failed to post the request to change setsize for Thread %d", iel);
                     *err = msg;
                     return 0;
                 }
@@ -2910,6 +2911,7 @@ standardConfig configs[] = {
     createBoolConfig("allow-write-during-load", NULL, MODIFIABLE_CONFIG, g_pserver->fWriteDuringActiveLoad, 0, NULL, NULL),
     createBoolConfig("force-backlog-disk-reserve", NULL, MODIFIABLE_CONFIG, cserver.force_backlog_disk, 0, NULL, NULL),
     createBoolConfig("soft-shutdown", NULL, MODIFIABLE_CONFIG, g_pserver->config_soft_shutdown, 0, NULL, NULL),
+    createSizeTConfig("semi-ordered-set-bucket-size", NULL, MODIFIABLE_CONFIG, 0, 1024, g_semiOrderedSetTargetBucketSize, 0, INTEGER_CONFIG, NULL, NULL),
 
 #ifdef USE_OPENSSL
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->tls_port, 0, INTEGER_CONFIG, NULL, updateTLSPort), /* TCP port. */

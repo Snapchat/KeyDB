@@ -1204,7 +1204,7 @@ public:
     void disableKeyCache();
     bool keycacheIsEnabled();
 
-    bool prefetchKeysAsync(client *c, struct parsed_command &command, bool fExecOK);
+    void prefetchKeysAsync(client *c, struct parsed_command &command);
 
     bool FSnapshot() const { return m_spdbSnapshotHOLDER != nullptr; }
 

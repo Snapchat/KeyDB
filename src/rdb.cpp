@@ -1490,7 +1490,7 @@ int rdbSaveFile(char *filename, const redisDbPersistentDataSnapshot **rgpdb, rdb
     rio rdb;
     int error = 0;
 
-    snprintf(tmpfile,sizeof(tmpfile),"temp-%d-%d.rdb", getpid(), g_pserver->rdbThreadVars.tmpfileNum);
+    getTempFileName(tmpfile, g_pserver->rdbThreadVars.tmpfileNum);
     fp = fopen(tmpfile,"w");
     if (!fp) {
         char *cwdp = getcwd(cwd,MAXPATHLEN);
@@ -1545,6 +1545,7 @@ int rdbSaveFile(char *filename, const redisDbPersistentDataSnapshot **rgpdb, rdb
         g_pserver->lastbgsave_status = C_OK;
     }
     stopSaving(1);
+    rdbRemoveTempFile(g_pserver->rdbThreadVars.tmpfileNum, 0);
     return C_OK;
 
 werr:

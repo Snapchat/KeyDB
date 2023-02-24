@@ -1545,7 +1545,6 @@ int rdbSaveFile(char *filename, const redisDbPersistentDataSnapshot **rgpdb, rdb
         g_pserver->lastbgsave_status = C_OK;
     }
     stopSaving(1);
-    rdbRemoveTempFile(g_pserver->rdbThreadVars.tmpfileNum, 0);
     return C_OK;
 
 werr:
@@ -1661,12 +1660,14 @@ int launchRdbSaveThread(pthread_t &child, rdbSaveInfo *rsi)
         pthread_attr_t tattr;
         pthread_attr_init(&tattr);
         pthread_attr_setstacksize(&tattr, 1 << 23); // 8 MB
+        openChildInfoPipe();
         if (pthread_create(&child, &tattr, rdbSaveThread, args)) {
             pthread_attr_destroy(&tattr);
             for (int idb = 0; idb < cserver.dbnum; ++idb)
                 g_pserver->db[idb]->endSnapshot(args->rgpdb[idb]);
             args->~rdbSaveThreadArgs();
             zfree(args);
+            closeChildInfoPipe();
             return C_ERR;
         }
         pthread_attr_destroy(&tattr);
@@ -1684,13 +1685,11 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
 
     g_pserver->dirty_before_bgsave = g_pserver->dirty;
     g_pserver->lastbgsave_try = time(NULL);
-    openChildInfoPipe();
 
     start = ustime();
     latencyStartMonitor(g_pserver->rdb_save_latency);
 
     if (launchRdbSaveThread(child, rsi) != C_OK) {
-        closeChildInfoPipe();
         g_pserver->lastbgsave_status = C_ERR;
         serverLog(LL_WARNING,"Can't save in background: fork: %s",
             strerror(errno));

@@ -2609,7 +2609,7 @@ void redisDbPersistentData::endStorageProvider()
 
 void clusterStorageLoadCallback(const char *rgchkey, size_t cch, void *)
 {
-    slotToKeyUpdateKeyCore(rgchkey, cch, true /*add*/);
+    slotToKeyUpdateKeyCore(rgchkey, cch, true /*add*/, false /*noModify*/);
 }
 
 void moduleLoadCallback(const char * rgchKey, size_t cchKey, void *data) {

@@ -53,7 +53,7 @@ struct dbBackup {
  *----------------------------------------------------------------------------*/
 
 int expireIfNeeded(redisDb *db, robj *key, robj *o);
-void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add);
+void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add, int noModify);
 
 std::unique_ptr<expireEntry> deserializeExpire(sds key, const char *str, size_t cch, size_t *poffset);
 sds serializeStoredObjectAndExpire(redisDbPersistentData *db, const char *key, robj_roptr o);
@@ -2471,11 +2471,11 @@ int xreadGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult 
  * a fast way a key that belongs to a specified hash slot. This is useful
  * while rehashing the cluster and in other conditions when we need to
  * understand if we have keys for a given hash slot. */
-void slotToKeyUpdateKey(sds key, int add) {
-    slotToKeyUpdateKeyCore(key, sdslen(key), add);
+void slotToKeyUpdateKey(sds key, int add, int noModify) {
+    slotToKeyUpdateKeyCore(key, sdslen(key), add, noModify);
 }
 
-void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add) {
+void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add, int noModify) {
     serverAssert(GlobalLocksAcquired());
 
     unsigned int hashslot = keyHashSlot(key,keylen);
@@ -2489,23 +2489,28 @@ void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add) {
     memcpy(indexed+2,key,keylen);
     int fModified = false;
     if (add) {
-        fModified = raxInsert(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL,NULL);
+        if (noModify) fModified = raxTryInsert(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL,NULL);
+        else fModified = raxInsert(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL,NULL);
     } else {
         fModified = raxRemove(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL);
     }
     // This assert is disabled when a snapshot depth is >0 because prepOverwriteForSnapshot will add in a tombstone,
     //  this prevents ensure from adding the key to the dictionary which means the caller isn't aware we're already tracking
     //  the key.
-    serverAssert(fModified || g_pserver->db[0]->snapshot_depth() > 0);
+    serverAssert(fModified || g_pserver->db[0]->snapshot_depth() > 0 || noModify);
     if (indexed != buf) zfree(indexed);
 }
 
+void slotToKeyTryAdd(sds key) {
+    slotToKeyUpdateKey(key,1,1);
+}
+
 void slotToKeyAdd(sds key) {
-    slotToKeyUpdateKey(key,1);
+    slotToKeyUpdateKey(key,1,0);
 }
 
 void slotToKeyDel(sds key) {
-    slotToKeyUpdateKey(key,0);
+    slotToKeyUpdateKey(key,0,0);
 }
 
 /* Release the radix tree mapping Redis Cluster keys to slots. If 'async'
@@ -2858,6 +2863,9 @@ LNotFound:
             {
                 dictAdd(m_pdict, sdsNewKey, o);
                 o->SetFExpires(spexpire != nullptr);
+                if (g_pserver->cluster_enabled) {
+                    slotToKeyTryAdd(sdsNewKey);
+                }
 
                 if (spexpire != nullptr)
                 {

@@ -3537,7 +3537,6 @@ unsigned int delKeysInSlot(unsigned int hashslot);
 int verifyClusterConfigWithData(void);
 void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor);
 int parseScanCursorOrReply(client *c, robj *o, unsigned long *cursor);
-void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add);
 void slotToKeyAdd(sds key);
 void slotToKeyDel(sds key);
 int dbAsyncDelete(redisDb *db, robj *key);

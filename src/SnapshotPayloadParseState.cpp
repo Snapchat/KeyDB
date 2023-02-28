@@ -294,7 +294,6 @@ void SnapshotPayloadParseState::pushValue(const char *rgch, long long cch) {
                     stage.arrvalues[1].first = nullptr;
                     cbQueued += vecqueuedKeysCb.back();
                     cbQueued += vecqueuedValsCb.back();
-                    if (g_pserver->cluster_enabled) slotToKeyUpdateKeyCore(stage.arrvalues[0].first, stage.arrvalues[0].second, 1 /*add*/);
                     if (cbQueued >= queuedBatchLimit)
                         flushQueuedKeys();
                 }

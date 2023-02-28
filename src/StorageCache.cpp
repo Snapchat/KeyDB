@@ -147,6 +147,7 @@ void StorageCache::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, si
                 de->next = m_pdict->ht[iht].table[index];
                 m_pdict->ht[iht].table[index] = de;
                 m_pdict->ht[iht].used++;
+                if (g_pserver->cluster_enabled) slotToKeyAdd((sds)de->key);
             }
         }
     }

@@ -25,7 +25,7 @@ NODEPS:=clean distclean
 
 # Default settings
 STD=-pedantic -DREDIS_STATIC=''
-CXX_STD=-std=c++14 -pedantic -fno-rtti -D__STDC_FORMAT_MACROS  
+CXX_STD=-std=c++17 -pedantic -fno-rtti -D__STDC_FORMAT_MACROS  
 ifneq (,$(findstring clang,$(CC)))
   STD+=-Wno-c11-extensions
 else

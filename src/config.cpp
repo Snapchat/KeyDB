@@ -35,6 +35,7 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #ifdef __linux__
 #include <sys/sysinfo.h>
 #endif

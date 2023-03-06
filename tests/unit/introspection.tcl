@@ -170,7 +170,8 @@ start_server {tags {"introspection"}} {
             bind
             set-proc-title
             repl-backlog-disk-reserve
-	    tls-allowlist
+	        tls-allowlist
+            db-s3-object
         }
 
         if {!$::tls} {

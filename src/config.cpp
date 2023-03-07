@@ -2480,8 +2480,7 @@ static int isValidS3Bucket(char *s3bucket, const char **err) {
         *err = "could not access s3 bucket";
         return 0;
     }
-    else
-        return 1;
+    return 1;
 }
 
 /* Validate specified string is a valid proc-title-template */

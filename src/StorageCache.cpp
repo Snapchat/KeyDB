@@ -121,6 +121,7 @@ void StorageCache::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, si
         vechashes.reserve(celem);
 
         for (size_t ielem = 0; ielem < celem; ++ielem) {
+            if (rgfOverwrite != nullptr && rgfOverwrite[ielem]) continue;
             dictEntry *de = (dictEntry*)zmalloc(sizeof(dictEntry));
             de->key = (void*)dictGenHashFunction(rgkeys[ielem], (int)rgcbkeys[ielem]);
             de->v.u64 = 1;

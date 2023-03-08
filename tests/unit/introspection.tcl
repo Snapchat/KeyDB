@@ -162,15 +162,16 @@ start_server {tags {"introspection"}} {
             aof_rewrite_cpulist
             time-thread-priority
             bgsave_cpulist
-	        storage-cache-mode
-	        storage-provider-options
-	        use-fork
+	    storage-cache-mode
+	    storage-provider-options
+	    use-fork
             multi-master
             active-replica
             bind
             set-proc-title
             repl-backlog-disk-reserve
 	    tls-allowlist
+            db-s3-object
         }
 
         if {!$::tls} {

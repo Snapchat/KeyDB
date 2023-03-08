@@ -3002,8 +3002,16 @@ void redisDbPersistentData::processChangesAsync(std::atomic<int> &pendingJobs)
     });
 }
 
-void redisDbPersistentData::bulkStorageInsert(char **rgKeys, size_t *rgcbKeys, char **rgVals, size_t *rgcbVals, size_t celem)
+/* This function is to bulk insert directly to storage provider bypassing in memory, assumes rgKeys and rgVals are not sds strings */
+void redisDbPersistentData::bulkDirectStorageInsert(char **rgKeys, size_t *rgcbKeys, char **rgVals, size_t *rgcbVals, size_t celem)
 {
+    if (g_pserver->cluster_enabled) {
+        aeAcquireLock();
+        for (size_t i = 0; i < celem; i++) {
+            slotToKeyUpdateKeyCore(rgKeys[i], rgcbKeys[i], 1);
+        }
+        aeReleaseLock();
+    }
     m_spstorage->bulkInsert(rgKeys, rgcbKeys, rgVals, rgcbVals, celem);
 }
 

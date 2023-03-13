@@ -27,7 +27,6 @@ ReadWriteDirectories=-/var/run/keydb
 
 NoNewPrivileges=true
 CapabilityBoundingSet=CAP_SETGID CAP_SETUID CAP_SYS_RESOURCE
-AmbientCapabilities=CAP_SETGID CAP_SETUID CAP_SYS_RESOURCE
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 # keydb-server can write to its own config file when in cluster mode so we

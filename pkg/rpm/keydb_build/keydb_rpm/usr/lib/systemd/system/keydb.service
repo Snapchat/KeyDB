@@ -4,7 +4,7 @@ After=network.target
 Documentation=https://docs.keydb.dev, man:keydb-server(1)
 
 [Service]
-Type=forking
+Type=notify
 ExecStart=/usr/bin/keydb-server /etc/keydb/keydb.conf
 ExecStop=/bin/kill -s TERM $MAINPID
 PIDFile=/var/run/keydb/keydb-server.pid
@@ -27,6 +27,7 @@ ReadWriteDirectories=-/var/run/keydb
 
 NoNewPrivileges=true
 CapabilityBoundingSet=CAP_SETGID CAP_SETUID CAP_SYS_RESOURCE
+AmbientCapabilities=CAP_SETGID CAP_SETUID CAP_SYS_RESOURCE
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 # keydb-server can write to its own config file when in cluster mode so we

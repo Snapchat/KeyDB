@@ -2607,12 +2607,15 @@ void clusterStorageLoadCallback(const char *rgchkey, size_t cch, void *)
     slotToKeyUpdateKeyCore(rgchkey, cch, true /*add*/);
 }
 
-void moduleLoadCallback(const char * rgchKey, size_t cchKey, void *data) {
-    if (g_pserver->cluster_enabled) {
-        clusterStorageLoadCallback(rgchKey, cchKey, data);
-    }
-    robj *keyobj = createEmbeddedStringObject(rgchKey, cchKey);
-    moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", keyobj, *(int *)data);
+void moduleLoadCallback(const char * rgchKey, size_t, void *data) {
+    redisObjectStack keyobj;
+    initStaticStringObject(keyobj, const_cast<char *>(rgchKey));
+    moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, *(int *)data);
+}
+
+void moduleClusterLoadCallback(const char * rgchKey, size_t cchKey, void *data) {
+    clusterStorageLoadCallback(rgchKey, cchKey, data);
+    moduleLoadCallback(rgchKey, cchKey, data);
 }
 
 void redisDb::initialize(int id)
@@ -2633,7 +2636,7 @@ void redisDb::storageProviderInitialize()
 {
     if (g_pserver->m_pstorageFactory != nullptr)
     {
-        IStorageFactory::key_load_iterator itr = moduleLoadCallback;
+        IStorageFactory::key_load_iterator itr = g_pserver->cluster_enabled ? moduleClusterLoadCallback : moduleLoadCallback;
         this->setStorageProvider(StorageCache::create(g_pserver->m_pstorageFactory, id, itr, &id));
     }
 }

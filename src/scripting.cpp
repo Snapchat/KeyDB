@@ -1264,6 +1264,7 @@ void scriptingInit(int setup) {
 
     /* Finally set the table as 'redis' global var. */
     lua_setglobal(lua,"redis");
+    /* Set table as 'KeyDB' global var as well */
     lua_getglobal(lua,"redis");
     lua_setglobal(lua,"KeyDB");
 

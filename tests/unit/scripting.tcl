@@ -49,7 +49,7 @@ start_server {tags {"scripting"}} {
 
     test {EVAL - using KeyDB global } {
         r eval {return KeyDB.call('get', KEYS[1])} 1 mykey
-        assert_equal {r eval {return redis.call('get',KEYS[1])} 1 mykey} {r eval {return KeyDB.call('get', KEYS[1])} 1 mykey}
+        assert_equal [r eval {return redis.call('get',KEYS[1])} 1 mykey] [r eval {return KeyDB.call('get', KEYS[1])} 1 mykey]
     }
 
     test {EVALSHA - Can we call a SHA1 if already defined?} {

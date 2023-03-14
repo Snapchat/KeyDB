@@ -1264,6 +1264,8 @@ void scriptingInit(int setup) {
 
     /* Finally set the table as 'redis' global var. */
     lua_setglobal(lua,"redis");
+    lua_getglobal(lua,"redis");
+    lua_setglobal(lua,"KeyDB");
 
     /* Replace math.random and math.randomseed with our implementations. */
     lua_getglobal(lua,"math");

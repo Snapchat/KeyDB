@@ -47,7 +47,7 @@ start_server {tags {"scripting"}} {
         r eval {return redis.call('keys', 'test')} 0
     }
 
-    test {EVAL - using KeyDB global } {
+    test {EVAL - KeyDB global works } {
         r eval {return KeyDB.call('get', KEYS[1])} 1 mykey
         assert_equal [r eval {return redis.call('get',KEYS[1])} 1 mykey] [r eval {return KeyDB.call('get', KEYS[1])} 1 mykey]
     }

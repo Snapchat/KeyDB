@@ -1204,12 +1204,12 @@ public:
     void disableKeyCache();
     bool keycacheIsEnabled();
 
-    bool prefetchKeysAsync(client *c, struct parsed_command &command, bool fExecOK);
+    void prefetchKeysAsync(client *c, struct parsed_command &command);
 
     bool FSnapshot() const { return m_spdbSnapshotHOLDER != nullptr; }
 
     std::unique_ptr<const StorageCache> CloneStorageCache() { return std::unique_ptr<const StorageCache>(m_spstorage->clone()); }
-    void bulkStorageInsert(char **rgKeys, size_t *rgcbKeys, char **rgVals, size_t *rgcbVals, size_t celem);
+    void bulkDirectStorageInsert(char **rgKeys, size_t *rgcbKeys, char **rgVals, size_t *rgcbVals, size_t celem);
 
     dict_iter find_cached_threadsafe(const char *key) const;
 
@@ -1370,7 +1370,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::FRehashing;
     using redisDbPersistentData::FTrackingChanges;
     using redisDbPersistentData::CloneStorageCache;
-    using redisDbPersistentData::bulkStorageInsert;
+    using redisDbPersistentData::bulkDirectStorageInsert;
 
 public:
     const redisDbPersistentDataSnapshot *createSnapshot(uint64_t mvccCheckpoint, bool fOptional) {
@@ -3894,13 +3894,13 @@ void incrementMvccTstamp();
 
 #if __GNUC__ >= 7 && !defined(NO_DEPRECATE_FREE)
  [[deprecated]]
-void *calloc(size_t count, size_t size);
+void *calloc(size_t count, size_t size) noexcept;
  [[deprecated]]
-void free(void *ptr);
+void free(void *ptr) noexcept;
  [[deprecated]]
-void *malloc(size_t size);
+void *malloc(size_t size) noexcept;
  [[deprecated]]
-void *realloc(void *ptr, size_t size);
+void *realloc(void *ptr, size_t size) noexcept;
 #endif
 
 /* Debugging stuff */

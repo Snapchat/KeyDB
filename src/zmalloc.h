@@ -55,7 +55,7 @@
 #include <jemalloc/jemalloc.h>
 #if (JEMALLOC_VERSION_MAJOR == 2 && JEMALLOC_VERSION_MINOR >= 1) || (JEMALLOC_VERSION_MAJOR > 2)
 #define HAVE_MALLOC_SIZE 1
-#define zmalloc_size(p) je_malloc_usable_size(p)
+#define zmalloc_size(p) malloc_usable_size(p)
 #else
 #error "Newer version of jemalloc required"
 #endif

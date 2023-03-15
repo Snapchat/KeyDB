@@ -151,6 +151,7 @@ int rdbLoad(rdbSaveInfo *rsi, int rdbflags);
 int rdbLoadFile(const char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbSaveBackground(rdbSaveInfo *rsi);
 int rdbSaveToSlavesSockets(rdbSaveInfo *rsi);
+void getTempFileName(char tmpfile[], int tmpfileNum);
 void rdbRemoveTempFile(pid_t childpid, int from_signal);
 int rdbSave(const redisDbPersistentDataSnapshot **rgpdb, rdbSaveInfo *rsi);
 int rdbSaveFile(char *filename, const redisDbPersistentDataSnapshot **rgpdb, rdbSaveInfo *rsi);

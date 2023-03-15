@@ -35,6 +35,7 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #ifdef __linux__
 #include <sys/sysinfo.h>
 #endif
@@ -2456,6 +2457,32 @@ static int isValidAOFfilename(char *val, const char **err) {
     return 1;
 }
 
+static int isValidS3Bucket(char *s3bucket, const char **err) {
+    int status = EXIT_FAILURE;
+    pid_t pid = fork();
+    if (pid < 0)
+    {
+        *err = "couldn't fork to call aws cli";
+        return 0;
+    }
+
+    if (pid == 0)
+    {
+        execlp("aws", "aws", "s3", "ls", s3bucket);
+        exit(EXIT_FAILURE);
+    }
+    else 
+    {
+        waitpid(pid, &status, 0);
+    }
+
+    if (status != EXIT_SUCCESS) {
+        *err = "could not access s3 bucket";
+        return 0;
+    }
+    return 1;
+}
+
 /* Validate specified string is a valid proc-title-template */
 static int isValidProcTitleTemplate(char *val, const char **err) {
     if (!validateProcTitleTemplate(val)) {
@@ -2803,6 +2830,7 @@ standardConfig configs[] = {
     createStringConfig("cluster-announce-ip", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->cluster_announce_ip, NULL, NULL, NULL),
     createStringConfig("syslog-ident", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->syslog_ident, "redis", NULL, NULL),
     createStringConfig("dbfilename", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->rdb_filename, CONFIG_DEFAULT_RDB_FILENAME, isValidDBfilename, NULL),
+    createStringConfig("db-s3-object", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->rdb_s3bucketpath, NULL, isValidS3Bucket, NULL),
     createStringConfig("appendfilename", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->aof_filename, "appendonly.aof", isValidAOFfilename, NULL),
     createStringConfig("server_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->server_cpulist, NULL, NULL, NULL),
     createStringConfig("bio_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->bio_cpulist, NULL, NULL, NULL),

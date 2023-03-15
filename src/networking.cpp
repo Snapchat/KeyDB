@@ -2595,9 +2595,7 @@ void parseClientCommandBuffer(client *c) {
             (g_pserver->m_pstorageFactory || aeLockContested(cserver.cthreads/2) || cserver.cthreads == 1) && !GlobalLocksAcquired()) {
             auto &query = c->vecqueuedcmd.back();
             if (query.argc > 0 && query.argc == query.argcMax) {
-                if (c->db->prefetchKeysAsync(c, query, c->vecqueuedcmd.size() == 1)) {
-                    c->vecqueuedcmd.erase(c->vecqueuedcmd.begin());
-                }
+                c->db->prefetchKeysAsync(c, query);
             }
         }
         c->reqtype = 0;

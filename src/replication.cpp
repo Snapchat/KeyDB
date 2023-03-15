@@ -3797,9 +3797,11 @@ int connectWithMaster(redisMaster *mi) {
     connSetPrivateData(mi->repl_transfer_s, mi);
     if (connConnect(mi->repl_transfer_s, mi->masterhost, mi->masterport,
                 NET_FIRST_BIND_ADDR, syncWithMaster) == C_ERR) {
-        int sev = g_pserver->enable_multimaster ? LL_NOTICE : LL_WARNING;   // with multimaster its not unheard of to intentiallionall have downed masters
-        serverLog(sev,"Unable to connect to MASTER: %s",
-                connGetLastError(mi->repl_transfer_s));
+        const char *err = "Unknown Error";
+        if (mi->repl_transfer_s->last_errno != 0)
+            err = connGetLastError(mi->repl_transfer_s);
+        int sev = g_pserver->enable_multimaster ? LL_NOTICE : LL_WARNING;   // with multimaster its not unheard of to intentionally have downed masters
+        serverLog(sev, "Unable to connect to MASTER: %s", err);
         connClose(mi->repl_transfer_s);
         mi->repl_transfer_s = NULL;
         return C_ERR;

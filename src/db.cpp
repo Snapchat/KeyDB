@@ -1931,6 +1931,7 @@ void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
  * is associated with this key (i.e. the key is non volatile) */
 expireEntry *redisDbPersistentDataSnapshot::getExpire(const char *key) {
     /* No expire? return ASAP */
+    std::unique_lock<fastlock> ul(g_expireLock);
     if (expireSize() == 0)
         return nullptr;
 
@@ -2727,8 +2728,11 @@ void redisDbPersistentData::clear(void(callback)(void*))
         m_cnewKeysPending = 0;
         m_fAllChanged++;
     }
+    {
+    std::unique_lock<fastlock> ul(g_expireLock);
     delete m_setexpire;
     m_setexpire = new (MALLOC_LOCAL) expireset();
+    }
     if (m_spstorage != nullptr)
         m_spstorage->clear(callback);
     dictEmpty(m_pdictTombstone,callback);
@@ -2861,7 +2865,8 @@ LNotFound:
             {
                 dictAdd(m_pdict, sdsNewKey, o);
                 o->SetFExpires(spexpire != nullptr);
-
+                
+                std::unique_lock<fastlock> ul(g_expireLock);
                 if (spexpire != nullptr)
                 {
                     auto itr = m_setexpire->find(sdsKey);
@@ -2884,6 +2889,7 @@ LNotFound:
     if (*pde != nullptr && dictGetVal(*pde) != nullptr)
     {
         robj *o = (robj*)dictGetVal(*pde);
+        std::unique_lock<fastlock> ul(g_expireLock);
         serverAssert(o->FExpires() == (m_setexpire->find(sdsKey) != m_setexpire->end()));
     }
 }
@@ -3256,6 +3262,7 @@ std::unique_ptr<expireEntry> deserializeExpire(sds key, const char *str, size_t 
 
 sds serializeStoredObjectAndExpire(redisDbPersistentData *db, const char *key, robj_roptr o)
 {
+    std::unique_lock<fastlock> ul(g_expireLock);
     auto itrExpire = db->setexpire()->find(key);
     const expireEntry *pexpire = nullptr;
     if (itrExpire != db->setexpire()->end())
@@ -3380,6 +3387,7 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
                     dictAdd(m_pdict, sharedKey, o);
                     o->SetFExpires(spexpire != nullptr);
 
+                    std::unique_lock<fastlock> ul(g_expireLock);
                     if (spexpire != nullptr)
                     {
                         auto itr = m_setexpire->find(sharedKey);

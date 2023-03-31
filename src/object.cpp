@@ -1668,6 +1668,7 @@ robj *deserializeStoredObjectCore(const void *data, size_t cb)
 robj *deserializeStoredObject(const redisDbPersistentData *db, const char *key, const void *data, size_t cb)
 {
     robj *o = deserializeStoredObjectCore(data, cb);
+    std::unique_lock<fastlock> ul(g_expireLock);
     o->SetFExpires(db->setexpire()->exists(key));
     return o;
 }

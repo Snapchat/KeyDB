@@ -481,6 +481,7 @@ void expireSlaveKeys(void) {
     if (slaveKeysWithExpire == NULL ||
         dictSize(slaveKeysWithExpire) == 0) return;
 
+    std::unique_lock<fastlock> ul(g_expireLock);
     int cycles = 0, noexpire = 0;
     mstime_t start = mstime();
     while(1) {

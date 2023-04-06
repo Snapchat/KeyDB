@@ -378,6 +378,8 @@ size_t freeMemoryGetNotCountedMemory(void) {
         }
     }
 
+    overhead += g_pserver->repl_backlog_size;
+
     if (g_pserver->aof_state != AOF_OFF) {
         overhead += sdsalloc(g_pserver->aof_buf)+aofRewriteBufferSize();
     }

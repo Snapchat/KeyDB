@@ -378,6 +378,8 @@ size_t freeMemoryGetNotCountedMemory(void) {
         }
     }
 
+    /* also don't count the replication backlog memory
+     * that's where the replication clients get their memory from */
     overhead += g_pserver->repl_backlog_size;
 
     if (g_pserver->aof_state != AOF_OFF) {

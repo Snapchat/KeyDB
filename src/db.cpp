@@ -1737,6 +1737,9 @@ int dbSwapDatabases(int id1, int id2) {
         id2 < 0 || id2 >= cserver.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
     std::swap(g_pserver->db[id1], g_pserver->db[id2]);
+    
+    //swap db's id too, otherwise db does not match its id
+    std::swap(g_pserver->db[id1]->id, g_pserver->db[id2]->id);
 
     /* Note that we don't swap blocking_keys,
      * ready_keys and watched_keys, since we want clients to
@@ -1766,7 +1769,7 @@ int dbSwapDatabases(int id1, int id2) {
 
 /* SWAPDB db1 db2 */
 void swapdbCommand(client *c) {
-    int id1, id2;
+    int id1, id2, oriId;
 
     /* Not allowed in cluster mode: we have just DB 0 there. */
     if (g_pserver->cluster_enabled) {
@@ -1783,6 +1786,9 @@ void swapdbCommand(client *c) {
         "invalid second DB index") != C_OK)
         return;
 
+    //get client's original db's id
+    oriId=c->db->id;
+
     /* Swap... */
     if (dbSwapDatabases(id1,id2) == C_ERR) {
         addReplyError(c,"DB index is out of range");
@@ -1791,6 +1797,10 @@ void swapdbCommand(client *c) {
         RedisModuleSwapDbInfo si = {REDISMODULE_SWAPDBINFO_VERSION,(int32_t)id1,(int32_t)id2};
         moduleFireServerEvent(REDISMODULE_EVENT_SWAPDB,0,&si);
         g_pserver->dirty++;
+
+	//set client's db to original db
+        c->db=g_pserver->db[oriId];
+
         addReply(c,shared.ok);
     }
 }

@@ -69,3 +69,14 @@ jobs:
           sudo apt-get -y remove libzstd || true
           sudo apt-get -y install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
           make KEYDB_CFLAGS='-Werror' KEYDB_CXXFLAGS='-Werror' MALLOC=libc -j2
+
+  build-alpine:
+    runs-on: alpine-latest
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        submodules: recursive
+    - name: make -j2
+      run: | 
+        apk add coreutils gcc linux-headers make musl-dev openssl-dev git util-linux-dev curl-dev g++ libunwind-dev bash perl git bzip2-dev zstd-dev lz4-dev snappy-dev
+        make -j2

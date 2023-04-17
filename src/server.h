@@ -3894,13 +3894,29 @@ void incrementMvccTstamp();
 
 #if __GNUC__ >= 7 && !defined(NO_DEPRECATE_FREE)
  [[deprecated]]
+#ifdef ALPINE
+void *calloc(size_t count, size_t size);
+#else
 void *calloc(size_t count, size_t size) noexcept;
+#endif
  [[deprecated]]
+#ifdef ALPINE
+void free(void *ptr);
+#else
 void free(void *ptr) noexcept;
+#endif
  [[deprecated]]
+#ifdef ALPINE
+void *malloc(size_t size);
+#else
 void *malloc(size_t size) noexcept;
+#endif
  [[deprecated]]
+#ifdef ALPINE
+void *realloc(void *ptr, size_t size);
+#else
 void *realloc(void *ptr, size_t size) noexcept;
+#endif
 #endif
 
 /* Debugging stuff */

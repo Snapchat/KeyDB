@@ -349,7 +349,7 @@ endif
 # Alpine OS doesn't have support for the execinfo backtrace library we use for debug, so we provide an alternate implementation using libwunwind.
 OS := $(shell cat /etc/os-release | grep ID= | head -n 1 | cut -d'=' -f2)
 ifeq ($(OS),alpine)
-    FINAL_CXXFLAGS+=-DUNW_LOCAL_ONLY
+    FINAL_CXXFLAGS+=-DUNW_LOCAL_ONLY -DALPINE
     FINAL_LIBS += -lunwind
 endif
 

@@ -2729,6 +2729,8 @@ struct redisServer {
     long long repl_batch_offStart = -1;
     long long repl_batch_idxStart = -1;
 
+    long long rand_total_threshold;
+
     int config_soft_shutdown = false;
     bool soft_shutdown = false;
 

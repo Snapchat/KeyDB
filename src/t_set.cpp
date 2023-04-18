@@ -673,6 +673,10 @@ void srandmemberWithCountCommand(client *c) {
     dict *d;
 
     if (getRangeLongFromObjectOrReply(c,c->argv[2],-LONG_MAX,LONG_MAX,&l,NULL) != C_OK) return;
+    if (l < -g_pserver->rand_total_threshold || l > g_pserver->rand_total_threshold) {
+        addReplyError(c,"value is out of range");
+        return;
+    }
     if (l >= 0) {
         count = (unsigned long) l;
     } else {
@@ -706,6 +710,8 @@ void srandmemberWithCountCommand(client *c) {
             } else {
                 addReplyBulkCBuffer(c,ele,sdslen(ele));
             }
+            if (c->flags & CLIENT_CLOSE_ASAP)
+                break;
         }
         return;
     }

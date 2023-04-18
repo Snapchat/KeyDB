@@ -1,3 +1,21 @@
+keydb (6:6.3.3-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * To help accelerate our development efforts for KeyDB, this will be the last release containing support for Centos 7, Ubuntu 16.04, Ubuntu 18.04, Debian 9 and 32-bit builds
+  * This release contains fixes for 11 issues along with improvements to the KeyDB FLASH feature:
+  * Fixed race condition with expireset access (Issue #597)
+  * Fixed keys command with lua, and added keydb as an alternative to redis as lua variable to access db (Issue #562 and #594)
+  * Fixed hang in aof child (Issue #554)
+  * Fixed leaking fds from RDB save (Issue #453 and #584)
+  * Added config for S3 RDB load/save (Issue #584)
+  * Enabled active defrag during forkless background save to improve average memory efficiency (Issue #460)
+  * Fixed crash with fork background save during replication (Issue #567)
+  * RocksDB has been updated to v7.9.2
+  * Fixed missing slot_to_key map in FLASH cluster mode (Issue #574)
+  * Added keyspace notifications for keys loaded from FLASH at startup
+  * Fixed race condition in prefetchKeysAsync with FLASH enabled (Issue #571)
+
+-- Ben Schermel <ben@eqalpha.com>  Tue, 18 Apr 2023 10:00:37 +0000
+
 keydb (6:6.3.2-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * This release contains Beta level support for KeyDB FLASH, new ASYNC commands, latency improvements and a number of bug fixes. 

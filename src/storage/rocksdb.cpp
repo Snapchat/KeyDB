@@ -168,6 +168,26 @@ bool RocksDBStorageProvider::enumerate(callback fn) const
     return !it->Valid();
 }
 
+size_t RocksDBStorageProvider::stateful_enumerate(callback fn)
+{
+    if (m_iter == nullptr || !m_iter->Valid())
+        m_iter = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spcolfamily.get()));
+    size_t count = 0;
+    while (m_iter->Valid()) {
+        if (FInternalKey(m_iter->key().data(), m_iter->key().size()))
+            continue;
+
+        if (fn(m_iter->key().data(), m_iter->key().size(), m_iter->value().data(), m_iter->value().size())) {
+            m_iter->Next();
+            ++count;
+        } else {
+            break;
+        }
+    }
+    assert(m_iter->status().ok()); // Check for any errors found during the scan
+    return count;
+}
+
 const IStorage *RocksDBStorageProvider::clone() const
 {
     std::unique_lock<fastlock> l(m_lock);

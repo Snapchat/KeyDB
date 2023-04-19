@@ -22,6 +22,7 @@ class RocksDBStorageProvider : public IStorage
     rocksdb::ReadOptions m_readOptionsTemplate;
     size_t m_count = 0;
     mutable fastlock m_lock {"RocksDBStorageProvider"};
+    std::unique_ptr<rocksdb::Iterator> m_iter;
 
 public:
     RocksDBStorageProvider(RocksDBStorageFactory *pfactory, std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count);
@@ -32,6 +33,7 @@ public:
     virtual void retrieve(const char *key, size_t cchKey, callbackSingle fn) const override;
     virtual size_t clear() override;
     virtual bool enumerate(callback fn) const override;
+    virtual size_t stateful_enumerate(callback fn) override;
 
     virtual const IStorage *clone() const override;
 

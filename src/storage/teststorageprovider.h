@@ -14,6 +14,7 @@ class TestStorageFactory : public IStorageFactory
 class TestStorageProvider final : public IStorage
 {
     std::unordered_map<std::string, std::string> m_map;
+    std::unordered_map<std::string, std::string>::iterator m_iter = m_map.end();
 
 public:
     TestStorageProvider();
@@ -24,6 +25,7 @@ public:
     virtual void retrieve(const char *key, size_t cchKey, callbackSingle fn) const override;
     virtual size_t clear() override;
     virtual bool enumerate(callback fn) const override;
+    virtual size_t stateful_enumerate(callback fn) override;
     virtual size_t count() const override;
 
     virtual void flush() override;

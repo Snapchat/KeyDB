@@ -73,6 +73,26 @@ bool TestStorageProvider::enumerate(callback fn) const
     }
     return fAll;
 }
+
+size_t TestStorageProvider::stateful_enumerate(callback fn)
+{
+    size_t count = 0;
+    if (m_iter == m_map.end())
+        m_iter = m_map.begin();
+
+    while (m_iter != m_map.end())
+    {
+        if (fn(m_iter->first.data(), m_iter->first.size(), m_iter->second.data(), m_iter->second.size()))
+        {
+            m_iter++;
+            count++;
+        } else
+        {
+            break;
+        }
+    }
+    return count;
+}
     
 size_t TestStorageProvider::count() const
 {

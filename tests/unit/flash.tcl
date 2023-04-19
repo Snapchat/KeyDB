@@ -120,6 +120,21 @@ if {$::flash_enabled} {
             assert_equal {2} [r scard set1]
         }
 
+        test { Keys in storage are expired } {
+            r flushdb
+            r psetex key1 500 a
+            r psetex key2 500 a
+            r psetex key3 500 a
+            r flushall cache
+            set size1 [r dbsize]
+            # Redis expires random keys ten times every second so we are
+            # fairly sure that all the three keys should be evicted after
+            # one second.
+            after 1000
+            set size2 [r dbsize]
+            list $size1 $size2
+        } {3 0}
+
         r flushall
         # If a weak storage memory model is set, wait for any pending snapshot writes to finish
         after 500 

@@ -49,6 +49,7 @@ public:
     void expand(uint64_t slots);
 
     bool enumerate(IStorage::callback fn) const { return m_spstorage->enumerate(fn); }
+    size_t stateful_enumerate(IStorage::callback fn) { return m_spstorage->stateful_enumerate(fn); }
 
     void beginWriteBatch();
     void endWriteBatch() { m_spstorage->endWriteBatch(); }

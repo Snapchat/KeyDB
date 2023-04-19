@@ -416,6 +416,33 @@ void activeExpireCycleCore(int type) {
             return true;
         }, &check);
 
+        if (!timelimit_exit && db->getStorageCache() != nullptr)
+            db->getStorageCache()->stateful_enumerate([&] (const char *key, size_t keylen, const void *val, size_t vallen) {
+                sds sdsKey = sdsnewlen(key, keylen);
+                size_t offset = 0;
+                auto e = deserializeExpire(sdsKey, (const char*)val, vallen, &offset);
+                if (e->when() < now)
+                {
+                    expired += activeExpireCycleExpire(db, *e, now, tried);
+                }
+                sdsfree(sdsKey);
+
+                if ((tried % ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP) == 0)
+                {
+                    /* We can't block forever here even if there are many keys to
+                    * expire. So after a given amount of milliseconds return to the
+                    * caller waiting for the other active expire cycle. */
+                    elapsed = ustime()-start;
+                    if (elapsed > timelimit) {
+                        timelimit_exit = 1;
+                        g_pserver->stat_expired_time_cap_reached_count++;
+                        return false;
+                    }
+                    check = ACTIVE_EXPIRE_CYCLE_FAST_DURATION;
+                }
+                return true;
+            });
+
         total_expired += expired;
     }
 

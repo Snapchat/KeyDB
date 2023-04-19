@@ -13,6 +13,10 @@ keydb (6:6.3.3-1distribution_placeholder) codename_placeholder; urgency=medium
   * Fixed missing slot_to_key map in FLASH cluster mode (Issue #574)
   * Added keyspace notifications for keys loaded from FLASH at startup
   * Fixed race condition in prefetchKeysAsync with FLASH enabled (Issue #571)
+  * Fixed integer overflow in rand family of commands(Issue #631, #632, #633)
+  * Fixed bad value in hincrbyfloat(Issue #634)
+  * Fixed OOM hang in rand family of commands(Issue #635)
+  * Added config to limit count of return values in rand family of commands(Issue #636)
 
 -- Ben Schermel <ben@eqalpha.com>  Tue, 18 Apr 2023 10:00:37 +0000
 

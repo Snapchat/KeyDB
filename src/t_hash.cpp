@@ -729,7 +729,7 @@ void hincrbyfloatCommand(client *c) {
     unsigned int vlen;
 
     if (getLongDoubleFromObjectOrReply(c,c->argv[3],&incr,NULL) != C_OK) return;
-    if (isnan(incr) || isinf(incr)) {
+    if (std::isnan(incr) || std::isinf(incr)) {
         addReplyError(c,"value is NaN or Infinity");
         return;
     }

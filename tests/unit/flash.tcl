@@ -122,15 +122,13 @@ if {$::flash_enabled} {
 
         test { Keys in storage are expired } {
             r flushdb
-            r psetex key1 1000 a
-            r psetex key2 1000 a
-            r psetex key3 1000 a
+            r psetex key1 10000 a
+            r psetex key2 10000 a
+            r psetex key3 10000 a
             r flushall cache
-            # Redis expires random keys ten times every second so we are
-            # fairly sure that all the three keys should be evicted after
-            # one second.
+
             after 1000
-            wait_for_condition 100 50 {
+            wait_for_condition 1000 50 {
                 [r dbsize] == 0
             } else {
                 fail "keys in ssd only not expired"

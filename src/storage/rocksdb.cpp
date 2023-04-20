@@ -170,8 +170,10 @@ bool RocksDBStorageProvider::enumerate(callback fn) const
 
 size_t RocksDBStorageProvider::stateful_enumerate(callback fn)
 {
-    if (m_iter == nullptr || !m_iter->Valid())
+    if (m_iter == nullptr || !m_iter->Valid()) {
         m_iter = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spcolfamily.get()));
+        m_iter->SeekToFirst();
+    }
     size_t count = 0;
     while (m_iter->Valid()) {
         if (FInternalKey(m_iter->key().data(), m_iter->key().size()))

@@ -2734,6 +2734,8 @@ struct redisServer {
     int config_soft_shutdown = false;
     bool soft_shutdown = false;
 
+    int flash_disable_key_cache = false;
+
     /* Lock Contention Ring Buffer */
     static const size_t s_lockContentionSamples = 64;
     uint16_t rglockSamples[s_lockContentionSamples];

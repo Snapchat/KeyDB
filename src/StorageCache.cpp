@@ -21,7 +21,7 @@ dictType dbStorageCacheType = {
 StorageCache::StorageCache(IStorage *storage, bool fCache)
         : m_spstorage(storage)
 {
-    if (fCache)
+    if (!g_pserver->flash_disable_key_cache && fCache)
         m_pdict = dictCreate(&dbStorageCacheType, nullptr);
 }
 

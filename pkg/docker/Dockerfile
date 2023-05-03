@@ -1,4 +1,4 @@
-FROM ubuntu:20.04
+FROM ubuntu:18.04
 SHELL ["/bin/bash","-c"]
 RUN groupadd -r keydb && useradd -r -g keydb keydb
 # use gosu for easy step-down from root: https://github.com/tianon/gosu/releases

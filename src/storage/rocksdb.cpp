@@ -165,7 +165,7 @@ bool RocksDBStorageProvider::enumerate(callback fn) const
     std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spcolfamily.get()));
     size_t count = 0;
     for (it->SeekToFirst(); it->Valid(); it->Next()) {
-        if (FInternalKey(it->key().data()+2, it->key().size()-2))
+        if (FInternalKey(it->key().data(), it->key().size()))
             continue;
         ++count;
         bool fContinue = fn(it->key().data()+2, it->key().size()-2, it->value().data(), it->value().size());

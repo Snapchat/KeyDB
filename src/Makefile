@@ -145,7 +145,9 @@ FINAL_LDFLAGS=$(LDFLAGS) $(KEYDB_LDFLAGS) $(DEBUG)
 FINAL_LIBS+=-lm -lz -lcrypto -lbz2 -lzstd -llz4 -lsnappy
 
 ifneq ($(uname_S),Darwin)
+    ifneq ($(uname_S),FreeBSD)
 	FINAL_LIBS+=-latomic
+    endif
 endif
 # Linux ARM32 needs -latomic at linking time
 ifneq (,$(findstring armv,$(uname_M)))
@@ -211,7 +213,13 @@ ifeq ($(uname_S),NetBSD)
 else
 ifeq ($(uname_S),FreeBSD)
 	# FreeBSD
-	FINAL_LIBS+= -lpthread -lexecinfo
+	FINAL_LIBS+= -lpthread -luuid -lexecinfo
+	FINAL_CFLAGS+= -I/usr/local/include
+	FINAL_CXXFLAGS+= -I/usr/local/include
+	FINAL_LDFLAGS+= -L/usr/local/lib
+	ifeq ($(USE_BACKTRACE),yes)
+	    FINAL_CFLAGS+= -DUSE_BACKTRACE
+	endif
 else
 ifeq ($(uname_S),DragonFly)
 	# DragonFly

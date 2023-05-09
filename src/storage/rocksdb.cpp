@@ -12,13 +12,6 @@ static const char keyprefix[] = INTERNAL_KEY_PREFIX;
 rocksdb::Options DefaultRocksDBOptions();
 extern "C" pid_t gettid();
 
-std::string prefixKey(const char *key, size_t cchKey)
-{
-    unsigned int hash = keyHashSlot(key, cchKey);
-    char *hash_char = (char *)&hash;
-    return std::string(hash_char + (sizeof(unsigned int) - 2), 2) + std::string(key, cchKey);
-}
-
 bool FInternalKey(const char *key, size_t cch)
 {
     if (cch >= sizeof(INTERNAL_KEY_PREFIX))
@@ -27,6 +20,13 @@ bool FInternalKey(const char *key, size_t cch)
             return true;
     }
     return false;
+}
+
+std::string prefixKey(const char *key, size_t cchKey)
+{
+    unsigned int hash = keyHashSlot(key, cchKey);
+    char *hash_char = (char *)&hash;
+    return FInternalKey(key, cchKey) ? std::string(key, cchKey) : std::string(hash_char + (sizeof(unsigned int) - 2), 2) + std::string(key, cchKey);
 }
 
 RocksDBStorageProvider::RocksDBStorageProvider(RocksDBStorageFactory *pfactory, std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count)

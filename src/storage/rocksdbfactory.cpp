@@ -186,7 +186,7 @@ IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *pr
                 printf("\tDatabase %d was not shutdown cleanly, recomputing metrics\n", db);
             fFirstRealKey = false;
             if (iter != nullptr)
-                iter(it->key().data(), it->key().size(), privdata);
+                iter(it->key().data()+2, it->key().size()-2, privdata);
             ++count;
         }
     }

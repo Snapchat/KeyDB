@@ -2489,10 +2489,10 @@ void slotToKeyUpdateKey(sds key, int add) {
 void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add) {
     serverAssert(GlobalLocksAcquired());
 
+    unsigned int hashslot = keyHashSlot(key,keylen);
     g_pserver->cluster->slots_keys_count[hashslot] += add ? 1 : -1;
 
     if (g_pserver->m_pstorageFactory == nullptr) {
-        unsigned int hashslot = keyHashSlot(key,keylen);
         unsigned char buf[64];
         unsigned char *indexed = buf;
 

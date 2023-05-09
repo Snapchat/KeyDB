@@ -1371,7 +1371,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::FRehashing;
     using redisDbPersistentData::FTrackingChanges;
     using redisDbPersistentData::CloneStorageCache;
-    using redisDbPersistentData::getStorageCache();
+    using redisDbPersistentData::getStorageCache;
     using redisDbPersistentData::bulkDirectStorageInsert;
 
 public:

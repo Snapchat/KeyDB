@@ -191,10 +191,10 @@ bool RocksDBStorageProvider::enumerate_hashslot(callback fn, int hashslot) const
     std::string prefix = getPrefix(hashslot);
     std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spcolfamily.get()));
     size_t count = 0;
-    for (it->Seek(prefix.cstr()); it->Valid(); it->Next()) {
+    for (it->Seek(prefix.c_str()); it->Valid(); it->Next()) {
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
-        if (strncmp(it->key().data(),prefix.cstr(),2) != 0)
+        if (strncmp(it->key().data(),prefix.c_str(),2) != 0)
             break;
         ++count;
         bool fContinue = fn(it->key().data()+2, it->key().size()-2, it->value().data(), it->value().size());

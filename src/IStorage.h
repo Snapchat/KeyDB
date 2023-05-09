@@ -31,6 +31,7 @@ public:
     virtual void retrieve(const char *key, size_t cchKey, callbackSingle fn) const = 0;
     virtual size_t clear() = 0;
     virtual bool enumerate(callback fn) const = 0;
+    virtual bool enumerate_hashslot(callback fn, int hashslot) const = 0;
     virtual size_t count() const = 0;
 
     virtual void bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem) {

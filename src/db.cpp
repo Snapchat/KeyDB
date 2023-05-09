@@ -2489,26 +2489,29 @@ void slotToKeyUpdateKey(sds key, int add) {
 void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add) {
     serverAssert(GlobalLocksAcquired());
 
-    unsigned int hashslot = keyHashSlot(key,keylen);
-    unsigned char buf[64];
-    unsigned char *indexed = buf;
-
     g_pserver->cluster->slots_keys_count[hashslot] += add ? 1 : -1;
-    if (keylen+2 > 64) indexed = (unsigned char*)zmalloc(keylen+2, MALLOC_SHARED);
-    indexed[0] = (hashslot >> 8) & 0xff;
-    indexed[1] = hashslot & 0xff;
-    memcpy(indexed+2,key,keylen);
-    int fModified = false;
-    if (add) {
-        fModified = raxInsert(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL,NULL);
-    } else {
-        fModified = raxRemove(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL);
+
+    if (g_pserver->m_pstorageFactory == nullptr) {
+        unsigned int hashslot = keyHashSlot(key,keylen);
+        unsigned char buf[64];
+        unsigned char *indexed = buf;
+
+        if (keylen+2 > 64) indexed = (unsigned char*)zmalloc(keylen+2, MALLOC_SHARED);
+        indexed[0] = (hashslot >> 8) & 0xff;
+        indexed[1] = hashslot & 0xff;
+        memcpy(indexed+2,key,keylen);
+        int fModified = false;
+        if (add) {
+            fModified = raxInsert(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL,NULL);
+        } else {
+            fModified = raxRemove(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL);
+        }
+        // This assert is disabled when a snapshot depth is >0 because prepOverwriteForSnapshot will add in a tombstone,
+        //  this prevents ensure from adding the key to the dictionary which means the caller isn't aware we're already tracking
+        //  the key.
+        serverAssert(fModified || g_pserver->db[0]->snapshot_depth() > 0);
+        if (indexed != buf) zfree(indexed);
     }
-    // This assert is disabled when a snapshot depth is >0 because prepOverwriteForSnapshot will add in a tombstone,
-    //  this prevents ensure from adding the key to the dictionary which means the caller isn't aware we're already tracking
-    //  the key.
-    serverAssert(fModified || g_pserver->db[0]->snapshot_depth() > 0);
-    if (indexed != buf) zfree(indexed);
 }
 
 void slotToKeyAdd(sds key) {
@@ -2544,47 +2547,66 @@ void slotToKeyFlush(int async) {
  * New objects are returned to represent keys, it's up to the caller to
  * decrement the reference count to release the keys names. */
 unsigned int getKeysInSlot(unsigned int hashslot, robj **keys, unsigned int count) {
-    raxIterator iter;
-    int j = 0;
-    unsigned char indexed[2];
+    if (g_pserver->m_pstorageFactory != nullptr) {
+        int j = 0;
+        g_pserver->db[0]->getStorageCache()->enumerate_hashslot([&](const char *key, size_t cchKey, const void *, size_t )->bool {
+            keys[j++] = createStringObject(key, cchKey);
+            return --count;
+        }, hashslot);
+    } else {
+        raxIterator iter;
+        int j = 0;
+        unsigned char indexed[2];
 
-    indexed[0] = (hashslot >> 8) & 0xff;
-    indexed[1] = hashslot & 0xff;
-    raxStart(&iter,g_pserver->cluster->slots_to_keys);
-    raxSeek(&iter,">=",indexed,2);
-    while(count-- && raxNext(&iter)) {
-        if (iter.key[0] != indexed[0] || iter.key[1] != indexed[1]) break;
-        keys[j++] = createStringObject((char*)iter.key+2,iter.key_len-2);
+        indexed[0] = (hashslot >> 8) & 0xff;
+        indexed[1] = hashslot & 0xff;
+        raxStart(&iter,g_pserver->cluster->slots_to_keys);
+        raxSeek(&iter,">=",indexed,2);
+        while(count-- && raxNext(&iter)) {
+            if (iter.key[0] != indexed[0] || iter.key[1] != indexed[1]) break;
+            keys[j++] = createStringObject((char*)iter.key+2,iter.key_len-2);
+        }
+        raxStop(&iter);
+        return j;
     }
-    raxStop(&iter);
-    return j;
 }
 
 /* Remove all the keys in the specified hash slot.
  * The number of removed items is returned. */
 unsigned int delKeysInSlot(unsigned int hashslot) {
     serverAssert(GlobalLocksAcquired());
-    
-    raxIterator iter;
-    int j = 0;
-    unsigned char indexed[2];
+    if (g_pserver->m_pstorageFactory != nullptr) {
+        int j = 0;
+        g_pserver->db[0]->getStorageCache()->enumerate_hashslot([&](const char *key, size_t cchKey, const void *, size_t )->bool {
+            robj *keyobj = createStringObject(key, cchKey);
+            dbDelete(g_pserver->db[0], keyobj);
+            decrRefCount(keyobj);
+            j++;
+            return true;
+        }, hashslot);
+        return j;
+    } else {
+        raxIterator iter;
+        int j = 0;
+        unsigned char indexed[2];
 
-    indexed[0] = (hashslot >> 8) & 0xff;
-    indexed[1] = hashslot & 0xff;
-    raxStart(&iter,g_pserver->cluster->slots_to_keys);
-    while(g_pserver->cluster->slots_keys_count[hashslot]) {
-        raxSeek(&iter,">=",indexed,2);
-        raxNext(&iter);
+        indexed[0] = (hashslot >> 8) & 0xff;
+        indexed[1] = hashslot & 0xff;
+        raxStart(&iter,g_pserver->cluster->slots_to_keys);
+        while(g_pserver->cluster->slots_keys_count[hashslot]) {
+            raxSeek(&iter,">=",indexed,2);
+            raxNext(&iter);
 
-        auto count = g_pserver->cluster->slots_keys_count[hashslot];
-        robj *key = createStringObject((char*)iter.key+2,iter.key_len-2);
-        dbDelete(g_pserver->db[0],key);
-        serverAssert(count > g_pserver->cluster->slots_keys_count[hashslot]);   // we should have deleted something or we will be in an infinite loop
-        decrRefCount(key);
-        j++;
+            auto count = g_pserver->cluster->slots_keys_count[hashslot];
+            robj *key = createStringObject((char*)iter.key+2,iter.key_len-2);
+            dbDelete(g_pserver->db[0],key);
+            serverAssert(count > g_pserver->cluster->slots_keys_count[hashslot]);   // we should have deleted something or we will be in an infinite loop
+            decrRefCount(key);
+            j++;
+        }
+        raxStop(&iter);
+        return j;
     }
-    raxStop(&iter);
-    return j;
 }
 
 unsigned int countKeysInSlot(unsigned int hashslot) {

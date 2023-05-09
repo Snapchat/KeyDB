@@ -22,11 +22,15 @@ bool FInternalKey(const char *key, size_t cch)
     return false;
 }
 
+std::string getPrefix(int hashslot)
+{
+    char *hash_char = (char *)&hashslot;
+    return std::string(hash_char + (sizeof(unsigned int) - 2), 2);
+}
+
 std::string prefixKey(const char *key, size_t cchKey)
 {
-    unsigned int hash = keyHashSlot(key, cchKey);
-    char *hash_char = (char *)&hash;
-    return FInternalKey(key, cchKey) ? std::string(key, cchKey) : std::string(hash_char + (sizeof(unsigned int) - 2), 2) + std::string(key, cchKey);
+    return FInternalKey(key, cchKey) ? std::string(key, cchKey) : getPrefix(keyHashSlot(key, cchKey)) + std::string(key, cchKey);
 }
 
 RocksDBStorageProvider::RocksDBStorageProvider(RocksDBStorageFactory *pfactory, std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count)
@@ -167,6 +171,31 @@ bool RocksDBStorageProvider::enumerate(callback fn) const
     for (it->SeekToFirst(); it->Valid(); it->Next()) {
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
+        ++count;
+        bool fContinue = fn(it->key().data()+2, it->key().size()-2, it->value().data(), it->value().size());
+        if (!fContinue)
+            break;
+    }
+    if (!it->Valid() && count != m_count)
+    {
+        if (const_cast<RocksDBStorageProvider*>(this)->m_count != count)
+            printf("WARNING: rocksdb count mismatch");
+        const_cast<RocksDBStorageProvider*>(this)->m_count = count;
+    }
+    assert(it->status().ok()); // Check for any errors found during the scan
+    return !it->Valid();
+}
+
+bool RocksDBStorageProvider::enumerate_hashslot(callback fn, int hashslot) const
+{
+    std::string prefix = getPrefix(hashslot);
+    std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spcolfamily.get()));
+    size_t count = 0;
+    for (it->Seek(prefix.cstr()); it->Valid(); it->Next()) {
+        if (FInternalKey(it->key().data(), it->key().size()))
+            continue;
+        if (strncmp(it->key().data(),prefix.cstr(),2) != 0)
+            break;
         ++count;
         bool fContinue = fn(it->key().data()+2, it->key().size()-2, it->value().data(), it->value().size());
         if (!fContinue)

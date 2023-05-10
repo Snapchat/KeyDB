@@ -2553,6 +2553,7 @@ unsigned int getKeysInSlot(unsigned int hashslot, robj **keys, unsigned int coun
             keys[j++] = createStringObject(key, cchKey);
             return --count;
         }, hashslot);
+        return j;
     } else {
         raxIterator iter;
         int j = 0;

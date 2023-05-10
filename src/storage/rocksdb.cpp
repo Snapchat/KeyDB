@@ -22,7 +22,7 @@ bool FInternalKey(const char *key, size_t cch)
     return false;
 }
 
-std::string getPrefix(int hashslot)
+std::string getPrefix(unsigned int hashslot)
 {
     char *hash_char = (char *)&hashslot;
     return std::string(hash_char + (sizeof(unsigned int) - 2), 2);
@@ -186,7 +186,7 @@ bool RocksDBStorageProvider::enumerate(callback fn) const
     return !it->Valid();
 }
 
-bool RocksDBStorageProvider::enumerate_hashslot(callback fn, int hashslot) const
+bool RocksDBStorageProvider::enumerate_hashslot(callback fn, unsigned int hashslot) const
 {
     std::string prefix = getPrefix(hashslot);
     std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spcolfamily.get()));

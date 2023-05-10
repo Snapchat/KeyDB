@@ -74,7 +74,7 @@ bool TestStorageProvider::enumerate(callback fn) const
     return fAll;
 }
 
-bool TestStorageProvider::enumerate_hashslot(callback fn, int hashslot) const
+bool TestStorageProvider::enumerate_hashslot(callback fn, unsigned int hashslot) const
 {
     bool fAll = true;
     for (auto &pair : m_map)

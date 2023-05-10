@@ -49,7 +49,7 @@ public:
     void expand(uint64_t slots);
 
     bool enumerate(IStorage::callback fn) const { return m_spstorage->enumerate(fn); }
-    bool enumerate_hashslot(IStorage::callback fn, int hashslot) const { return m_spstorage->enumerate_hashslot(fn, hashslot); }
+    bool enumerate_hashslot(IStorage::callback fn, unsigned int hashslot) const { return m_spstorage->enumerate_hashslot(fn, hashslot); }
 
     void beginWriteBatch();
     void endWriteBatch() { m_spstorage->endWriteBatch(); }

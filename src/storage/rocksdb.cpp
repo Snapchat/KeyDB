@@ -201,14 +201,13 @@ bool RocksDBStorageProvider::enumerate_hashslot(callback fn, int hashslot) const
         if (!fContinue)
             break;
     }
-    if (!it->Valid() && count != m_count)
+    bool full_iter = !it->Valid() || (strncmp(it->key().data(),prefix.c_str(),2) != 0)
+    if (full_iter && count != g_pserver->cluster->slots_keys_count[hashslot])
     {
-        if (const_cast<RocksDBStorageProvider*>(this)->m_count != count)
-            printf("WARNING: rocksdb count mismatch");
-        const_cast<RocksDBStorageProvider*>(this)->m_count = count;
+        printf("WARNING: rocksdb hashslot count mismatch");
     }
     assert(it->status().ok()); // Check for any errors found during the scan
-    return !it->Valid();
+    return full_iter;
 }
 
 const IStorage *RocksDBStorageProvider::clone() const

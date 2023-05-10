@@ -206,6 +206,7 @@ bool RocksDBStorageProvider::enumerate_hashslot(callback fn, int hashslot) const
     {
         printf("WARNING: rocksdb hashslot count mismatch");
     }
+    assert(!full_iter || count == g_pserver->cluster->slots_keys_count[hashslot]);
     assert(it->status().ok()); // Check for any errors found during the scan
     return full_iter;
 }

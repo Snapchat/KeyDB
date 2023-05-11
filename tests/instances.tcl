@@ -309,11 +309,15 @@ proc pause_on_error {} {
             break
         } elseif {$cmd eq {show-keydb-logs}} {
             set count 10
+            set instance {}
             if {[lindex $argv 1] ne {}} {set count [lindex $argv 1]}
+            if {[lindex $argv 2] ne {}} {set instance [lindex $argv 2]}
             foreach_redis_id id {
-                puts "=== KeyDB $id ===="
-                puts [exec tail -$count redis_$id/log.txt]
-                puts "---------------------\n"
+                if {$instance eq $id || $instance eq {}} {
+                    puts "=== KeyDB $id ===="
+                    puts [exec tail -$count redis_$id/log.txt]
+                    puts "---------------------\n"
+                }
             }
         } elseif {$cmd eq {show-sentinel-logs}} {
             set count 10
@@ -358,7 +362,7 @@ proc pause_on_error {} {
         } elseif {$cmd eq {help}} {
             puts "ls                     List Sentinel and KeyDB instances."
             puts "show-sentinel-logs \[N\] Show latest N lines of logs."
-            puts "show-keydb-logs \[N\]    Show latest N lines of logs."
+            puts "show-keydb-logs \[N\] \[id\]    Show latest N lines of logs of server id."
             puts "S <id> cmd ... arg     Call command in Sentinel <id>."
             puts "R <id> cmd ... arg     Call command in KeyDB <id>."
             puts "SI <id> <field>        Show Sentinel <id> INFO <field>."

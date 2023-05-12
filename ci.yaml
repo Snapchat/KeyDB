@@ -1,0 +1,16 @@
+# Doc: https://wiki.sc-corp.net/display/TOOL/ci.yaml+User+Guide
+version: 1
+on:
+  pull_request:
+    - workflows:
+      # All builds that use machamp should use the defined `backend_workflow`
+      - workflow_type: backend_workflow
+        # references a build defined in build.yaml
+        build_name: keydb-build
+        arch_types: ["amd64", "arm64"]
+  push:
+    - branches: [keydbpro]
+      workflows:
+        - workflow_type: backend_workflow
+          build_name: keydb-build
+          arch_types: ["amd64", "arm64"]

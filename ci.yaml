@@ -9,7 +9,7 @@ on:
         build_name: keydb-build
         arch_types: ["amd64", "arm64"]
   push:
-    - branches: [keydbpro]
+    - branches: [main]
       workflows:
         - workflow_type: backend_workflow
           build_name: keydb-build

@@ -2468,7 +2468,7 @@ static int isValidS3Bucket(char *s3bucket, const char **err) {
 
     if (pid == 0)
     {
-        execlp("aws", "aws", "s3", "ls", s3bucket);
+        execlp("aws", "aws", "s3", "ls", s3bucket, nullptr);
         exit(EXIT_FAILURE);
     }
     else 

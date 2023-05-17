@@ -394,27 +394,43 @@ void activeExpireCycleCore(int type) {
         size_t expired = 0;
         size_t tried = 0;
         long long check = ACTIVE_EXPIRE_CYCLE_FAST_DURATION;    // assume a check is roughly 1us.  It isn't but good enough
-        db->expireitr = db->setexpireUnsafe()->enumerate(db->expireitr, now, [&](expireEntry &e) __attribute__((always_inline)) {
-            if (e.when() < now)
-            {
-                expired += activeExpireCycleExpire(db, e, now, tried);
-            }
-
-            if ((tried % ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP) == 0)
-            {
-                /* We can't block forever here even if there are many keys to
-                * expire. So after a given amount of milliseconds return to the
-                * caller waiting for the other active expire cycle. */
-                elapsed = ustime()-start;
-                if (elapsed > timelimit) {
-                    timelimit_exit = 1;
-                    g_pserver->stat_expired_time_cap_reached_count++;
-                    return false;
+        if (g_pserver->m_pstorageFactory == nullptr) {
+            db->expireitr = db->setexpireUnsafe()->enumerate(db->expireitr, now, [&](expireEntry &e) __attribute__((always_inline)) {
+                if (e.when() < now)
+                {
+                    expired += activeExpireCycleExpire(db, e, now, tried);
                 }
-                check = ACTIVE_EXPIRE_CYCLE_FAST_DURATION;
+
+                if ((tried % ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP) == 0)
+                {
+                    /* We can't block forever here even if there are many keys to
+                    * expire. So after a given amount of milliseconds return to the
+                    * caller waiting for the other active expire cycle. */
+                    elapsed = ustime()-start;
+                    if (elapsed > timelimit) {
+                        timelimit_exit = 1;
+                        g_pserver->stat_expired_time_cap_reached_count++;
+                        return false;
+                    }
+                    check = ACTIVE_EXPIRE_CYCLE_FAST_DURATION;
+                }
+                return true;
+            }, &check);
+        } else {
+            std::vector<std::string> keys = db->getStorageCache()->getExpirationCandidates();
+            for (std::string key : keys) {
+                g_pserver->asyncworkqueue->AddWorkFunction([db,key]() {
+                    aeAcquireLock();
+                    robj* keyobj = createStringObject(key.c_str(), key.size());
+                    db->find(szFromObj(keyobj));
+                    expireEntry *e = db->getExpire(keyobj);
+                    size_t tried;
+                    activeExpireCycleExpire(db, *e, mstime(), tried);
+                    decrRefCount(keyobj);
+                    aeReleaseLock();
+                });
             }
-            return true;
-        }, &check);
+        }
 
         total_expired += expired;
     }

@@ -657,6 +657,78 @@ int performEvictions(bool fPreSnapshot) {
     monotime evictionTimer;
     elapsedStart(&evictionTimer);
 
+    if (g_pserver->maxstorage && g_pserver->m_pstorageFactory != nullptr) {
+        while (g_pserver->m_pstorageFactory->totalDiskspaceUsed() >= g_pserver->maxstorage && elapsedUs(evictionTimer) < eviction_time_limit_us) {
+            redisDb *db;
+            std::vector<std::string> evictionPool;
+            robj *bestkey = nullptr;
+            redisDb *bestdb = nullptr;
+            unsigned long long bestidle = 0;
+            for (int i = 0; i < cserver.dbnum; i++) {
+                db = g_pserver->db[i];
+                evictionPool = db->getStorageCache()->getEvictionCandidates();
+                for (std::string key : evictionPool) {
+                    robj *keyobj = createStringObject(key.c_str(), key.size());
+                    robj *obj = db->find(szFromObj(keyobj));
+                    if (obj != nullptr) {
+                        unsigned long long idle;
+                        expireEntry *e = db->getExpire(keyobj);
+
+                        /* Calculate the idle time according to the policy. This is called
+                            * idle just because the code initially handled LRU, but is in fact
+                            * just a score where an higher score means better candidate. */
+                        if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LRU) {
+                            idle = (obj != nullptr) ? estimateObjectIdleTime(obj) : 0;
+                        } else if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+                            /* When we use an LRU policy, we sort the keys by idle time
+                                * so that we expire keys starting from greater idle time.
+                                * However when the policy is an LFU one, we have a frequency
+                                * estimation, and we want to evict keys with lower frequency
+                                * first. So inside the pool we put objects using the inverted
+                                * frequency subtracting the actual frequency to the maximum
+                                * frequency of 255. */
+                            idle = 255-LFUDecrAndReturn(obj);
+                        } else if (g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_TTL && e != nullptr) {
+                            /* In this case the sooner the expire the better. */
+                            idle = ULLONG_MAX - e->when();
+                        } else {
+                            serverPanic("Unknown eviction policy in storage eviction");
+                        }
+
+                        if (bestkey == nullptr || bestidle < idle) {
+                            decrRefCount(bestkey);
+                            incrRefCount(keyobj);
+                            bestkey = keyobj;
+                            bestidle = idle;
+                            bestdb = db;
+                        }
+                    }
+                    decrRefCount(keyobj);
+                }
+            }
+            if (bestkey) {
+                propagateExpire(bestdb, bestkey, g_pserver->lazyfree_lazy_eviction);
+
+                latencyStartMonitor(eviction_latency);
+                if (g_pserver->lazyfree_lazy_eviction)
+                    dbAsyncDelete(bestdb, bestkey);
+                else
+                    dbSyncDelete(bestdb, bestkey);
+                latencyEndMonitor(eviction_latency);
+                latencyAddSampleIfNeeded("eviction-del", eviction_latency);
+
+                g_pserver->stat_evictedkeys++;
+                signalModifiedKey(NULL, bestdb, bestkey);
+                notifyKeyspaceEvent(NOTIFY_EVICTED, "evicted",
+                    bestkey, bestdb->id);
+                    
+                decrRefCount(bestkey);
+            } else {
+                break; //could not find a key to evict so stop now
+            }
+        }
+    }
+
     if (g_pserver->maxstorage && g_pserver->m_pstorageFactory != nullptr && g_pserver->m_pstorageFactory->totalDiskspaceUsed() >= g_pserver->maxstorage)
         goto cant_free_storage;
 

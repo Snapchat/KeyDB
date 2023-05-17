@@ -34,6 +34,9 @@ public:
     virtual bool enumerate(callback fn) const override;
     virtual bool enumerate_hashslot(callback fn, unsigned int hashslot) const override;
 
+    virtual std::vector<std::string> getExpirationCandidates() override { return std::vector<std::string>(); }
+    virtual std::vector<std::string> getEvictionCandidates() override { return std::vector<std::string>(); }
+
     virtual const IStorage *clone() const override;
 
     virtual void beginWriteBatch() override;

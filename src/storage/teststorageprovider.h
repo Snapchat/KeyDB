@@ -27,6 +27,9 @@ public:
     virtual bool enumerate_hashslot(callback fn, unsigned int hashslot) const override;
     virtual size_t count() const override;
 
+    virtual std::vector<std::string> getExpirationCandidates() override { return std::vector<std::string>(); }
+    virtual std::vector<std::string> getEvictionCandidates() override { return std::vector<std::string>(); }
+
     virtual void flush() override;
 
     /* This is permitted to be a shallow clone */

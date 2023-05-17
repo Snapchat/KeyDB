@@ -51,6 +51,9 @@ public:
     bool enumerate(IStorage::callback fn) const { return m_spstorage->enumerate(fn); }
     bool enumerate_hashslot(IStorage::callback fn, unsigned int hashslot) const { return m_spstorage->enumerate_hashslot(fn, hashslot); }
 
+    std::vector<std::string> getExpirationCandidates() { return m_spstorage->getExpirationCandidates(); }
+    std::vector<std::string> getEvictionCandidates() { return m_spstorage->getEvictionCandidates(); }
+
     void beginWriteBatch();
     void endWriteBatch() { m_spstorage->endWriteBatch(); }
     void batch_lock() { return m_spstorage->batch_lock(); }

@@ -42,6 +42,9 @@ public:
         endWriteBatch();
     }
 
+    virtual std::vector<std::string> getExpirationCandidates() = 0;
+    virtual std::vector<std::string> getEvictionCandidates() = 0;
+
     virtual void beginWriteBatch() {} // NOP
     virtual void endWriteBatch() {} // NOP
 

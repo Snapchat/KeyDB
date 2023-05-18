@@ -211,6 +211,61 @@ bool RocksDBStorageProvider::enumerate_hashslot(callback fn, unsigned int hashsl
     return full_iter;
 }
 
+std::vector<std::string> RocksDBStorageProvider::getExpirationCandidates() override
+{
+    std::vector<std::string> result;
+    std::string slice;
+    auto status = m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(last_expire_key, sizeof(last_expire_key)), &slice);
+    long long lastTime = std::stoll(slice);
+    long long curTime = ustime() << TIME_BUCKET_SHIFT;
+    if (status.ok()) {
+        std::string bucketString;
+        int i;
+        for (i = lastTime; i < curTime; i++) {
+            std::string bucketString = INTERNAL_KEY_PREFIX + std::to_string(i);
+            status = m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(bucketString), &slice);
+            if (status.ok()) {
+                result += deserialize(slice);
+                if (m_spbatch != nullptr)
+                {
+                    status = m_spbatch->Delete(m_spcolfamily.get(), rocksdb::Slice(bucketString));
+                }
+                else
+                {
+                    status = m_spdb->Delete(WriteOptions(), m_spcolfamily.get(), rocksdb::Slice(bucketString));
+                }
+            }
+        }
+        status = m_spdb->Put(WriteOptions(), m_spcolfamily.get(), rocksdb::Slice(last_expire_key, sizeof(last_expire_key)), rocksdb::Slice(std::to_string(i)));
+        if (!status.ok()) {
+            assert("failed to update flash expire last time");
+        }
+    }
+    return result;
+}
+
+std::vector<std::string> RocksDBStorageProvider::getEvictionCandidates() override
+{
+    std::vector<std::string> result;
+    std::string slice;
+    auto status = m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(last_expire_key, sizeof(last_expire_key)), &slice);
+    long long lastTime = std::stoll(slice);
+    long long curTime = ustime() << TIME_BUCKET_SHIFT;
+    if (status.ok()) {
+        std::string bucketString;
+        int i = lastTime;
+        while (result.empty()) {
+            std::string bucketString = INTERNAL_KEY_PREFIX + std::to_string(i);
+            status = m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(bucketString), &slice);
+            if (status.ok()) {
+                result += deserialize(slice);
+            }
+            i++;
+        }
+    }
+    return result;
+}
+
 const IStorage *RocksDBStorageProvider::clone() const
 {
     std::unique_lock<fastlock> l(m_lock);

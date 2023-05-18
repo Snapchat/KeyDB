@@ -10,6 +10,7 @@
 static const char count_key[] = INTERNAL_KEY_PREFIX "__keydb__count\1";
 static const char version_key[] = INTERNAL_KEY_PREFIX "__keydb__version\1";
 static const char meta_key[] = INTERNAL_KEY_PREFIX "__keydb__metadata\1";
+static const char last_expire_key[] = INTERNAL_KEY_PREFIX "__keydb__last_expire_time"
 class RocksDBStorageFactory;
 
 class RocksDBStorageProvider : public IStorage
@@ -34,8 +35,8 @@ public:
     virtual bool enumerate(callback fn) const override;
     virtual bool enumerate_hashslot(callback fn, unsigned int hashslot) const override;
 
-    virtual std::vector<std::string> getExpirationCandidates() override { return std::vector<std::string>(); }
-    virtual std::vector<std::string> getEvictionCandidates() override { return std::vector<std::string>(); }
+    virtual std::vector<std::string> getExpirationCandidates() override;
+    virtual std::vector<std::string> getEvictionCandidates() override;
 
     virtual const IStorage *clone() const override;
 

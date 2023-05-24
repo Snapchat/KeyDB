@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include "../server.h"
 #include "../cluster.h"
+#include "../mt19937-64.h"
 #include "rocksdbfactor_internal.h"
 
 static const char keyprefix[] = INTERNAL_KEY_PREFIX;
@@ -233,6 +234,10 @@ std::vector<std::string> RocksDBStorageProvider::getExpirationCandidates()
         }
     }
     return result;
+}
+
+std::string randomHashSlot() {
+    return getPrefix(genrand64_int63() % (1 << 16));
 }
 
 std::vector<std::string> RocksDBStorageProvider::getEvictionCandidates()

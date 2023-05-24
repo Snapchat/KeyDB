@@ -3155,6 +3155,11 @@ bool redisDbPersistentData::removeCachedValue(const char *key, dictEntry **ppde)
     if (m_spstorage != nullptr)
         m_spstorage->batch_unlock();
     
+    std::unique_lock<fastlock> ul(g_expireLock);
+    auto itr = m_setexpire->find(sdsKey);
+    if (itr != m_setexpire->end())
+        m_setexpire->erase(itr);
+    
     return true;
 }
 

@@ -843,7 +843,7 @@ int performEvictions(bool fPreSnapshot) {
                 if (db->removeCachedValue(bestkey, &deT)) {
                     mem_freed += splazy->addEntry(db->dictUnsafeKeyOnly(), deT);
                     ckeysFailed = 0;
-		    g_pserver->stat_evictedkeys++;
+                    g_pserver->stat_evictedkeys++;
                 }
                 else {
                     delta = 0;

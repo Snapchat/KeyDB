@@ -417,19 +417,17 @@ void activeExpireCycleCore(int type) {
                 return true;
             }, &check);
         } else {
-            std::vector<std::string> keys = db->getStorageCache()->getExpirationCandidates();
-            for (std::string key : keys) {
-                g_pserver->asyncworkqueue->AddWorkFunction([db,key]() {
-                    aeAcquireLock();
+            std::vector<std::string> keys;
+            do {
+                keys = db->getStorageCache()->getExpirationCandidates();
+                for (std::string key : keys) {
                     robj* keyobj = createStringObject(key.c_str(), key.size());
                     db->find(szFromObj(keyobj));
                     expireEntry *e = db->getExpire(keyobj);
-                    size_t tried;
                     activeExpireCycleExpire(db, *e, mstime(), tried);
                     decrRefCount(keyobj);
-                    aeReleaseLock();
-                });
-            }
+                }
+            } while (keys.size() > 0 && (ustime()-start < timelimit));
         }
 
         total_expired += expired;

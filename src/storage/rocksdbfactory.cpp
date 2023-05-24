@@ -78,6 +78,7 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
         rocksdb::ColumnFamilyOptions cf_options(options);
         cf_options.level_compaction_dynamic_level_bytes = true;
         veccoldesc.push_back(rocksdb::ColumnFamilyDescriptor(std::to_string(idb), cf_options));
+        veccoldesc.push_back(rocksdb::ColumnFamilyDescriptor(std::to_string(idb) + "_expires", cf_options));
     }
 
     if (rgchConfig != nullptr)
@@ -97,24 +98,32 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
         throw status.ToString();
 
     m_spdb = std::shared_ptr<rocksdb::DB>(db);
+    rocksdb::ColumnFamilyDescriptor *desc = nullptr;
     for (auto handle : handles)
     {
-        std::string strVersion;
-        auto status = m_spdb->Get(rocksdb::ReadOptions(), handle, rocksdb::Slice(version_key, sizeof(version_key)), &strVersion);
-        if (!status.ok())
-        {
-            setVersion(handle);
+        if (!handle->GetDescriptor(desc).ok()) {
+            throw "Error loading rocksdb handles";
         }
-        else
-        {
-            SymVer ver = parseVersion(strVersion.c_str());
-            auto cmp = compareVersion(&ver);
-            if (cmp == NewerVersion)
-                throw "Cannot load FLASH database created by newer version of KeyDB";
-            if (cmp == OlderVersion)
+        if (!strncmp(desc->name.substr(desc->name.size() - 7).c_str(), "expires", 7)) {
+            m_vecspexpirecols.emplace_back(handle);
+        } else {
+            std::string strVersion;
+            auto status = m_spdb->Get(rocksdb::ReadOptions(), handle, rocksdb::Slice(version_key, sizeof(version_key)), &strVersion);
+            if (!status.ok())
+            {
                 setVersion(handle);
+            }
+            else
+            {
+                SymVer ver = parseVersion(strVersion.c_str());
+                auto cmp = compareVersion(&ver);
+                if (cmp == NewerVersion)
+                    throw "Cannot load FLASH database created by newer version of KeyDB";
+                if (cmp == OlderVersion)
+                    setVersion(handle);
+            }
+            m_vecspcols.emplace_back(handle);
         }
-        m_vecspcols.emplace_back(handle);
     }   
 }
 
@@ -155,6 +164,7 @@ IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *pr
 {
     ++db;   // skip default col family
     std::shared_ptr<rocksdb::ColumnFamilyHandle> spcolfamily(m_vecspcols[db].release());
+    std::shared_ptr<rocksdb::ColumnFamilyHandle> spexpirecolfamily(m_vecspexpirecols[db].release());
     size_t count = 0;
     bool fUnclean = false;
     
@@ -191,7 +201,7 @@ IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *pr
             ++count;
         }
     }
-    return new RocksDBStorageProvider(this, m_spdb, spcolfamily, nullptr, count);
+    return new RocksDBStorageProvider(this, m_spdb, spcolfamily, spexpirecolfamily, nullptr, count);
 }
 
 const char *RocksDBStorageFactory::name() const

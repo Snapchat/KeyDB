@@ -424,10 +424,16 @@ void activeExpireCycleCore(int type) {
                     robj* keyobj = createStringObject(key.c_str(), key.size());
                     db->find(szFromObj(keyobj));
                     expireEntry *e = db->getExpire(keyobj);
-                    activeExpireCycleExpire(db, *e, mstime(), tried);
+                    expired += activeExpireCycleExpire(db, *e, mstime(), tried);
                     decrRefCount(keyobj);
                 }
-            } while (keys.size() > 0 && (ustime()-start < timelimit));
+                elapsed = ustime()-start;
+            } while (keys.size() > 0 && (elapsed < timelimit));
+
+            if (ustime()-start > timelimit) {
+                timelimit_exit = 1;
+                g_pserver->stat_expired_time_cap_reached_count++;
+            }
         }
 
         total_expired += expired;

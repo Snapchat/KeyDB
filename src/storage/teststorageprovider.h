@@ -29,6 +29,7 @@ public:
 
     virtual std::vector<std::string> getExpirationCandidates() override { return std::vector<std::string>(); }
     virtual std::vector<std::string> getEvictionCandidates() override { return std::vector<std::string>(); }
+    virtual void setExpire(const char *, size_t, long long) override {}
 
     virtual void flush() override;
 

@@ -212,6 +212,20 @@ bool RocksDBStorageProvider::enumerate_hashslot(callback fn, unsigned int hashsl
     return full_iter;
 }
 
+void RocksDBStorageProvider::setExpire(const char *key, size_t cchKey, long long expire)
+{
+    rocksdb::Status status;
+    std::unique_lock<fastlock> l(m_lock);
+    std::string prefix((const char *)&expire,sizeof(long long));
+    std::string strKey(key, cchKey);
+    if (m_spbatch != nullptr)
+        status = m_spbatch->Put(m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), rocksdb::Slice(strKey));
+    else
+        status = m_spdb->Put(WriteOptions(), m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), rocksdb::Slice(strKey));
+    if (!status.ok())
+        throw status.ToString();
+}
+
 std::vector<std::string> RocksDBStorageProvider::getExpirationCandidates()
 {
     std::vector<std::string> result;

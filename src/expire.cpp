@@ -383,7 +383,7 @@ void activeExpireCycleCore(int type) {
         now = mstime();
 
         /* If there is nothing to expire try next DB ASAP. */
-        if (db->setexpireUnsafe()->empty())
+        if (db->setexpireUnsafe()->empty() && g_pserver->m_pstorageFactory == nullptr)
         {
             db->avg_ttl = 0;
             db->last_expire_set = now;

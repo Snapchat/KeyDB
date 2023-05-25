@@ -53,6 +53,7 @@ public:
 
     std::vector<std::string> getExpirationCandidates() { return m_spstorage->getExpirationCandidates(); }
     std::vector<std::string> getEvictionCandidates() { return m_spstorage->getEvictionCandidates(); }
+    void setExpire(const char *key, size_t cchKey, long long expire) { m_spstorage->setExpire(key, cchKey, expire); }
 
     void beginWriteBatch();
     void endWriteBatch() { m_spstorage->endWriteBatch(); }

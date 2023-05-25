@@ -38,6 +38,7 @@ public:
 
     virtual std::vector<std::string> getExpirationCandidates() override;
     virtual std::vector<std::string> getEvictionCandidates() override;
+    virtual void setExpire(const char *key, size_t cchKey, long long expire) override;
 
     virtual const IStorage *clone() const override;
 

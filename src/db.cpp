@@ -1871,6 +1871,7 @@ void redisDbPersistentData::resortExpire(expireEntry &e)
     expireEntry eT = std::move(e);
     m_setexpire->erase(itr);
     m_setexpire->insert(eT);
+    getStorageCache()->setExpire(e.key(), sdslen(e.key()), e.when());
 }
 
 /* Set an expire to the specified key. If the expire is set in the context
@@ -2801,6 +2802,7 @@ void redisDbPersistentData::setExpire(robj *key, robj *subkey, long long when)
         ((robj*)dictGetVal(kde))->SetFExpires(true);
         m_setexpire->insert(e);
     }
+    getStorageCache()->setExpire(szFromObj(key), sdslen(szFromObj(key)), when);
 }
 
 void redisDbPersistentData::setExpire(expireEntry &&e)
@@ -2808,6 +2810,7 @@ void redisDbPersistentData::setExpire(expireEntry &&e)
     std::unique_lock<fastlock> ul(g_expireLock);
     trackkey(e.key(), true /* fUpdate */);
     m_setexpire->insert(e);
+    getStorageCache()->setExpire(e.key(), sdslen(e.key()), e.when());
 }
 
 bool redisDb::FKeyExpires(const char *key)

@@ -60,8 +60,8 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
     auto status = rocksdb::DB::ListColumnFamilies(rocksdb::Options(), dbfile, &vecT);
     // RocksDB requires we know the count of col families before opening, if the user only wants to see less
     //  we still have to make room for all column family handles regardless
-    if (status.ok() && (int)vecT.size() > dbnum)
-        dbnum = (int)vecT.size();
+    if (status.ok() && (int)vecT.size()/2 > dbnum)
+        dbnum = (int)vecT.size()/2;
 
     std::vector<rocksdb::ColumnFamilyDescriptor> veccoldesc;
     veccoldesc.push_back(rocksdb::ColumnFamilyDescriptor(rocksdb::kDefaultColumnFamilyName, rocksdb::ColumnFamilyOptions()));  // ignore default col family
@@ -98,13 +98,9 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
         throw status.ToString();
 
     m_spdb = std::shared_ptr<rocksdb::DB>(db);
-    rocksdb::ColumnFamilyDescriptor *desc = nullptr;
     for (auto handle : handles)
     {
-        if (!handle->GetDescriptor(desc).ok()) {
-            throw "Error loading rocksdb handles";
-        }
-        if (!strncmp(desc->name.substr(desc->name.size() - 7).c_str(), "expires", 7)) {
+        if (handle->GetName().size() > 7 && !strncmp(handle->GetName().substr(handle->GetName().size() - 7).c_str(), "expires", 7)) {
             m_vecspexpirecols.emplace_back(handle);
         } else {
             std::string strVersion;
@@ -124,7 +120,7 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
             }
             m_vecspcols.emplace_back(handle);
         }
-    }   
+    }
 }
 
 RocksDBStorageFactory::~RocksDBStorageFactory()

@@ -231,21 +231,17 @@ std::vector<std::string> RocksDBStorageProvider::getExpirationCandidates()
     std::vector<std::string> result;
     std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spexpirecolfamily.get()));
     long long curTime = ustime();
-    for (it->SeekToFirst(); it->Valid() && result.size() < 16; it->Next()) {
+    for (it->SeekToFirst(); it->Valid() && (*((long long *)it->key().data()) <= curTime) && (result.size() < 16); it->Next()) {
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
-        if (*((long long *)it->key().data()) <= curTime) {
-            result.emplace_back(it->value().data(), it->value().size());
-            rocksdb::Status status;
-            if (m_spbatch != nullptr)
-                status = m_spbatch->Delete(m_spexpirecolfamily.get(), it->key());
-            else
-                status = m_spdb->Delete(WriteOptions(), m_spexpirecolfamily.get(), it->key());
-            if (!status.ok())
-                throw "Failed to remove expired key from rocksdb";
-        } else {
-            break;
-        }
+        result.emplace_back(it->value().data(), it->value().size());
+        rocksdb::Status status;
+        if (m_spbatch != nullptr)
+            status = m_spbatch->Delete(m_spexpirecolfamily.get(), it->key());
+        else
+            status = m_spdb->Delete(WriteOptions(), m_spexpirecolfamily.get(), it->key());
+        if (!status.ok())
+            throw "Failed to remove expired key from rocksdb";
     }
     return result;
 }

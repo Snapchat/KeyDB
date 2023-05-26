@@ -424,7 +424,8 @@ void activeExpireCycleCore(int type) {
                     robj* keyobj = createStringObject(key.c_str(), key.size());
                     db->find(szFromObj(keyobj));
                     expireEntry *e = db->getExpire(keyobj);
-                    expired += activeExpireCycleExpire(db, *e, mstime(), tried);
+                    if (e != nullptr)
+                        expired += activeExpireCycleExpire(db, *e, mstime(), tried);
                     decrRefCount(keyobj);
                 }
                 elapsed = ustime()-start;

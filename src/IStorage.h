@@ -1,6 +1,7 @@
 #pragma once
 #include <functional>
 #include "sds.h"
+#include <string>
 
 #define METADATA_DB_IDENTIFIER "c299fde0-6d42-4ec4-b939-34f680ffe39f"
 

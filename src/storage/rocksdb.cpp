@@ -230,7 +230,7 @@ std::vector<std::string> RocksDBStorageProvider::getExpirationCandidates()
 {
     std::vector<std::string> result;
     std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spexpirecolfamily.get()));
-    long long curTime = ustime();
+    long long curTime = mstime();
     for (it->SeekToFirst(); it->Valid() && (*((long long *)it->key().data()) <= curTime) && (result.size() < 16); it->Next()) {
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;

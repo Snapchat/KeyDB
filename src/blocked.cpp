@@ -732,6 +732,7 @@ void unblockClientWaitingData(client *c) {
         c->bpop.xread_group = NULL;
         c->bpop.xread_consumer = NULL;
     }
+    c->bpop.timeout = 0;
 }
 
 static int getBlockedTypeByType(int type) {

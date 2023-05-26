@@ -1069,6 +1069,13 @@ start_server {
         r ping
     } {PONG}
 
+    test "Regression for bug 659 - chaining BRPOP with async blocking cmds" {
+        r flushall
+        r brpop foo 1
+        r keys *
+        r ping
+    } {PONG}
+
     test "client unblock tests" {
         r del l
         set rd [redis_deferring_client]

@@ -3995,7 +3995,7 @@ void pauseClients(mstime_t end, pause_type type) {
      * to track this state so that we don't assert
      * in propagate(). */
     if (serverTL->in_exec) {
-        g_pserver->client_pause_in_transaction = 1;
+        serverTL->client_pause_in_transaction = 1;
     }
 }
 

@@ -3945,7 +3945,6 @@ void initServer(void) {
     g_pserver->pubsub_channels = dictCreate(&keylistDictType,NULL);
     g_pserver->pubsub_patterns = dictCreate(&keylistDictType,NULL);
     g_pserver->cronloops = 0;
-    g_pserver->client_pause_in_transaction = 0;
     g_pserver->child_pid = -1;
     g_pserver->child_type = CHILD_TYPE_NONE;
     g_pserver->rdbThreadVars.fRdbThreadCancel = false;
@@ -4324,7 +4323,7 @@ void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
 
     /* This needs to be unreachable since the dataset should be fixed during 
      * client pause, otherwise data may be lossed during a failover. */
-    serverAssert(!(areClientsPaused() && !g_pserver->client_pause_in_transaction));
+    serverAssert(!(areClientsPaused() && !serverTL->client_pause_in_transaction));
 
     if (g_pserver->aof_state != AOF_OFF && flags & PROPAGATE_AOF)
         feedAppendOnlyFile(cmd,dbid,argv,argc);
@@ -4646,8 +4645,8 @@ void call(client *c, int flags) {
 
     /* Client pause takes effect after a transaction has finished. This needs
      * to be located after everything is propagated. */
-    if (!serverTL->in_exec && g_pserver->client_pause_in_transaction) {
-        g_pserver->client_pause_in_transaction = 0;
+    if (!serverTL->in_exec && serverTL->client_pause_in_transaction) {
+        serverTL->client_pause_in_transaction = 0;
     }
 
     /* If the client has keys tracking enabled for client side caching,

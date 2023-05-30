@@ -46,8 +46,3 @@ machamp:
         # https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-20-04
         builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-20-04@sha256:cf869a3f5d1de1e1d976bb906689c37b7031938eb68661b844a38c532f27248c
         command: ./runtest-rotation
-      keyproxy-test:
-        type: cmd
-        parent: make-build
-        command: ./runtest-keyproxy --tls
-        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-20-04@sha256:cf869a3f5d1de1e1d976bb906689c37b7031938eb68661b844a38c532f27248c

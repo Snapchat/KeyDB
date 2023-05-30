@@ -3945,7 +3945,6 @@ void initServer(void) {
     g_pserver->pubsub_channels = dictCreate(&keylistDictType,NULL);
     g_pserver->pubsub_patterns = dictCreate(&keylistDictType,NULL);
     g_pserver->cronloops = 0;
-    g_pserver->propagate_in_transaction = 0;
     g_pserver->client_pause_in_transaction = 0;
     g_pserver->child_pid = -1;
     g_pserver->child_type = CHILD_TYPE_NONE;
@@ -4320,7 +4319,7 @@ void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
      * This way we'll deliver the MULTI/..../EXEC block as a whole and
      * both the AOF and the replication link will have the same consistency
      * and atomicity guarantees. */
-    if (serverTL->in_exec && !g_pserver->propagate_in_transaction)
+    if (serverTL->in_exec && !serverTL->propagate_in_transaction)
         execCommandPropagateMulti(dbid);
 
     /* This needs to be unreachable since the dataset should be fixed during 
@@ -4735,13 +4734,13 @@ static int cmdHasMovableKeys(struct redisCommand *cmd) {
 int processCommand(client *c, int callFlags) {
     AssertCorrectThread(c);
     serverAssert((callFlags & CMD_CALL_ASYNC) || GlobalLocksAcquired());
-    if (!g_pserver->lua_timedout && !(callFlags & CMD_CALL_ASYNC)) {
+    if (!g_pserver->lua_timedout) {
         /* Both EXEC and EVAL call call() directly so there should be
          * no way in_exec or in_eval or propagate_in_transaction is 1.
          * That is unless lua_timedout, in which case client may run
          * some commands. Also possible that some other thread set
          * propagate_in_transaction if this is an async command. */
-        serverAssert(!g_pserver->propagate_in_transaction);
+        serverAssert(!serverTL->propagate_in_transaction);
         serverAssert(!serverTL->in_exec);
         serverAssert(!serverTL->in_eval);
     }

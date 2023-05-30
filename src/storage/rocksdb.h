@@ -32,6 +32,7 @@ public:
     virtual void retrieve(const char *key, size_t cchKey, callbackSingle fn) const override;
     virtual size_t clear() override;
     virtual bool enumerate(callback fn) const override;
+    virtual bool enumerate_hashslot(callback fn, unsigned int hashslot) const override;
 
     virtual const IStorage *clone() const override;
 
@@ -48,7 +49,7 @@ public:
     size_t count() const override;
 
 protected:
-    bool FKeyExists(const char *key, size_t cchKey) const;
+    bool FKeyExists(std::string&) const;
 
     const rocksdb::ReadOptions &ReadOptions() const { return m_readOptionsTemplate; }
     rocksdb::WriteOptions WriteOptions() const;

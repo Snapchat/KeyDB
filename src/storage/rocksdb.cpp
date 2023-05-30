@@ -3,6 +3,8 @@
 #include <sstream>
 #include <mutex>
 #include <unistd.h>
+#include "../server.h"
+#include "../cluster.h"
 #include "rocksdbfactor_internal.h"
 
 static const char keyprefix[] = INTERNAL_KEY_PREFIX;
@@ -20,6 +22,17 @@ bool FInternalKey(const char *key, size_t cch)
     return false;
 }
 
+std::string getPrefix(unsigned int hashslot)
+{
+    char *hash_char = (char *)&hashslot;
+    return std::string(hash_char + (sizeof(unsigned int) - 2), 2);
+}
+
+std::string prefixKey(const char *key, size_t cchKey)
+{
+    return FInternalKey(key, cchKey) ? std::string(key, cchKey) : getPrefix(keyHashSlot(key, cchKey)) + std::string(key, cchKey);
+}
+
 RocksDBStorageProvider::RocksDBStorageProvider(RocksDBStorageFactory *pfactory, std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count)
     : m_pfactory(pfactory), m_spdb(spdb), m_psnapshot(psnapshot), m_spcolfamily(spcolfam), m_count(count)
 {
@@ -32,10 +45,11 @@ void RocksDBStorageProvider::insert(const char *key, size_t cchKey, void *data, 
 {
     rocksdb::Status status;
     std::unique_lock<fastlock> l(m_lock);
+    std::string prefixed_key = prefixKey(key, cchKey);
     if (m_spbatch != nullptr)
-        status = m_spbatch->Put(m_spcolfamily.get(), rocksdb::Slice(key, cchKey), rocksdb::Slice((const char*)data, cb));
+        status = m_spbatch->Put(m_spcolfamily.get(), rocksdb::Slice(prefixed_key), rocksdb::Slice((const char*)data, cb));
     else
-        status = m_spdb->Put(WriteOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cchKey), rocksdb::Slice((const char*)data, cb));
+        status = m_spdb->Put(WriteOptions(), m_spcolfamily.get(), rocksdb::Slice(prefixed_key), rocksdb::Slice((const char*)data, cb));
     if (!status.ok())
         throw status.ToString();
 
@@ -59,7 +73,8 @@ void RocksDBStorageProvider::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **
         // Insert rows into the SST file, note that inserted keys must be 
         // strictly increasing (based on options.comparator)
         for (size_t ielem = 0; ielem < celem; ++ielem) {
-            s = sst_file_writer.Put(rocksdb::Slice(rgkeys[ielem], rgcbkeys[ielem]), rocksdb::Slice(rgvals[ielem], rgcbvals[ielem]));
+            std::string prefixed_key = prefixKey(rgkeys[ielem], rgcbkeys[ielem]);
+            s = sst_file_writer.Put(rocksdb::Slice(prefixed_key), rocksdb::Slice(rgvals[ielem], rgcbvals[ielem]));
             if (!s.ok()) {
                 unlink(file_path.c_str());
                 goto LFallback;
@@ -87,7 +102,8 @@ void RocksDBStorageProvider::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **
     LFallback:
         auto spbatch = std::make_unique<rocksdb::WriteBatch>();
         for (size_t ielem = 0; ielem < celem; ++ielem) {
-            spbatch->Put(m_spcolfamily.get(), rocksdb::Slice(rgkeys[ielem], rgcbkeys[ielem]), rocksdb::Slice(rgvals[ielem], rgcbvals[ielem]));
+            std::string prefixed_key = prefixKey(rgkeys[ielem], rgcbkeys[ielem]);
+            spbatch->Put(m_spcolfamily.get(), rocksdb::Slice(prefixed_key), rocksdb::Slice(rgvals[ielem], rgcbvals[ielem]));
         }
         m_spdb->Write(WriteOptions(), spbatch.get());
     }
@@ -100,15 +116,16 @@ bool RocksDBStorageProvider::erase(const char *key, size_t cchKey)
 {
     rocksdb::Status status;
     std::unique_lock<fastlock> l(m_lock);
-    if (!FKeyExists(key, cchKey))
+    std::string prefixed_key = prefixKey(key, cchKey);
+    if (!FKeyExists(prefixed_key))
         return false;
     if (m_spbatch != nullptr)
     {
-        status = m_spbatch->Delete(m_spcolfamily.get(), rocksdb::Slice(key, cchKey));
+        status = m_spbatch->Delete(m_spcolfamily.get(), rocksdb::Slice(prefixed_key));
     }
     else
     {
-        status = m_spdb->Delete(WriteOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cchKey));
+        status = m_spdb->Delete(WriteOptions(), m_spcolfamily.get(), rocksdb::Slice(prefixed_key));
     }
     if (status.ok())
         --m_count;
@@ -118,7 +135,8 @@ bool RocksDBStorageProvider::erase(const char *key, size_t cchKey)
 void RocksDBStorageProvider::retrieve(const char *key, size_t cchKey, callbackSingle fn) const
 {
     rocksdb::PinnableSlice slice;
-    auto status = m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cchKey), &slice);
+    std::string prefixed_key = prefixKey(key, cchKey);
+    auto status = m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(prefixed_key), &slice);
     if (status.ok())
         fn(key, cchKey, slice.data(), slice.size());
 }
@@ -154,7 +172,7 @@ bool RocksDBStorageProvider::enumerate(callback fn) const
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
         ++count;
-        bool fContinue = fn(it->key().data(), it->key().size(), it->value().data(), it->value().size());
+        bool fContinue = fn(it->key().data()+2, it->key().size()-2, it->value().data(), it->value().size());
         if (!fContinue)
             break;
     }
@@ -166,6 +184,31 @@ bool RocksDBStorageProvider::enumerate(callback fn) const
     }
     assert(it->status().ok()); // Check for any errors found during the scan
     return !it->Valid();
+}
+
+bool RocksDBStorageProvider::enumerate_hashslot(callback fn, unsigned int hashslot) const
+{
+    std::string prefix = getPrefix(hashslot);
+    std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spcolfamily.get()));
+    size_t count = 0;
+    for (it->Seek(prefix.c_str()); it->Valid(); it->Next()) {
+        if (FInternalKey(it->key().data(), it->key().size()))
+            continue;
+        if (strncmp(it->key().data(),prefix.c_str(),2) != 0)
+            break;
+        ++count;
+        bool fContinue = fn(it->key().data()+2, it->key().size()-2, it->value().data(), it->value().size());
+        if (!fContinue)
+            break;
+    }
+    bool full_iter = !it->Valid() || (strncmp(it->key().data(),prefix.c_str(),2) != 0);
+    if (full_iter && count != g_pserver->cluster->slots_keys_count[hashslot])
+    {
+        printf("WARNING: rocksdb hashslot count mismatch");
+    }
+    assert(!full_iter || count == g_pserver->cluster->slots_keys_count[hashslot]);
+    assert(it->status().ok()); // Check for any errors found during the scan
+    return full_iter;
 }
 
 const IStorage *RocksDBStorageProvider::clone() const
@@ -227,10 +270,10 @@ void RocksDBStorageProvider::flush()
     m_spdb->SyncWAL();
 }
 
-bool RocksDBStorageProvider::FKeyExists(const char *key, size_t cch) const
+bool RocksDBStorageProvider::FKeyExists(std::string& key) const
 {
     rocksdb::PinnableSlice slice;
     if (m_spbatch)
-        return m_spbatch->GetFromBatchAndDB(m_spdb.get(), ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cch), &slice).ok();
-    return m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key, cch), &slice).ok();
+        return m_spbatch->GetFromBatchAndDB(m_spdb.get(), ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key), &slice).ok();
+    return m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key), &slice).ok();
 }

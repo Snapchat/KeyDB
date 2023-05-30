@@ -1209,6 +1209,7 @@ public:
     bool FSnapshot() const { return m_spdbSnapshotHOLDER != nullptr; }
 
     std::unique_ptr<const StorageCache> CloneStorageCache() { return std::unique_ptr<const StorageCache>(m_spstorage->clone()); }
+    std::shared_ptr<StorageCache> getStorageCache() { return m_spstorage; }
     void bulkDirectStorageInsert(char **rgKeys, size_t *rgcbKeys, char **rgVals, size_t *rgcbVals, size_t celem);
 
     dict_iter find_cached_threadsafe(const char *key) const;
@@ -1370,6 +1371,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::FRehashing;
     using redisDbPersistentData::FTrackingChanges;
     using redisDbPersistentData::CloneStorageCache;
+    using redisDbPersistentData::getStorageCache;
     using redisDbPersistentData::bulkDirectStorageInsert;
 
 public:

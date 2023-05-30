@@ -749,7 +749,7 @@ void loadServerConfigFromString(char *config) {
                 g_pserver->fActiveReplica = CONFIG_DEFAULT_ACTIVE_REPLICA;
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
-            if (listLength(g_pserver->masters)) {
+            if (listLength(g_pserver->masters) && g_pserver->fActiveReplica) {
                 err = "must not set replica-of config before active-replica config"; goto loaderr;
             }
         } else if (!strcasecmp(argv[0], "multi-master") && argc == 2) {
@@ -758,7 +758,7 @@ void loadServerConfigFromString(char *config) {
                 g_pserver->enable_multimaster = CONFIG_DEFAULT_ENABLE_MULTIMASTER;
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
-            if (listLength(g_pserver->masters)) {
+            if (listLength(g_pserver->masters) && g_pserver->enable_multimaster) {
                 err = "must not set replica-of config before multi-master config"; goto loaderr;
             }
         } else if (!strcasecmp(argv[0], "tls-allowlist")) {

@@ -4735,11 +4735,12 @@ static int cmdHasMovableKeys(struct redisCommand *cmd) {
 int processCommand(client *c, int callFlags) {
     AssertCorrectThread(c);
     serverAssert((callFlags & CMD_CALL_ASYNC) || GlobalLocksAcquired());
-    if (!g_pserver->lua_timedout) {
+    if (!g_pserver->lua_timedout && !(callFlags & CMD_CALL_ASYNC)) {
         /* Both EXEC and EVAL call call() directly so there should be
          * no way in_exec or in_eval or propagate_in_transaction is 1.
          * That is unless lua_timedout, in which case client may run
-         * some commands. */
+         * some commands. Also possible that some other thread set
+         * propagate_in_transaction if this is an async command. */
         serverAssert(!g_pserver->propagate_in_transaction);
         serverAssert(!serverTL->in_exec);
         serverAssert(!serverTL->in_eval);

@@ -552,7 +552,7 @@ static int evictionTimeProc(
     UNUSED(clientData);
     serverAssert(GlobalLocksAcquired());
 
-    if (performEvictions(false) == EVICT_RUNNING) return 0;  /* keep evicting */
+    if (performEvictions((bool)clientData) == EVICT_RUNNING) return 0;  /* keep evicting */
 
     /* For EVICT_OK - things are good, no need to keep evicting.
      * For EVICT_FAIL - there is nothing left to evict.  */
@@ -910,7 +910,7 @@ int performEvictions(bool fPreSnapshot) {
                     if (!isEvictionProcRunning && serverTL->el != nullptr) {
                         isEvictionProcRunning = 1;
                         aeCreateTimeEvent(serverTL->el, 0,
-                                evictionTimeProc, NULL, NULL);
+                                evictionTimeProc, (void*)fPreSnapshot, NULL);
                     }
                     break;
                 }

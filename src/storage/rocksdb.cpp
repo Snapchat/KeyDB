@@ -5,7 +5,6 @@
 #include <unistd.h>
 #include "../server.h"
 #include "../cluster.h"
-#include "../mt19937-64.h"
 #include "rocksdbfactor_internal.h"
 
 static const char keyprefix[] = INTERNAL_KEY_PREFIX;

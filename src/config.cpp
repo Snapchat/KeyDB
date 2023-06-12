@@ -749,6 +749,18 @@ void loadServerConfigFromString(char *config) {
                 g_pserver->fActiveReplica = CONFIG_DEFAULT_ACTIVE_REPLICA;
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
+            if (listLength(g_pserver->masters) && g_pserver->fActiveReplica) {
+                err = "must not set replica-of config before active-replica config"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0], "multi-master") && argc == 2) {
+            g_pserver->enable_multimaster = yesnotoi(argv[1]);
+            if (g_pserver->enable_multimaster == -1) {
+                g_pserver->enable_multimaster = CONFIG_DEFAULT_ENABLE_MULTIMASTER;
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+            if (listLength(g_pserver->masters) && g_pserver->enable_multimaster) {
+                err = "must not set replica-of config before multi-master config"; goto loaderr;
+            }
         } else if (!strcasecmp(argv[0], "tls-allowlist")) {
             if (argc < 2) {
                 err = "must supply at least one element in the allow list"; goto loaderr;
@@ -2468,7 +2480,7 @@ static int isValidS3Bucket(char *s3bucket, const char **err) {
 
     if (pid == 0)
     {
-        execlp("aws", "aws", "s3", "ls", s3bucket);
+        execlp("aws", "aws", "s3", "ls", s3bucket, nullptr);
         exit(EXIT_FAILURE);
     }
     else 
@@ -2798,7 +2810,6 @@ standardConfig configs[] = {
     createBoolConfig("replica-serve-stale-data", "slave-serve-stale-data", MODIFIABLE_CONFIG, g_pserver->repl_serve_stale_data, 1, NULL, NULL),
     createBoolConfig("replica-read-only", "slave-read-only", MODIFIABLE_CONFIG, g_pserver->repl_slave_ro, 1, NULL, NULL),
     createBoolConfig("replica-ignore-maxmemory", "slave-ignore-maxmemory", MODIFIABLE_CONFIG, g_pserver->repl_slave_ignore_maxmemory, 1, NULL, NULL),
-    createBoolConfig("multi-master", NULL, IMMUTABLE_CONFIG, g_pserver->enable_multimaster,CONFIG_DEFAULT_ENABLE_MULTIMASTER, NULL, NULL),
     createBoolConfig("jemalloc-bg-thread", NULL, MODIFIABLE_CONFIG, cserver.jemalloc_bg_thread, 1, NULL, updateJemallocBgThread),
     createBoolConfig("activedefrag", NULL, MODIFIABLE_CONFIG, cserver.active_defrag_enabled, 0, isValidActiveDefrag, NULL),
     createBoolConfig("syslog-enabled", NULL, IMMUTABLE_CONFIG, g_pserver->syslog_enabled, 0, NULL, NULL),

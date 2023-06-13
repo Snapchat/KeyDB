@@ -119,13 +119,18 @@ void StorageCache::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, si
     std::vector<dictEntry*> vechashes;
     if (m_pdict != nullptr) {
         vechashes.reserve(celem);
+    }
 
-        for (size_t ielem = 0; ielem < celem; ++ielem) {
+    for (size_t ielem = 0; ielem < celem; ++ielem) {
+        if (m_pdict != nullptr) {
             dictEntry *de = (dictEntry*)zmalloc(sizeof(dictEntry));
             de->key = (void*)dictGenHashFunction(rgkeys[ielem], (int)rgcbkeys[ielem]);
             de->v.u64 = 1;
             vechashes.push_back(de);
         }
+        auto e = deserializeExpire(rgkeys[ielem], rgvals[ielem], rgcbvals[ielem], nullptr);
+        if (e != nullptr)
+            m_spstorage->setExpire(rgkeys[ielem], rgcbkeys[ielem], e->when());
     }
 
     std::unique_lock<fastlock> ul(m_lock);

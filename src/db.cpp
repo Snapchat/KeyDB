@@ -3299,8 +3299,8 @@ std::unique_ptr<expireEntry> deserializeExpire(sds key, const char *str, size_t 
         if (subkey)
             sdsfree(subkey);
     }
-
-    *poffset = offset;
+    if (poffset != nullptr)
+        *poffset = offset;
     return spexpire;
 }
 

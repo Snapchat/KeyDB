@@ -688,9 +688,14 @@ int performEvictions(bool fPreSnapshot) {
                                 * frequency subtracting the actual frequency to the maximum
                                 * frequency of 255. */
                             idle = 255-LFUDecrAndReturn(obj);
-                        } else if (g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_TTL && e != nullptr) {
+                        } else if (g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
                             /* In this case the sooner the expire the better. */
-                            idle = ULLONG_MAX - e->when();
+                            if (e != nullptr)
+                                idle = ULLONG_MAX - e->when();
+                            else
+                                continue;
+                        } else if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
+                            idle = ULLONG_MAX;
                         } else {
                             serverPanic("Unknown eviction policy in storage eviction");
                         }

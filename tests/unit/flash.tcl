@@ -206,6 +206,5 @@ if {$::flash_enabled} {
                 r flushall
             }
         }
-
     }
 }

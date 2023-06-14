@@ -701,7 +701,8 @@ int performEvictions(bool fPreSnapshot) {
                         }
 
                         if (bestkey == nullptr || bestidle < idle) {
-                            decrRefCount(bestkey);
+                            if (bestkey != nullptr)
+                                decrRefCount(bestkey);
                             incrRefCount(keyobj);
                             bestkey = keyobj;
                             bestidle = idle;

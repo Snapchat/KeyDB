@@ -3881,9 +3881,25 @@ void initServer(void) {
     g_pserver->db = (redisDb**)zmalloc(sizeof(redisDb*)*cserver.dbnum, MALLOC_LOCAL);
 
     /* Create the Redis databases, and initialize other internal state. */
-    for (int j = 0; j < cserver.dbnum; j++) {
-        g_pserver->db[j] = new (MALLOC_LOCAL) redisDb();
-        g_pserver->db[j]->initialize(j);
+    if (g_pserver->m_pstorageFactory == nullptr) {
+        for (int j = 0; j < cserver.dbnum; j++) {
+            g_pserver->db[j] = new (MALLOC_LOCAL) redisDb();
+            g_pserver->db[j]->initialize(j);
+        }
+    } else {
+        // Read FLASH metadata and load the appropriate dbid into each databse index, as each DB index can have different dbid mapped due to the swapdb command.
+        g_pserver->metadataDb = g_pserver->m_pstorageFactory->createMetadataDb();
+        for (int idb = 0; idb < cserver.dbnum; ++idb)
+        {
+            int dbid = idb;
+            std::string dbid_key = "db-" + std::to_string(idb);
+            g_pserver->metadataDb->retrieve(dbid_key.c_str(), dbid_key.length(), [&](const char *, size_t, const void *data, size_t){
+                dbid = *(int*)data;
+            });
+
+            g_pserver->db[idb] = new (MALLOC_LOCAL) redisDb();
+            g_pserver->db[idb]->initialize(dbid);
+        }
     }
 
     for (int i = 0; i < MAX_EVENT_LOOPS; ++i)
@@ -4033,7 +4049,6 @@ void initServer(void) {
     latencyMonitorInit();
 
     if (g_pserver->m_pstorageFactory) {
-        g_pserver->metadataDb = g_pserver->m_pstorageFactory->createMetadataDb();
         if (g_pserver->metadataDb) {
             g_pserver->metadataDb->retrieve("repl-id", 7, [&](const char *, size_t, const void *data, size_t cb){
                 if (cb == sizeof(g_pserver->replid)) {

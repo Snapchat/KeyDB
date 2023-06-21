@@ -36,7 +36,7 @@ class SnapshotPayloadParseState {
     std::vector<size_t> vecqueuedValsCb;
     
     
-    std::atomic<int> insertsInFlight;
+    std::shared_ptr<std::atomic<int>> insertsInFlight;
     std::unique_ptr<SlabAllocator> m_spallocator;
     dict *dictLongLongMetaData = nullptr;
     dict *dictMetaData = nullptr;
@@ -62,5 +62,5 @@ public:
     void pushArray(long long size);
     void pushValue(const char *rgch, long long cch);
     void pushValue(long long value);
-    bool shouldThrottle() const { return insertsInFlight > (cserver.cthreads*4); }
+    bool shouldThrottle() const { return *insertsInFlight > (cserver.cthreads*4); }
 };

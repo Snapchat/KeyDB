@@ -483,6 +483,7 @@ public:
             for (auto de : pair.second) {
                 dictFreeUnlinkedEntry(pair.first, de);
             }
+            dictRelease(pair.first);
         }
         aeReleaseLock();
         --s_clazyFreesInProgress;
@@ -513,6 +514,7 @@ public:
         );
         if (itr == vecdictvecde.end() || itr->first != d) {
             itr = vecdictvecde.insert(itr, std::make_pair(d, std::vector<dictEntry*>()));
+            __atomic_fetch_add(&d->refcount, 1, __ATOMIC_ACQ_REL);
         }
         serverAssert(itr->first == d);
         itr->second.push_back(de);

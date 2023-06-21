@@ -2199,6 +2199,9 @@ struct redisServerThreadVars {
     bool modulesEnabledThisAeLoop = false; /* In this loop of aeMain, were modules enabled before 
                                               the thread went to sleep? */
     bool disable_async_commands = false; /* this is only valid for one cycle of the AE loop and is reset in afterSleep */
+    
+    int propagate_in_transaction = 0;  /* Make sure we don't propagate nested MULTI/EXEC */
+    int client_pause_in_transaction = 0; /* Was a client pause executed during this Exec? */
     std::vector<client*> vecclientsProcess;
     dictAsyncRehashCtl *rehashCtl = nullptr;
 
@@ -2304,9 +2307,7 @@ struct redisServer {
     int sentinel_mode;          /* True if this instance is a Sentinel. */
     size_t initial_memory_usage; /* Bytes used after initialization. */
     int always_show_logo;       /* Show logo even for non-stdout logging. */
-    int propagate_in_transaction;  /* Make sure we don't propagate nested MULTI/EXEC */
     char *ignore_warnings;      /* Config: warnings that should be ignored. */
-    int client_pause_in_transaction; /* Was a client pause executed during this Exec? */
     pause_type client_pause_type;      /* True if clients are currently paused */
     /* Modules */
     ::dict *moduleapi;            /* Exported core APIs dictionary for modules. */

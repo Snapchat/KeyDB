@@ -1059,7 +1059,7 @@ void keysCommand(client *c) {
     sds pattern = szFromObj(c->argv[1]);
 
     const redisDbPersistentDataSnapshot *snapshot = nullptr;
-    if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED | CLIENT_DENY_BLOCKING)))
+    if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED | CLIENT_DENY_BLOCKING)) && !(serverTL->in_eval || serverTL->in_exec))
         snapshot = c->db->createSnapshot(c->mvccCheckpoint, true /* fOptional */);
     if (snapshot != nullptr)
     {
@@ -1224,7 +1224,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
         }
     }
 
-    if (o == nullptr && count >= 100)
+    if (o == nullptr && count >= 100 && !(serverTL->in_eval || serverTL->in_exec))
     {
         // Do an async version
         if (c->asyncCommand(

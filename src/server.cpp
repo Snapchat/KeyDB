@@ -3961,8 +3961,6 @@ void initServer(void) {
     g_pserver->pubsub_channels = dictCreate(&keylistDictType,NULL);
     g_pserver->pubsub_patterns = dictCreate(&keylistDictType,NULL);
     g_pserver->cronloops = 0;
-    g_pserver->propagate_in_transaction = 0;
-    g_pserver->client_pause_in_transaction = 0;
     g_pserver->child_pid = -1;
     g_pserver->child_type = CHILD_TYPE_NONE;
     g_pserver->rdbThreadVars.fRdbThreadCancel = false;
@@ -4335,12 +4333,12 @@ void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
      * This way we'll deliver the MULTI/..../EXEC block as a whole and
      * both the AOF and the replication link will have the same consistency
      * and atomicity guarantees. */
-    if (serverTL->in_exec && !g_pserver->propagate_in_transaction)
+    if (serverTL->in_exec && !serverTL->propagate_in_transaction)
         execCommandPropagateMulti(dbid);
 
     /* This needs to be unreachable since the dataset should be fixed during 
      * client pause, otherwise data may be lossed during a failover. */
-    serverAssert(!(areClientsPaused() && !g_pserver->client_pause_in_transaction));
+    serverAssert(!(areClientsPaused() && !serverTL->client_pause_in_transaction));
 
     if (g_pserver->aof_state != AOF_OFF && flags & PROPAGATE_AOF)
         feedAppendOnlyFile(cmd,dbid,argv,argc);
@@ -4662,8 +4660,8 @@ void call(client *c, int flags) {
 
     /* Client pause takes effect after a transaction has finished. This needs
      * to be located after everything is propagated. */
-    if (!serverTL->in_exec && g_pserver->client_pause_in_transaction) {
-        g_pserver->client_pause_in_transaction = 0;
+    if (!serverTL->in_exec && serverTL->client_pause_in_transaction) {
+        serverTL->client_pause_in_transaction = 0;
     }
 
     /* If the client has keys tracking enabled for client side caching,
@@ -4754,8 +4752,9 @@ int processCommand(client *c, int callFlags) {
         /* Both EXEC and EVAL call call() directly so there should be
          * no way in_exec or in_eval or propagate_in_transaction is 1.
          * That is unless lua_timedout, in which case client may run
-         * some commands. */
-        serverAssert(!g_pserver->propagate_in_transaction);
+         * some commands. Also possible that some other thread set
+         * propagate_in_transaction if this is an async command. */
+        serverAssert(!serverTL->propagate_in_transaction);
         serverAssert(!serverTL->in_exec);
         serverAssert(!serverTL->in_eval);
     }

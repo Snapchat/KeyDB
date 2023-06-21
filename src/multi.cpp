@@ -118,14 +118,14 @@ void discardCommand(client *c) {
 
 void beforePropagateMulti() {
     /* Propagating MULTI */
-    serverAssert(!g_pserver->propagate_in_transaction);
-    g_pserver->propagate_in_transaction = 1;
+    serverAssert(!serverTL->propagate_in_transaction);
+    serverTL->propagate_in_transaction = 1;
 }
 
 void afterPropagateExec() {
     /* Propagating EXEC */
-    serverAssert(g_pserver->propagate_in_transaction == 1);
-    g_pserver->propagate_in_transaction = 0;
+    serverAssert(serverTL->propagate_in_transaction == 1);
+    serverTL->propagate_in_transaction = 0;
 }
 
 /* Send a MULTI command to all the slaves and AOF file. Check the execCommand
@@ -264,7 +264,7 @@ void execCommand(client *c) {
 
     /* Make sure the EXEC command will be propagated as well if MULTI
      * was already propagated. */
-    if (g_pserver->propagate_in_transaction) {
+    if (serverTL->propagate_in_transaction) {
         int is_master = listLength(g_pserver->masters) == 0;
         g_pserver->dirty++;
         /* If inside the MULTI/EXEC block this instance was suddenly

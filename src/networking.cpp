@@ -2753,7 +2753,7 @@ void readQueryFromClient(connection *conn) {
 
     if (cserver.cthreads > 1 || g_pserver->m_pstorageFactory) {
         parseClientCommandBuffer(c);
-        if (g_pserver->enable_async_commands && !serverTL->disable_async_commands && listLength(g_pserver->monitors) == 0 && (aeLockContention() || serverTL->rgdbSnapshot[c->db->id] || g_fTestMode)) {
+        if (g_pserver->enable_async_commands && !serverTL->disable_async_commands && listLength(g_pserver->monitors) == 0 && (aeLockContention() || serverTL->rgdbSnapshot[c->db->id] || g_fTestMode) && !serverTL->in_eval && !serverTL->in_exec) {
             // Frequent writers aren't good candidates for this optimization, they cause us to renew the snapshot too often
             //  so we exclude them unless the snapshot we need already exists.
             // Note: In test mode we want to create snapshots as often as possibl to excercise them - we don't care about perf
@@ -3995,7 +3995,7 @@ void pauseClients(mstime_t end, pause_type type) {
      * to track this state so that we don't assert
      * in propagate(). */
     if (serverTL->in_exec) {
-        g_pserver->client_pause_in_transaction = 1;
+        serverTL->client_pause_in_transaction = 1;
     }
 }
 

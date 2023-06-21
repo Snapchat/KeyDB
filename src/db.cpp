@@ -1769,7 +1769,7 @@ int dbSwapDatabases(int id1, int id2) {
 
 /* SWAPDB db1 db2 */
 void swapdbCommand(client *c) {
-    int id1, id2, oriId;
+    int id1, id2, oriIdx;
 
     /* Not allowed in cluster mode: we have just DB 0 there. */
     if (g_pserver->cluster_enabled) {
@@ -1786,8 +1786,13 @@ void swapdbCommand(client *c) {
         "invalid second DB index") != C_OK)
         return;
 
-    //get client's original db's id
-    oriId=c->db->id;
+    // get client's original db's index
+    for (int idb=0; idb < cserver.dbnum; ++idb) {
+        if (g_pserver->db[idb]->id == c->db->id) {
+            oriIdx = idb;
+            break;
+        }
+    }
 
     /* Swap... */
     if (dbSwapDatabases(id1,id2) == C_ERR) {
@@ -1798,9 +1803,17 @@ void swapdbCommand(client *c) {
         moduleFireServerEvent(REDISMODULE_EVENT_SWAPDB,0,&si);
         g_pserver->dirty++;
 
-	//set client's db to original db
-        c->db=g_pserver->db[oriId];
+        // set client's db to original db
+        c->db=g_pserver->db[oriIdx];
 
+        // Persist the databse index to dbid mapping into FLASH for later recovery.
+        if (g_pserver->m_pstorageFactory != nullptr && g_pserver->metadataDb != nullptr) {
+            std::string dbid_key = "db-" + std::to_string(id1);
+            g_pserver->metadataDb->insert(dbid_key.c_str(), dbid_key.length(), &g_pserver->db[id1]->id, sizeof(g_pserver->db[id1]->id), true);
+
+            dbid_key = "db-" + std::to_string(id2);
+            g_pserver->metadataDb->insert(dbid_key.c_str(), dbid_key.length(), &g_pserver->db[id2]->id, sizeof(g_pserver->db[id2]->id), true);
+        }
         addReply(c,shared.ok);
     }
 }

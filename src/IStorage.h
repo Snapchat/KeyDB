@@ -46,6 +46,7 @@ public:
     virtual std::vector<std::string> getExpirationCandidates() = 0;
     virtual std::vector<std::string> getEvictionCandidates() = 0;
     virtual void setExpire(const char *key, size_t cchKey, long long expire) = 0;
+    virtual void removeExpire(const char *key, size_t cchKey, long long expire) = 0;
 
     virtual void beginWriteBatch() {} // NOP
     virtual void endWriteBatch() {} // NOP

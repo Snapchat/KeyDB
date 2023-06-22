@@ -1827,6 +1827,8 @@ int redisDbPersistentData::removeExpire(robj *key, dict_iter itr) {
     serverAssert(itrExpire != m_setexpire->end());
     m_setexpire->erase(itrExpire);
     val->SetFExpires(false);
+    if (g_pserver->m_pstorageFactory != nullptr)
+        getStorageCache()->removeExpire(szFromObj(key), sdslen(szFromObj(key)), itrExpire->when());
     return 1;
 }
 

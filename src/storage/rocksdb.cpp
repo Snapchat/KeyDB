@@ -232,9 +232,10 @@ void RocksDBStorageProvider::removeExpire(const char * key, size_t cchKey, long 
     std::string prefix((const char *)&expire,sizeof(long long));
     std::string strKey(key, cchKey);
     rocksdb::PinnableSlice slice;
-    if (m_spbatch)
+    if (m_spbatch) {
         if (m_spbatch->GetFromBatchAndDB(m_spdb.get(), ReadOptions(), m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), &slice).ok())
             status = m_spbatch->Delete(m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), rocksdb::Slice(strKey));
+    }
     else if(m_spdb->Get(ReadOptions(), m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), &slice).ok())
         status = m_spdb->Delete(WriteOptions(), m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), rocksdb::Slice(strKey));
     if (!status.ok())

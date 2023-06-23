@@ -231,12 +231,9 @@ void RocksDBStorageProvider::removeExpire(const char * key, size_t cchKey, long 
     std::unique_lock<fastlock> l(m_lock);
     std::string prefix((const char *)&expire,sizeof(long long));
     std::string strKey(key, cchKey);
-    rocksdb::PinnableSlice slice;
-    if (m_spbatch) {
-        if (m_spbatch->GetFromBatchAndDB(m_spdb.get(), ReadOptions(), m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), &slice).ok())
-            status = m_spbatch->Delete(m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), rocksdb::Slice(strKey));
-    }
-    else if(m_spdb->Get(ReadOptions(), m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), &slice).ok())
+    if (m_spbatch)
+        status = m_spbatch->Delete(m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), rocksdb::Slice(strKey));
+    else
         status = m_spdb->Delete(WriteOptions(), m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), rocksdb::Slice(strKey));
     if (!status.ok())
         throw status.ToString();
@@ -251,13 +248,6 @@ std::vector<std::string> RocksDBStorageProvider::getExpirationCandidates()
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
         result.emplace_back(it->value().data(), it->value().size());
-        rocksdb::Status status;
-        if (m_spbatch != nullptr)
-            status = m_spbatch->Delete(m_spexpirecolfamily.get(), it->key());
-        else
-            status = m_spdb->Delete(WriteOptions(), m_spexpirecolfamily.get(), it->key());
-        if (!status.ok())
-            throw "Failed to remove expired key from rocksdb";
     }
     return result;
 }
@@ -277,12 +267,7 @@ std::vector<std::string> RocksDBStorageProvider::getEvictionCandidates()
             result.emplace_back(it->key().data() + 2, it->key().size() - 2);
         }
     } else {
-        std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spexpirecolfamily.get()));
-        for (it->SeekToFirst(); it->Valid() && result.size() < 16; it->Next()) {
-            if (FInternalKey(it->key().data(), it->key().size()))
-                continue;
-            result.emplace_back(it->value().data(), it->value().size());
-        }
+        return getExpirationCandidates();
     }
     return result;
 }

@@ -325,7 +325,7 @@ void activeExpireCycleCore(int type) {
     static int timelimit_exit = 0;      /* Time limit hit in previous call? */
     static long long last_fast_cycle = 0; /* When last fast cycle ran. */
 
-    int j, iteration = 0;
+    int j;
     int dbs_per_call = CRON_DBS_PER_CALL;
     long long start = ustime(), timelimit, elapsed;
 
@@ -379,7 +379,6 @@ void activeExpireCycleCore(int type) {
         current_db++;
 
         long long now;
-        iteration++;
         now = mstime();
 
         /* If there is nothing to expire try next DB ASAP. */

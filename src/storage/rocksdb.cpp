@@ -225,21 +225,24 @@ void RocksDBStorageProvider::setExpire(const char *key, size_t cchKey, long long
         throw status.ToString();
 }
 
-void RocksDBStorageProvider::removeExpire(const char * key, size_t cchKey, long long expire)
+void RocksDBStorageProvider::removeExpire(const char *key, size_t cchKey, long long expire)
 {
     rocksdb::Status status;
     std::unique_lock<fastlock> l(m_lock);
     std::string prefix((const char *)&expire,sizeof(long long));
     std::string strKey(key, cchKey);
+    std::string fullKey = prefix + strKey;
+    if (!FExpireExists(fullKey))
+        return;
     if (m_spbatch)
-        status = m_spbatch->Delete(m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), rocksdb::Slice(strKey));
+        status = m_spbatch->Delete(m_spexpirecolfamily.get(), rocksdb::Slice(fullKey), rocksdb::Slice(strKey));
     else
-        status = m_spdb->Delete(WriteOptions(), m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), rocksdb::Slice(strKey));
+        status = m_spdb->Delete(WriteOptions(), m_spexpirecolfamily.get(), rocksdb::Slice(fullKey), rocksdb::Slice(strKey));
     if (!status.ok())
         throw status.ToString();
 }
 
-std::vector<std::string> RocksDBStorageProvider::getExpirationCandidates(int count)
+std::vector<std::string> RocksDBStorageProvider::getExpirationCandidates(unsigned int count)
 {
     std::vector<std::string> result;
     std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spexpirecolfamily.get()));
@@ -256,7 +259,7 @@ std::string randomHashSlot() {
     return getPrefix(genrand64_int63() % (1 << 16));
 }
 
-std::vector<std::string> RocksDBStorageProvider::getEvictionCandidates(int count)
+std::vector<std::string> RocksDBStorageProvider::getEvictionCandidates(unsigned int count)
 {
     std::vector<std::string> result;
     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
@@ -337,4 +340,12 @@ bool RocksDBStorageProvider::FKeyExists(std::string& key) const
     if (m_spbatch)
         return m_spbatch->GetFromBatchAndDB(m_spdb.get(), ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key), &slice).ok();
     return m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key), &slice).ok();
+}
+
+bool RocksDBStorageProvider::FExpireExists(std::string& key) const
+{
+    rocksdb::PinnableSlice slice;
+    if (m_spbatch)
+        return m_spbatch->GetFromBatchAndDB(m_spdb.get(), ReadOptions(), m_spexpirecolfamily.get(), rocksdb::Slice(key), &slice).ok();
+    return m_spdb->Get(ReadOptions(), m_spexpirecolfamily.get(), rocksdb::Slice(key), &slice).ok();
 }

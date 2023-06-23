@@ -239,12 +239,12 @@ void RocksDBStorageProvider::removeExpire(const char * key, size_t cchKey, long 
         throw status.ToString();
 }
 
-std::vector<std::string> RocksDBStorageProvider::getExpirationCandidates()
+std::vector<std::string> RocksDBStorageProvider::getExpirationCandidates(int count)
 {
     std::vector<std::string> result;
     std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spexpirecolfamily.get()));
     long long curTime = mstime();
-    for (it->SeekToFirst(); it->Valid() && (*((long long *)it->key().data()) <= curTime) && (result.size() < 16); it->Next()) {
+    for (it->SeekToFirst(); it->Valid() && (*((long long *)it->key().data()) <= curTime) && (result.size() < count); it->Next()) {
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
         result.emplace_back(it->value().data(), it->value().size());
@@ -256,18 +256,18 @@ std::string randomHashSlot() {
     return getPrefix(genrand64_int63() % (1 << 16));
 }
 
-std::vector<std::string> RocksDBStorageProvider::getEvictionCandidates()
+std::vector<std::string> RocksDBStorageProvider::getEvictionCandidates(int count)
 {
     std::vector<std::string> result;
     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
         std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spcolfamily.get()));
-        for (it->Seek(randomHashSlot()); it->Valid() && result.size() < 16; it->Next()) {
+        for (it->Seek(randomHashSlot()); it->Valid() && result.size() < count; it->Next()) {
             if (FInternalKey(it->key().data(), it->key().size()))
                 continue;
             result.emplace_back(it->key().data() + 2, it->key().size() - 2);
         }
     } else {
-        return getExpirationCandidates();
+        return getExpirationCandidates(count);
     }
     return result;
 }

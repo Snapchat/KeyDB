@@ -419,7 +419,7 @@ void activeExpireCycleCore(int type) {
         } else {
             std::vector<std::string> keys;
             do {
-                keys = db->getStorageCache()->getExpirationCandidates();
+                keys = db->getStorageCache()->getExpirationCandidates(ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP);
                 for (std::string key : keys) {
                     robj* keyobj = createStringObject(key.c_str(), key.size());
                     db->find(szFromObj(keyobj));

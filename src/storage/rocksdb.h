@@ -36,8 +36,8 @@ public:
     virtual bool enumerate(callback fn) const override;
     virtual bool enumerate_hashslot(callback fn, unsigned int hashslot) const override;
 
-    virtual std::vector<std::string> getExpirationCandidates() override;
-    virtual std::vector<std::string> getEvictionCandidates() override;
+    virtual std::vector<std::string> getExpirationCandidates(int count) override;
+    virtual std::vector<std::string> getEvictionCandidates(int count) override;
     virtual void setExpire(const char *key, size_t cchKey, long long expire) override;
     virtual void removeExpire(const char *key, size_t cchKey, long long expire) override;
 

@@ -700,7 +700,7 @@ int performEvictions(bool fPreSnapshot) {
             unsigned long long bestidle = 0;
             for (int i = 0; i < cserver.dbnum; i++) {
                 db = g_pserver->db[i];
-                evictionPool = db->getStorageCache()->getEvictionCandidates();
+                evictionPool = db->getStorageCache()->getEvictionCandidates(g_pserver->maxmemory_samples);
                 for (std::string key : evictionPool) {
                     robj *keyobj = createStringObject(key.c_str(), key.size());
                     robj *obj = db->find(szFromObj(keyobj));

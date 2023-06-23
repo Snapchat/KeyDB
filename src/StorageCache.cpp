@@ -84,19 +84,31 @@ void StorageCache::cacheKey(const char *rgch, size_t cch)
 
 bool StorageCache::erase(sds key)
 {
+    unsigned long long when = 0;
+    m_spstorage->retrieve(key, sdslen(key), [&when, &key](const char *, size_t, const void * data, size_t cbdata) {
+        auto e = deserializeExpire(key, (const char *)data, cbdata, nullptr);
+        if (e != nullptr)
+            when = e->when();
+    });
     bool result = m_spstorage->erase(key, sdslen(key));
     std::unique_lock<fastlock> ul(m_lock);
-    if (result && m_pdict != nullptr)
+    if (result)
     {
-        uint64_t hash = dictSdsHash(key);
-        dictEntry *de = dictFind(m_pdict, reinterpret_cast<void*>(hash));
-        serverAssert(de != nullptr);
-        de->v.s64--;
-        serverAssert(de->v.s64 >= 0);
-        if (de->v.s64 == 0) {
-            dictDelete(m_pdict, reinterpret_cast<void*>(hash));
-        } else {
-            m_collisionCount--;
+        if (m_pdict != nullptr)
+        {
+            uint64_t hash = dictSdsHash(key);
+            dictEntry *de = dictFind(m_pdict, reinterpret_cast<void*>(hash));
+            serverAssert(de != nullptr);
+            de->v.s64--;
+            serverAssert(de->v.s64 >= 0);
+            if (de->v.s64 == 0) {
+                dictDelete(m_pdict, reinterpret_cast<void*>(hash));
+            } else {
+                m_collisionCount--;
+            }
+        }
+        if (when != 0) {
+            m_spstorage->removeExpire(key, sdslen(key), when);
         }
     }
     return result;
@@ -111,6 +123,9 @@ void StorageCache::insert(sds key, const void *data, size_t cbdata, bool fOverwr
     }
     ul.unlock();
     m_spstorage->insert(key, sdslen(key), (void*)data, cbdata, fOverwrite);
+    auto e = deserializeExpire(key, (const char *)data, cbdata, nullptr);
+    if (e != nullptr)
+        m_spstorage->setExpire(key, sdslen(key), e->when());
 }
 
 long _dictKeyIndex(dict *d, const void *key, uint64_t hash, dictEntry **existing);

@@ -235,9 +235,9 @@ void RocksDBStorageProvider::removeExpire(const char *key, size_t cchKey, long l
     if (!FExpireExists(fullKey))
         return;
     if (m_spbatch)
-        status = m_spbatch->Delete(m_spexpirecolfamily.get(), rocksdb::Slice(fullKey), rocksdb::Slice(strKey));
+        status = m_spbatch->Delete(m_spexpirecolfamily.get(), rocksdb::Slice(fullKey));
     else
-        status = m_spdb->Delete(WriteOptions(), m_spexpirecolfamily.get(), rocksdb::Slice(fullKey), rocksdb::Slice(strKey));
+        status = m_spdb->Delete(WriteOptions(), m_spexpirecolfamily.get(), rocksdb::Slice(fullKey));
     if (!status.ok())
         throw status.ToString();
 }

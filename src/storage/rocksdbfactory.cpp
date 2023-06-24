@@ -115,6 +115,8 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
                 auto cmp = compareVersion(&ver);
                 if (cmp == NewerVersion)
                     throw "Cannot load FLASH database created by newer version of KeyDB";
+                if (cmp == IncompatibleVersion)
+                    throw "Cannot load FLASH database from before 6.3.4";
                 if (cmp == OlderVersion)
                     setVersion(handle);
             }

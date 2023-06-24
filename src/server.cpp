@@ -1870,6 +1870,9 @@ VersionCompareResult compareVersion(SymVer *pver)
     if ((symVerThis.major == 0 && symVerThis.minor == 0 && symVerThis.build == 0)
         || (pver->major == 0 && pver->minor == 0 && pver->build == 0))
         return VersionCompareResult::EqualVersion;
+
+    if (pver->major <= 6 && pver->minor <= 3 && pver->build <= 3)
+        return VersionCompareResult::IncompatibleVersion;
     
     for (int iver = 0; iver < 3; ++iver)
     {

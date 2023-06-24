@@ -251,6 +251,13 @@ std::vector<std::string> RocksDBStorageProvider::getExpirationCandidates(unsigne
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
         result.emplace_back(it->value().data(), it->value().size());
+        rocksdb::Status status;
+        if (m_spbatch)
+            status = m_spbatch->Delete(m_spexpirecolfamily.get(), it->key());
+        else
+            status = m_spdb->Delete(WriteOptions(), m_spexpirecolfamily.get(), it->key());
+        if (!status.ok())
+            throw status.ToString();
     }
     return result;
 }
@@ -270,7 +277,12 @@ std::vector<std::string> RocksDBStorageProvider::getEvictionCandidates(unsigned 
             result.emplace_back(it->key().data() + 2, it->key().size() - 2);
         }
     } else {
-        return getExpirationCandidates(count);
+        std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spexpirecolfamily.get()));
+        for (it->SeekToFirst(); it->Valid() && result.size() < 16; it->Next()) {
+            if (FInternalKey(it->key().data(), it->key().size()))
+                continue;
+            result.emplace_back(it->value().data(), it->value().size());
+        }
     }
     return result;
 }

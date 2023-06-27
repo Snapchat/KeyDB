@@ -246,7 +246,7 @@ std::vector<std::string> RocksDBStorageProvider::getExpirationCandidates(unsigne
 {
     std::vector<std::string> result;
     std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spexpirecolfamily.get()));
-    for (it->SeekToFirst(); it->Valid() && (*((long long *)it->key().data()) <= time) && (result.size() < count); it->Next()) {
+    for (it->SeekToFirst(); it->Valid() && (*((long long *)it->key().data()) < time) && (result.size() < count); it->Next()) {
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
         result.emplace_back(it->value().data(), it->value().size());

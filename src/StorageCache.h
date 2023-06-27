@@ -61,6 +61,8 @@ public:
     void batch_lock() { return m_spstorage->batch_lock(); }
     void batch_unlock() { return m_spstorage->batch_unlock(); }
 
+    void flush() { m_spstorage->flush(); }
+
     size_t count() const;
 
     const StorageCache *clone();

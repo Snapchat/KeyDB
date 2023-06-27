@@ -937,6 +937,14 @@ NULL
         mallctl_string(c, c->argv+2, c->argc-2);
         return;
 #endif
+    } else if(!strcasecmp(szFromObj(c->argv[1]),"flush-storage") && c->argc == 2) {
+        if (g_pserver->m_pstorageFactory != nullptr) {
+            for (int i = 0; i < cserver.dbnum; i++) {
+                g_pserver->db[i]->getStorageCache()->flush();
+            }
+        } else {
+            addReplyError(c, "Can't flush storage if no storage provider is set");
+        }
     } else {
         addReplySubcommandSyntaxError(c);
         return;

@@ -545,6 +545,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_REPL_RDBONLY (1ULL<<42) /* This client is a replica that only wants
                                           RDB without replication buffer. */
 #define CLIENT_FORCE_REPLY (1ULL<<44) /* Should addReply be forced to write the text? */
+#define CLIENT_AUDIT_LOGGING (1ULL<<45) /* Client commands required audit logging */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -1713,6 +1714,7 @@ struct client {
     size_t argv_len_sum() const;
     bool asyncCommand(std::function<void(const redisDbPersistentDataSnapshot *, const std::vector<robj_sharedptr> &)> &&mainFn, 
                         std::function<void(const redisDbPersistentDataSnapshot *)> &&postFn = nullptr);
+    char* fprint;
 };
 
 struct saveparam {
@@ -2568,6 +2570,7 @@ struct redisServer {
     int get_ack_from_slaves;            /* If true we send REPLCONF GETACK. */
     /* Limits */
     unsigned int maxclients;            /* Max number of simultaneous clients */
+    unsigned int maxclientsReserved;    /* Reserved amount for health checks (localhost conns) */
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
     unsigned long long maxstorage;  /* Max number of bytes to use in a storage provider */
     int maxmemory_policy;           /* Policy for key eviction */
@@ -2707,6 +2710,7 @@ struct redisServer {
     int tls_auth_clients;
     int tls_rotation;
 
+    std::set<sdsstring> tls_auditlog_blocklist; /* Certificates that can be excluded from audit logging */
     std::set<sdsstring> tls_allowlist;
     redisTLSContextConfig tls_ctx_config;
 

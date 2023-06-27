@@ -81,6 +81,7 @@ set ::all_tests {
     unit/pendingquerybuf
     unit/tls
     unit/tls-name-validation
+    unit/tls-auditlog
     unit/tracking
     unit/oom-score-adj
     unit/shutdown

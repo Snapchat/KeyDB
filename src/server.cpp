@@ -5082,9 +5082,28 @@ int processCommand(client *c, int callFlags) {
     } else {
         /* If the command was replication or admin related we *must* flush our buffers first.  This is in case
             something happens which would modify what we would send to replicas */
-
         if (c->cmd->flags & (CMD_MODULE | CMD_ADMIN))
             flushReplBacklogToClients();
+
+        if (c->flags & CLIENT_AUDIT_LOGGING){
+            getKeysResult result = GETKEYS_RESULT_INIT;
+            int numkeys = getKeysFromCommand(c->cmd, c->argv, c->argc, &result);
+            int *keyindex = result.keys;
+
+            sds str = sdsempty();
+            for (int j = 0; j < numkeys; j++) {
+                sdscatsds(str, (sds)ptrFromObj(c->argv[keyindex[j]]));
+                sdscat(str, " ");
+            }
+        
+            if (numkeys > 0)
+            {
+                serverLog(LL_NOTICE, "Audit Log: %s, cmd %s, keys: %s", c->fprint, c->cmd->name, str);
+            } else {
+                serverLog(LL_NOTICE, "Audit Log: %s, cmd %s", c->fprint, c->cmd->name);
+            }
+            sdsfree(str);
+        }
 
         call(c,callFlags);
         c->woff = g_pserver->master_repl_offset;
@@ -5818,15 +5837,6 @@ sds genRedisInfoString(const char *section) {
             g_pserver->m_pstorageFactory ? g_pserver->m_pstorageFactory->name() : "none"
         );
         freeMemoryOverheadData(mh);
-
-        if (g_pserver->m_pstorageFactory)
-        {
-            info = sdscatprintf(info, 
-                "%s_memory:%zu\r\n",
-                g_pserver->m_pstorageFactory->name(),
-                g_pserver->m_pstorageFactory->totalDiskspaceUsed()
-            );
-        }
     }
 
     /* Persistence */
@@ -5949,6 +5959,10 @@ sds genRedisInfoString(const char *section) {
                 perc,
                 (intmax_t)eta
             );
+        }
+        if (g_pserver->m_pstorageFactory)
+        {
+            info = sdscat(info, g_pserver->m_pstorageFactory->getInfo().get());
         }
     }
 

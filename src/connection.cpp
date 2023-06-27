@@ -161,6 +161,11 @@ static void connSocketClose(connection *conn) {
         return;
     }
 
+    if (conn->fprint) {
+        zfree(conn->fprint);
+        conn->fprint = NULL;
+    }
+
     zfree(conn);
 }
 

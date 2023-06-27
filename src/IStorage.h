@@ -14,6 +14,7 @@ public:
     virtual class IStorage *createMetadataDb() = 0;
     virtual const char *name() const = 0;
     virtual size_t totalDiskspaceUsed() const = 0;
+    virtual sdsstring getInfo() const = 0;
     virtual bool FSlow() const = 0;
     virtual size_t filedsRequired() const { return 0; }
 };

@@ -9,6 +9,7 @@
 #include "rocksdbfactor_internal.h"
 #include <sys/types.h>
 #include <sys/stat.h> 
+#include <sys/statvfs.h>
 
 rocksdb::Options DefaultRocksDBOptions() {
     rocksdb::Options options;
@@ -202,4 +203,22 @@ const char *RocksDBStorageFactory::name() const
 size_t RocksDBStorageFactory::totalDiskspaceUsed() const
 {
     return m_pfilemanager->GetTotalSize();
+}
+
+sdsstring RocksDBStorageFactory::getInfo() const
+{
+    struct statvfs fiData;
+    int status = statvfs(m_path.c_str(), &fiData);
+    if ( status == 0 ) {
+        return sdsstring(sdscatprintf(sdsempty(),
+            "storage_flash_used_bytes:%zu\r\n"
+            "storage_flash_total_bytes:%zu\r\n"
+            "storage_flash_rocksdb_bytes:%zu\r\n",
+            fiData.f_bfree * fiData.f_frsize,
+            fiData.f_blocks * fiData.f_frsize,
+            totalDiskspaceUsed()));
+    } else {
+        fprintf(stderr, "Failed to gather FLASH statistics with status: %d\r\n", status);
+        return sdsstring(sdsempty());
+    }
 }

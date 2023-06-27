@@ -770,6 +770,15 @@ void loadServerConfigFromString(char *config) {
             }
             for (int i = 1; i < argc; i++)
                 g_pserver->tls_allowlist.emplace(argv[i], strlen(argv[i]));
+        } else if (!strcasecmp(argv[0], "tls-auditlog-blocklist")) {
+            if (argc < 2) {
+                err = "must supply at least one element in the block list"; goto loaderr;
+            }
+            if (!g_pserver->tls_auditlog_blocklist.empty()) {
+                err = "tls-auditlog-blocklist may only be set once"; goto loaderr;
+            }
+            for (int i = 1; i < argc; i++)
+                g_pserver->tls_auditlog_blocklist.emplace(argv[i], strlen(argv[i]));
         } else if (!strcasecmp(argv[0], "version-override") && argc == 2) {
             KEYDB_SET_VERSION = zstrdup(argv[1]);
             serverLog(LL_WARNING, "Warning version is overriden to: %s\n", KEYDB_SET_VERSION);
@@ -2112,7 +2121,10 @@ static void sdsConfigGet(client *c, typeData data) {
 }
 
 static void sdsConfigRewrite(typeData data, const char *name, struct rewriteConfigState *state) {
-    rewriteConfigSdsOption(state, name, *(data.sds.config), data.sds.default_value ? sdsnew(data.sds.default_value) : NULL);
+    sds sdsDefault = data.sds.default_value ? sdsnew(data.sds.default_value) : NULL;
+    rewriteConfigSdsOption(state, name, *(data.sds.config), sdsDefault);
+    if (sdsDefault)
+        sdsfree(sdsDefault);
 }
 
 
@@ -2907,6 +2919,7 @@ standardConfig configs[] = {
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, g_pserver->maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
     createUIntConfig("loading-process-events-interval-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->loading_process_events_interval_keys, 8192, MEMORY_CONFIG, NULL, NULL),
+    createUIntConfig("maxclients-reserved", NULL, MODIFIABLE_CONFIG, 0, 100, g_pserver->maxclientsReserved, 0, INTEGER_CONFIG, NULL,  NULL),
 
     /* Unsigned Long configs */
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, cserver.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */

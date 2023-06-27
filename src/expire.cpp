@@ -418,13 +418,13 @@ void activeExpireCycleCore(int type) {
         } else {
             std::vector<std::string> keys;
             do {
-                keys = db->getStorageCache()->getExpirationCandidates(ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP);
+                keys = db->getStorageCache()->getExpirationCandidates(ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP, now);
                 for (std::string key : keys) {
                     robj* keyobj = createStringObject(key.c_str(), key.size());
                     db->find(szFromObj(keyobj));
                     expireEntry *e = db->getExpire(keyobj);
-                    if (e != nullptr)
-                        expired += activeExpireCycleExpire(db, *e, mstime(), tried);
+                    if (e != nullptr && e->when() < now)
+                        expired += activeExpireCycleExpire(db, *e, now, tried);
                     decrRefCount(keyobj);
                 }
                 elapsed = ustime()-start;

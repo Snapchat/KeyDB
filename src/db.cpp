@@ -1871,8 +1871,6 @@ void redisDbPersistentData::resortExpire(expireEntry &e)
     expireEntry eT = std::move(e);
     m_setexpire->erase(itr);
     m_setexpire->insert(eT);
-    if (g_pserver->m_pstorageFactory != nullptr)
-        getStorageCache()->setExpire(eT.key(), sdslen(eT.key()), eT.when());
 }
 
 /* Set an expire to the specified key. If the expire is set in the context

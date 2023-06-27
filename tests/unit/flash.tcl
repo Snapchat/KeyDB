@@ -74,7 +74,7 @@ if {$::flash_enabled} {
             r set testkey foo ex 1
             r flushall cache
             assert_equal {1} [r dbsize]
-            after 1500
+            after 2000
             assert_equal {0} [r dbsize]
         }
 

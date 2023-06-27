@@ -242,12 +242,11 @@ void RocksDBStorageProvider::removeExpire(const char *key, size_t cchKey, long l
         throw status.ToString();
 }
 
-std::vector<std::string> RocksDBStorageProvider::getExpirationCandidates(unsigned int count)
+std::vector<std::string> RocksDBStorageProvider::getExpirationCandidates(unsigned int count, long long time)
 {
     std::vector<std::string> result;
     std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spexpirecolfamily.get()));
-    long long curTime = mstime();
-    for (it->SeekToFirst(); it->Valid() && (*((long long *)it->key().data()) <= curTime) && (result.size() < count); it->Next()) {
+    for (it->SeekToFirst(); it->Valid() && (*((long long *)it->key().data()) <= time) && (result.size() < count); it->Next()) {
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
         result.emplace_back(it->value().data(), it->value().size());

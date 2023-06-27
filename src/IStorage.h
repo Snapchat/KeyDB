@@ -43,7 +43,7 @@ public:
         endWriteBatch();
     }
 
-    virtual std::vector<std::string> getExpirationCandidates(unsigned int count) = 0;
+    virtual std::vector<std::string> getExpirationCandidates(unsigned int count, long long time) = 0;
     virtual std::vector<std::string> getEvictionCandidates(unsigned int count) = 0;
     virtual void setExpire(const char *key, size_t cchKey, long long expire) = 0;
     virtual void removeExpire(const char *key, size_t cchKey, long long expire) = 0;

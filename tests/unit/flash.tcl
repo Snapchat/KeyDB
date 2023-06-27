@@ -198,12 +198,14 @@ if {$::flash_enabled} {
                     fail "Server did not evict cleanly (detected full flush)"
                 }
                 r set last val
-                set dbsize [r dbsize]
+                r debug flush-storage
                 r config set maxstorage 1
-                assert {[s used_memory] < ($limit*1.2)}
-                assert {$dbsize == $numkeys+$extra_keys+2}
-                assert {[r get first] == {val}}
-                assert {[r get last] == {val}}
+                r config set maxmemory 1
+                set dbsize [r dbsize]
+                # after setting maxstorage and memory below used amount we should evict from storage provider
+                assert {$dbsize < $numkeys+$extra_keys+2}
+                r config set maxstorage 0
+                r config set maxmemory 0
                 r flushall
             }
         }

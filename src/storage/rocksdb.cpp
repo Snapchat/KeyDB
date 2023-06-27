@@ -343,6 +343,7 @@ void RocksDBStorageProvider::batch_unlock()
 void RocksDBStorageProvider::flush()
 {
     m_spdb->SyncWAL();
+    m_spdb->Flush(rocksdb::FlushOptions());
 }
 
 bool RocksDBStorageProvider::FKeyExists(std::string& key) const

@@ -942,6 +942,7 @@ NULL
             for (int i = 0; i < cserver.dbnum; i++) {
                 g_pserver->db[i]->getStorageCache()->flush();
             }
+            addReply(c,shared.ok);
         } else {
             addReplyError(c, "Can't flush storage if no storage provider is set");
         }

@@ -1177,6 +1177,11 @@ int chooseBestThreadForAccept()
 void clientAcceptHandler(connection *conn) {
     client *c = (client*)connGetPrivateData(conn);
 
+    if (conn->flags & CONN_FLAG_AUDIT_LOGGING_REQUIRED) {
+        c->flags |= CLIENT_AUDIT_LOGGING;
+        c->fprint = conn->fprint;
+    }
+
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
         serverLog(LL_WARNING,
                 "Error accepting a client connection: %s",
@@ -1240,6 +1245,7 @@ void clientAcceptHandler(connection *conn) {
 
 #define MAX_ACCEPTS_PER_CALL 1000
 #define MAX_ACCEPTS_PER_CALL_TLS 100
+
 static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) {
     client *c;
     char conninfo[100];
@@ -1276,24 +1282,27 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) 
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
     if (listLength(g_pserver->clients) + getClusterConnectionsCount()
-        >= g_pserver->maxclients)
+        >= (g_pserver->maxclients - g_pserver->maxclientsReserved))
     {
-        const char *err;
-        if (g_pserver->cluster_enabled)
-            err = "-ERR max number of clients + cluster "
-                  "connections reached\r\n";
-        else
-            err = "-ERR max number of clients reached\r\n";
+        // Allow the connection if it comes from localhost and we're within the maxclientReserved buffer range
+        if ((listLength(g_pserver->clients) + getClusterConnectionsCount()) >= g_pserver->maxclients || strcmp("127.0.0.1", ip)) {
+            const char *err;
+            if (g_pserver->cluster_enabled)
+                err = "-ERR max number of clients + cluster "
+                    "connections reached\r\n";
+            else
+                err = "-ERR max number of clients reached\r\n";
 
-        /* That's a best effort error message, don't check write errors.
-         * Note that for TLS connections, no handshake was done yet so nothing
-         * is written and the connection will just drop. */
-        if (connWrite(conn,err,strlen(err)) == -1) {
-            /* Nothing to do, Just to avoid the warning... */
+            /* That's a best effort error message, don't check write errors.
+            * Note that for TLS connections, no handshake was done yet so nothing
+            * is written and the connection will just drop. */
+            if (connWrite(conn,err,strlen(err)) == -1) {
+                /* Nothing to do, Just to avoid the warning... */
+            }
+            g_pserver->stat_rejected_conn++;
+            connClose(conn);
+            return;
         }
-        g_pserver->stat_rejected_conn++;
-        connClose(conn);
-        return;
     }
 
     /* Create connection and client */
@@ -2753,7 +2762,7 @@ void readQueryFromClient(connection *conn) {
 
     if (cserver.cthreads > 1 || g_pserver->m_pstorageFactory) {
         parseClientCommandBuffer(c);
-        if (g_pserver->enable_async_commands && !serverTL->disable_async_commands && listLength(g_pserver->monitors) == 0 && (aeLockContention() || serverTL->rgdbSnapshot[c->db->id] || g_fTestMode)) {
+        if (g_pserver->enable_async_commands && !serverTL->disable_async_commands && listLength(g_pserver->monitors) == 0 && (aeLockContention() || serverTL->rgdbSnapshot[c->db->id] || g_fTestMode) && !serverTL->in_eval && !serverTL->in_exec) {
             // Frequent writers aren't good candidates for this optimization, they cause us to renew the snapshot too often
             //  so we exclude them unless the snapshot we need already exists.
             // Note: In test mode we want to create snapshots as often as possibl to excercise them - we don't care about perf
@@ -3995,7 +4004,7 @@ void pauseClients(mstime_t end, pause_type type) {
      * to track this state so that we don't assert
      * in propagate(). */
     if (serverTL->in_exec) {
-        g_pserver->client_pause_in_transaction = 1;
+        serverTL->client_pause_in_transaction = 1;
     }
 }
 

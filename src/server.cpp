@@ -1961,6 +1961,16 @@ void getExpansiveClientsInfo(size_t *in_usage, size_t *out_usage) {
     *out_usage = o;
 }
 
+int closeClientOnOverload(client *c) {
+    if (g_pserver->overload_closed_clients > MAX_CLIENTS_SHED_PER_PERIOD) return false;
+    if (!g_pserver->is_overloaded) return false;
+    // Don't close masters, replicas, or pub/sub clients
+    if (c->flags & (CLIENT_MASTER | CLIENT_SLAVE | CLIENT_PENDING_WRITE | CLIENT_PUBSUB | CLIENT_BLOCKED)) return false;
+    freeClient(c);
+    ++g_pserver->overload_closed_clients;
+    return true;
+}
+
 /* This function is called by serverCron() and is used in order to perform
  * operations on clients that are important to perform constantly. For instance
  * we use this function in order to disconnect clients after a timeout, including
@@ -2031,6 +2041,7 @@ void clientsCron(int iel) {
             if (clientsCronTrackExpansiveClients(c, curr_peak_mem_usage_slot)) goto LContinue;
             if (clientsCronTrackClientsMemUsage(c)) goto LContinue;
             if (closeClientOnOutputBufferLimitReached(c, 0)) continue; // Client also free'd
+            if (closeClientOnOverload(c)) continue;
         LContinue:
             fastlock_unlock(&c->lock);
         }        
@@ -2584,6 +2595,26 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         migrateCloseTimedoutSockets();
     }
 
+    /* Check for CPU Overload */
+    run_with_period(10'000) {
+        g_pserver->is_overloaded = false;
+        g_pserver->overload_closed_clients = 0;
+        static clock_t last = 0;
+        if (g_pserver->overload_protect_threshold > 0) {
+            clock_t cur = clock();
+            double perc = static_cast<double>(cur - last) / (CLOCKS_PER_SEC*10);
+            perc /= cserver.cthreads;
+            perc *= 100.0;
+            serverLog(LL_WARNING, "CPU Used: %.2f", perc);
+            if (perc > g_pserver->overload_protect_threshold) {
+                serverLog(LL_WARNING, "\tWARNING: CPU overload detected.");
+                g_pserver->is_overloaded = true;
+            }
+            last = cur;
+        }
+    }
+
+    /* Tune the fastlock to CPU load */
     run_with_period(30000) {
         /* Tune the fastlock to CPU load */
         fastlock_auto_adjust_waits();
@@ -3884,9 +3915,25 @@ void initServer(void) {
     g_pserver->db = (redisDb**)zmalloc(sizeof(redisDb*)*cserver.dbnum, MALLOC_LOCAL);
 
     /* Create the Redis databases, and initialize other internal state. */
-    for (int j = 0; j < cserver.dbnum; j++) {
-        g_pserver->db[j] = new (MALLOC_LOCAL) redisDb();
-        g_pserver->db[j]->initialize(j);
+    if (g_pserver->m_pstorageFactory == nullptr) {
+        for (int j = 0; j < cserver.dbnum; j++) {
+            g_pserver->db[j] = new (MALLOC_LOCAL) redisDb();
+            g_pserver->db[j]->initialize(j);
+        }
+    } else {
+        // Read FLASH metadata and load the appropriate dbid into each databse index, as each DB index can have different dbid mapped due to the swapdb command.
+        g_pserver->metadataDb = g_pserver->m_pstorageFactory->createMetadataDb();
+        for (int idb = 0; idb < cserver.dbnum; ++idb)
+        {
+            int dbid = idb;
+            std::string dbid_key = "db-" + std::to_string(idb);
+            g_pserver->metadataDb->retrieve(dbid_key.c_str(), dbid_key.length(), [&](const char *, size_t, const void *data, size_t){
+                dbid = *(int*)data;
+            });
+
+            g_pserver->db[idb] = new (MALLOC_LOCAL) redisDb();
+            g_pserver->db[idb]->initialize(dbid);
+        }
     }
 
     for (int i = 0; i < MAX_EVENT_LOOPS; ++i)
@@ -3948,8 +3995,6 @@ void initServer(void) {
     g_pserver->pubsub_channels = dictCreate(&keylistDictType,NULL);
     g_pserver->pubsub_patterns = dictCreate(&keylistDictType,NULL);
     g_pserver->cronloops = 0;
-    g_pserver->propagate_in_transaction = 0;
-    g_pserver->client_pause_in_transaction = 0;
     g_pserver->child_pid = -1;
     g_pserver->child_type = CHILD_TYPE_NONE;
     g_pserver->rdbThreadVars.fRdbThreadCancel = false;
@@ -4036,7 +4081,6 @@ void initServer(void) {
     latencyMonitorInit();
 
     if (g_pserver->m_pstorageFactory) {
-        g_pserver->metadataDb = g_pserver->m_pstorageFactory->createMetadataDb();
         if (g_pserver->metadataDb) {
             g_pserver->metadataDb->retrieve("repl-id", 7, [&](const char *, size_t, const void *data, size_t cb){
                 if (cb == sizeof(g_pserver->replid)) {
@@ -4323,12 +4367,12 @@ void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
      * This way we'll deliver the MULTI/..../EXEC block as a whole and
      * both the AOF and the replication link will have the same consistency
      * and atomicity guarantees. */
-    if (serverTL->in_exec && !g_pserver->propagate_in_transaction)
+    if (serverTL->in_exec && !serverTL->propagate_in_transaction)
         execCommandPropagateMulti(dbid);
 
     /* This needs to be unreachable since the dataset should be fixed during 
      * client pause, otherwise data may be lossed during a failover. */
-    serverAssert(!(areClientsPaused() && !g_pserver->client_pause_in_transaction));
+    serverAssert(!(areClientsPaused() && !serverTL->client_pause_in_transaction));
 
     if (g_pserver->aof_state != AOF_OFF && flags & PROPAGATE_AOF)
         feedAppendOnlyFile(cmd,dbid,argv,argc);
@@ -4650,8 +4694,8 @@ void call(client *c, int flags) {
 
     /* Client pause takes effect after a transaction has finished. This needs
      * to be located after everything is propagated. */
-    if (!serverTL->in_exec && g_pserver->client_pause_in_transaction) {
-        g_pserver->client_pause_in_transaction = 0;
+    if (!serverTL->in_exec && serverTL->client_pause_in_transaction) {
+        serverTL->client_pause_in_transaction = 0;
     }
 
     /* If the client has keys tracking enabled for client side caching,
@@ -4742,8 +4786,9 @@ int processCommand(client *c, int callFlags) {
         /* Both EXEC and EVAL call call() directly so there should be
          * no way in_exec or in_eval or propagate_in_transaction is 1.
          * That is unless lua_timedout, in which case client may run
-         * some commands. */
-        serverAssert(!g_pserver->propagate_in_transaction);
+         * some commands. Also possible that some other thread set
+         * propagate_in_transaction if this is an async command. */
+        serverAssert(!serverTL->propagate_in_transaction);
         serverAssert(!serverTL->in_exec);
         serverAssert(!serverTL->in_eval);
     }
@@ -5040,9 +5085,28 @@ int processCommand(client *c, int callFlags) {
     } else {
         /* If the command was replication or admin related we *must* flush our buffers first.  This is in case
             something happens which would modify what we would send to replicas */
-
         if (c->cmd->flags & (CMD_MODULE | CMD_ADMIN))
             flushReplBacklogToClients();
+
+        if (c->flags & CLIENT_AUDIT_LOGGING){
+            getKeysResult result = GETKEYS_RESULT_INIT;
+            int numkeys = getKeysFromCommand(c->cmd, c->argv, c->argc, &result);
+            int *keyindex = result.keys;
+
+            sds str = sdsempty();
+            for (int j = 0; j < numkeys; j++) {
+                sdscatsds(str, (sds)ptrFromObj(c->argv[keyindex[j]]));
+                sdscat(str, " ");
+            }
+        
+            if (numkeys > 0)
+            {
+                serverLog(LL_NOTICE, "Audit Log: %s, cmd %s, keys: %s", c->fprint, c->cmd->name, str);
+            } else {
+                serverLog(LL_NOTICE, "Audit Log: %s, cmd %s", c->fprint, c->cmd->name);
+            }
+            sdsfree(str);
+        }
 
         call(c,callFlags);
         c->woff = g_pserver->master_repl_offset;
@@ -5591,7 +5655,8 @@ sds genRedisInfoString(const char *section) {
             "configured_hz:%i\r\n"
             "lru_clock:%u\r\n"
             "executable:%s\r\n"
-            "config_file:%s\r\n",
+            "config_file:%s\r\n"
+            "availability_zone:%s\r\n",
             KEYDB_SET_VERSION,
             redisGitSHA1(),
             strtol(redisGitDirty(),NULL,10) > 0,
@@ -5617,7 +5682,8 @@ sds genRedisInfoString(const char *section) {
             g_pserver->config_hz,
             lruclock,
             cserver.executable ? cserver.executable : "",
-            cserver.configfile ? cserver.configfile : "");
+            cserver.configfile ? cserver.configfile : "",
+            g_pserver->sdsAvailabilityZone);
     }
 
     /* Clients */
@@ -5774,15 +5840,6 @@ sds genRedisInfoString(const char *section) {
             g_pserver->m_pstorageFactory ? g_pserver->m_pstorageFactory->name() : "none"
         );
         freeMemoryOverheadData(mh);
-
-        if (g_pserver->m_pstorageFactory)
-        {
-            info = sdscatprintf(info, 
-                "%s_memory:%zu\r\n",
-                g_pserver->m_pstorageFactory->name(),
-                g_pserver->m_pstorageFactory->totalDiskspaceUsed()
-            );
-        }
     }
 
     /* Persistence */
@@ -5905,6 +5962,10 @@ sds genRedisInfoString(const char *section) {
                 perc,
                 (intmax_t)eta
             );
+        }
+        if (g_pserver->m_pstorageFactory)
+        {
+            info = sdscat(info, g_pserver->m_pstorageFactory->getInfo().get());
         }
     }
 

@@ -122,6 +122,9 @@ typedef long long ustime_t; /* microsecond time type. */
 #define LOADING_BOOT 1
 #define LOADING_REPLICATION 2
 
+#define OVERLOAD_PROTECT_PERIOD_MS 10'000 // 10 seconds
+#define MAX_CLIENTS_SHED_PER_PERIOD (OVERLOAD_PROTECT_PERIOD_MS / 10)  // Restrict to one client per 10ms
+
 extern int g_fTestMode;
 extern struct redisServer *g_pserver;
 
@@ -542,6 +545,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_REPL_RDBONLY (1ULL<<42) /* This client is a replica that only wants
                                           RDB without replication buffer. */
 #define CLIENT_FORCE_REPLY (1ULL<<44) /* Should addReply be forced to write the text? */
+#define CLIENT_AUDIT_LOGGING (1ULL<<45) /* Client commands required audit logging */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -1710,6 +1714,7 @@ struct client {
     size_t argv_len_sum() const;
     bool asyncCommand(std::function<void(const redisDbPersistentDataSnapshot *, const std::vector<robj_sharedptr> &)> &&mainFn, 
                         std::function<void(const redisDbPersistentDataSnapshot *)> &&postFn = nullptr);
+    char* fprint;
 };
 
 struct saveparam {
@@ -2199,6 +2204,9 @@ struct redisServerThreadVars {
     bool modulesEnabledThisAeLoop = false; /* In this loop of aeMain, were modules enabled before 
                                               the thread went to sleep? */
     bool disable_async_commands = false; /* this is only valid for one cycle of the AE loop and is reset in afterSleep */
+    
+    int propagate_in_transaction = 0;  /* Make sure we don't propagate nested MULTI/EXEC */
+    int client_pause_in_transaction = 0; /* Was a client pause executed during this Exec? */
     std::vector<client*> vecclientsProcess;
     dictAsyncRehashCtl *rehashCtl = nullptr;
 
@@ -2304,9 +2312,7 @@ struct redisServer {
     int sentinel_mode;          /* True if this instance is a Sentinel. */
     size_t initial_memory_usage; /* Bytes used after initialization. */
     int always_show_logo;       /* Show logo even for non-stdout logging. */
-    int propagate_in_transaction;  /* Make sure we don't propagate nested MULTI/EXEC */
     char *ignore_warnings;      /* Config: warnings that should be ignored. */
-    int client_pause_in_transaction; /* Was a client pause executed during this Exec? */
     pause_type client_pause_type;      /* True if clients are currently paused */
     /* Modules */
     ::dict *moduleapi;            /* Exported core APIs dictionary for modules. */
@@ -2564,6 +2570,7 @@ struct redisServer {
     int get_ack_from_slaves;            /* If true we send REPLCONF GETACK. */
     /* Limits */
     unsigned int maxclients;            /* Max number of simultaneous clients */
+    unsigned int maxclientsReserved;    /* Reserved amount for health checks (localhost conns) */
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
     unsigned long long maxstorage;  /* Max number of bytes to use in a storage provider */
     int maxmemory_policy;           /* Policy for key eviction */
@@ -2703,6 +2710,7 @@ struct redisServer {
     int tls_auth_clients;
     int tls_rotation;
 
+    std::set<sdsstring> tls_auditlog_blocklist; /* Certificates that can be excluded from audit logging */
     std::set<sdsstring> tls_allowlist;
     redisTLSContextConfig tls_ctx_config;
 
@@ -2742,6 +2750,12 @@ struct redisServer {
     static const size_t s_lockContentionSamples = 64;
     uint16_t rglockSamples[s_lockContentionSamples];
     unsigned ilockRingHead = 0;
+
+
+    sds sdsAvailabilityZone;
+    int overload_protect_threshold = 0;
+    int is_overloaded = 0;
+    int overload_closed_clients = 0;
 
         int module_blocked_pipe[2]; /* Pipe used to awake the event loop if a
                             client blocked on a module command needs

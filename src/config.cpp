@@ -2953,6 +2953,8 @@ standardConfig configs[] = {
     createBoolConfig("soft-shutdown", NULL, MODIFIABLE_CONFIG, g_pserver->config_soft_shutdown, 0, NULL, NULL),
     createBoolConfig("flash-disable-key-cache", NULL, MODIFIABLE_CONFIG, g_pserver->flash_disable_key_cache, 0, NULL, NULL),
     createSizeTConfig("semi-ordered-set-bucket-size", NULL, MODIFIABLE_CONFIG, 0, 1024, g_semiOrderedSetTargetBucketSize, 0, INTEGER_CONFIG, NULL, NULL),
+    createSDSConfig("availability-zone", NULL, MODIFIABLE_CONFIG, 0, g_pserver->sdsAvailabilityZone, "", NULL, NULL),
+    createIntConfig("overload-protect-percent", NULL, MODIFIABLE_CONFIG, 0, 200, g_pserver->overload_protect_threshold, 0, INTEGER_CONFIG, NULL, NULL),
 
 #ifdef USE_OPENSSL
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->tls_port, 0, INTEGER_CONFIG, NULL, updateTLSPort), /* TCP port. */

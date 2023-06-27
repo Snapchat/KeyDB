@@ -122,6 +122,9 @@ typedef long long ustime_t; /* microsecond time type. */
 #define LOADING_BOOT 1
 #define LOADING_REPLICATION 2
 
+#define OVERLOAD_PROTECT_PERIOD_MS 10'000 // 10 seconds
+#define MAX_CLIENTS_SHED_PER_PERIOD (OVERLOAD_PROTECT_PERIOD_MS / 10)  // Restrict to one client per 10ms
+
 extern int g_fTestMode;
 extern struct redisServer *g_pserver;
 
@@ -2743,6 +2746,12 @@ struct redisServer {
     static const size_t s_lockContentionSamples = 64;
     uint16_t rglockSamples[s_lockContentionSamples];
     unsigned ilockRingHead = 0;
+
+
+    sds sdsAvailabilityZone;
+    int overload_protect_threshold = 0;
+    int is_overloaded = 0;
+    int overload_closed_clients = 0;
 
         int module_blocked_pipe[2]; /* Pipe used to awake the event loop if a
                             client blocked on a module command needs

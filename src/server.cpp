@@ -70,6 +70,7 @@
 #ifdef __linux__
 #include <sys/prctl.h>
 #include <sys/mman.h>
+#include <sys/sysinfo.h>
 #endif
 
 int g_fTestMode = false;
@@ -2312,6 +2313,15 @@ void cronUpdateMemoryStats() {
             g_pserver->cron_malloc_stats.allocator_active = g_pserver->cron_malloc_stats.allocator_resident;
         if (!g_pserver->cron_malloc_stats.allocator_allocated)
             g_pserver->cron_malloc_stats.allocator_allocated = g_pserver->cron_malloc_stats.zmalloc_used;
+
+     #ifdef __linux__
+        struct sysinfo sysinf;
+        memset(&sysinf, 0, sizeof sysinf);
+        if (!sysinfo(&sysinf)) {
+            g_pserver->cron_malloc_stats.sys_total = static_cast<size_t>(sysinf.totalram);
+        }
+    #endif
+
     }
 }
 

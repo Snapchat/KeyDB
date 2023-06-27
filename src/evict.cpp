@@ -421,9 +421,21 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     if (total) *total = mem_reported;
     size_t maxmemory = g_pserver->maxmemory;
     if (fPreSnapshot)
-        maxmemory = static_cast<size_t>(maxmemory * 0.9);   // derate memory by 10% since we won't be able to free during snapshot
+        maxmemory = static_cast<size_t>(maxmemory*0.9);   // derate memory by 10% since we won't be able to free during snapshot
     if (g_pserver->FRdbSaveInProgress())
         maxmemory = static_cast<size_t>(maxmemory*1.2);
+
+    /* If there is less than 10% free system memory, force eviction */
+    bool mem_rss_max_exceeded;
+    if (g_pserver->cron_malloc_stats.sys_total) {
+        size_t mem_rss_max = static_cast<size_t>(g_pserver->cron_malloc_stats.sys_total * 0.9);
+        mem_rss_max_exceeded = g_pserver->cron_malloc_stats.process_rss > mem_rss_max;
+        if (mem_rss_max_exceeded) {
+            /* This will always set maxmemory < mem_reported */
+            float frag_ratio = (float)g_pserver->cron_malloc_stats.process_rss / (float)mem_reported;
+            maxmemory = static_cast<size_t>((float)mem_rss_max / frag_ratio);
+        }
+    }
 
     /* We may return ASAP if there is no need to compute the level. */
     int return_ok_asap = !maxmemory || mem_reported <= maxmemory;
@@ -434,6 +446,12 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     mem_used = mem_reported;
     size_t overhead = freeMemoryGetNotCountedMemory();
     mem_used = (mem_used > overhead) ? mem_used-overhead : 0;
+
+     /* If we've exceeded max RSS memory, we want to force evictions no matter
+     * what so we also offset the overhead from maxmemory. */
+    if (mem_rss_max_exceeded) {
+        maxmemory = (maxmemory > overhead) ? maxmemory-overhead : 0;
+    }
 
     /* Compute the ratio of memory usage. */
     if (level) {

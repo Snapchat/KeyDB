@@ -5,7 +5,7 @@ RUN mkdir -p /etc/keydb
 ARG BRANCH
 RUN set -eux; \
         \
-        apk add --no-cache su-exec; \
+        apk add --no-cache su-exec tini; \
         apk add --no-cache --virtual .build-deps \
                 coreutils \
                 gcc \
@@ -76,6 +76,6 @@ RUN set -eux; \
         chmod +x /usr/local/bin/docker-entrypoint.sh
 VOLUME /data
 WORKDIR /data
-ENTRYPOINT ["docker-entrypoint.sh"]
+ENTRYPOINT ["tini", "--", "docker-entrypoint.sh"]
 EXPOSE 6379
 CMD ["keydb-server", "/etc/keydb/keydb.conf"]

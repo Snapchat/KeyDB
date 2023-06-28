@@ -74,8 +74,11 @@ if {$::flash_enabled} {
             r set testkey foo ex 1
             r flushall cache
             assert_equal {1} [r dbsize]
-            after 5000
-            assert_equal {0} [r dbsize]
+            wait_for_condition 50 100 {
+                [r dbsize] == 0
+            } else {
+                fail "key is not expired"
+            }
         }
 
         test { SUBKEY EXPIRE persists after cache flush } {

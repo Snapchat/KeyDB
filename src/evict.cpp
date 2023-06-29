@@ -36,6 +36,9 @@
 #include <mutex>
 #include <map>
 #include <math.h>
+#ifdef __linux__
+#include <sys/sysinfo.h>
+#endif
 
 /* ----------------------------------------------------------------------------
  * Data structures
@@ -426,14 +429,14 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
         maxmemory = static_cast<size_t>(maxmemory*1.2);
 
     /* If free system memory is below a certain threshold, force eviction */
-    size_t sys_free_mem_buffer;
+    long sys_free_mem_buffer;
     if (g_pserver->force_eviction_percent && g_pserver->cron_malloc_stats.sys_total) {
         float free_mem_ratio = (float)(100 - g_pserver->force_eviction_percent)/100;
         size_t min_free_mem = static_cast<size_t>(g_pserver->cron_malloc_stats.sys_total * free_mem_ratio);
-        sys_free_mem_buffer = static_cast<size_t>(g_pserver->cron_malloc_stats.sys_free - min_free_mem);
+        sys_free_mem_buffer = static_cast<long>(g_pserver->cron_malloc_stats.sys_free - min_free_mem);
         if (sys_free_mem_buffer < 0) {
-            size_t mem_threshold = static_cast<size_t>(mem_reported + sys_free_mem_buffer);
-            maxmemory = (maxmemory < mem_threshold) ? maxmemory : mem_threshold;
+            long mem_threshold = mem_reported + sys_free_mem_buffer;
+            maxmemory = (maxmemory < mem_threshold) ? maxmemory : static_cast<size_t>(mem_threshold);
         }
     }
 
@@ -891,7 +894,7 @@ cant_free:
     if (mem_freed > 0) {
         updateSysFreeMemory();
     }
-    
+
     if (g_pserver->m_pstorageFactory)
     {
         if (mem_reported < g_pserver->maxmemory*1.2) {

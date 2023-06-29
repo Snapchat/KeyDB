@@ -2314,7 +2314,7 @@ void cronUpdateMemoryStats() {
         if (!g_pserver->cron_malloc_stats.allocator_allocated)
             g_pserver->cron_malloc_stats.allocator_allocated = g_pserver->cron_malloc_stats.zmalloc_used;
 
-     #ifdef __linux__
+    #ifdef __linux__
         if (g_pserver->force_eviction_percent) {
             struct sysinfo sysinf;
             memset(&sysinf, 0, sizeof sysinf);

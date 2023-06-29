@@ -430,10 +430,10 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     if (g_pserver->FRdbSaveInProgress() && !cserver.fForkBgSave)
         maxmemory = static_cast<size_t>(maxmemory*1.2);
 
-    /* If there is less than a configurable percent of free system memory, force eviction */
+    /* If rss memory exceeds configurable percent of system memory, force eviction */
     bool mem_rss_max_exceeded;
     if (g_pserver->force_eviction_percent && g_pserver->cron_malloc_stats.sys_total) {
-        float sys_total_ratio = (float)(100 - g_pserver->force_eviction_percent)/100;
+        float sys_total_ratio = (float)(g_pserver->force_eviction_percent)/100;
         size_t mem_rss_max = static_cast<size_t>(g_pserver->cron_malloc_stats.sys_total * sys_total_ratio);
         mem_rss_max_exceeded = g_pserver->cron_malloc_stats.process_rss > mem_rss_max;
         if (mem_rss_max_exceeded) {

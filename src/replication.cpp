@@ -410,7 +410,7 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
             if (minimumsize > g_pserver->repl_backlog_size && listening_replicas) {
                 // This is an emergency overflow, we better resize to fit
                 long long newsize = std::max(g_pserver->repl_backlog_size*2, minimumsize);
-                serverLog(LL_WARNING, "Replication backlog is too small, resizing to: %lld bytes", newsize);
+                serverLog(LL_WARNING, "Replication backlog is too small, resizing from %lld to %lld bytes", g_pserver->repl_backlog_size, newsize);
                 resizeReplicationBacklog(newsize);
             } else if (!listening_replicas) {
                 // We need to update a few variables or later asserts will notice we dropped data

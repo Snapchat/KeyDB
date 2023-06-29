@@ -445,7 +445,7 @@ extern "C" void clusterManagerWaitForClusterJoin(void) {
     int counter = 0,
         check_after = CLUSTER_JOIN_CHECK_AFTER +
                       (int)(listLength(cluster_manager.nodes) * 0.15f);
-    while(!clusterManagerIsConfigConsistent()) {
+    while(!clusterManagerIsConfigConsistent(0 /*fLog*/)) {
         printf(".");
         fflush(stdout);
         sleep(1);
@@ -588,7 +588,7 @@ extern "C" int clusterManagerCheckCluster(int quiet) {
     int do_fix = config.cluster_manager_command.flags &
                  CLUSTER_MANAGER_CMD_FLAG_FIX;
     if (!quiet) clusterManagerShowNodes();
-    consistent = clusterManagerIsConfigConsistent();
+    consistent = clusterManagerIsConfigConsistent(1 /*fLog*/);
     if (!consistent) {
         sds err = sdsnew("[ERR] Nodes don't agree about configuration!");
         clusterManagerOnError(err);

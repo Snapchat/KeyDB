@@ -18,6 +18,7 @@ public:
     virtual const char *name() const override;
 
     virtual size_t totalDiskspaceUsed() const override;
+    virtual sdsstring getInfo() const override;
 
     virtual bool FSlow() const override { return true; }
 

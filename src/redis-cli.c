@@ -1618,6 +1618,8 @@ static int parseOptions(int argc, char **argv) {
                 fprintf(stderr, "Unknown --show-pushes value '%s' "
                         "(valid: '[y]es', '[n]o')\n", argval);
             }
+        } else if (!strcmp(argv[i],"--force")) {
+            config.force_mode = 1;
         } else if (CLUSTER_MANAGER_MODE() && argv[i][0] != '-') {
             if (config.cluster_manager_command.argc == 0) {
                 int j = i + 1;
@@ -1793,6 +1795,7 @@ static void usage(void) {
 "  --verbose          Verbose mode.\n"
 "  --no-auth-warning  Don't show warning message when using password on command\n"
 "                     line interface.\n"
+"  --force            Ignore validation and safety checks\n"
 "  --help             Output this help and exit.\n"
 "  --version          Output version and exit.\n"
 "\n");
@@ -3993,12 +3996,13 @@ cleanup:
     return signature;
 }
 
-int clusterManagerIsConfigConsistent(void) {
+int clusterManagerIsConfigConsistent(int fLog) {
     if (cluster_manager.nodes == NULL) return 0;
     int consistent = (listLength(cluster_manager.nodes) <= 1);
     // If the Cluster has only one node, it's always consistent
     if (consistent) return 1;
     sds first_cfg = NULL;
+    const char *firstNode = NULL;
     listIter li;
     listNode *ln;
     listRewind(cluster_manager.nodes, &li);
@@ -4009,10 +4013,14 @@ int clusterManagerIsConfigConsistent(void) {
             consistent = 0;
             break;
         }
-        if (first_cfg == NULL) first_cfg = cfg;
-        else {
+        if (first_cfg == NULL) {
+            first_cfg = cfg;
+            firstNode = node->name;
+        } else {
             consistent = !sdscmp(first_cfg, cfg);
             sdsfree(cfg);
+            if (fLog && !consistent)
+                clusterManagerLogInfo("\tNode %s (%s:%d) is inconsistent with %s\n", node->name, node->ip, node->port, firstNode);
             if (!consistent) break;
         }
     }
@@ -5161,7 +5169,7 @@ static int clusterManagerCommandReshard(int argc, char **argv) {
     clusterManagerNode *node = clusterManagerNewNode(ip, port);
     if (!clusterManagerLoadInfoFromNode(node, 0)) return 0;
     clusterManagerCheckCluster(0);
-    if (cluster_manager.errors && listLength(cluster_manager.errors) > 0) {
+    if (cluster_manager.errors && listLength(cluster_manager.errors) > 0 && !config.force_mode) {
         fflush(stdout);
         fprintf(stderr,
                 "*** Please fix your cluster problems before resharding\n");
@@ -5394,7 +5402,7 @@ static int clusterManagerCommandRebalance(int argc, char **argv) {
     if (weightedNodes == NULL) goto cleanup;
     /* Check cluster, only proceed if it looks sane. */
     clusterManagerCheckCluster(1);
-    if (cluster_manager.errors && listLength(cluster_manager.errors) > 0) {
+    if (cluster_manager.errors && listLength(cluster_manager.errors) > 0 && !config.force_mode) {
         clusterManagerLogErr("*** Please fix your cluster problems "
                              "before rebalancing\n");
         result = 0;
@@ -7185,6 +7193,7 @@ int main(int argc, char **argv) {
     config.set_errcode = 0;
     config.no_auth_warning = 0;
     config.in_multi = 0;
+    config.force_mode = 0;
     config.cluster_manager_command.name = NULL;
     config.cluster_manager_command.argc = 0;
     config.cluster_manager_command.argv = NULL;

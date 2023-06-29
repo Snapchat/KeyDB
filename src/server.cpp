@@ -1959,6 +1959,16 @@ void getExpansiveClientsInfo(size_t *in_usage, size_t *out_usage) {
     *out_usage = o;
 }
 
+int closeClientOnOverload(client *c) {
+    if (g_pserver->overload_closed_clients > MAX_CLIENTS_SHED_PER_PERIOD) return false;
+    if (!g_pserver->is_overloaded) return false;
+    // Don't close masters, replicas, or pub/sub clients
+    if (c->flags & (CLIENT_MASTER | CLIENT_SLAVE | CLIENT_PENDING_WRITE | CLIENT_PUBSUB | CLIENT_BLOCKED)) return false;
+    freeClient(c);
+    ++g_pserver->overload_closed_clients;
+    return true;
+}
+
 /* This function is called by serverCron() and is used in order to perform
  * operations on clients that are important to perform constantly. For instance
  * we use this function in order to disconnect clients after a timeout, including
@@ -2029,6 +2039,7 @@ void clientsCron(int iel) {
             if (clientsCronTrackExpansiveClients(c, curr_peak_mem_usage_slot)) goto LContinue;
             if (clientsCronTrackClientsMemUsage(c)) goto LContinue;
             if (closeClientOnOutputBufferLimitReached(c, 0)) continue; // Client also free'd
+            if (closeClientOnOverload(c)) continue;
         LContinue:
             fastlock_unlock(&c->lock);
         }        
@@ -2591,6 +2602,26 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         migrateCloseTimedoutSockets();
     }
 
+    /* Check for CPU Overload */
+    run_with_period(10'000) {
+        g_pserver->is_overloaded = false;
+        g_pserver->overload_closed_clients = 0;
+        static clock_t last = 0;
+        if (g_pserver->overload_protect_threshold > 0) {
+            clock_t cur = clock();
+            double perc = static_cast<double>(cur - last) / (CLOCKS_PER_SEC*10);
+            perc /= cserver.cthreads;
+            perc *= 100.0;
+            serverLog(LL_WARNING, "CPU Used: %.2f", perc);
+            if (perc > g_pserver->overload_protect_threshold) {
+                serverLog(LL_WARNING, "\tWARNING: CPU overload detected.");
+                g_pserver->is_overloaded = true;
+            }
+            last = cur;
+        }
+    }
+
+    /* Tune the fastlock to CPU load */
     run_with_period(30000) {
         /* Tune the fastlock to CPU load */
         fastlock_auto_adjust_waits();
@@ -5061,9 +5092,28 @@ int processCommand(client *c, int callFlags) {
     } else {
         /* If the command was replication or admin related we *must* flush our buffers first.  This is in case
             something happens which would modify what we would send to replicas */
-
         if (c->cmd->flags & (CMD_MODULE | CMD_ADMIN))
             flushReplBacklogToClients();
+
+        if (c->flags & CLIENT_AUDIT_LOGGING){
+            getKeysResult result = GETKEYS_RESULT_INIT;
+            int numkeys = getKeysFromCommand(c->cmd, c->argv, c->argc, &result);
+            int *keyindex = result.keys;
+
+            sds str = sdsempty();
+            for (int j = 0; j < numkeys; j++) {
+                sdscatsds(str, (sds)ptrFromObj(c->argv[keyindex[j]]));
+                sdscat(str, " ");
+            }
+        
+            if (numkeys > 0)
+            {
+                serverLog(LL_NOTICE, "Audit Log: %s, cmd %s, keys: %s", c->fprint, c->cmd->name, str);
+            } else {
+                serverLog(LL_NOTICE, "Audit Log: %s, cmd %s", c->fprint, c->cmd->name);
+            }
+            sdsfree(str);
+        }
 
         call(c,callFlags);
         c->woff = g_pserver->master_repl_offset;
@@ -5612,7 +5662,8 @@ sds genRedisInfoString(const char *section) {
             "configured_hz:%i\r\n"
             "lru_clock:%u\r\n"
             "executable:%s\r\n"
-            "config_file:%s\r\n",
+            "config_file:%s\r\n"
+            "availability_zone:%s\r\n",
             KEYDB_SET_VERSION,
             redisGitSHA1(),
             strtol(redisGitDirty(),NULL,10) > 0,
@@ -5638,7 +5689,8 @@ sds genRedisInfoString(const char *section) {
             g_pserver->config_hz,
             lruclock,
             cserver.executable ? cserver.executable : "",
-            cserver.configfile ? cserver.configfile : "");
+            cserver.configfile ? cserver.configfile : "",
+            g_pserver->sdsAvailabilityZone);
     }
 
     /* Clients */
@@ -5795,15 +5847,6 @@ sds genRedisInfoString(const char *section) {
             g_pserver->m_pstorageFactory ? g_pserver->m_pstorageFactory->name() : "none"
         );
         freeMemoryOverheadData(mh);
-
-        if (g_pserver->m_pstorageFactory)
-        {
-            info = sdscatprintf(info, 
-                "%s_memory:%zu\r\n",
-                g_pserver->m_pstorageFactory->name(),
-                g_pserver->m_pstorageFactory->totalDiskspaceUsed()
-            );
-        }
     }
 
     /* Persistence */
@@ -5926,6 +5969,10 @@ sds genRedisInfoString(const char *section) {
                 perc,
                 (intmax_t)eta
             );
+        }
+        if (g_pserver->m_pstorageFactory)
+        {
+            info = sdscat(info, g_pserver->m_pstorageFactory->getInfo().get());
         }
     }
 

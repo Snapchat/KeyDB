@@ -4516,8 +4516,8 @@ void clusterCommand(client *c) {
 "NODES",
 "    Return cluster configuration seen by node. Output format:",
 "    <id> <ip:port> <flags> <master> <pings> <pongs> <epoch> <link> <slot> ...",
-"REPLICATE <node-id>",
-"    Configure current node as replica to <node-id>.",
+"REPLICATE (<node-id>|NO ONE)",
+"    Configure current node as replica to <node-id> or turn it into empty primary.",
 "RESET [HARD|SOFT]",
 "    Reset current node (default: soft).",
 "SET-CONFIG-EPOCH <epoch>",
@@ -4890,14 +4890,22 @@ NULL
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE|
                              CLUSTER_TODO_SAVE_CONFIG);
         addReply(c,shared.ok);
-    } else if (!strcasecmp(szFromObj(c->argv[1]),"replicate") && c->argc == 3) {
-        /* CLUSTER REPLICATE <NODE ID> */
-        clusterNode *n = clusterLookupNode(szFromObj(c->argv[2]));
-
-        /* Lookup the specified node in our table. */
-        if (!n) {
-            addReplyErrorFormat(c,"Unknown node %s", (char*)ptrFromObj(c->argv[2]));
-            return;
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"replicate") && (c->argc == 3 || c->argc == 4)) {
+        /* CLUSTER REPLICATE (<NODE ID>|NO ONE) */
+        clusterNode *n;
+        if (c->argc == 4) {
+            if (0 != strcasecmp(szFromObj(c->argv[2]),"NO") || 0 != strcasecmp(szFromObj(c->argv[3]),"ONE")) {
+                addReplySubcommandSyntaxError(c);
+                return;
+            }
+            n = nullptr;
+        } else {
+            /* Lookup the specified node in our table. */
+            n = clusterLookupNode(szFromObj(c->argv[2]));
+            if (n == nullptr) {
+                addReplyErrorFormat(c,"Unknown node %s", (char*)ptrFromObj(c->argv[2]));
+                return;
+            }
         }
 
         /* I can't replicate myself. */
@@ -4907,7 +4915,7 @@ NULL
         }
 
         /* Can't replicate a slave. */
-        if (nodeIsSlave(n)) {
+        if (n != nullptr && nodeIsSlave(n)) {
             addReplyError(c,"I can only replicate a master, not a replica.");
             return;
         }
@@ -4923,8 +4931,26 @@ NULL
             return;
         }
 
-        /* Set the master. */
-        clusterSetMaster(n);
+        if (n == nullptr) {
+            if (nodeIsMaster(myself)) {
+                addReply(c,shared.ok);
+                return;
+            }
+            serverLog(LL_NOTICE,"Stop replication and turning myself into empty primary.");
+            clusterSetNodeAsMaster(myself);
+            if (listLength(g_pserver->masters) > 0)
+            {
+                serverAssert(listLength(g_pserver->masters) == 1);
+                replicationUnsetMaster((redisMaster*)listFirst(g_pserver->masters)->value);
+            }
+            int empty_db_flags = g_pserver->repl_slave_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
+            emptyDb(-1,empty_db_flags, nullptr);
+            /* Reset manual failover state. */
+            resetManualFailover();
+        } else {
+            /* Set the master. */
+            clusterSetMaster(n);
+        }
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE|CLUSTER_TODO_SAVE_CONFIG);
         addReply(c,shared.ok);
     } else if ((!strcasecmp(szFromObj(c->argv[1]),"slaves") ||

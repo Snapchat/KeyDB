@@ -2319,6 +2319,7 @@ void cronUpdateMemoryStats() {
         memset(&sysinf, 0, sizeof sysinf);
         if (!sysinfo(&sysinf)) {
             g_pserver->cron_malloc_stats.sys_total = static_cast<size_t>(sysinf.totalram);
+            g_pserver->cron_malloc_stats.sys_free = static_cast<size_t>(sysinf.freeram);
         }
     #endif
 

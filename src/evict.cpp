@@ -425,16 +425,14 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     if (g_pserver->FRdbSaveInProgress())
         maxmemory = static_cast<size_t>(maxmemory*1.2);
 
-    /* If rss memory exceeds configurable percent of system memory, force eviction */
-    bool mem_rss_max_exceeded;
+    /* If free system memory is below a certain threshold, force eviction */
+    size_t sys_free_mem_buffer;
     if (g_pserver->force_eviction_percent && g_pserver->cron_malloc_stats.sys_total) {
-        float sys_total_ratio = (float)(g_pserver->force_eviction_percent)/100;
-        size_t mem_rss_max = static_cast<size_t>(g_pserver->cron_malloc_stats.sys_total * sys_total_ratio);
-        mem_rss_max_exceeded = g_pserver->cron_malloc_stats.process_rss > mem_rss_max;
-        if (mem_rss_max_exceeded) {
-            /* This will always set maxmemory < mem_reported */
-            float frag_ratio = (float)g_pserver->cron_malloc_stats.process_rss / (float)mem_reported;
-            maxmemory = static_cast<size_t>((float)mem_rss_max / frag_ratio);
+        float free_mem_ratio = (float)(100 - g_pserver->force_eviction_percent)/100;
+        size_t min_free_mem = static_cast<size_t>(g_pserver->cron_malloc_stats.sys_total * free_mem_ratio);
+        sys_free_mem_buffer = static_cast<size_t>(g_pserver->cron_malloc_stats.sys_free - min_free_mem);
+        if (sys_free_mem_buffer < 0) {
+            maxmemory = static_cast<size_t>(mem_reported + sys_free_mem_buffer);
         }
     }
 
@@ -448,9 +446,9 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     size_t overhead = freeMemoryGetNotCountedMemory();
     mem_used = (mem_used > overhead) ? mem_used-overhead : 0;
 
-     /* If we've exceeded max RSS memory, we want to force evictions no matter
+     /* If system free memory is too low, we want to force evictions no matter
      * what so we also offset the overhead from maxmemory. */
-    if (mem_rss_max_exceeded) {
+    if (sys_free_mem_buffer < 0) {
         maxmemory = (maxmemory > overhead) ? maxmemory-overhead : 0;
     }
 

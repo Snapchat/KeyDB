@@ -2015,6 +2015,7 @@ struct malloc_stats {
     size_t allocator_active;
     size_t allocator_resident;
     size_t sys_total;
+    size_t sys_free;
 };
 
 typedef struct socketFds {

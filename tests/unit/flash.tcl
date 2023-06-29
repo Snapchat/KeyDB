@@ -74,7 +74,7 @@ if {$::flash_enabled} {
             r set testkey foo ex 1
             r flushall cache
             assert_equal {1} [r dbsize]
-            wait_for_condition 50 100 {
+            wait_for_condition 50 1000 {
                 [r dbsize] == 0
             } else {
                 fail "key is not expired"

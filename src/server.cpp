@@ -2315,11 +2315,13 @@ void cronUpdateMemoryStats() {
             g_pserver->cron_malloc_stats.allocator_allocated = g_pserver->cron_malloc_stats.zmalloc_used;
 
      #ifdef __linux__
-        struct sysinfo sysinf;
-        memset(&sysinf, 0, sizeof sysinf);
-        if (!sysinfo(&sysinf)) {
-            g_pserver->cron_malloc_stats.sys_total = static_cast<size_t>(sysinf.totalram);
-            g_pserver->cron_malloc_stats.sys_free = static_cast<size_t>(sysinf.freeram);
+        if (g_pserver->force_eviction_percent) {
+            struct sysinfo sysinf;
+            memset(&sysinf, 0, sizeof sysinf);
+            if (!sysinfo(&sysinf)) {
+                g_pserver->cron_malloc_stats.sys_total = static_cast<size_t>(sysinf.totalram);
+                g_pserver->cron_malloc_stats.sys_free = static_cast<size_t>(sysinf.freeram);
+            }
         }
     #endif
 

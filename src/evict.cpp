@@ -432,7 +432,8 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
         size_t min_free_mem = static_cast<size_t>(g_pserver->cron_malloc_stats.sys_total * free_mem_ratio);
         sys_free_mem_buffer = static_cast<size_t>(g_pserver->cron_malloc_stats.sys_free - min_free_mem);
         if (sys_free_mem_buffer < 0) {
-            maxmemory = static_cast<size_t>(mem_reported + sys_free_mem_buffer);
+            size_t mem_threshold = static_cast<size_t>(mem_reported + sys_free_mem_buffer);
+            maxmemory = (maxmemory < mem_threshold) ? maxmemory : mem_threshold;
         }
     }
 
@@ -619,6 +620,18 @@ static unsigned long evictionTimeLimitUs() {
     }
 
     return ULONG_MAX;   /* No limit to eviction time */
+}
+
+static void updateSysFreeMemory() {
+#ifdef __linux__
+    if (g_pserver->force_eviction_percent) {
+        struct sysinfo sysinf;
+        memset(&sysinf, 0, sizeof sysinf);
+        if (!sysinfo(&sysinf)) {
+            g_pserver->cron_malloc_stats.sys_free = static_cast<size_t>(sysinf.freeram);
+        }
+    }
+#endif
 }
 
 /* Check that memory usage is within the current "maxmemory" limit.  If over
@@ -844,6 +857,7 @@ int performEvictions(bool fPreSnapshot) {
                  * across the dbAsyncDelete() call, while the thread can
                  * release the memory all the time. */
                 if (g_pserver->lazyfree_lazy_eviction) {
+                    updateSysFreeMemory();
                     if (getMaxmemoryState(NULL,NULL,NULL,NULL) == C_OK) {
                         break;
                     }
@@ -871,9 +885,13 @@ int performEvictions(bool fPreSnapshot) {
 
     if (splazy != nullptr && splazy->memory_queued() > 0 && !serverTL->gcEpoch.isReset()) {
         g_pserver->garbageCollector.enqueue(serverTL->gcEpoch, std::move(splazy));
-    }
+    } 
 
 cant_free:
+    if (mem_freed > 0) {
+        updateSysFreeMemory();
+    }
+    
     if (g_pserver->m_pstorageFactory)
     {
         if (mem_reported < g_pserver->maxmemory*1.2) {

@@ -81,6 +81,21 @@ if {$::flash_enabled} {
             }
         }
 
+        test { EXPIRE reduces used disk space } {
+            r flushall
+            r set testkey foo ex 10
+            r debug flush-storage
+            set used [r debug get-storage-usage]
+            assert_equal {1} [r dbsize]
+            wait_for_condition 50 1000 {
+                [r dbsize] == 0
+            } else {
+                fail "key is not expired"
+            }
+            set after [r debug get-storage-usage]
+            assert {$after < $used}
+        }
+
         test { SUBKEY EXPIRE persists after cache flush } {
             r flushall
             r sadd testkey foo bar baz

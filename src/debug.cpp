@@ -946,6 +946,12 @@ NULL
         } else {
             addReplyError(c, "Can't flush storage if no storage provider is set");
         }
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"get-storage-usage") && c->argc == 2) {
+        if (g_pserver->m_pstorageFactory != nullptr) {
+            addReplyLongLong(c, g_pserver->m_pstorageFactory->totalDiskspaceUsed());
+        } else {
+            addReplyLongLong(c, 0);
+        }
     } else {
         addReplySubcommandSyntaxError(c);
         return;

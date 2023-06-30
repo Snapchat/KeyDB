@@ -2015,7 +2015,7 @@ struct malloc_stats {
     size_t allocator_active;
     size_t allocator_resident;
     size_t sys_total;
-    size_t sys_free;
+    size_t sys_available;
 };
 
 typedef struct socketFds {
@@ -3663,6 +3663,9 @@ unsigned long LFUDecrAndReturn(robj_roptr o);
 #define EVICT_FAIL 2
 int performEvictions(bool fPreSnapshot);
 
+/* meminfo.cpp -- get memory info from /proc/memoryinfo for linux distros */
+size_t getMemAvailable();
+size_t getMemTotal();
 
 /* Keys hashing / comparison functions for dict.c hash tables. */
 uint64_t dictSdsHash(const void *key);

@@ -625,7 +625,7 @@ static unsigned long evictionTimeLimitUs() {
     return ULONG_MAX;   /* No limit to eviction time */
 }
 
-static void updateSysFreeMemory() {
+static void updateSysAvailableMemory() {
     if (g_pserver->force_eviction_percent) {
         g_pserver->cron_malloc_stats.sys_available = getMemAvailable();
     }
@@ -854,7 +854,7 @@ int performEvictions(bool fPreSnapshot) {
                  * across the dbAsyncDelete() call, while the thread can
                  * release the memory all the time. */
                 if (g_pserver->lazyfree_lazy_eviction) {
-                    updateSysFreeMemory();
+                    updateSysAvailableMemory();
                     if (getMaxmemoryState(NULL,NULL,NULL,NULL) == C_OK) {
                         break;
                     }
@@ -886,7 +886,7 @@ int performEvictions(bool fPreSnapshot) {
 
 cant_free:
     if (mem_freed > 0) {
-        updateSysFreeMemory();
+        updateSysAvailableMemory();
     }
 
     if (g_pserver->m_pstorageFactory)

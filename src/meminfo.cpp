@@ -2,7 +2,7 @@
 #include <fstream>
 
 static size_t getMemKey(std::string key) {
-# ifdef __linux__
+// # ifdef __linux__
     std::string token;
     std::ifstream f("/proc/meminfo");
     while (f >> token) {
@@ -15,11 +15,11 @@ static size_t getMemKey(std::string key) {
             }
             f.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
         }
-        return 0; // nothing found
     }
-# else
     return 0;
-# endif
+// # else
+//     return 0;
+// # endif
 }
 
 size_t getMemAvailable() {

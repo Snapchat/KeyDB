@@ -436,7 +436,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
         sys_available_mem_buffer = static_cast<long>(g_pserver->cron_malloc_stats.sys_available - min_available_mem);
         if (sys_available_mem_buffer < 0) {
             long long mem_threshold = mem_reported + sys_available_mem_buffer;
-            maxmemory = ((long)maxmemory < mem_threshold) ? maxmemory : static_cast<size_t>(mem_threshold);
+            maxmemory = ((long long)maxmemory < mem_threshold) ? maxmemory : static_cast<size_t>(mem_threshold);
         }
     }
 

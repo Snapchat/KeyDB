@@ -2,14 +2,14 @@
 #include <fstream>
 
 static size_t getMemKey(std::string key) {
-// # ifdef __linux__
+# ifdef __linux__
     std::string token;
     std::ifstream f("/proc/meminfo");
     while (f >> token) {
         if (token == key) {
             size_t mem_val;
             if (f >> mem_val) {
-                return mem_val;
+                return mem_val * 1024; // values are in kB
             } else {
                 return 0;
             }
@@ -17,9 +17,9 @@ static size_t getMemKey(std::string key) {
         }
     }
     return 0;
-// # else
-//     return 0;
-// # endif
+# else
+    return 0;
+# endif
 }
 
 size_t getMemAvailable() {

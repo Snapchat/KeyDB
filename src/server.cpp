@@ -2314,17 +2314,10 @@ void cronUpdateMemoryStats() {
         if (!g_pserver->cron_malloc_stats.allocator_allocated)
             g_pserver->cron_malloc_stats.allocator_allocated = g_pserver->cron_malloc_stats.zmalloc_used;
 
-    #ifdef __linux__
         if (g_pserver->force_eviction_percent) {
-            struct sysinfo sysinf;
-            memset(&sysinf, 0, sizeof sysinf);
-            if (!sysinfo(&sysinf)) {
-                g_pserver->cron_malloc_stats.sys_total = static_cast<size_t>(sysinf.totalram);
-                g_pserver->cron_malloc_stats.sys_free = static_cast<size_t>(sysinf.freeram);
-            }
+            g_pserver->cron_malloc_stats.sys_available = getMemAvailable();
+            serverLog(LL_WARNING, "Setting sys_available:%llu", g_pserver->cron_malloc_stats.sys_available); 
         }
-    #endif
-
     }
 }
 
@@ -4044,12 +4037,15 @@ void initServer(void) {
     g_pserver->cron_malloc_stats.allocator_allocated = 0;
     g_pserver->cron_malloc_stats.allocator_active = 0;
     g_pserver->cron_malloc_stats.allocator_resident = 0;
+    g_pserver->cron_malloc_stats.sys_available = 0;
+    g_pserver->cron_malloc_stats.sys_total = g_pserver->force_eviction_percent ? getMemTotal() : 0;
     g_pserver->lastbgsave_status = C_OK;
     g_pserver->aof_last_write_status = C_OK;
     g_pserver->aof_last_write_errno = 0;
     g_pserver->repl_good_slaves_count = 0;
 
     g_pserver->mvcc_tstamp = 0;
+
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed

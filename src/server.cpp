@@ -2316,7 +2316,6 @@ void cronUpdateMemoryStats() {
 
         if (g_pserver->force_eviction_percent) {
             g_pserver->cron_malloc_stats.sys_available = getMemAvailable();
-            serverLog(LL_WARNING, "Setting sys_available:%lu", g_pserver->cron_malloc_stats.sys_available); 
         }
     }
 }

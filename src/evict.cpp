@@ -626,15 +626,9 @@ static unsigned long evictionTimeLimitUs() {
 }
 
 static void updateSysFreeMemory() {
-#ifdef __linux__
     if (g_pserver->force_eviction_percent) {
-        struct sysinfo sysinf;
-        memset(&sysinf, 0, sizeof sysinf);
-        if (!sysinfo(&sysinf)) {
-            g_pserver->cron_malloc_stats.sys_free = static_cast<size_t>(sysinf.freeram);
-        }
+        g_pserver->cron_malloc_stats.sys_available = getMemAvailable();
     }
-#endif
 }
 
 /* Check that memory usage is within the current "maxmemory" limit.  If over

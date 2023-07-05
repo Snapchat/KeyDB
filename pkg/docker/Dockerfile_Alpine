@@ -54,6 +54,7 @@ RUN set -eux; \
         sed -i 's/^\(logfile .*\)$/# \1/' /etc/keydb/keydb.conf; \
         sed -i 's/protected-mode yes/protected-mode no/g' /etc/keydb/keydb.conf; \
         sed -i 's/^\(bind .*\)$/# \1/' /etc/keydb/keydb.conf; \
+        cd /usr/local/bin; \
         ln -s keydb-cli redis-cli; \
         cd /etc/keydb; \
         ln -s keydb.conf redis.conf; \

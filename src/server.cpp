@@ -5737,6 +5737,7 @@ sds genRedisInfoString(const char *section) {
         const char *evict_policy = evictPolicyToString();
         long long memory_lua = g_pserver->lua ? (long long)lua_gc(g_pserver->lua,LUA_GCCOUNT,0)*1024 : 0;
         struct redisMemOverhead *mh = getMemoryOverheadData();
+        char available_system_mem[64] = "unavailable";
 
         /* Peak memory is updated from time to time by serverCron() so it
          * may happen that the instantaneous value is slightly bigger than
@@ -5744,6 +5745,10 @@ sds genRedisInfoString(const char *section) {
          * if found smaller than the current memory usage. */
         if (zmalloc_used > g_pserver->stat_peak_memory)
             g_pserver->stat_peak_memory = zmalloc_used;
+
+        if (g_pserver->cron_malloc_stats.sys_available) {
+            snprintf(available_system_mem, 64, "%lu", g_pserver->cron_malloc_stats.sys_available);
+        }
 
         bytesToHuman(hmem,zmalloc_used,sizeof(hmem));
         bytesToHuman(peak_hmem,g_pserver->stat_peak_memory,sizeof(peak_hmem));
@@ -5797,7 +5802,8 @@ sds genRedisInfoString(const char *section) {
             "active_defrag_running:%d\r\n"
             "lazyfree_pending_objects:%zu\r\n"
             "lazyfreed_objects:%zu\r\n"
-            "storage_provider:%s\r\n",
+            "storage_provider:%s\r\n"
+            "available_system_memory:%s\r\n",
             zmalloc_used,
             hmem,
             g_pserver->cron_malloc_stats.process_rss,
@@ -5842,7 +5848,8 @@ sds genRedisInfoString(const char *section) {
             g_pserver->active_defrag_running,
             lazyfreeGetPendingObjectsCount(),
             lazyfreeGetFreedObjectsCount(),
-            g_pserver->m_pstorageFactory ? g_pserver->m_pstorageFactory->name() : "none"
+            g_pserver->m_pstorageFactory ? g_pserver->m_pstorageFactory->name() : "none",
+            available_system_mem
         );
         freeMemoryOverheadData(mh);
     }

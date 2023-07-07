@@ -3378,7 +3378,7 @@ int zslLexValueGteMin(sds value, zlexrangespec *spec);
 int zslLexValueLteMax(sds value, zlexrangespec *spec);
 
 /* Core functions */
-int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, bool fQuickCycle = false, bool fPreSnapshot=false);
+int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, int *reason=NULL, bool fQuickCycle=false, bool fPreSnapshot=false);
 size_t freeMemoryGetNotCountedMemory();
 int overMaxmemoryAfterAlloc(size_t moremem);
 int processCommand(client *c, int callFlags);
@@ -3662,6 +3662,9 @@ unsigned long LFUDecrAndReturn(robj_roptr o);
 #define EVICT_RUNNING 1
 #define EVICT_FAIL 2
 int performEvictions(bool fPreSnapshot);
+#define EVICT_REASON_NONE 0
+#define EVICT_REASON_USER 1
+#define EVICT_REASON_SYS 2
 
 /* meminfo.cpp -- get memory info from /proc/memoryinfo for linux distros */
 size_t getMemAvailable();

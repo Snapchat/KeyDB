@@ -2874,6 +2874,12 @@ typedef struct {
 #define OBJ_HASH_KEY 1
 #define OBJ_HASH_VALUE 2
 
+/* Used in evict.cpp */
+enum class EvictReason {
+    User,       /* User memory exceeded limit */
+    System      /* System memory exceeded limit */
+};
+
 /*-----------------------------------------------------------------------------
  * Extern declarations
  *----------------------------------------------------------------------------*/
@@ -3378,7 +3384,7 @@ int zslLexValueGteMin(sds value, zlexrangespec *spec);
 int zslLexValueLteMax(sds value, zlexrangespec *spec);
 
 /* Core functions */
-int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, int *reason=NULL, bool fQuickCycle=false, bool fPreSnapshot=false);
+int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, EvictReason *reason=NULL, bool fQuickCycle=false, bool fPreSnapshot=false);
 size_t freeMemoryGetNotCountedMemory();
 int overMaxmemoryAfterAlloc(size_t moremem);
 int processCommand(client *c, int callFlags);

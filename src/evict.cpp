@@ -36,9 +36,6 @@
 #include <mutex>
 #include <map>
 #include <math.h>
-#ifdef __linux__
-#include <sys/sysinfo.h>
-#endif
 
 /* ----------------------------------------------------------------------------
  * Data structures
@@ -65,11 +62,6 @@ struct evictionPoolEntry {
 };
 
 static struct evictionPoolEntry *EvictionPoolLRU;
-
-enum class EvictReason {
-    User,                       /* User memory exceeded limit */
-    System                      /* System memory exceeded limit */
-};
 
 /* ----------------------------------------------------------------------------
  * Implementation of eviction, aging and LRU

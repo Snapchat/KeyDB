@@ -66,6 +66,11 @@ struct evictionPoolEntry {
 
 static struct evictionPoolEntry *EvictionPoolLRU;
 
+enum class EvictReason {
+    User,                       /* User memory exceeded limit */
+    System                      /* System memory exceeded limit */
+};
+
 /* ----------------------------------------------------------------------------
  * Implementation of eviction, aging and LRU
  * --------------------------------------------------------------------------*/
@@ -420,7 +425,7 @@ size_t freeMemoryGetNotCountedMemory(void) {
  *              EVICT_REASON_SYS: available system memory under configurable threshold 
  *              (Populated when C_ERR is returned)
  */
-int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, int *reason, bool fQuickCycle, bool fPreSnapshot) {
+int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, EvictReason *reason, bool fQuickCycle, bool fPreSnapshot) {
     size_t mem_reported, mem_used, mem_tofree;
 
     /* Check if we are over the memory usage limit. If we are not, no need
@@ -485,7 +490,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     if (logical) *logical = mem_used;
     if (tofree) *tofree = mem_tofree;
 
-    if (reason) *reason = sys_available_mem_buffer < 0 ? EVICT_REASON_SYS : EVICT_REASON_USER;
+    if (reason) *reason = sys_available_mem_buffer < 0 ? EvictReason::System : EvictReason::User;
 
     return C_ERR;
 }
@@ -675,7 +680,7 @@ int performEvictions(bool fPreSnapshot) {
     const bool fEvictToStorage = !cserver.delete_on_evict && g_pserver->db[0]->FStorageProvider();
     int result = EVICT_FAIL;
     int ckeysFailed = 0;
-    int evictReason;
+    EvictReason evictReason;
 
     std::unique_ptr<FreeMemoryLazyFree> splazy = std::make_unique<FreeMemoryLazyFree>();
 
@@ -862,7 +867,7 @@ int performEvictions(bool fPreSnapshot) {
                  * across the dbAsyncDelete() call, while the thread can
                  * release the memory all the time. */
                 if (g_pserver->lazyfree_lazy_eviction) {
-                    if (evictReason == EVICT_REASON_SYS) {
+                    if (evictReason == EvictReason::System) {
                         updateSysAvailableMemory();
                     }
                     if (getMaxmemoryState(NULL,NULL,NULL,NULL) == C_OK) {
@@ -895,7 +900,7 @@ int performEvictions(bool fPreSnapshot) {
     } 
 
 cant_free:
-    if (mem_freed > 0 && evictReason == EVICT_REASON_SYS) {
+    if (mem_freed > 0 && evictReason == EvictReason::System) {
         updateSysAvailableMemory();
     }
 

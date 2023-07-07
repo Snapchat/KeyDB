@@ -3662,9 +3662,6 @@ unsigned long LFUDecrAndReturn(robj_roptr o);
 #define EVICT_RUNNING 1
 #define EVICT_FAIL 2
 int performEvictions(bool fPreSnapshot);
-#define EVICT_REASON_NONE 0
-#define EVICT_REASON_USER 1
-#define EVICT_REASON_SYS 2
 
 /* meminfo.cpp -- get memory info from /proc/memoryinfo for linux distros */
 size_t getMemAvailable();

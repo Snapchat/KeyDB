@@ -414,8 +414,13 @@ size_t freeMemoryGetNotCountedMemory(void) {
  *              memory currently used. May be > 1 if we are over the memory
  *              limit.
  *              (Populated both for C_ERR and C_OK)
+ * 
+ *  'reason'    the reason why the memory limit was exceeded
+ *              EVICT_REASON_USER: reported user memory exceeded maxmemory
+ *              EVICT_REASON_SYS: available system memory under configurable threshold 
+ *              (Populated when C_ERR is returned)
  */
-int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, bool fQuickCycle, bool fPreSnapshot) {
+int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, int *reason, bool fQuickCycle, bool fPreSnapshot) {
     size_t mem_reported, mem_used, mem_tofree;
 
     /* Check if we are over the memory usage limit. If we are not, no need
@@ -479,6 +484,8 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 
     if (logical) *logical = mem_used;
     if (tofree) *tofree = mem_tofree;
+
+    if (reason) *reason = sys_available_mem_buffer < 0 ? EVICT_REASON_SYS : EVICT_REASON_USER;
 
     return C_ERR;
 }
@@ -668,10 +675,11 @@ int performEvictions(bool fPreSnapshot) {
     const bool fEvictToStorage = !cserver.delete_on_evict && g_pserver->db[0]->FStorageProvider();
     int result = EVICT_FAIL;
     int ckeysFailed = 0;
+    int evictReason;
 
     std::unique_ptr<FreeMemoryLazyFree> splazy = std::make_unique<FreeMemoryLazyFree>();
 
-    if (getMaxmemoryState(&mem_reported,NULL,&mem_tofree,NULL,false,fPreSnapshot) == C_OK)
+    if (getMaxmemoryState(&mem_reported,NULL,&mem_tofree,NULL,&evictReason,false,fPreSnapshot) == C_OK)
         return EVICT_OK;
 
     if (g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
@@ -854,7 +862,9 @@ int performEvictions(bool fPreSnapshot) {
                  * across the dbAsyncDelete() call, while the thread can
                  * release the memory all the time. */
                 if (g_pserver->lazyfree_lazy_eviction) {
-                    updateSysAvailableMemory();
+                    if (evictReason == EVICT_REASON_SYS) {
+                        updateSysAvailableMemory();
+                    }
                     if (getMaxmemoryState(NULL,NULL,NULL,NULL) == C_OK) {
                         break;
                     }
@@ -885,7 +895,7 @@ int performEvictions(bool fPreSnapshot) {
     } 
 
 cant_free:
-    if (mem_freed > 0) {
+    if (mem_freed > 0 && evictReason == EVICT_REASON_SYS) {
         updateSysAvailableMemory();
     }
 

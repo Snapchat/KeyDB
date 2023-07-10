@@ -70,6 +70,7 @@
 #ifdef __linux__
 #include <sys/prctl.h>
 #include <sys/mman.h>
+#include <sys/sysinfo.h>
 #endif
 
 int g_fTestMode = false;
@@ -2312,6 +2313,10 @@ void cronUpdateMemoryStats() {
             g_pserver->cron_malloc_stats.allocator_active = g_pserver->cron_malloc_stats.allocator_resident;
         if (!g_pserver->cron_malloc_stats.allocator_allocated)
             g_pserver->cron_malloc_stats.allocator_allocated = g_pserver->cron_malloc_stats.zmalloc_used;
+
+        if (g_pserver->force_eviction_percent) {
+            g_pserver->cron_malloc_stats.sys_available = getMemAvailable();
+        }
     }
 }
 
@@ -4031,12 +4036,15 @@ void initServer(void) {
     g_pserver->cron_malloc_stats.allocator_allocated = 0;
     g_pserver->cron_malloc_stats.allocator_active = 0;
     g_pserver->cron_malloc_stats.allocator_resident = 0;
+    g_pserver->cron_malloc_stats.sys_available = 0;
+    g_pserver->cron_malloc_stats.sys_total = g_pserver->force_eviction_percent ? getMemTotal() : 0;
     g_pserver->lastbgsave_status = C_OK;
     g_pserver->aof_last_write_status = C_OK;
     g_pserver->aof_last_write_errno = 0;
     g_pserver->repl_good_slaves_count = 0;
 
     g_pserver->mvcc_tstamp = 0;
+
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
@@ -5729,6 +5737,7 @@ sds genRedisInfoString(const char *section) {
         const char *evict_policy = evictPolicyToString();
         long long memory_lua = g_pserver->lua ? (long long)lua_gc(g_pserver->lua,LUA_GCCOUNT,0)*1024 : 0;
         struct redisMemOverhead *mh = getMemoryOverheadData();
+        char available_system_mem[64] = "unavailable";
 
         /* Peak memory is updated from time to time by serverCron() so it
          * may happen that the instantaneous value is slightly bigger than
@@ -5736,6 +5745,10 @@ sds genRedisInfoString(const char *section) {
          * if found smaller than the current memory usage. */
         if (zmalloc_used > g_pserver->stat_peak_memory)
             g_pserver->stat_peak_memory = zmalloc_used;
+
+        if (g_pserver->cron_malloc_stats.sys_available) {
+            snprintf(available_system_mem, 64, "%lu", g_pserver->cron_malloc_stats.sys_available);
+        }
 
         bytesToHuman(hmem,zmalloc_used,sizeof(hmem));
         bytesToHuman(peak_hmem,g_pserver->stat_peak_memory,sizeof(peak_hmem));
@@ -5789,7 +5802,8 @@ sds genRedisInfoString(const char *section) {
             "active_defrag_running:%d\r\n"
             "lazyfree_pending_objects:%zu\r\n"
             "lazyfreed_objects:%zu\r\n"
-            "storage_provider:%s\r\n",
+            "storage_provider:%s\r\n"
+            "available_system_memory:%s\r\n",
             zmalloc_used,
             hmem,
             g_pserver->cron_malloc_stats.process_rss,
@@ -5834,7 +5848,8 @@ sds genRedisInfoString(const char *section) {
             g_pserver->active_defrag_running,
             lazyfreeGetPendingObjectsCount(),
             lazyfreeGetFreedObjectsCount(),
-            g_pserver->m_pstorageFactory ? g_pserver->m_pstorageFactory->name() : "none"
+            g_pserver->m_pstorageFactory ? g_pserver->m_pstorageFactory->name() : "none",
+            available_system_mem
         );
         freeMemoryOverheadData(mh);
     }

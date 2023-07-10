@@ -2014,6 +2014,8 @@ struct malloc_stats {
     size_t allocator_allocated;
     size_t allocator_active;
     size_t allocator_resident;
+    size_t sys_total;
+    size_t sys_available;
 };
 
 typedef struct socketFds {
@@ -2576,6 +2578,7 @@ struct redisServer {
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Precision of random sampling */
     int maxmemory_eviction_tenacity;/* Aggressiveness of eviction processing */
+    int force_eviction_percent;     /* Force eviction when this percent of system memory is remaining */
     int lfu_log_factor;             /* LFU logarithmic counter factor. */
     int lfu_decay_time;             /* LFU counter decay factor. */
     long long proto_max_bulk_len;   /* Protocol bulk length maximum size. */
@@ -2870,6 +2873,12 @@ typedef struct {
 
 #define OBJ_HASH_KEY 1
 #define OBJ_HASH_VALUE 2
+
+/* Used in evict.cpp */
+enum class EvictReason {
+    User,       /* User memory exceeded limit */
+    System      /* System memory exceeded limit */
+};
 
 /*-----------------------------------------------------------------------------
  * Extern declarations
@@ -3375,7 +3384,7 @@ int zslLexValueGteMin(sds value, zlexrangespec *spec);
 int zslLexValueLteMax(sds value, zlexrangespec *spec);
 
 /* Core functions */
-int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, bool fQuickCycle = false, bool fPreSnapshot=false);
+int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, EvictReason *reason=nullptr, bool fQuickCycle=false, bool fPreSnapshot=false);
 size_t freeMemoryGetNotCountedMemory();
 int overMaxmemoryAfterAlloc(size_t moremem);
 int processCommand(client *c, int callFlags);
@@ -3660,6 +3669,9 @@ unsigned long LFUDecrAndReturn(robj_roptr o);
 #define EVICT_FAIL 2
 int performEvictions(bool fPreSnapshot);
 
+/* meminfo.cpp -- get memory info from /proc/memoryinfo for linux distros */
+size_t getMemAvailable();
+size_t getMemTotal();
 
 /* Keys hashing / comparison functions for dict.c hash tables. */
 uint64_t dictSdsHash(const void *key);

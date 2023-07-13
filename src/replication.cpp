@@ -3732,7 +3732,7 @@ retry_connect:
     }
 
     /* Prepare a suitable temp file for bulk transfer */
-    if (!useDisklessLoad()) {
+    if (!useDisklessLoad() && !mi->isRocksdbSnapshotRepl) {
         while(maxtries--) {
             auto dt = std::chrono::system_clock::now().time_since_epoch();
             auto dtMillisecond = std::chrono::duration_cast<std::chrono::milliseconds>(dt);

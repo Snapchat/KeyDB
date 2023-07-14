@@ -3257,14 +3257,16 @@ NULL
                 }
                 else
                 {
-                    int iel = client->iel;
                     freeClientAsync(client);
-                    aePostFunction(g_pserver->rgthreadvar[client->iel].el, [iel] {  // note: failure is OK
-                        freeClientsInAsyncFreeQueue(iel);
-                    });
                 }
             }
             killed++;
+        }
+
+        for (int iel = 0; iel < cserver.cthreads; ++iel) {
+            aePostFunction(g_pserver->rgthreadvar[iel].el, [iel] {  // note: failure is OK
+                freeClientsInAsyncFreeQueue(iel);
+            });
         }
 
         /* Reply according to old/new format. */

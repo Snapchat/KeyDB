@@ -1,5 +1,6 @@
 #include <string>
 #include <fstream>
+#include <limits>
 
 static size_t getMemKey(std::string key) {
 # ifdef __linux__

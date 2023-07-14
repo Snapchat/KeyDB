@@ -7409,7 +7409,7 @@ static void validateConfiguration()
         exit(EXIT_FAILURE);
     }
 
-    g_pserver->repl_backlog_config_size = g_pserver->repl_backlog_size; // this is normally set in the update logic, but not on initial config
+    g_pserver->repl_backlog_size = g_pserver->repl_backlog_config_size; // this is normally set in the update logic, but not on initial config
 }
 
 int iAmMaster(void) {

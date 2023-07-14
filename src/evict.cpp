@@ -427,7 +427,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     size_t maxmemory = g_pserver->maxmemory;
     if (fPreSnapshot)
         maxmemory = static_cast<size_t>(maxmemory*0.9);   // derate memory by 10% since we won't be able to free during snapshot
-    if (g_pserver->FRdbSaveInProgress())
+    if (g_pserver->FRdbSaveInProgress() && !cserver.fForkBgSave)
         maxmemory = static_cast<size_t>(maxmemory*1.2);
 
     /* If available system memory is below a certain threshold, force eviction */

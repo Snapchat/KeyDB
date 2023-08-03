@@ -2036,7 +2036,7 @@ struct zsetopsrc {
                 zset *zs;
                 zskiplistNode *node;
             } sl;
-        } zset;
+        } iterzset;
     } iter;
 };
 
@@ -2085,7 +2085,7 @@ void zuiInitIterator(zsetopsrc *op) {
         /* Sorted sets are traversed in reverse order to optimize for
          * the insertion of the elements in a new list as in
          * ZDIFF/ZINTER/ZUNION */
-        iterzset *it = (iterzset*)&op->iter.zset;
+        iterzset *it = (iterzset*)&op->iter.iterzset;
         if (op->encoding == OBJ_ENCODING_ZIPLIST) {
             it->zl.zl = (unsigned char*)op->subject->m_ptr;
             it->zl.eptr = ziplistIndex(it->zl.zl,-2);
@@ -2118,7 +2118,7 @@ void zuiClearIterator(zsetopsrc *op) {
             serverPanic("Unknown set encoding");
         }
     } else if (op->type == OBJ_ZSET) {
-        iterzset *it = &op->iter.zset;
+        iterzset *it = &op->iter.iterzset;
         if (op->encoding == OBJ_ENCODING_ZIPLIST) {
             UNUSED(it); /* skip */
         } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
@@ -2194,7 +2194,7 @@ int zuiNext(zsetopsrc *op, zsetopval *val) {
             serverPanic("Unknown set encoding");
         }
     } else if (op->type == OBJ_ZSET) {
-        iterzset *it = &op->iter.zset;
+        iterzset *it = &op->iter.iterzset;
         if (op->encoding == OBJ_ENCODING_ZIPLIST) {
             /* No need to check both, but better be explicit. */
             if (it->zl.eptr == NULL || it->zl.sptr == NULL)

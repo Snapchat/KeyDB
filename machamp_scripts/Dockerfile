@@ -6,7 +6,7 @@ ENV GOSU_VERSION 1.14
 RUN set -eux; \
         savedAptMark="$(apt-mark showmanual)"; \
         apt-get update; \
-        apt-get install -y --no-install-recommends ca-certificates dirmngr gnupg wget; \
+        apt-get -o Dpkg::Options::="--force-confnew" install -y --no-install-recommends ca-certificates dirmngr gnupg wget; \
         rm -rf /var/lib/apt/lists/*; \
         dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')"; \
         wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$dpkgArch"; \
@@ -25,11 +25,12 @@ RUN set -eux; \
 # build KeyDB
 ARG MAKE_JOBS=""
 ARG ENABLE_FLASH=""
+COPY . /tmp/keydb-internal
 RUN set -eux; \
-        \
+        cd /tmp/keydb-internal; \
         savedAptMark="$(apt-mark showmanual)"; \
         apt-get update; \
-        DEBIAN_FRONTEND=noninteractive apt-get install -qqy --no-install-recommends \
+        DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confnew" install -qqy --no-install-recommends \
                 dpkg-dev \
                 pkg-config \
                 ca-certificates \

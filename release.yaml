@@ -1,0 +1,31 @@
+# Doc: https://wiki.sc-corp.net/pages/viewpage.action?pageId=121500284
+version: 1
+machamp:
+  keydb-build: # user can define the build name, match with the build name in build.yaml
+    branches: # defines which branch would trigger this release definition, you can define multiple regex for this field. This also applies to git tags
+      - ^main$
+    post_build_actions:
+      # https://wiki.sc-corp.net/display/TOOL/Build+Config+Complete+Samples#BuildConfigCompleteSamples-Mybuildhasadockerimage,Iwanttocontrolwhichregionorwhichcloudservicethisimagepublishto,Idonothavepipelinetotrigger
+      # publish image to gcr repository
+      publish-image-to-gcr-regions: # user can define the post build action step name
+        deploy_to: gke
+        regions:
+          - gcp-us-central1
+          - gcp-us-east1
+          - gcp-us-east4
+          - gcp-europe-west1
+          - gcp-asia-southeast1
+          - gcp-asia-south1
+        image_name:
+          - keydb
+      # publish image to ecr repository
+      publish-image-to-ecr-regions: # user can define the post build action step name
+        deploy_to: eks
+        regions:
+          - aws-us-west-2
+          - aws-us-east-1
+          - aws-eu-west-1
+          - aws-ap-southeast-1
+          - aws-ap-south-1
+        image_name:
+          - keydb

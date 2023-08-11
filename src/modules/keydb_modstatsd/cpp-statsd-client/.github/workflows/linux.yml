@@ -1,0 +1,23 @@
+name: Linux
+
+on: [push, pull_request]
+jobs:
+  linux:
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2
+      - name: dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq make cmake gcc g++
+      - name: build
+        shell: bash
+        run: |
+          export LD_LIBRARY_PATH=.:$(cat /etc/ld.so.conf.d/* | grep -vF "#" | tr "\\n" ":" | sed -e "s/:$//g")
+          cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_SANITIZERS=On
+          make all -j$(nproc)
+      - name: test
+        shell: bash
+        run: |
+          make test

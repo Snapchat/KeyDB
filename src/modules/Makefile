@@ -63,3 +63,4 @@ helloacl.so: helloacl.xo
 
 clean:
 	rm -rf *.xo *.so
+	$(MAKE) -C keydb_modstatsd clean

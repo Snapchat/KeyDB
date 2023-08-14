@@ -4,6 +4,3 @@
 [submodule "deps/depot_tools"]
 	path = deps/depot_tools
 	url = https://chromium.googlesource.com/chromium/tools/depot_tools.git
-[submodule "deps/cpp-statsd-client"]
-	path = deps/cpp-statsd-client
-	url = https://github.com/vthiery/cpp-statsd-client.git

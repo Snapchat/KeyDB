@@ -56,6 +56,7 @@ RUN set -eux; \
         make distclean; \
         make -j$([ -z "$MAKE_JOBS" ] &&  nproc || echo "$MAKE_JOBS") BUILD_TLS=yes NO_LICENSE_CHECK=yes $([ -z "$ENABLE_FLASH" ] &&  echo "" || echo "ENABLE_FLASH=$ENABLE_FLASH"); \
         cd src; \
+        mv modules/keydb_modstatsd/modstatsd.so /usr/local/lib/; \
         strip keydb-cli keydb-benchmark keydb-check-rdb keydb-check-aof keydb-diagnostic-tool keydb-sentinel; \
         mv keydb-server keydb-cli keydb-benchmark keydb-check-rdb keydb-check-aof keydb-diagnostic-tool keydb-sentinel /usr/local/bin/; \
         # clean up unused dependencies
@@ -84,7 +85,8 @@ RUN \
         sed -i 's/^\(logfile .*\)$/# \1/' /etc/keydb/keydb.conf; \
         sed -i 's/protected-mode yes/protected-mode no/g' /etc/keydb/keydb.conf; \
         sed -i 's/^\(bind .*\)$/# \1/' /etc/keydb/keydb.conf; \
-	    ln -s keydb-cli redis-cli; \
+        echo -e "\nloadmodule /usr/local/lib/modstatsd.so" >> /etc/keydb/keydb.conf; \
+	ln -s keydb-cli redis-cli; \
         cd /etc/keydb; \
         ln -s keydb.conf redis.conf; \
         rm -rf /tmp/*

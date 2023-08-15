@@ -94,7 +94,7 @@ RUN \
 RUN set -eux; \
         echo '#!/bin/sh' > /usr/local/bin/docker-entrypoint.sh; \
         echo 'set -e' >> /usr/local/bin/docker-entrypoint.sh; \
-        echo "# perpend `keydb-server` if not provided as first argument" >> /usr/local/bin/docker-entrypoint.sh; \
+        echo "# perpend 'keydb-server' if not provided as first argument" >> /usr/local/bin/docker-entrypoint.sh; \
         echo 'if [ "${1}" != "keydb-server" ]; then' >> /usr/local/bin/docker-entrypoint.sh; \
         echo '        set -- keydb-server "$@"' >> /usr/local/bin/docker-entrypoint.sh; \
         echo 'fi' >> /usr/local/bin/docker-entrypoint.sh; \

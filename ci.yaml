@@ -11,12 +11,20 @@ on:
           # references a build defined in build.yaml
           build_name: keydb-build
           arch_types: ["amd64", "arm64"]
+        - workflow_type: backend_workflow
+          # references a build defined in build.yaml
+          build_name: keydb-docker-build
+          arch_types: ["amd64", "arm64"]
   # on push is used for release branch, meaning: trigger this build when there is commit pushed to this branch
   push:
     - branches: [main]
       workflows:
         - workflow_type: backend_workflow
           build_name: keydb-build
+          arch_types: ["amd64", "arm64"]
+        - workflow_type: backend_workflow
+          # references a build defined in build.yaml
+          build_name: keydb-docker-build
           arch_types: ["amd64", "arm64"]
 
 # below defines which branch is release branch / release tag

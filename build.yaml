@@ -46,3 +46,9 @@ machamp:
         # https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-20-04
         builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-20-04@sha256:cf869a3f5d1de1e1d976bb906689c37b7031938eb68661b844a38c532f27248c
         command: ./runtest-rotation
+      docker:
+        parent: make-build
+        type: docker # published images can be found in https://console.cloud.google.com/gcr/images/machamp-prod/global/keydb
+        dockerfile: machamp_scripts/Dockerfile
+        image_name: keydb # git commit sha will be deafult tag in the final image
+        workspace_context: ./ # This is the workspace context that your Dockerfile will use to move files around. <Root of checkout repository>/<Workspace Context>/<Dockerfile> If the workspace context is just the root of the repository, you can just use "./".

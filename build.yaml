@@ -3,7 +3,7 @@ version: 1
 machamp:
   keydb-build:
     # Optional - build counter is linked to the build def
-    tag_template: 0.0.%build.counter%
+    tag_template: "%short.sha%"
     # Optional - value in seconds before a build is terminated, default is 3600 seconds
     timeout: 3600
     # Optional - update ghe or not, default to true

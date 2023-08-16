@@ -3,7 +3,7 @@ version: 1
 machamp:
   keydb-build:
     # Optional - build counter is linked to the build def
-    tag_template: "%short.sha%"
+    tag_template: "0.0.%build.counter%-%sha%"
     # Optional - value in seconds before a build is terminated, default is 3600 seconds
     timeout: 3600
     # Optional - update ghe or not, default to true
@@ -46,8 +46,24 @@ machamp:
         # https://github.sc-corp.net/Snapchat/img/tree/master/keydb/ubuntu-20-04
         builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/keydb/keydb-ubuntu-20-04@sha256:cf869a3f5d1de1e1d976bb906689c37b7031938eb68661b844a38c532f27248c
         command: ./runtest-rotation
+  keydb-docker-build:
+    # Optional - build counter is linked to the build def
+    tag_template: "%sha%"
+    # Optional - value in seconds before a build is terminated, default is 3600 seconds
+    timeout: 3600
+    # Optional - update ghe or not, default to true
+    update_ghe: true
+    code_coverage: false
+    # Required
+    steps:
+      # to ensure a clearer docker build env
+      code-checkout:
+        type: cmd
+        command: echo checkout
+        # default machamp builder image does not work for multi arch
+        builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/ubuntu/ubuntu-23-04@sha256:bd43177a80e6ce1c3583e8ea959b88a9081c0f56b765ec9c5a157c27a637c23b
       docker:
-        parent: make-build
+        parent: code-checkout
         type: docker # published images can be found in https://console.cloud.google.com/gcr/images/machamp-prod/global/keydb
         dockerfile: machamp_scripts/Dockerfile
         image_name: keydb # git commit sha will be deafult tag in the final image

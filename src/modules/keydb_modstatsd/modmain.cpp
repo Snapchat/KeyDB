@@ -614,6 +614,10 @@ void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64
         // g_stats->timing("handle_client_info_time_taken_us", ustime() - commandStartTime);
         // RedisModule_FreeCallReply(reply);
 
+        commandStartTime = ustime();
+        emit_system_free_memory();
+        g_stats->timing("emit_free_system_memory_time_taken_us", ustime() - commandStartTime);
+
         /* Log Keys */
         reply = RedisModule_Call(ctx, "dbsize", "");
         long long keys = RedisModule_CallReplyInteger(reply);
@@ -621,8 +625,6 @@ void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64
         g_stats->gauge("keys", keys);
         RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Emitting metric \"keys\": %llu", keys);
         g_stats->timing("metrics_time_taken_us", ustime() - startTime);
-
-        emit_system_free_memory();
         
 	lastTime = curTime;
     }

@@ -12,6 +12,8 @@
 #include <sys/time.h>
 #include <regex>
 #include <sstream>
+#include <iostream>
+#include <fstream>
 
 using namespace Statsd;
 
@@ -529,6 +531,18 @@ void handle_client_list_response(struct RedisModuleCtx *ctx, const char *szReply
     g_stats->gauge("total_replica_client_output_buffer", totalReplicaClientOutputBuffer);
 }
 
+void emit_system_free_memory() {
+    std::ifstream meminfo("/proc/meminfo");
+    std::string line;
+    while (std::getline(meminfo, line)) {
+        if (line.find("MemFree:") != std::string::npos) {
+            unsigned long memFreeInKB;
+            std::sscanf(line.c_str(), "MemFree: %lu kB", &memFreeInKB);
+            g_stats->gauge("systemFreeMemory_MB", memFreeInKB / 1024);
+            return;
+        }
+    }
+}
 
 void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64_t subevent, void *data) {
     static time_t lastTime = 0;
@@ -599,6 +613,10 @@ void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64
         // handle_client_list_response(ctx, szReply, len);
         // g_stats->timing("handle_client_info_time_taken_us", ustime() - commandStartTime);
         // RedisModule_FreeCallReply(reply);
+
+        commandStartTime = ustime();
+        emit_system_free_memory();
+        g_stats->timing("emit_free_system_memory_time_taken_us", ustime() - commandStartTime);
 
         /* Log Keys */
         reply = RedisModule_Call(ctx, "dbsize", "");

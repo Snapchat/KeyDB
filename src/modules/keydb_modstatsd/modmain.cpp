@@ -12,6 +12,8 @@
 #include <sys/time.h>
 #include <regex>
 #include <sstream>
+#include <iostream>
+#include <fstream>
 
 using namespace Statsd;
 
@@ -529,6 +531,18 @@ void handle_client_list_response(struct RedisModuleCtx *ctx, const char *szReply
     g_stats->gauge("total_replica_client_output_buffer", totalReplicaClientOutputBuffer);
 }
 
+void emit_system_free_memory() {
+    std::ifstream meminfo("/proc/meminfo");
+    std::string line;
+    while (std::getline(meminfo, line)) {
+        if (line.find("MemFree:") != std::string::npos) {
+            unsigned long memFreeInKB;
+            std::sscanf(line.c_str(), "MemFree: %lu kB", &memFreeInKB);
+            g_stats->gauge("systemFreeMemory_MB", memFreeInKB / 1024);
+            return;
+        }
+    }
+}
 
 void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64_t subevent, void *data) {
     static time_t lastTime = 0;
@@ -607,6 +621,8 @@ void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64
         g_stats->gauge("keys", keys);
         RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Emitting metric \"keys\": %llu", keys);
         g_stats->timing("metrics_time_taken_us", ustime() - startTime);
+
+        emit_system_free_memory();
         
 	lastTime = curTime;
     }

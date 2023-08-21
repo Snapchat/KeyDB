@@ -535,10 +535,10 @@ void emit_system_free_memory() {
     std::ifstream meminfo("/proc/meminfo");
     std::string line;
     while (std::getline(meminfo, line)) {
-        if (line.find("MemFree:") != std::string::npos) {
-            unsigned long memFreeInKB;
-            std::sscanf(line.c_str(), "MemFree: %lu kB", &memFreeInKB);
-            g_stats->gauge("systemFreeMemory_MB", memFreeInKB / 1024);
+        if (line.find("MemAvailable:") != std::string::npos) {
+            unsigned long memAvailableInKB;
+            std::sscanf(line.c_str(), "MemAvailable: %lu kB", &memAvailableInKB);
+            g_stats->gauge("systemAvailableMemory_MB", memAvailableInKB / 1024);
             return;
         }
     }

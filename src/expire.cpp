@@ -33,8 +33,6 @@
 #include "server.h"
 #include "cron.h"
 
-fastlock g_expireLock {"Expire"};
-
 /* Helper function for the activeExpireCycle() function.
  * This function will try to expire the key that is stored in the hash table
  * entry 'de' of the 'expires' hash table of a Redis database.
@@ -74,21 +72,20 @@ void activeExpireCycleExpireFullKey(redisDb *db, const char *key) {
  *----------------------------------------------------------------------------*/
 
 
-int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, size_t &tried) {
+int activeExpireCycleExpire(redisDb *db, const char *key, expireEntry &e, long long now, size_t &tried) {
     if (!e.FFat())
     {
-        activeExpireCycleExpireFullKey(db, e.key());
+        activeExpireCycleExpireFullKey(db, key);
         ++tried;
         return 1;
     }
 
     expireEntryFat *pfat = e.pfatentry();
-    robj *val = db->find(e.key());
+    robj *val = db->find(key);
     int deleted = 0;
 
     redisObjectStack objKey;
-    initStaticStringObject(objKey, (char*)e.key());
-    bool fTtlChanged = false;
+    initStaticStringObject(objKey, (char*)key);
 
     while (!pfat->FEmpty())
     {
@@ -99,7 +96,7 @@ int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, size_t &
         // Is it the full key expiration?
         if (pfat->nextExpireEntry().spsubkey == nullptr)
         {
-            activeExpireCycleExpireFullKey(db, e.key());
+            activeExpireCycleExpireFullKey(db, key);
             return ++deleted;
         }
 
@@ -109,7 +106,7 @@ int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, size_t &
             if (setTypeRemove(val,pfat->nextExpireEntry().spsubkey.get())) {
                 deleted++;
                 if (setTypeSize(val) == 0) {
-                    activeExpireCycleExpireFullKey(db, e.key());
+                    activeExpireCycleExpireFullKey(db, key);
                     return deleted;
                 }
             }
@@ -119,7 +116,7 @@ int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, size_t &
             if (hashTypeDelete(val,(sds)pfat->nextExpireEntry().spsubkey.get())) {
                 deleted++;
                 if (hashTypeLength(val) == 0) {
-                    activeExpireCycleExpireFullKey(db, e.key());
+                    activeExpireCycleExpireFullKey(db, key);
                     return deleted;
                 }
             }
@@ -129,7 +126,7 @@ int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, size_t &
             if (zsetDel(val,(sds)pfat->nextExpireEntry().spsubkey.get())) {
                 deleted++;
                 if (zsetLength(val) == 0) {
-                    activeExpireCycleExpireFullKey(db, e.key());
+                    activeExpireCycleExpireFullKey(db, key);
                     return deleted;
                 }
             }
@@ -137,15 +134,15 @@ int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, size_t &
 
         case OBJ_CRON:
         {
-            sds keyCopy = sdsdup(e.key());
+            sds keyCopy = sdsdup(key);
             incrRefCount(val);
             aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, [keyCopy, val]{
                 executeCronJobExpireHook(keyCopy, val);
                 sdsfree(keyCopy);
                 decrRefCount(val);
             }, true /*fLock*/, true /*fForceQueue*/);
+            break;
         }
-            return deleted;
 
         case OBJ_LIST:
         default:
@@ -157,7 +154,6 @@ int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, size_t &
         propagateSubkeyExpire(db, val->type, &objKey, &objSubkey);
         
         pfat->popfrontExpireEntry();
-        fTtlChanged = true;
         if ((tried % ACTIVE_EXPIRE_CYCLE_SUBKEY_LOOKUPS_PER_LOOP) == 0) {
             break;
         }
@@ -166,11 +162,6 @@ int activeExpireCycleExpire(redisDb *db, expireEntry &e, long long now, size_t &
     if (pfat->FEmpty())
     {
         removeExpire(db, &objKey);
-    }
-    else if (!pfat->FEmpty() && fTtlChanged)
-    {
-        // We need to resort the expire entry since it may no longer be in the correct position
-        db->resortExpire(e);
     }
 
     if (deleted)
@@ -317,8 +308,26 @@ void pexpireMemberAtCommand(client *c)
  * If type is ACTIVE_EXPIRE_CYCLE_SLOW, that normal expire cycle is
  * executed, where the time limit is a percentage of the REDIS_HZ period
  * as specified by the ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC define. */
+#define ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP 20 /* Keys for each DB loop. */
+#define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds. */
+#define ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC 25 /* Max % of CPU to use. */
+#define ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE 10 /* % of stale keys after which
+                                                   we do extra efforts. */
+/*static*/ void redisDbPersistentData::activeExpireCycleCore(int type) {
+    /* Adjust the running parameters according to the configured expire
+     * effort. The default effort is 1, and the maximum configurable effort
+     * is 10. */
+    unsigned long
+    effort = g_pserver->active_expire_effort-1, /* Rescale from 0 to 9. */
+    config_keys_per_loop = ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP +
+                           ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP/4*effort,
+    config_cycle_fast_duration = ACTIVE_EXPIRE_CYCLE_FAST_DURATION +
+                                 ACTIVE_EXPIRE_CYCLE_FAST_DURATION/4*effort,
+    config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC +
+                                  2*effort,
+    config_cycle_acceptable_stale = ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE-
+                                    effort;
 
-void activeExpireCycleCore(int type) {
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
     static unsigned int current_db = 0; /* Next DB to test. */
@@ -336,10 +345,16 @@ void activeExpireCycleCore(int type) {
 
     if (type == ACTIVE_EXPIRE_CYCLE_FAST) {
         /* Don't start a fast cycle if the previous cycle did not exit
-         * for time limit. Also don't repeat a fast cycle for the same period
+         * for time limit, unless the percentage of estimated stale keys is
+         * too high. Also never repeat a fast cycle for the same period
          * as the fast cycle total duration itself. */
-        if (!timelimit_exit) return;
-        if (start < last_fast_cycle + ACTIVE_EXPIRE_CYCLE_FAST_DURATION*2) return;
+        if (!timelimit_exit &&
+            g_pserver->stat_expired_stale_perc < config_cycle_acceptable_stale)
+            return;
+
+        if (start < last_fast_cycle + (long long)config_cycle_fast_duration*2)
+            return;
+
         last_fast_cycle = start;
     }
 
@@ -353,16 +368,16 @@ void activeExpireCycleCore(int type) {
     if (dbs_per_call > cserver.dbnum || timelimit_exit)
         dbs_per_call = cserver.dbnum;
 
-    /* We can use at max ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC percentage of CPU time
-     * per iteration. Since this function gets called with a frequency of
-     * g_pserver->hz times per second, the following is the max amount of
+    /* We can use at max 'config_cycle_slow_time_perc' percentage of CPU
+     * time per iteration. Since this function gets called with a frequency of
+     * server.hz times per second, the following is the max amount of
      * microseconds we can spend in this function. */
-    timelimit = 1000000*ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC/g_pserver->hz/100;
+    timelimit = config_cycle_slow_time_perc*1000000/g_pserver->hz/100;
     timelimit_exit = 0;
     if (timelimit <= 0) timelimit = 1;
 
     if (type == ACTIVE_EXPIRE_CYCLE_FAST)
-        timelimit = ACTIVE_EXPIRE_CYCLE_FAST_DURATION; /* in microseconds. */
+        timelimit = config_cycle_fast_duration; /* in microseconds. */
 
     /* Accumulate some global stats as we expire keys, to have some idea
      * about the number of keys that are already logically expired, but still
@@ -371,6 +386,9 @@ void activeExpireCycleCore(int type) {
     long total_expired = 0;
 
     for (j = 0; j < dbs_per_call && timelimit_exit == 0; j++) {
+        /* Expired and checked in a single loop. */
+        unsigned long expired, sampled;
+
         redisDb *db = g_pserver->db[(current_db % cserver.dbnum)];
 
         /* Increment the DB now so we are sure if we run out of time
@@ -378,48 +396,130 @@ void activeExpireCycleCore(int type) {
          * distribute the time evenly across DBs. */
         current_db++;
 
-        long long now;
-        iteration++;
-        now = mstime();
+        /* Continue to expire if at the end of the cycle there are still
+         * a big percentage of keys to expire, compared to the number of keys
+         * we scanned. The percentage, stored in config_cycle_acceptable_stale
+         * is not fixed, but depends on the Redis configured "expire effort". */
+        do {
+            unsigned long num, slots;
+            long long now, ttl_sum;
+            int ttl_samples;
+            iteration++;
 
-        /* If there is nothing to expire try next DB ASAP. */
-        if (db->setexpireUnsafe()->empty())
-        {
-            db->avg_ttl = 0;
-            db->last_expire_set = now;
-            continue;
-        }
-        
-        std::unique_lock<fastlock> ul(g_expireLock);
-        size_t expired = 0;
-        size_t tried = 0;
-        long long check = ACTIVE_EXPIRE_CYCLE_FAST_DURATION;    // assume a check is roughly 1us.  It isn't but good enough
-        db->expireitr = db->setexpireUnsafe()->enumerate(db->expireitr, now, [&](expireEntry &e) __attribute__((always_inline)) {
-            if (e.when() < now)
-            {
-                expired += activeExpireCycleExpire(db, e, now, tried);
+            /* If there is nothing to expire try next DB ASAP. */
+            if (db->expireSize() == 0) {
+                db->avg_ttl = 0;
+                break;
+            }
+            num = dictSize(db->m_pdict);
+            slots = dictSlots(db->m_pdict);
+            now = mstime();
+
+            /* When there are less than 1% filled slots, sampling the key
+             * space is expensive, so stop here waiting for better times...
+             * The dictionary will be resized asap. */
+            if (slots > DICT_HT_INITIAL_SIZE &&
+                (num*100/slots < 1)) break;
+
+            /* The main collection cycle. Sample random keys among keys
+             * with an expire set, checking for expired ones. */
+            expired = 0;
+            sampled = 0;
+            ttl_sum = 0;
+            ttl_samples = 0;
+
+            if (num > config_keys_per_loop)
+                num = config_keys_per_loop;
+
+            /* Here we access the low level representation of the hash table
+             * for speed concerns: this makes this code coupled with dict.c,
+             * but it hardly changed in ten years.
+             *
+             * Note that certain places of the hash table may be empty,
+             * so we want also a stop condition about the number of
+             * buckets that we scanned. However scanning for free buckets
+             * is very fast: we are in the cache line scanning a sequential
+             * array of NULL pointers, so we can scan a lot more buckets
+             * than keys in the same time. */
+            long max_buckets = num*20;
+            long checked_buckets = 0;
+
+            while (sampled < num && checked_buckets < max_buckets) {
+                for (int table = 0; table < 2; table++) {
+                    if (table == 1 && !dictIsRehashing(db->m_pdict)) break;
+
+                    unsigned long idx = db->expires_cursor;
+                    idx &= db->m_pdict->ht[table].sizemask;
+                    dictEntry *de = db->m_pdict->ht[table].table[idx];
+                    long long ttl;
+
+                    /* Scan the current bucket of the current table. */
+                    checked_buckets++;
+                    while(de) {
+                        /* Get the next entry now since this entry may get
+                         * deleted. */
+                        dictEntry *e = de;
+                        robj *o = (robj*)dictGetVal(de);
+                        de = de->next;
+                        if (!o->FExpires())
+                            continue;
+
+                        expireEntry *exp = &o->expire;
+
+                        serverAssert(exp->when() > 0);
+                        ttl = exp->when()-now;
+                        size_t tried = 0;
+                        if (exp->when() <= now) {
+                            if (activeExpireCycleExpire(db,(const char*)dictGetKey(e),*exp,now,tried)) expired++;
+                            serverAssert(ttl <= 0);
+                        } else {
+                            serverAssert(ttl > 0);
+                        }
+                        if (ttl > 0) {
+                            /* We want the average TTL of keys yet
+                             * not expired. */
+                            ttl_sum += ttl;
+                            ttl_samples++;
+                        }
+                        sampled++;
+                    }
+                }
+                db->expires_cursor++;
+            }
+            total_expired += expired;
+            total_sampled += sampled;
+
+            /* Update the average TTL stats for this database. */
+            if (ttl_samples) {
+                long long avg_ttl = ttl_sum/ttl_samples;
+
+                /* Do a simple running average with a few samples.
+                 * We just use the current estimate with a weight of 2%
+                 * and the previous estimate with a weight of 98%. */
+                if (db->avg_ttl == 0) db->avg_ttl = avg_ttl;
+                db->avg_ttl = (db->avg_ttl/50)*49 + (avg_ttl/50);
             }
 
-            if ((tried % ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP) == 0)
-            {
-                /* We can't block forever here even if there are many keys to
-                * expire. So after a given amount of milliseconds return to the
-                * caller waiting for the other active expire cycle. */
+            /* We can't block forever here even if there are many keys to
+             * expire. So after a given amount of milliseconds return to the
+             * caller waiting for the other active expire cycle. */
+            if ((iteration & 0xf) == 0) { /* check once every 16 iterations. */
                 elapsed = ustime()-start;
                 if (elapsed > timelimit) {
                     timelimit_exit = 1;
                     g_pserver->stat_expired_time_cap_reached_count++;
-                    return false;
+                    break;
                 }
-                check = ACTIVE_EXPIRE_CYCLE_FAST_DURATION;
             }
-            return true;
-        }, &check);
-
-        total_expired += expired;
+            /* We don't repeat the cycle for the current database if there are
+             * an acceptable amount of stale keys (logically expired but yet
+             * not reclaimed). */
+        } while (sampled == 0 ||
+                 (expired*100/sampled) > config_cycle_acceptable_stale);
     }
 
     elapsed = ustime()-start;
+    g_pserver->stat_expire_cycle_time_used += elapsed;
     latencyAddSampleIfNeeded("expire-cycle",elapsed/1000);
 
     /* Update our estimate of keys existing but yet to be expired.
@@ -435,7 +535,7 @@ void activeExpireCycleCore(int type) {
 
 void activeExpireCycle(int type)
 {
-    runAndPropogateToReplicas(activeExpireCycleCore, type);
+    runAndPropogateToReplicas(redisDbPersistentData::activeExpireCycleCore, type);
 }
 
 /*-----------------------------------------------------------------------------
@@ -481,7 +581,6 @@ void expireSlaveKeys(void) {
     if (slaveKeysWithExpire == NULL ||
         dictSize(slaveKeysWithExpire) == 0) return;
 
-    std::unique_lock<fastlock> ul(g_expireLock);
     int cycles = 0, noexpire = 0;
     mstime_t start = mstime();
     while(1) {
@@ -496,19 +595,14 @@ void expireSlaveKeys(void) {
         while(dbids && dbid < cserver.dbnum) {
             if ((dbids & 1) != 0) {
                 redisDb *db = g_pserver->db[dbid];
-
-                // the expire is hashed based on the key pointer, so we need the point in the main db
                 auto itrDB = db->find(keyname);
-                auto itrExpire = db->setexpire()->end();
-                if (itrDB != nullptr)
-                    itrExpire = db->setexpireUnsafe()->find(itrDB.key());
                 int expired = 0;
 
-                if (itrExpire != db->setexpire()->end())
+                if (itrDB != db->end() && itrDB->FExpires())
                 {
-                    if (itrExpire->when() < start) {
+                    if (itrDB->expire.when() < start) {
                         size_t tried = 0;
-                        expired = activeExpireCycleExpire(g_pserver->db[dbid],*itrExpire,start,tried);
+                        expired = activeExpireCycleExpire(g_pserver->db[dbid],itrDB.key(),itrDB->expire,start,tried);
                     }
                 }
 
@@ -516,7 +610,7 @@ void expireSlaveKeys(void) {
                  * corresponding bit in the new bitmap we set as value.
                  * At the end of the loop if the bitmap is zero, it means we
                  * no longer need to keep track of this key. */
-                if (itrExpire != db->setexpire()->end() && !expired) {
+                if (itrDB != db->end() && itrDB->FExpires() && !expired) {
                     noexpire++;
                     new_dbids |= (uint64_t)1 << dbid;
                 }
@@ -694,7 +788,6 @@ void ttlGenericCommand(client *c, int output_ms) {
 
     /* The key exists. Return -1 if it has no expire, or the actual
         * TTL value otherwise. */
-    std::unique_lock<fastlock> ul(g_expireLock);
     expireEntry *pexpire = c->db->getExpire(c->argv[1]);
 
     if (c->argc == 2) {
@@ -784,16 +877,9 @@ expireEntryFat::~expireEntryFat()
 }
 
 expireEntryFat::expireEntryFat(const expireEntryFat &e)
-    : m_keyPrimary(e.m_keyPrimary), m_vecexpireEntries(e.m_vecexpireEntries)
+    : m_vecexpireEntries(e.m_vecexpireEntries)
 {
     // Note: dictExpires is not copied
-}
-
-expireEntryFat::expireEntryFat(expireEntryFat &&e)
-    : m_keyPrimary(std::move(e.m_keyPrimary)), m_vecexpireEntries(std::move(e.m_vecexpireEntries))
-{
-    m_dictIndex = e.m_dictIndex;
-    e.m_dictIndex = nullptr;
 }
 
 void expireEntryFat::createIndex()

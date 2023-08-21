@@ -20,11 +20,9 @@ void lazyfreeFreeObject(void *args[]) {
  * when the database was logically deleted. */
 void lazyfreeFreeDatabase(void *args[]) {
     dict *ht1 = (dict *) args[0];
-    expireset *setexpire = (expireset *) args[1];
 
     size_t numkeys = dictSize(ht1);
     dictRelease(ht1);
-    delete setexpire;
     atomicDecr(lazyfree_objects,numkeys);
     atomicIncr(lazyfreed_objects,numkeys);
 }
@@ -217,17 +215,15 @@ void freeObjAsync(robj *key, robj *obj) {
  * create a new empty set of hash tables and scheduling the old ones for
  * lazy freeing. */
 void redisDbPersistentData::emptyDbAsync() {
-    std::unique_lock<fastlock> ul(g_expireLock);
     dict *oldht1 = m_pdict;
-    auto *set = m_setexpire;
-    m_setexpire = new (MALLOC_LOCAL) expireset();
     m_pdict = dictCreate(&dbDictType,this);
     if (m_spstorage != nullptr)
         m_spstorage->clearAsync();
     if (m_fTrackingChanges)
         m_fAllChanged = true;
     atomicIncr(lazyfree_objects,dictSize(oldht1));
-    bioCreateLazyFreeJob(lazyfreeFreeDatabase,2,oldht1,set);
+    m_numexpires = 0;
+    bioCreateLazyFreeJob(lazyfreeFreeDatabase,2,oldht1,nullptr);
 }
 
 /* Release the radix tree mapping Redis Cluster keys to slots asynchronously. */

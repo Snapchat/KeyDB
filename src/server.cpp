@@ -1518,6 +1518,16 @@ dictType dbDictType = {
     dictGCAsyncFree             /* async free destructor */
 };
 
+dictType dbExpiresDictType = {
+        dictSdsHash,                /* hash function */
+        NULL,                       /* key dup */
+        NULL,                       /* val dup */
+        dictSdsKeyCompare,          /* key compare */
+        NULL,                       /* key destructor */
+        NULL,                       /* val destructor */
+        dictExpandAllowed           /* allow to expand */
+    };
+
 /* db->pdict, keys are sds strings, vals are Redis objects. */
 dictType dbTombstoneDictType = {
     dictSdsHash,                /* hash function */
@@ -1548,17 +1558,6 @@ dictType shaScriptObjectDictType = {
     dictSdsDestructor,          /* key destructor */
     dictObjectDestructor,       /* val destructor */
     NULL                        /* allow to expand */
-};
-
-/* Db->expires */
-dictType dbExpiresDictType = {
-    dictSdsHash,                /* hash function */
-    NULL,                       /* key dup */
-    NULL,                       /* val dup */
-    dictSdsKeyCompare,          /* key compare */
-    NULL,                       /* key destructor */
-    NULL,                       /* val destructor */
-    dictExpandAllowed           /* allow to expand */
 };
 
 /* Command table. sds string -> command struct pointer. */

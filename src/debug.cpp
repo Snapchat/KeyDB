@@ -146,11 +146,10 @@ void mixStringObjectDigest(unsigned char *digest, robj_roptr o) {
  * Note that this function does not reset the initial 'digest' passed, it
  * will continue mixing this object digest to anything that was already
  * present. */
-void xorObjectDigest(redisDb *db, robj_roptr keyobj, unsigned char *digest, robj_roptr o) {
+void xorObjectDigest(unsigned char *digest, robj_roptr o) {
     uint32_t aux = htonl(o->type);
     mixDigest(digest,&aux,sizeof(aux));
-    std::unique_lock<fastlock> ul(g_expireLock);
-    expireEntry *pexpire = db->getExpire(keyobj);
+    const expireEntry *pexpire = o->FExpires() ? &o->expire : nullptr;
     long long expiretime = INVALID_EXPIRE;
     char buf[128];
 
@@ -318,7 +317,7 @@ void computeDatasetDigest(unsigned char *final) {
 
             mixDigest(digest,key,sdslen(key));
 
-            xorObjectDigest(db,keyobj,digest,o);
+            xorObjectDigest(digest,o);
 
             /* We can finally xor the key-val digest to the final digest */
             xorDigest(final,digest,20);
@@ -716,7 +715,7 @@ NULL
              * work on logically expired keys */
             auto itr = c->db->find(c->argv[j]);
             robj* o = (robj*)(itr == NULL ? NULL : itr.val());
-            if (o) xorObjectDigest(c->db,c->argv[j],digest,o);
+            if (o) xorObjectDigest(digest,o);
 
             sds d = sdsempty();
             for (int i = 0; i < 20; i++) d = sdscatprintf(d, "%02x",digest[i]);
@@ -842,10 +841,6 @@ NULL
         stats = sdscatprintf(stats,"[Dictionary HT]\n");
         g_pserver->db[dbid]->getStats(buf,sizeof(buf));
         stats = sdscat(stats,buf);
-
-        stats = sdscatprintf(stats,"[Expires set]\n");
-        g_pserver->db[dbid]->getExpireStats(buf, sizeof(buf));
-        stats = sdscat(stats, buf);
 
         addReplyVerbatim(c,stats,sdslen(stats),"txt");
         sdsfree(stats);

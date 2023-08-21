@@ -222,52 +222,23 @@ void processEvictionCandidate(int dbid, sds key, robj *o, const expireEntry *e, 
  * idle time are on the left, and keys with the higher idle time on the
  * right. */
 
-struct visitFunctor
+int evictionPoolPopulate(int dbid, redisDb *db, bool fVolatile, struct evictionPoolEntry *pool)
 {
-    int dbid;
-    dict *dbdict;
-    struct evictionPoolEntry *pool;
-    int count = 0;
-    int tries = 0;
-
-    bool operator()(const expireEntry &e)
-    {
-        dictEntry *de = dictFind(dbdict, e.key());
-        if (de != nullptr)
+    int returnCount = 0;
+    dictEntry **samples = (dictEntry**)alloca(g_pserver->maxmemory_samples * sizeof(dictEntry*));
+    int count = dictGetSomeKeys(db->dictUnsafeKeyOnly(),samples,g_pserver->maxmemory_samples);
+    for (int j = 0; j < count; j++) {
+        robj *o = (robj*)dictGetVal(samples[j]);
+        // If the object is in second tier storage we don't need to evict it (since it already is)
+        if (o != nullptr)
         {
-            processEvictionCandidate(dbid, (sds)dictGetKey(de), (robj*)dictGetVal(de), &e, pool);
-            ++count;
-        }
-        ++tries;
-        return tries < g_pserver->maxmemory_samples;
-    }
-};
-int evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct evictionPoolEntry *pool)
-{
-    if (setexpire != nullptr)
-    {
-        std::unique_lock<fastlock> ul(g_expireLock);
-        visitFunctor visitor { dbid, db->dictUnsafeKeyOnly(), pool, 0 };
-        setexpire->random_visit(visitor);
-        return visitor.count;
-    }
-    else
-    {
-        int returnCount = 0;
-        dictEntry **samples = (dictEntry**)alloca(g_pserver->maxmemory_samples * sizeof(dictEntry*));
-        int count = dictGetSomeKeys(db->dictUnsafeKeyOnly(),samples,g_pserver->maxmemory_samples);
-        for (int j = 0; j < count; j++) {
-            robj *o = (robj*)dictGetVal(samples[j]);
-            // If the object is in second tier storage we don't need to evict it (since it alrady is)
-            if (o != nullptr)
-            {
-                processEvictionCandidate(dbid, (sds)dictGetKey(samples[j]), o, nullptr, pool);
+            if (!fVolatile || o->FExpires()) {
+                processEvictionCandidate(dbid, (sds)dictGetKey(samples[j]), o, &o->expire, pool);
                 ++returnCount;
             }
         }
-        return returnCount;
     }
-    return 0;
+    return returnCount;
 }
 
 /* ----------------------------------------------------------------------------
@@ -718,14 +689,14 @@ int performEvictions(bool fPreSnapshot) {
                     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS)
                     {
                         if ((keys = db->size()) != 0) {
-                            total_keys += evictionPoolPopulate(i, db, nullptr, pool);
+                            total_keys += evictionPoolPopulate(i, db, false, pool);
                         }
                     }
                     else
                     {
                         keys = db->expireSize();
                         if (keys != 0)
-                            total_keys += evictionPoolPopulate(i, db, db->setexpireUnsafe(), pool);
+                            total_keys += evictionPoolPopulate(i, db, true, pool);
                     }
                 }
                 if (!total_keys) break; /* No keys to evict. */
@@ -786,7 +757,7 @@ int performEvictions(bool fPreSnapshot) {
                 {
                     if (db->expireSize())
                     {
-                        bestkey = (sds)db->random_expire().key();
+                        db->random_expire(&bestkey);
                         bestdbid = j;
                         break;
                     }

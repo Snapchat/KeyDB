@@ -85,8 +85,8 @@ void StorageCache::cacheKey(const char *rgch, size_t cch)
 bool StorageCache::erase(sds key)
 {
     unsigned long long when = 0;
-    m_spstorage->retrieve(key, sdslen(key), [&when, &key](const char *, size_t, const void * data, size_t cbdata) {
-        auto e = deserializeExpire(key, (const char *)data, cbdata, nullptr);
+    m_spstorage->retrieve(key, sdslen(key), [&when](const char *, size_t, const void * data, size_t cbdata) {
+        auto e = deserializeExpire((const char *)data, cbdata, nullptr);
         if (e != nullptr)
             when = e->when();
     });
@@ -123,7 +123,7 @@ void StorageCache::insert(sds key, const void *data, size_t cbdata, bool fOverwr
     }
     ul.unlock();
     m_spstorage->insert(key, sdslen(key), (void*)data, cbdata, fOverwrite);
-    auto e = deserializeExpire(key, (const char *)data, cbdata, nullptr);
+    auto e = deserializeExpire((const char *)data, cbdata, nullptr);
     if (e != nullptr)
         m_spstorage->setExpire(key, sdslen(key), e->when());
 }
@@ -143,7 +143,7 @@ void StorageCache::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, si
             de->v.u64 = 1;
             vechashes.push_back(de);
         }
-        auto e = deserializeExpire(rgkeys[ielem], rgvals[ielem], rgcbvals[ielem], nullptr);
+        auto e = deserializeExpire(rgvals[ielem], rgcbvals[ielem], nullptr);
         if (e != nullptr)
             m_spstorage->setExpire(rgkeys[ielem], rgcbkeys[ielem], e->when());
     }

@@ -334,7 +334,7 @@ void pexpireMemberAtCommand(client *c)
     static int timelimit_exit = 0;      /* Time limit hit in previous call? */
     static long long last_fast_cycle = 0; /* When last fast cycle ran. */
 
-    int j;
+    int j, iteration;
     int dbs_per_call = CRON_DBS_PER_CALL;
     long long start = ustime(), timelimit, elapsed;
 
@@ -518,6 +518,8 @@ void pexpireMemberAtCommand(client *c)
             } while (sampled == 0 ||
                     (expired*100/sampled) > config_cycle_acceptable_stale);
         } else {
+            long long now;
+            size_t tried = 0;
             std::vector<std::string> keys;
             do {
                 keys = db->getStorageCache()->getExpirationCandidates(ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP, now);
@@ -526,7 +528,7 @@ void pexpireMemberAtCommand(client *c)
                     db->find(szFromObj(keyobj));
                     expireEntry *e = db->getExpire(keyobj);
                     if (e != nullptr && e->when() < now)
-                        total_expired += activeExpireCycleExpire(db, *e, now, tried);
+                        total_expired += activeExpireCycleExpire(db, szFromObj(keyobj), *e, now, tried);
                     decrRefCount(keyobj);
                 }
                 total_sampled += keys.size();

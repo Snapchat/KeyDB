@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.15)
 
-project(keydb VERSION 6.3.0 LANGUAGES C CXX)
+project(keydb VERSION 6.3.3 LANGUAGES C CXX)
 
 #===============#
 # Compiler args #

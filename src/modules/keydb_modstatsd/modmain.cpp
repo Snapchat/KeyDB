@@ -544,6 +544,31 @@ void emit_system_free_memory() {
     }
 }
 
+void emit_non_empty_primary_with_less_than_2_connected_replicas_error_metrics(struct RedisModuleCtx *ctx, long long keys) {
+    // non-empty
+    if (keys <= 0) {
+        return;
+    }
+    RedisModuleCallReply *reply = RedisModule_Call(ctx, "ROLE", "");
+    if (RedisModule_CallReplyType(reply) != REDISMODULE_REPLY_ARRAY) {
+        return;
+    }
+    RedisModuleCallReply *roleReply = RedisModule_CallReplyArrayElement(reply, 0);
+    if (RedisModule_CallReplyType(roleReply) != REDISMODULE_REPLY_STRING) {
+        return;
+    }
+    size_t len;
+    const char *role = RedisModule_CallReplyStringPtr(roleReply, &len);
+    // check if the current node is a primary
+    if (strncmp(role, "master", len) == 0) {
+        RedisModuleCallReply *replicasReply = RedisModule_CallReplyArrayElement(reply, 2);
+        // check if there are less than 2 connected replicas
+        if (RedisModule_CallReplyLength(replicasReply) < 2) {
+            g_stats->increment("hasLessThan2ConnectedReplicas_error", 1);
+        }
+    }
+}
+
 void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64_t subevent, void *data) {
     static time_t lastTime = 0;
     time_t curTime = time(nullptr);
@@ -619,11 +644,16 @@ void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64
         g_stats->timing("emit_free_system_memory_time_taken_us", ustime() - commandStartTime);
 
         /* Log Keys */
+        commandStartTime = ustime();
         reply = RedisModule_Call(ctx, "dbsize", "");
         long long keys = RedisModule_CallReplyInteger(reply);
         RedisModule_FreeCallReply(reply);
         g_stats->gauge("keys", keys);
         RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Emitting metric \"keys\": %llu", keys);
+        g_stats->timing("emit_keys_metric_time_taken_us", ustime() - commandStartTime);
+
+        emit_non_empty_primary_with_less_than_2_connected_replicas_error_metrics(ctx, keys);
+
         g_stats->timing("metrics_time_taken_us", ustime() - startTime);
         
 	lastTime = curTime;

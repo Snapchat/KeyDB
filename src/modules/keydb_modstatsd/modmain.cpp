@@ -591,7 +591,7 @@ void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64
 			+ (self_ru.ru_stime.tv_sec * 1000) + (self_ru.ru_stime.tv_usec / 1000);
 
 
-        g_stats->gauge("cpu_load_perc", (double)(mscpuCur - s_mscpuLast) / ((curTime - lastTime)*1000), true /* prefixOnly */);   
+        g_stats->gauge("cpu_load_perc", ((double)(mscpuCur - s_mscpuLast) / ((curTime - lastTime)*1000))*100, true /* prefixOnly */);   
 	s_mscpuLast = mscpuCur;
 #endif
 

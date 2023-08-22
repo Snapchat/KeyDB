@@ -1,0 +1,13 @@
+name: Lint
+
+on: [push, pull_request]
+jobs:
+  lint:
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2
+      - name: lint
+        uses: DoozyX/clang-format-lint-action@v0.12
+        with:
+          clangFormatVersion: 12
+          source: './include/cpp-statsd-client ./tests'

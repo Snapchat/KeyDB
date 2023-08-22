@@ -18,7 +18,7 @@ start_server {tags {"CRON"} overrides {hz 100} } {
 
     test {keydb.cron repeat works} {
         r flushall
-        r keydb.cron testjob repeat 0 600 {redis.call("incr","testkey")}
+        r keydb.cron testjob repeat 0 900 {redis.call("incr","testkey")}
         after 1000
         assert_equal 2 [r get testkey]
     }

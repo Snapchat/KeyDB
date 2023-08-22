@@ -345,7 +345,8 @@ void freeReplicationBacklog(void) {
         client *c = (client*)listNodeValue(ln);
         serverAssert(c->flags & CLIENT_CLOSE_ASAP || FMasterHost(c));
     }
-    zfree(g_pserver->repl_backlog);
+    if (g_pserver->repl_backlog != g_pserver->repl_backlog_disk)
+        zfree(g_pserver->repl_backlog);
     g_pserver->repl_backlog = NULL;
 }
 

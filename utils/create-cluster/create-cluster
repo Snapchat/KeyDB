@@ -26,7 +26,11 @@ then
     while [ $((PORT < ENDPORT)) != "0" ]; do
         PORT=$((PORT+1))
         echo "Starting $PORT"
-        $BIN_PATH/keydb-server --port $PORT  --protected-mode $PROTECTED_MODE --cluster-enabled yes --cluster-config-file nodes-${PORT}.conf --cluster-node-timeout $TIMEOUT --appendonly yes --appendfilename appendonly-${PORT}.aof --dbfilename dump-${PORT}.rdb --logfile ${PORT}.log --daemonize yes ${ADDITIONAL_OPTIONS}
+        if [ "$2" == "flash" ]
+        then
+            ADDITIONAL_OPTIONS="--save \"\" \"\" \"\" --semi-ordered-set-bucket-size 8 --client-output-buffer-limit replica 1 1 0 --maxmemory 100000000 --storage-provider flash ./$PORT.flash"
+        fi
+        $BIN_PATH/keydb-server --server-threads 4 --port $PORT  --protected-mode $PROTECTED_MODE --cluster-enabled yes --cluster-config-file nodes-${PORT}.conf --cluster-node-timeout $TIMEOUT --dbfilename dump-${PORT}.rdb --logfile ${PORT}.log --daemonize yes ${ADDITIONAL_OPTIONS}
     done
     exit 0
 fi
@@ -97,6 +101,8 @@ then
     rm -rf appendonly*.aof
     rm -rf dump*.rdb
     rm -rf nodes*.conf
+    rm -rf *.flash
+    rm -rf temp*.rdb
     exit 0
 fi
 

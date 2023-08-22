@@ -46,6 +46,9 @@
 
 #include <sys/stat.h>
 #include <arpa/inet.h>
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/decoder.h>
+#endif
 
 #define REDIS_TLS_PROTO_TLSv1       (1<<0)
 #define REDIS_TLS_PROTO_TLSv1_1     (1<<1)
@@ -154,14 +157,13 @@ void tlsInit(void) {
      */
     #if OPENSSL_VERSION_NUMBER < 0x10100000L
     OPENSSL_config(NULL);
+    SSL_load_error_strings();
+    SSL_library_init();
     #elif OPENSSL_VERSION_NUMBER < 0x10101000L
     OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CONFIG, NULL);
     #else
     OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CONFIG|OPENSSL_INIT_ATFORK, NULL);
     #endif
-    ERR_load_crypto_strings();
-    SSL_load_error_strings();
-    SSL_library_init();
 
 #ifdef USE_CRYPTO_LOCKS
     initCryptoLocks();
@@ -364,20 +366,46 @@ int tlsConfigure(redisTLSContextConfig *ctx_config) {
     if (ctx_config->prefer_server_ciphers)
         SSL_CTX_set_options(ctx, SSL_OP_CIPHER_SERVER_PREFERENCE);
 
-#if defined(SSL_CTX_set_ecdh_auto)
+#if ((OPENSSL_VERSION_NUMBER < 0x30000000L) && defined(SSL_CTX_set_ecdh_auto))
     SSL_CTX_set_ecdh_auto(ctx, 1);
 #endif
     SSL_CTX_set_options(ctx, SSL_OP_SINGLE_DH_USE);
 
     if (ctx_config->dh_params_file) {
         FILE *dhfile = fopen(ctx_config->dh_params_file, "r");
-        DH *dh = NULL;
         if (!dhfile) {
             serverLog(LL_WARNING, "Failed to load %s: %s", ctx_config->dh_params_file, strerror(errno));
             goto error;
         }
 
-        dh = PEM_read_DHparams(dhfile, NULL, NULL, NULL);
+#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+        EVP_PKEY *pkey = NULL;
+        OSSL_DECODER_CTX *dctx = OSSL_DECODER_CTX_new_for_pkey(
+                &pkey, "PEM", NULL, "DH", OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS, NULL, NULL);
+        if (!dctx) {
+            serverLog(LL_WARNING, "No decoder for DH params.");
+            fclose(dhfile);
+            goto error;
+        }
+        if (!OSSL_DECODER_from_fp(dctx, dhfile)) {
+            serverLog(LL_WARNING, "%s: failed to read DH params.", ctx_config->dh_params_file);
+            OSSL_DECODER_CTX_free(dctx);
+            fclose(dhfile);
+            goto error;
+        }
+
+        OSSL_DECODER_CTX_free(dctx);
+        fclose(dhfile);
+
+        if (SSL_CTX_set0_tmp_dh_pkey(ctx, pkey) <= 0) {
+            ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+            serverLog(LL_WARNING, "Failed to load DH params file: %s: %s", ctx_config->dh_params_file, errbuf);
+            EVP_PKEY_free(pkey);
+            goto error;
+        }
+        /* Not freeing pkey, it is owned by OpenSSL now */
+#else
+        DH *dh = PEM_read_DHparams(dhfile, NULL, NULL, NULL);
         fclose(dhfile);
         if (!dh) {
             serverLog(LL_WARNING, "%s: failed to read DH params.", ctx_config->dh_params_file);
@@ -392,6 +420,11 @@ int tlsConfigure(redisTLSContextConfig *ctx_config) {
         }
 
         DH_free(dh);
+#endif
+    } else {
+#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+        SSL_CTX_set_dh_auto(ctx, 1);
+#endif
     }
 
     /* If a client-side certificate is configured, create an explicit client context */
@@ -484,17 +517,36 @@ typedef struct tls_connection {
     aeEventLoop *el;
 } tls_connection;
 
-/* Check to see if a given client name matches against our allowlist.
+/* Check to see if a given client name is contained in the provided set (allowlist/blocklist)
  * Return true if it does */
-bool tlsCheckAgainstAllowlist(const char * client){
+bool tlsCheckAgainstAllowlist(const char * client, std::set<sdsstring> set){
     /* Because of wildcard matching, we need to iterate over the entire set.
      * If we were doing simply straight matching, we could just directly 
      * check to see if the client name is in the set in O(1) time */
-    for (auto &client_pattern: g_pserver->tls_allowlist){
+    for (auto &client_pattern: set){
         if (stringmatchlen(client_pattern.get(), client_pattern.size(), client, strlen(client), 1))
             return true;
     }
     return false;
+}
+
+/* Sets the sha256 certificate fingerprint on the connection
+ * Based on the example here https://fm4dd.com/openssl/certfprint.shtm */
+void tlsSetCertificateFingerprint(tls_connection* conn, X509 * cert) {
+    unsigned int fprint_size;
+    unsigned char fprint[EVP_MAX_MD_SIZE];
+    const EVP_MD *fprint_type = EVP_sha256();
+    X509_digest(cert, fprint_type, fprint, &fprint_size);
+
+    if (conn->c.fprint) zfree(conn->c.fprint);
+    conn->c.fprint = (char*)zcalloc(fprint_size*2+1);
+
+    /* Format fingerprint as hex string */
+    char tmp[3];
+    for (unsigned int i = 0; i < fprint_size; i++) {
+        snprintf(tmp, 2, "%02x", (unsigned int)fprint[i]);
+        strncat(conn->c.fprint, tmp, 2);
+    }
 }
 
 /* ASN1_STRING_get0_data was introduced in OPENSSL 1.1.1
@@ -503,17 +555,37 @@ bool tlsCheckAgainstAllowlist(const char * client){
 #define ASN1_STRING_get0_data ASN1_STRING_data 
 #endif 
 
-bool tlsValidateCertificateName(tls_connection* conn){
-    if (g_pserver->tls_allowlist.empty())
-        return true;    // Empty list implies acceptance of all
+class TCleanup {
+    std::function<void()> fn;
+
+public:
+    TCleanup(std::function<void()> fn)
+        : fn(fn)
+    {}
+
+    ~TCleanup() {
+        fn();
+    }
+};
+
+bool tlsCheckCertificateAgainstAllowlist(tls_connection* conn, std::set<sdsstring> allowlist, const char** commonName){
+    if (allowlist.empty()){
+        // An empty list implies acceptance of all
+        return true;
+    }
 
     X509 * cert = SSL_get_peer_certificate(conn->ssl);
+    TCleanup certClen([cert]{X509_free(cert);});
+
     /* Check the common name (CN) of the certificate first */
     X509_NAME_ENTRY * ne = X509_NAME_get_entry(X509_get_subject_name(cert), X509_NAME_get_index_by_NID(X509_get_subject_name(cert), NID_commonName, -1));
-    const char * commonName = reinterpret_cast<const char*>(ASN1_STRING_get0_data(X509_NAME_ENTRY_get_data(ne)));
-    
-    if (tlsCheckAgainstAllowlist(commonName))
+    *commonName = reinterpret_cast<const char*>(ASN1_STRING_get0_data(X509_NAME_ENTRY_get_data(ne)));
+
+    tlsSetCertificateFingerprint(conn, cert);
+
+    if (tlsCheckAgainstAllowlist(*commonName, allowlist)) {
         return true;
+    }
 
     /* If that fails, check through the subject alternative names (SANs) as well */
     GENERAL_NAMES* subjectAltNames = (GENERAL_NAMES*)X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
@@ -526,19 +598,19 @@ bool tlsValidateCertificateName(tls_connection* conn){
             switch (generalName->type)
             {
                 case GEN_EMAIL:
-                    if (tlsCheckAgainstAllowlist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.rfc822Name)))){
+                    if (tlsCheckAgainstAllowlist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.rfc822Name)), allowlist)){
                         sk_GENERAL_NAME_pop_free(subjectAltNames, GENERAL_NAME_free);
                         return true;
                     }
                     break;
                 case GEN_DNS:
-                    if (tlsCheckAgainstAllowlist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.dNSName)))){
+                    if (tlsCheckAgainstAllowlist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.dNSName)), allowlist)){
                         sk_GENERAL_NAME_pop_free(subjectAltNames, GENERAL_NAME_free);
                         return true;
                     }
                     break;
                 case GEN_URI:
-                    if (tlsCheckAgainstAllowlist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.uniformResourceIdentifier)))){
+                    if (tlsCheckAgainstAllowlist(reinterpret_cast<const char*>(ASN1_STRING_get0_data(generalName->d.uniformResourceIdentifier)), allowlist)){
                         sk_GENERAL_NAME_pop_free(subjectAltNames, GENERAL_NAME_free);
                         return true;
                     }
@@ -549,7 +621,7 @@ bool tlsValidateCertificateName(tls_connection* conn){
                         if (ipLen == 4){ //IPv4 case
                             char addr[INET_ADDRSTRLEN];
                             inet_ntop(AF_INET, ASN1_STRING_get0_data(generalName->d.iPAddress), addr, INET_ADDRSTRLEN);
-                            if (tlsCheckAgainstAllowlist(addr)){
+                            if (tlsCheckAgainstAllowlist(addr, allowlist)){
                                 sk_GENERAL_NAME_pop_free(subjectAltNames, GENERAL_NAME_free);
                                 return true;
                             }
@@ -565,12 +637,34 @@ bool tlsValidateCertificateName(tls_connection* conn){
         sk_GENERAL_NAME_pop_free(subjectAltNames, GENERAL_NAME_free);
     }
 
-    /* If neither the CN nor the SANs match, update the SSL error and return false */
-    conn->c.last_errno = 0;
-    if (conn->ssl_error) zfree(conn->ssl_error);
-    conn->ssl_error = (char*)zmalloc(512);
-    snprintf(conn->ssl_error, 512, "Client CN (%s) and SANs not found in allowlist.", commonName);
     return false;
+}
+
+bool tlsCertificateRequiresAuditLogging(tls_connection* conn){
+    const char* cn = "";
+    if (tlsCheckCertificateAgainstAllowlist(conn, g_pserver->tls_auditlog_blocklist, &cn)) {
+        // Certificate is in exclusion list, no need to audit log
+        serverLog(LL_NOTICE, "Audit Log: disabled for %s", conn->c.fprint);
+        return false;
+    } else {
+        serverLog(LL_NOTICE, "Audit Log: enabled for %s", conn->c.fprint);
+        return true;
+    }
+}
+
+bool tlsValidateCertificateName(tls_connection* conn){
+    const char* cn = "";
+    if (tlsCheckCertificateAgainstAllowlist(conn, g_pserver->tls_allowlist, &cn)) {
+        return true;
+    } else {
+        /* If neither the CN nor the SANs match, update the SSL error and return false */
+        conn->c.last_errno = 0;
+        if (conn->ssl_error) zfree(conn->ssl_error);
+        size_t bufsize = 512;
+        conn->ssl_error = (char*)zmalloc(bufsize);
+        snprintf(conn->ssl_error, bufsize, "Client CN (%s) and SANs not found in allowlist.", cn);
+        return false;
+    }
 }
 
 static connection *createTLSConnection(int client_side) {
@@ -795,6 +889,9 @@ void tlsHandleEvent(tls_connection *conn, int mask) {
                     conn->c.state = CONN_STATE_ERROR;
                 } else {
                     conn->c.state = CONN_STATE_CONNECTED;
+                    if (tlsCertificateRequiresAuditLogging(conn)){
+                        conn->c.flags |= CONN_FLAG_AUDIT_LOGGING_REQUIRED;
+                    }
                 }
             }
 

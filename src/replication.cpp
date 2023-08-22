@@ -190,7 +190,7 @@ int bg_unlink(const char *filename) {
 bool createDiskBacklog() {
     // Lets create some disk backed pages and add them here
     std::string path = "./repl-backlog-temp" + std::to_string(gettid());
-#ifdef __APPLE__
+#if (defined __APPLE__ || defined __FreeBSD__)
     int fd = open(path.c_str(), O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
 #else
     int fd = open(path.c_str(), O_CREAT | O_RDWR | O_LARGEFILE, S_IRUSR | S_IWUSR);
@@ -264,9 +264,8 @@ void resizeReplicationBacklog(long long newsize) {
         newsize = CONFIG_REPL_BACKLOG_MIN_SIZE;
     if (g_pserver->repl_backlog_size == newsize) return;
 
-    std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
-
     if (g_pserver->repl_backlog != NULL) {
+        std::unique_lock<fastlock> repl_backlog_lock(g_pserver->repl_backlog_lock);
         /* What we actually do is to flush the old buffer and realloc a new
          * empty one. It will refill with new data incrementally.
          * The reason is that copying a few gigabytes adds latency and even
@@ -346,7 +345,8 @@ void freeReplicationBacklog(void) {
         client *c = (client*)listNodeValue(ln);
         serverAssert(c->flags & CLIENT_CLOSE_ASAP || FMasterHost(c));
     }
-    zfree(g_pserver->repl_backlog);
+    if (g_pserver->repl_backlog != g_pserver->repl_backlog_disk)
+        zfree(g_pserver->repl_backlog);
     g_pserver->repl_backlog = NULL;
 }
 
@@ -357,7 +357,7 @@ void freeReplicationBacklog(void) {
 void feedReplicationBacklog(const void *ptr, size_t len) {
     serverAssert(GlobalLocksAcquired());
     const unsigned char *p = (const unsigned char*)ptr;
-
+    std::unique_lock<fastlock> repl_backlog_lock(g_pserver->repl_backlog_lock, std::defer_lock);
 
     if (g_pserver->repl_batch_idxStart >= 0) {
         /* We are lower bounded by the lowest replica offset, or the batch offset start if not applicable */
@@ -411,12 +411,14 @@ void feedReplicationBacklog(const void *ptr, size_t len) {
             if (minimumsize > g_pserver->repl_backlog_size && listening_replicas) {
                 // This is an emergency overflow, we better resize to fit
                 long long newsize = std::max(g_pserver->repl_backlog_size*2, minimumsize);
-                serverLog(LL_WARNING, "Replication backlog is too small, resizing to: %lld bytes", newsize);
+                serverLog(LL_WARNING, "Replication backlog is too small, resizing from %lld to %lld bytes", g_pserver->repl_backlog_size, newsize);
                 resizeReplicationBacklog(newsize);
             } else if (!listening_replicas) {
                 // We need to update a few variables or later asserts will notice we dropped data
                 g_pserver->repl_batch_offStart = g_pserver->master_repl_offset + len;
                 g_pserver->repl_lowest_off = -1;
+                if (!repl_backlog_lock.owns_lock())
+                    repl_backlog_lock.lock();   // we need to acquire the lock if we'll be overwriting data that writeToClient may be reading
             }
         }
     }
@@ -1131,9 +1133,17 @@ public:
             replica->repl_put_online_on_ack = 1;
         }
     }
+
+    void abort() {
+        for (auto replica : replicas) {
+            // Close the connection to force a resync
+            freeClientAsync(replica);
+        }
+        replicas.clear();
+    }
 };
 
-int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
+int rdbSaveSnapshotForReplication(rdbSaveInfo *rsi) {
     // TODO: This needs to be on a background thread
     int retval = C_OK;
     serverAssert(GlobalLocksAcquired());
@@ -1226,7 +1236,11 @@ int rdbSaveSnapshotForReplication(struct rdbSaveInfo *rsi) {
                 retval = C_ERR;
                 break;
             }
-            serverAssert(count == snapshotDeclaredCount);
+            if (count != snapshotDeclaredCount) {
+                serverLog(LL_WARNING, "Replication BUG: Count of keys sent does not match actual count.  Aborting full sync.");
+                replBuf.abort();
+                break;
+            }
         }
         
         replBuf.end();
@@ -1525,7 +1539,7 @@ void syncCommand(client *c) {
         } else {
             /* We don't have a BGSAVE in progress, let's start one. Diskless
              * or disk-based mode is determined by replica's capacity. */
-            if (!hasActiveChildProcess()) {
+            if (!hasActiveChildProcessOrBGSave()) {
                 startBgsaveForReplication(c->slave_capa);
             } else {
                 serverLog(LL_NOTICE,
@@ -2976,10 +2990,11 @@ error:
 }
 
 void readSyncBulkPayload(connection *conn) {
+    serverAssert(GlobalLocksAcquired());
     rdbSaveInfo rsi;
     redisMaster *mi = (redisMaster*)connGetPrivateData(conn);
     static int usemark = 0;
-    if (mi == nullptr) {
+    if (mi == nullptr || conn != mi->repl_transfer_s) {
         // We're about to be free'd so bail out
         return;
     }
@@ -2991,6 +3006,9 @@ void readSyncBulkPayload(connection *conn) {
         if (!readSyncBulkPayloadRdb(conn, mi, rsi, usemark))
             return;
     }
+
+    if (conn != mi->repl_transfer_s)
+        return;
 
     /* Final setup of the connected slave <- master link */
     replicationCreateMasterClient(mi,mi->repl_transfer_s,rsi.repl_stream_db);
@@ -3715,11 +3733,11 @@ retry_connect:
     }
 
     /* Prepare a suitable temp file for bulk transfer */
-    if (!useDisklessLoad()) {
+    if (!useDisklessLoad() && !mi->isRocksdbSnapshotRepl) {
         while(maxtries--) {
             auto dt = std::chrono::system_clock::now().time_since_epoch();
             auto dtMillisecond = std::chrono::duration_cast<std::chrono::milliseconds>(dt);
-            snprintf(tmpfile,256,
+            snprintf(tmpfile,sizeof(tmpfile),
                 "temp-%d.%ld.rdb",(int)dtMillisecond.count(),(long int)getpid());
             dfd = open(tmpfile,O_CREAT|O_WRONLY|O_EXCL,0644);
             if (dfd != -1) break;
@@ -3780,9 +3798,11 @@ int connectWithMaster(redisMaster *mi) {
     connSetPrivateData(mi->repl_transfer_s, mi);
     if (connConnect(mi->repl_transfer_s, mi->masterhost, mi->masterport,
                 NET_FIRST_BIND_ADDR, syncWithMaster) == C_ERR) {
-        int sev = g_pserver->enable_multimaster ? LL_NOTICE : LL_WARNING;   // with multimaster its not unheard of to intentiallionall have downed masters
-        serverLog(sev,"Unable to connect to MASTER: %s",
-                connGetLastError(mi->repl_transfer_s));
+        const char *err = "Unknown Error";
+        if (mi->repl_transfer_s->last_errno != 0)
+            err = connGetLastError(mi->repl_transfer_s);
+        int sev = g_pserver->enable_multimaster ? LL_NOTICE : LL_WARNING;   // with multimaster its not unheard of to intentionally have downed masters
+        serverLog(sev, "Unable to connect to MASTER: %s", err);
         connClose(mi->repl_transfer_s);
         mi->repl_transfer_s = NULL;
         return C_ERR;
@@ -3800,12 +3820,14 @@ int connectWithMaster(redisMaster *mi) {
  * Never call this function directly, use cancelReplicationHandshake() instead.
  */
 void undoConnectWithMaster(redisMaster *mi) {
+    serverAssert(GlobalLocksAcquired());
     auto conn = mi->repl_transfer_s;
     connSetPrivateData(conn, nullptr);
-    aePostFunction(g_pserver->rgthreadvar[mi->ielReplTransfer].el, [conn]{
-        connClose(conn);
-    });
     mi->repl_transfer_s = NULL;
+    int result = aePostFunction(g_pserver->rgthreadvar[mi->ielReplTransfer].el, [conn]{
+        connClose(conn);
+    }, false);
+    serverAssert(result == AE_OK);
 }
 
 /* Abort the async download of the bulk dataset while SYNC-ing with master.
@@ -3960,6 +3982,10 @@ void freeMasterInfo(redisMaster *mi)
 {
     sdsfree(mi->masterauth);
     zfree(mi->masteruser);
+    if (g_pserver->rdb_filename != nullptr && g_pserver->rdb_filename == mi->repl_transfer_tmpfile) {
+        unlink(g_pserver->rdb_filename);
+        g_pserver->rdb_filename = nullptr;
+    }
     if (mi->repl_transfer_tmpfile)
         zfree(mi->repl_transfer_tmpfile);
     delete mi->staleKeyMap;
@@ -4961,7 +4987,7 @@ void replicationStartPendingFork(void) {
      * In case of diskless replication, we make sure to wait the specified
      * number of seconds (according to configuration) so that other slaves
      * have the time to arrive before we start streaming. */
-    if (!hasActiveChildProcess()) {
+    if (!hasActiveChildProcessOrBGSave()) {
         time_t idle, max_idle = 0;
         int slaves_waiting = 0;
         int mincapa = -1;
@@ -5599,6 +5625,9 @@ void flushReplBacklogToClients()
         serverAssert(g_pserver->master_repl_offset - g_pserver->repl_batch_offStart <= g_pserver->repl_backlog_size);
         serverAssert(g_pserver->repl_batch_idxStart != g_pserver->repl_backlog_idx);
 
+        // Repl backlog writes must become visible to all threads at this point
+        std::atomic_thread_fence(std::memory_order_release);
+
         listIter li;
         listNode *ln;
         listRewind(g_pserver->slaves, &li);
@@ -5626,7 +5655,10 @@ void flushReplBacklogToClients()
             replica->repl_end_off = g_pserver->master_repl_offset;
 
             /* Only if the there isn't already a pending write do we prepare the client to write */
-            serverAssert(replica->repl_curr_off != g_pserver->master_repl_offset);
+            if (replica->repl_curr_off == g_pserver->master_repl_offset) {
+                serverLog(LL_DEBUG, "Pending write when it's on repl_offset=%lld", g_pserver->master_repl_offset);
+                continue;
+            }
             prepareClientToWrite(replica);
         }
         if (fAsyncWrite)

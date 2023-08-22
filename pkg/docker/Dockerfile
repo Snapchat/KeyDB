@@ -53,7 +53,7 @@ RUN set -eux; \
         grep -E '^ *createBoolConfig[(]"protected-mode",.*, *1 *,.*[)],$' ./src/config.cpp; \
         sed -ri 's!^( *createBoolConfig[(]"protected-mode",.*, *)1( *,.*[)],)$!\10\2!' ./src/config.cpp; \
         grep -E '^ *createBoolConfig[(]"protected-mode",.*, *0 *,.*[)],$' ./src/config.cpp; \
-        make -j$(nproc) BUILD_TLS=yes; \
+        make -j$(nproc) BUILD_TLS=yes ENABLE_FLASH=yes; \
         cd src; \
         strip keydb-cli keydb-benchmark keydb-check-rdb keydb-check-aof keydb-diagnostic-tool keydb-sentinel keydb-server; \
         mv keydb-server keydb-cli keydb-benchmark keydb-check-rdb keydb-check-aof keydb-diagnostic-tool keydb-sentinel /usr/local/bin/; \
@@ -77,12 +77,13 @@ RUN \
         mkdir /data && chown keydb:keydb /data; \
         mkdir /flash && chown keydb:keydb /flash; \
         mkdir -p /etc/keydb; \
-        cp /tmp/keydb-internal/keydb.conf /etc/keydb/; \
+        cp /tmp/KeyDB/keydb.conf /etc/keydb/; \
         sed -i 's/^\(daemonize .*\)$/# \1/' /etc/keydb/keydb.conf; \
         sed -i 's/^\(dir .*\)$/# \1\ndir \/data/' /etc/keydb/keydb.conf; \
         sed -i 's/^\(logfile .*\)$/# \1/' /etc/keydb/keydb.conf; \
         sed -i 's/protected-mode yes/protected-mode no/g' /etc/keydb/keydb.conf; \
         sed -i 's/^\(bind .*\)$/# \1/' /etc/keydb/keydb.conf; \
+        cd /usr/local/bin; \
         ln -s keydb-cli redis-cli; \
         cd /etc/keydb; \
         ln -s keydb.conf redis.conf; \
@@ -110,8 +111,3 @@ ENV KEYDB_PRO_DIRECTORY=/usr/local/bin/
 ENTRYPOINT ["docker-entrypoint.sh"]
 EXPOSE 6379
 CMD ["keydb-server","/etc/keydb/keydb.conf"]
-
-
-
-
-

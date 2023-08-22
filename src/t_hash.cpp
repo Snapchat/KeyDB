@@ -729,6 +729,10 @@ void hincrbyfloatCommand(client *c) {
     unsigned int vlen;
 
     if (getLongDoubleFromObjectOrReply(c,c->argv[3],&incr,NULL) != C_OK) return;
+    if (isnan(incr) || isinf(incr)) {
+        addReplyError(c,"value is NaN or Infinity");
+        return;
+    }
     if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
     if (hashTypeGetValue(o,szFromObj(c->argv[2]),&vstr,&vlen,&ll) == C_OK) {
         if (vstr) {
@@ -1062,6 +1066,8 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 addReplyBulkCBuffer(c, key, sdslen(key));
                 if (withvalues)
                     addReplyBulkCBuffer(c, value, sdslen(value));
+                if (c->flags & CLIENT_CLOSE_ASAP)
+                    break;
             }
         } else if (hash->encoding == OBJ_ENCODING_ZIPLIST) {
             ziplistEntry *keys, *vals = NULL;
@@ -1075,6 +1081,8 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 count -= sample_count;
                 ziplistRandomPairs((unsigned char*)ptrFromObj(hash), sample_count, keys, vals);
                 harndfieldReplyWithZiplist(c, sample_count, keys, vals);
+                if (c->flags & CLIENT_CLOSE_ASAP)
+                    break;
             }
             zfree(keys);
             zfree(vals);
@@ -1221,12 +1229,17 @@ void hrandfieldCommand(client *c) {
     ziplistEntry ele;
 
     if (c->argc >= 3) {
-        if (getLongFromObjectOrReply(c,c->argv[2],&l,NULL) != C_OK) return;
+        if (getRangeLongFromObjectOrReply(c,c->argv[2],-LONG_MAX,LONG_MAX,&l,NULL) != C_OK) return;
         if (c->argc > 4 || (c->argc == 4 && strcasecmp(szFromObj(c->argv[3]),"withvalues"))) {
             addReplyErrorObject(c,shared.syntaxerr);
             return;
-        } else if (c->argc == 4)
+        } else if (c->argc == 4) {
             withvalues = 1;
+            if (l < -g_pserver->rand_total_threshold || l > g_pserver->rand_total_threshold) {
+                addReplyError(c,"value is out of range");
+                return;
+            }
+        }
         hrandfieldWithCountCommand(c, l, withvalues);
         return;
     }

@@ -73,7 +73,22 @@ bool TestStorageProvider::enumerate(callback fn) const
     }
     return fAll;
 }
-    
+
+bool TestStorageProvider::enumerate_hashslot(callback fn, unsigned int hashslot) const
+{
+    bool fAll = true;
+    for (auto &pair : m_map)
+    {
+        if (keyHashSlot(pair.first.data(), pair.first.size()) == hashslot)
+            if (!fn(pair.first.data(), pair.first.size(), pair.second.data(), pair.second.size()))
+            {
+                fAll = false;
+                break;
+            }
+    }
+    return fAll;
+}
+      
 size_t TestStorageProvider::count() const
 {
     return m_map.size();

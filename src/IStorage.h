@@ -14,6 +14,7 @@ public:
     virtual class IStorage *createMetadataDb() = 0;
     virtual const char *name() const = 0;
     virtual size_t totalDiskspaceUsed() const = 0;
+    virtual sdsstring getInfo() const = 0;
     virtual bool FSlow() const = 0;
     virtual size_t filedsRequired() const { return 0; }
 };
@@ -31,6 +32,7 @@ public:
     virtual void retrieve(const char *key, size_t cchKey, callbackSingle fn) const = 0;
     virtual size_t clear() = 0;
     virtual bool enumerate(callback fn) const = 0;
+    virtual bool enumerate_hashslot(callback fn, unsigned int hashslot) const = 0;
     virtual size_t count() const = 0;
 
     virtual void bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem) {

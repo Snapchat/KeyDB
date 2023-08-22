@@ -2,6 +2,7 @@
 #include <vector>
 #include <assert.h>
 #include <unordered_set>
+#include <list>
 
 struct ICollectable
 {
@@ -15,7 +16,17 @@ class GarbageCollector
     struct EpochHolder
     {
         uint64_t tstamp;
-        std::vector<std::unique_ptr<T>> m_vecObjs;
+        std::unique_ptr<std::vector<std::unique_ptr<T>>> m_spvecObjs;
+
+        EpochHolder() {
+            m_spvecObjs = std::make_unique<std::vector<std::unique_ptr<T>>>();
+        }
+
+        // Support move operators
+        EpochHolder(EpochHolder &&other) = default;
+        EpochHolder &operator=(EpochHolder &&) = default;
+
+
 
         bool operator<(uint64_t tstamp) const
         {
@@ -45,14 +56,14 @@ public:
     void shutdown()
     {
         std::unique_lock<fastlock> lock(m_lock);
-        m_vecepochs.clear();
+        m_listepochs.clear();
         m_setepochOutstanding.clear();
     }
 
     bool empty() const
     {
         std::unique_lock<fastlock> lock(m_lock);
-        return m_vecepochs.empty();
+        return m_listepochs.empty();
     }
 
     void endEpoch(uint64_t epoch, bool fNoFree = false)
@@ -63,12 +74,12 @@ public:
         m_setepochOutstanding.erase(epoch);
         if (fNoFree)
             return;
-        std::vector<EpochHolder> vecclean;
+        std::list<EpochHolder> listclean;
         
         // No outstanding epochs?
         if (m_setepochOutstanding.empty())
         {
-            vecclean = std::move(m_vecepochs);  // Everything goes!
+            listclean = std::move(m_listepochs);  // Everything goes!
         }
         else
         {
@@ -77,18 +88,20 @@ public:
                 return; // No available epochs to free
 
             // Clean any epochs available (after the lock)
-            for (size_t iepoch = 0; iepoch < m_vecepochs.size(); ++iepoch)
+            for (auto itr = m_listepochs.begin(); itr != m_listepochs.end(); /* itr incremented in loop*/)
             {
-                auto &e = m_vecepochs[iepoch];
+                auto &e = *itr;
+                auto itrNext = itr;
+                ++itrNext;
                 if (e < minepoch)
                 {
-                    vecclean.emplace_back(std::move(e));
-                    m_vecepochs.erase(m_vecepochs.begin() + iepoch);
-                    --iepoch;
+                    listclean.emplace_back(std::move(e));
+                    m_listepochs.erase(itr);
                 }
+                itr = itrNext;
             }
 
-            assert(vecclean.empty() || fMinElement);
+            assert(listclean.empty() || fMinElement);
         }
 
         lock.unlock();  // don't hold it for the potentially long delete of vecclean
@@ -100,24 +113,24 @@ public:
         serverAssert(m_setepochOutstanding.find(epoch) != m_setepochOutstanding.end());
         serverAssert(sp->FWillFreeChildDebug() == false);
 
-        auto itr = std::find(m_vecepochs.begin(), m_vecepochs.end(), m_epochNext+1);
-        if (itr == m_vecepochs.end())
+        auto itr = std::find(m_listepochs.begin(), m_listepochs.end(), m_epochNext+1);
+        if (itr == m_listepochs.end())
         {
             EpochHolder e;
             e.tstamp = m_epochNext+1;
-            e.m_vecObjs.push_back(std::move(sp));
-            m_vecepochs.emplace_back(std::move(e));
+            e.m_spvecObjs->push_back(std::move(sp));
+            m_listepochs.emplace_back(std::move(e));
         }
         else
         {
-            itr->m_vecObjs.push_back(std::move(sp));
+            itr->m_spvecObjs->push_back(std::move(sp));
         }
     }
 
 private:
     mutable fastlock m_lock { "Garbage Collector"};
 
-    std::vector<EpochHolder> m_vecepochs;
+    std::list<EpochHolder> m_listepochs;
     std::unordered_set<uint64_t> m_setepochOutstanding;
     uint64_t m_epochNext = 0;
 };

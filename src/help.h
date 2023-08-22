@@ -1071,7 +1071,7 @@ struct commandHelp {
     1,
     "2.2.0" },
     { "SHUTDOWN",
-    "[NOSAVE|SAVE]",
+    "[NOSAVE|SAVE|SOFT]",
     "Synchronously save the dataset to disk and then shut down the server",
     9,
     "1.0.0" },

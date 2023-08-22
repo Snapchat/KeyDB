@@ -5,11 +5,11 @@ on: [push, pull_request]
 jobs:
 
   test-ubuntu-latest:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v2
       with:
-        submodules: true
+        submodules: recursive
     - name: make
       run: |
           sudo apt-get update
@@ -21,10 +21,10 @@ jobs:
     - name: test-tls
       run: |
         sudo apt-get -y install tcl tcl-tls
-        ./runtest --clients 2 --verbose --tls
+        ./runtest --clients 1 --verbose --tls --config server-threads 3
     - name: cluster-test
       run: |
-        ./runtest-cluster --tls
+        ./runtest-cluster --tls --config server-threads 3
     - name: sentinel test
       run: |
           ./runtest-sentinel
@@ -36,19 +36,24 @@ jobs:
           ./runtest-rotation
         
   build-ubuntu-old:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v2
+      with:
+        submodules: recursive
     - name: make -j2
       run: | 
         sudo apt-get update
-        sudo apt-get -y install uuid-dev libcurl4-openssl-dev
+        sudo apt-get -y remove libzstd || true
+        sudo apt-get -y install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
         make -j2
 
   build-macos-latest:
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v2
+      with:
+        submodules: recursive
     - name: make
       run: make KEYDB_CFLAGS='-Werror' KEYDB_CXXFLAGS='-Werror' -j2
 
@@ -56,4 +61,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
+      with:
+        submodules: recursive
     - name: make
+      run: |
+          sudo apt-get update
+          sudo apt-get -y remove libzstd || true
+          sudo apt-get -y install uuid-dev libcurl4-openssl-dev libbz2-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev libgflags-dev
+          make KEYDB_CFLAGS='-Werror' KEYDB_CXXFLAGS='-Werror' MALLOC=libc -j2

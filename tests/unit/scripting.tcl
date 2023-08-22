@@ -43,6 +43,15 @@ start_server {tags {"scripting"}} {
         r eval {return redis.call('get',KEYS[1])} 1 mykey
     } {myval}
 
+    test {EVAL - keys command works? } {
+        r eval {return redis.call('keys', 'test')} 0
+    }
+
+    test {EVAL - KeyDB global works } {
+        r eval {return keydb.call('get', KEYS[1])} 1 mykey
+        assert_equal [r eval {return redis.call('get',KEYS[1])} 1 mykey] [r eval {return keydb.call('get', KEYS[1])} 1 mykey]
+    }
+
     test {EVALSHA - Can we call a SHA1 if already defined?} {
         r evalsha fd758d1589d044dd850a6f05d52f2eefd27f033f 1 mykey
     } {myval}
@@ -126,6 +135,10 @@ start_server {tags {"scripting"}} {
         r select 9
         set res
     } {original value}
+    
+    test {EVAL background command} {
+	r eval {redis.call("SCAN", "0", "MATCH", "key*", "COUNT", 1000)} 0
+    } {}
 
     if 0 {
         test {EVAL - Script can't run more than configured time limit} {

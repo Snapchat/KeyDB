@@ -656,7 +656,7 @@ void moduleHandlePropagationAfterCommandCallback(RedisModuleCtx *ctx) {
 
     /* We don't need to do anything here if the server isn't inside
      * a transaction. */
-    if (!g_pserver->propagate_in_transaction) return;
+    if (!serverTL->propagate_in_transaction) return;
 
     /* If this command is executed from with Lua or MULTI/EXEC we do not
      * need to propagate EXEC */
@@ -1814,7 +1814,7 @@ void moduleReplicateMultiIfNeeded(RedisModuleCtx *ctx) {
      * the module command was called by a script. */
     if (serverTL->in_eval || serverTL->in_exec) return;
     /* If we already emitted MULTI return ASAP. */
-    if (g_pserver->propagate_in_transaction) return;
+    if (serverTL->propagate_in_transaction) return;
     /* If this is a thread safe context, we do not want to wrap commands
      * executed into MULTI/EXEC, they are executed as single commands
      * from an external client in essence. */
@@ -7058,7 +7058,7 @@ RedisModuleString *RM_DictPrev(RedisModuleCtx *ctx, RedisModuleDictIter *di, voi
 /* Compare the element currently pointed by the iterator to the specified
  * element given by key/keylen, according to the operator 'op' (the set of
  * valid operators are the same valid for RedisModule_DictIteratorStart).
- * If the comparision is successful the command returns REDISMODULE_OK
+ * If the comparison is successful the command returns REDISMODULE_OK
  * otherwise REDISMODULE_ERR is returned.
  *
  * This is useful when we want to just emit a lexicographical range, so

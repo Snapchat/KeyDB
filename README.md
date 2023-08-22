@@ -4,7 +4,7 @@
 
 ##### KeyDB is now a part of Snap Inc! Check out the announcement [here](https://docs.keydb.dev/news/2022/05/12/keydb-joins-snap) 
 
-##### [Release v6.3.0](https://github.com/EQ-Alpha/KeyDB/releases/tag/v6.3.0) is here with major improvements as we consolodate our Open Source and Enterprise offerings into a single BSD-3 licensed project. See our [roadmap](https://docs.keydb.dev/docs/coming-soon) for details. 
+##### [Release v6.3.0](https://github.com/EQ-Alpha/KeyDB/releases/tag/v6.3.0) is here with major improvements as we consolidate our Open Source and Enterprise offerings into a single BSD-3 licensed project. See our [roadmap](https://docs.keydb.dev/docs/coming-soon) for details. 
 
 ##### Want to extend KeyDB with Javascript?  Try [ModJS](https://github.com/JohnSully/ModJS)
 
@@ -37,7 +37,7 @@ Because of this difference of opinion features which are right for KeyDB may not
 Project Support
 -------------------
 
-The KeyDB team maintains this project as part of Snap Inc. KeyDB is used by Snap as part of its caching infrastructure and is fully open sourced. There is no separate commercial product and no paid support options available. We really value collaborating with the open source community and welcome PRs, bug reports, and open discussion. For community support or to get involved further with the project check out our community support options [here](https://docs.keydb.dev/docs/support) (slack, forum, meetup, github issues). Our team monitors these channlels regularly.
+The KeyDB team maintains this project as part of Snap Inc. KeyDB is used by Snap as part of its caching infrastructure and is fully open sourced. There is no separate commercial product and no paid support options available. We really value collaborating with the open source community and welcome PRs, bug reports, and open discussion. For community support or to get involved further with the project check out our community support options [here](https://docs.keydb.dev/docs/support) (slack, forum, meetup, github issues). Our team monitors these channels regularly.
 
 
 Additional Resources
@@ -104,6 +104,12 @@ Avoid forwarding RREPLAY messages to other masters? WARNING: This setting is dan
 If you would like KeyDB to dump and load directly to AWS S3 this option specifies the bucket.  Using this option with the traditional RDB options will result in KeyDB backing up twice to both locations.  If both are specified KeyDB will first attempt to load from the local dump file and if that fails load from S3.  This requires the AWS CLI tools to be installed and configured which are used under the hood to transfer the data.
 
 
+```
+storage-provider flash /path/to/flash
+```
+If you would like to use KeyDB FLASH storage, specify the storage medium followed by the directory path on your local SSD volume. Note that this feature is still considered experimental and should be used with discretion. See [FLASH Documentation](https://docs.keydb.dev/docs/flash) for more details on configuration and setting up your FLASH volume. 
+
+
 Building KeyDB
 --------------
 
@@ -135,15 +141,21 @@ To append a suffix to KeyDB program names, use:
 ***Note that the following dependencies may be needed: 
     % sudo apt-get install autoconf autotools-dev libnuma-dev libtool
 
-To buik=ld with TLS support, use:
+KeyDB by default is built with TLS enabled. To build without TLS support, use:
 
-    % make BUILD_TLS=yes
+    % make BUILD_TLS=no
 
 Running the tests with TLS enabled (you will need `tcl-tls`
 installed):
 
     % ./utils/gen-test-certs.sh
     % ./runtest --tls
+
+To build with KeyDB FLASH support, use:
+
+    % make ENABLE_FLASH=yes
+
+***Note that the KeyDB FLASH feature is considered experimental (beta) and should used with discretion
 
 
 Fixing build problems with dependencies or cached build options

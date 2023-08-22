@@ -171,6 +171,7 @@ int aeTryAcquireLock(int fWeak);
 void aeThreadOffline();
 void aeReleaseLock();
 void aeReleaseForkLock();
+void aeForkLockInChild();
 int aeThreadOwnsLock();
 void aeSetThreadOwnsLockOverride(int fOverride);
 int aeLockContested(int threshold);

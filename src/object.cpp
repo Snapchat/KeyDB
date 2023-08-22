@@ -1091,7 +1091,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
     mem_total += g_pserver->initial_memory_usage;
 
     mem = 0;
-    if (g_pserver->repl_backlog)
+    if (g_pserver->repl_backlog && g_pserver->repl_backlog != g_pserver->repl_backlog_disk)
         mem += zmalloc_size(g_pserver->repl_backlog);
     mh->repl_backlog = mem;
     mem_total += mem;
@@ -1142,8 +1142,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
         mem_total+=mem;
         
         std::unique_lock<fastlock> ul(g_expireLock);
-        mem = db->setexpire()->bytes_used();
-        
+        mem = db->setexpire()->estimated_bytes_used();
         mh->db[mh->num_dbs].overhead_ht_expires = mem;
         mem_total+=mem;
 
@@ -1542,7 +1541,7 @@ void memoryCommand(client *c) {
     } else if (!strcasecmp(szFromObj(c->argv[1]),"malloc-stats") && c->argc == 2) {
 #if defined(USE_JEMALLOC)
         sds info = sdsempty();
-        je_malloc_stats_print(inputCatSds, &info, NULL);
+        malloc_stats_print(inputCatSds, &info, NULL);
         addReplyVerbatim(c,info,sdslen(info),"txt");
         sdsfree(info);
 #else
@@ -1669,6 +1668,7 @@ robj *deserializeStoredObjectCore(const void *data, size_t cb)
 robj *deserializeStoredObject(const redisDbPersistentData *db, const char *key, const void *data, size_t cb)
 {
     robj *o = deserializeStoredObjectCore(data, cb);
+    std::unique_lock<fastlock> ul(g_expireLock);
     o->SetFExpires(db->setexpire()->exists(key));
     return o;
 }

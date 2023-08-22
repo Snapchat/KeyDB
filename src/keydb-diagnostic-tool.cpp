@@ -904,7 +904,7 @@ int main(int argc, const char **argv) {
 
     while (self_threads < config.max_threads) {
         for (int i = 0; i < config.numclients; i++) {
-            sprintf(command, "SET %d %s\r\n", self_threads * config.numclients + i, set_value);
+            snprintf(command, sizeof(command), "SET %d %s\r\n", self_threads * config.numclients + i, set_value);
             createClient(command, strlen(command), NULL,self_threads);
         }
 

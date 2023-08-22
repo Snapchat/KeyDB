@@ -93,7 +93,7 @@ static void lookupKeyUpdateObj(robj *val, int flags)
     /* Update the access time for the ageing algorithm.
      * Don't do it if we have a saving child, as this will trigger
      * a copy on write madness. */
-    if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH))
+    if (!hasActiveChildProcessOrBGSave() && !(flags & LOOKUP_NOTOUCH))
     {
         if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
             updateLFU(val);
@@ -1059,7 +1059,7 @@ void keysCommand(client *c) {
     sds pattern = szFromObj(c->argv[1]);
 
     const redisDbPersistentDataSnapshot *snapshot = nullptr;
-    if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED)))
+    if (!(c->flags & (CLIENT_MULTI | CLIENT_BLOCKED | CLIENT_DENY_BLOCKING)) && !(serverTL->in_eval || serverTL->in_exec))
         snapshot = c->db->createSnapshot(c->mvccCheckpoint, true /* fOptional */);
     if (snapshot != nullptr)
     {
@@ -1224,7 +1224,7 @@ void scanGenericCommand(client *c, robj_roptr o, unsigned long cursor) {
         }
     }
 
-    if (o == nullptr && count >= 100)
+    if (o == nullptr && count >= 100 && !(serverTL->in_eval || serverTL->in_exec))
     {
         // Do an async version
         if (c->asyncCommand(
@@ -1462,6 +1462,11 @@ void shutdownCommand(client *c) {
             flags |= SHUTDOWN_NOSAVE;
         } else if (!strcasecmp(szFromObj(c->argv[1]),"save")) {
             flags |= SHUTDOWN_SAVE;
+        } else if (!strcasecmp(szFromObj(c->argv[1]), "soft")) {
+            g_pserver->soft_shutdown = true;
+            serverLog(LL_WARNING, "Soft Shutdown Initiated");
+            addReply(c, shared.ok);
+            return;
         } else {
             addReplyErrorObject(c,shared.syntaxerr);
             return;
@@ -1568,6 +1573,12 @@ void moveCommand(client *c) {
         return;
     }
 
+    /* Return zero if the key already exists in the target DB */
+    if (lookupKeyWrite(dst,c->argv[1]) != NULL) {
+        addReply(c,shared.czero);
+        return;
+    }
+
     std::unique_ptr<expireEntry> spexpire;
     {   // scope pexpireOld
     std::unique_lock<fastlock> ul(g_expireLock);
@@ -1582,12 +1593,6 @@ void moveCommand(client *c) {
     dbDelete(src,c->argv[1]);
     g_pserver->dirty++;
 
-    /* Return zero if the key already exists in the target DB */
-    if (lookupKeyWrite(dst,c->argv[1]) != NULL) {
-        addReply(c,shared.czero);
-        decrRefCount(o);
-        return;
-    }
     dbAdd(dst,c->argv[1],o);
     if (spexpire != nullptr) setExpire(c,dst,c->argv[1],std::move(*spexpire));
 
@@ -1732,6 +1737,9 @@ int dbSwapDatabases(int id1, int id2) {
         id2 < 0 || id2 >= cserver.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
     std::swap(g_pserver->db[id1], g_pserver->db[id2]);
+    
+    //swap db's id too, otherwise db does not match its id
+    std::swap(g_pserver->db[id1]->id, g_pserver->db[id2]->id);
 
     /* Note that we don't swap blocking_keys,
      * ready_keys and watched_keys, since we want clients to
@@ -1761,7 +1769,7 @@ int dbSwapDatabases(int id1, int id2) {
 
 /* SWAPDB db1 db2 */
 void swapdbCommand(client *c) {
-    int id1, id2;
+    int id1, id2, oriIdx;
 
     /* Not allowed in cluster mode: we have just DB 0 there. */
     if (g_pserver->cluster_enabled) {
@@ -1778,6 +1786,14 @@ void swapdbCommand(client *c) {
         "invalid second DB index") != C_OK)
         return;
 
+    // get client's original db's index
+    for (int idb=0; idb < cserver.dbnum; ++idb) {
+        if (g_pserver->db[idb]->id == c->db->id) {
+            oriIdx = idb;
+            break;
+        }
+    }
+
     /* Swap... */
     if (dbSwapDatabases(id1,id2) == C_ERR) {
         addReplyError(c,"DB index is out of range");
@@ -1786,6 +1802,18 @@ void swapdbCommand(client *c) {
         RedisModuleSwapDbInfo si = {REDISMODULE_SWAPDBINFO_VERSION,(int32_t)id1,(int32_t)id2};
         moduleFireServerEvent(REDISMODULE_EVENT_SWAPDB,0,&si);
         g_pserver->dirty++;
+
+        // set client's db to original db
+        c->db=g_pserver->db[oriIdx];
+
+        // Persist the databse index to dbid mapping into FLASH for later recovery.
+        if (g_pserver->m_pstorageFactory != nullptr && g_pserver->metadataDb != nullptr) {
+            std::string dbid_key = "db-" + std::to_string(id1);
+            g_pserver->metadataDb->insert(dbid_key.c_str(), dbid_key.length(), &g_pserver->db[id1]->id, sizeof(g_pserver->db[id1]->id), true);
+
+            dbid_key = "db-" + std::to_string(id2);
+            g_pserver->metadataDb->insert(dbid_key.c_str(), dbid_key.length(), &g_pserver->db[id2]->id, sizeof(g_pserver->db[id2]->id), true);
+        }
         addReply(c,shared.ok);
     }
 }
@@ -1926,6 +1954,7 @@ void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
  * is associated with this key (i.e. the key is non volatile) */
 expireEntry *redisDbPersistentDataSnapshot::getExpire(const char *key) {
     /* No expire? return ASAP */
+    std::unique_lock<fastlock> ul(g_expireLock);
     if (expireSize() == 0)
         return nullptr;
 
@@ -2474,25 +2503,28 @@ void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add) {
     serverAssert(GlobalLocksAcquired());
 
     unsigned int hashslot = keyHashSlot(key,keylen);
-    unsigned char buf[64];
-    unsigned char *indexed = buf;
-
     g_pserver->cluster->slots_keys_count[hashslot] += add ? 1 : -1;
-    if (keylen+2 > 64) indexed = (unsigned char*)zmalloc(keylen+2, MALLOC_SHARED);
-    indexed[0] = (hashslot >> 8) & 0xff;
-    indexed[1] = hashslot & 0xff;
-    memcpy(indexed+2,key,keylen);
-    int fModified = false;
-    if (add) {
-        fModified = raxInsert(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL,NULL);
-    } else {
-        fModified = raxRemove(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL);
+
+    if (g_pserver->m_pstorageFactory == nullptr) {
+        unsigned char buf[64];
+        unsigned char *indexed = buf;
+
+        if (keylen+2 > 64) indexed = (unsigned char*)zmalloc(keylen+2, MALLOC_SHARED);
+        indexed[0] = (hashslot >> 8) & 0xff;
+        indexed[1] = hashslot & 0xff;
+        memcpy(indexed+2,key,keylen);
+        int fModified = false;
+        if (add) {
+            fModified = raxInsert(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL,NULL);
+        } else {
+            fModified = raxRemove(g_pserver->cluster->slots_to_keys,indexed,keylen+2,NULL);
+        }
+        // This assert is disabled when a snapshot depth is >0 because prepOverwriteForSnapshot will add in a tombstone,
+        //  this prevents ensure from adding the key to the dictionary which means the caller isn't aware we're already tracking
+        //  the key.
+        serverAssert(fModified || g_pserver->db[0]->snapshot_depth() > 0);
+        if (indexed != buf) zfree(indexed);
     }
-    // This assert is disabled when a snapshot depth is >0 because prepOverwriteForSnapshot will add in a tombstone,
-    //  this prevents ensure from adding the key to the dictionary which means the caller isn't aware we're already tracking
-    //  the key.
-    serverAssert(fModified || g_pserver->db[0]->snapshot_depth() > 0);
-    if (indexed != buf) zfree(indexed);
 }
 
 void slotToKeyAdd(sds key) {
@@ -2528,47 +2560,67 @@ void slotToKeyFlush(int async) {
  * New objects are returned to represent keys, it's up to the caller to
  * decrement the reference count to release the keys names. */
 unsigned int getKeysInSlot(unsigned int hashslot, robj **keys, unsigned int count) {
-    raxIterator iter;
-    int j = 0;
-    unsigned char indexed[2];
+    if (g_pserver->m_pstorageFactory != nullptr) {
+        int j = 0;
+        g_pserver->db[0]->getStorageCache()->enumerate_hashslot([&](const char *key, size_t cchKey, const void *, size_t )->bool {
+            keys[j++] = createStringObject(key, cchKey);
+            return --count;
+        }, hashslot);
+        return j;
+    } else {
+        raxIterator iter;
+        int j = 0;
+        unsigned char indexed[2];
 
-    indexed[0] = (hashslot >> 8) & 0xff;
-    indexed[1] = hashslot & 0xff;
-    raxStart(&iter,g_pserver->cluster->slots_to_keys);
-    raxSeek(&iter,">=",indexed,2);
-    while(count-- && raxNext(&iter)) {
-        if (iter.key[0] != indexed[0] || iter.key[1] != indexed[1]) break;
-        keys[j++] = createStringObject((char*)iter.key+2,iter.key_len-2);
+        indexed[0] = (hashslot >> 8) & 0xff;
+        indexed[1] = hashslot & 0xff;
+        raxStart(&iter,g_pserver->cluster->slots_to_keys);
+        raxSeek(&iter,">=",indexed,2);
+        while(count-- && raxNext(&iter)) {
+            if (iter.key[0] != indexed[0] || iter.key[1] != indexed[1]) break;
+            keys[j++] = createStringObject((char*)iter.key+2,iter.key_len-2);
+        }
+        raxStop(&iter);
+        return j;
     }
-    raxStop(&iter);
-    return j;
 }
 
 /* Remove all the keys in the specified hash slot.
  * The number of removed items is returned. */
 unsigned int delKeysInSlot(unsigned int hashslot) {
     serverAssert(GlobalLocksAcquired());
-    
-    raxIterator iter;
-    int j = 0;
-    unsigned char indexed[2];
+    if (g_pserver->m_pstorageFactory != nullptr) {
+        int j = 0;
+        g_pserver->db[0]->getStorageCache()->enumerate_hashslot([&](const char *key, size_t cchKey, const void *, size_t )->bool {
+            robj *keyobj = createStringObject(key, cchKey);
+            dbDelete(g_pserver->db[0], keyobj);
+            decrRefCount(keyobj);
+            j++;
+            return true;
+        }, hashslot);
+        return j;
+    } else {
+        raxIterator iter;
+        int j = 0;
+        unsigned char indexed[2];
 
-    indexed[0] = (hashslot >> 8) & 0xff;
-    indexed[1] = hashslot & 0xff;
-    raxStart(&iter,g_pserver->cluster->slots_to_keys);
-    while(g_pserver->cluster->slots_keys_count[hashslot]) {
-        raxSeek(&iter,">=",indexed,2);
-        raxNext(&iter);
+        indexed[0] = (hashslot >> 8) & 0xff;
+        indexed[1] = hashslot & 0xff;
+        raxStart(&iter,g_pserver->cluster->slots_to_keys);
+        while(g_pserver->cluster->slots_keys_count[hashslot]) {
+            raxSeek(&iter,">=",indexed,2);
+            raxNext(&iter);
 
-        auto count = g_pserver->cluster->slots_keys_count[hashslot];
-        robj *key = createStringObject((char*)iter.key+2,iter.key_len-2);
-        dbDelete(g_pserver->db[0],key);
-        serverAssert(count > g_pserver->cluster->slots_keys_count[hashslot]);   // we should have deleted something or we will be in an infinite loop
-        decrRefCount(key);
-        j++;
+            auto count = g_pserver->cluster->slots_keys_count[hashslot];
+            robj *key = createStringObject((char*)iter.key+2,iter.key_len-2);
+            dbDelete(g_pserver->db[0],key);
+            serverAssert(count > g_pserver->cluster->slots_keys_count[hashslot]);   // we should have deleted something or we will be in an infinite loop
+            decrRefCount(key);
+            j++;
+        }
+        raxStop(&iter);
+        return j;
     }
-    raxStop(&iter);
-    return j;
 }
 
 unsigned int countKeysInSlot(unsigned int hashslot) {
@@ -2602,6 +2654,17 @@ void clusterStorageLoadCallback(const char *rgchkey, size_t cch, void *)
     slotToKeyUpdateKeyCore(rgchkey, cch, true /*add*/);
 }
 
+void moduleLoadCallback(const char * rgchKey, size_t, void *data) {
+    redisObjectStack keyobj;
+    initStaticStringObject(keyobj, const_cast<char *>(rgchKey));
+    moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, *(int *)data);
+}
+
+void moduleClusterLoadCallback(const char * rgchKey, size_t cchKey, void *data) {
+    clusterStorageLoadCallback(rgchKey, cchKey, data);
+    moduleLoadCallback(rgchKey, cchKey, data);
+}
+
 void redisDb::initialize(int id)
 {
     redisDbPersistentData::initialize();
@@ -2620,8 +2683,8 @@ void redisDb::storageProviderInitialize()
 {
     if (g_pserver->m_pstorageFactory != nullptr)
     {
-        IStorageFactory::key_load_iterator itr = (g_pserver->cluster_enabled) ? clusterStorageLoadCallback : nullptr;
-        this->setStorageProvider(StorageCache::create(g_pserver->m_pstorageFactory, id, itr, nullptr));
+        IStorageFactory::key_load_iterator itr = g_pserver->cluster_enabled ? moduleClusterLoadCallback : moduleLoadCallback;
+        this->setStorageProvider(StorageCache::create(g_pserver->m_pstorageFactory, id, itr, &id));
     }
 }
 
@@ -2639,7 +2702,10 @@ bool redisDbPersistentData::insert(char *key, robj *o, bool fAssumeNew, dict_ite
         ensure(key);
     dictEntry *de;
     int res = dictAdd(m_pdict, key, o, &de);
-    serverAssert(FImplies(fAssumeNew, res == DICT_OK));
+    if (!FImplies(fAssumeNew, res == DICT_OK)) {
+        serverLog(LL_WARNING,
+            "Assumed new key %s existed in DB.", key);
+    }
     if (res == DICT_OK)
     {
 #ifdef CHECKED_BUILD
@@ -2669,6 +2735,11 @@ void redisDbPersistentData::prepOverwriteForSnapshot(char *key)
         auto itr = m_pdbSnapshot->find_cached_threadsafe(key);
         if (itr.key() != nullptr)
         {
+            if (itr.val()->FExpires()) {
+                // Note: I'm sure we could handle this, but its too risky at the moment.
+                //  There are known bugs doing this with expires
+                return;
+            }
             sds keyNew = sdsdupshared(itr.key());
             if (dictAdd(m_pdictTombstone, keyNew, (void*)dictHashKey(m_pdict, key)) != DICT_OK)
                 sdsfree(keyNew);
@@ -2703,8 +2774,11 @@ void redisDbPersistentData::clear(void(callback)(void*))
         m_cnewKeysPending = 0;
         m_fAllChanged++;
     }
+    {
+    std::unique_lock<fastlock> ul(g_expireLock);
     delete m_setexpire;
     m_setexpire = new (MALLOC_LOCAL) expireset();
+    }
     if (m_spstorage != nullptr)
         m_spstorage->clear(callback);
     dictEmpty(m_pdictTombstone,callback);
@@ -2837,7 +2911,8 @@ LNotFound:
             {
                 dictAdd(m_pdict, sdsNewKey, o);
                 o->SetFExpires(spexpire != nullptr);
-
+                
+                std::unique_lock<fastlock> ul(g_expireLock);
                 if (spexpire != nullptr)
                 {
                     auto itr = m_setexpire->find(sdsKey);
@@ -2860,6 +2935,7 @@ LNotFound:
     if (*pde != nullptr && dictGetVal(*pde) != nullptr)
     {
         robj *o = (robj*)dictGetVal(*pde);
+        std::unique_lock<fastlock> ul(g_expireLock);
         serverAssert(o->FExpires() == (m_setexpire->find(sdsKey) != m_setexpire->end()));
     }
 }
@@ -2981,8 +3057,16 @@ void redisDbPersistentData::processChangesAsync(std::atomic<int> &pendingJobs)
     });
 }
 
-void redisDbPersistentData::bulkStorageInsert(char **rgKeys, size_t *rgcbKeys, char **rgVals, size_t *rgcbVals, size_t celem)
+/* This function is to bulk insert directly to storage provider bypassing in memory, assumes rgKeys and rgVals are not sds strings */
+void redisDbPersistentData::bulkDirectStorageInsert(char **rgKeys, size_t *rgcbKeys, char **rgVals, size_t *rgcbVals, size_t celem)
 {
+    if (g_pserver->cluster_enabled) {
+        aeAcquireLock();
+        for (size_t i = 0; i < celem; i++) {
+            slotToKeyUpdateKeyCore(rgKeys[i], rgcbKeys[i], 1);
+        }
+        aeReleaseLock();
+    }
     m_spstorage->bulkInsert(rgKeys, rgcbKeys, rgVals, rgcbVals, celem);
 }
 
@@ -3224,6 +3308,7 @@ std::unique_ptr<expireEntry> deserializeExpire(sds key, const char *str, size_t 
 
 sds serializeStoredObjectAndExpire(redisDbPersistentData *db, const char *key, robj_roptr o)
 {
+    std::unique_lock<fastlock> ul(g_expireLock);
     auto itrExpire = db->setexpire()->find(key);
     const expireEntry *pexpire = nullptr;
     if (itrExpire != db->setexpire()->end())
@@ -3244,7 +3329,7 @@ int dbnumFromDb(redisDb *db)
     serverPanic("invalid database pointer");
 }
 
-bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command, bool fExecOK)
+void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command)
 {
     if (m_spstorage == nullptr) {
 #if defined(__x86_64__) || defined(__i386__)
@@ -3256,17 +3341,18 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
             const char *cmd = szFromObj(command.argv[0]);
             if (!strcasecmp(cmd, "set") || !strcasecmp(cmd, "get")) {
                 if (c->db->m_spdbSnapshotHOLDER != nullptr)
-                    return false; // this is dangerous enough without a snapshot around
+                    return; // this is dangerous enough without a snapshot around
                 auto h = dictSdsHash(szFromObj(command.argv[1]));
                 for (int iht = 0; iht < 2; ++iht) {
                     auto hT = h & c->db->m_pdict->ht[iht].sizemask;
                     dictEntry **table;
                     __atomic_load(&c->db->m_pdict->ht[iht].table, &table, __ATOMIC_RELAXED);
                     if (table != nullptr) {
-                        dictEntry *de = table[hT];
+                        dictEntry *de;
+                        __atomic_load(&table[hT], &de, __ATOMIC_ACQUIRE);
                         while (de != nullptr) {
                             _mm_prefetch(dictGetKey(de), _MM_HINT_T2);
-                            de = de->next;
+                            __atomic_load(&de->next, &de, __ATOMIC_ACQUIRE);
                         }
                     }
                     if (!dictIsRehashing(c->db->m_pdict))
@@ -3275,7 +3361,7 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
             }
         }
 #endif
-        return false;
+        return;
     }
 
     AeLocker lock;
@@ -3285,7 +3371,11 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
     getKeysResult result = GETKEYS_RESULT_INIT;
     auto cmd = lookupCommand(szFromObj(command.argv[0]));
     if (cmd == nullptr)
-        return false; // Bad command? It's not for us to judge, just bail
+        return; // Bad command? It's not for us to judge, just bail
+    
+    if (command.argc < std::abs(cmd->arity))
+        return; // Invalid number of args
+    
     int numkeys = getKeysFromCommand(cmd, command.argv, command.argc, &result);
     for (int ikey = 0; ikey < numkeys; ++ikey)
     {
@@ -3317,7 +3407,6 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
         }
     }
 
-    bool fNoInsert = false;
     if (!vecInserts.empty()) {
         lock.arm(c);
         for (auto &tuple : vecInserts)
@@ -3333,19 +3422,18 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
                     // While unlocked this was already ensured
                     decrRefCount(o);
                     sdsfree(sharedKey);
-                    fNoInsert = true;
                 }
                 else
                 {
                     if (spexpire != nullptr) {
                         if (spexpire->when() < mstime()) {
-                            fNoInsert = true;
                             break;
                         }
                     }
                     dictAdd(m_pdict, sharedKey, o);
                     o->SetFExpires(spexpire != nullptr);
 
+                    std::unique_lock<fastlock> ul(g_expireLock);
                     if (spexpire != nullptr)
                     {
                         auto itr = m_setexpire->find(sharedKey);
@@ -3366,12 +3454,5 @@ bool redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
         lock.disarm();
     }
 
-    if (fExecOK && !fNoInsert && cmd->proc == getCommand && !vecInserts.empty()) {
-        robj *o = std::get<1>(vecInserts[0]);
-        if (o != nullptr) {
-            addReplyBulk(c, o);
-            return true;
-        }
-    }
-    return false;
+    return;
 }

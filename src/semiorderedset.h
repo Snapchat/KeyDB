@@ -27,6 +27,7 @@ namespace keydbutils
     template<>
     size_t hash(const sdsview &);
 }
+extern size_t g_semiOrderedSetTargetBucketSize;
 
 template<typename T, typename T_KEY = T, bool MEMMOVE_SAFE = false>
 class semiorderedset
@@ -41,11 +42,14 @@ class semiorderedset
     size_t idxRehash = (1ULL << bits_min); 
     int cfPauseRehash = 0;
 
-    constexpr size_t targetElementsPerBucket()
+    inline size_t targetElementsPerBucket()
     {
         // Aim for roughly 4 cache lines per bucket (determined by imperical testing)
         //  lower values are faster but use more memory
-        return std::max((64/sizeof(T))*8, (size_t)2);
+        if (g_semiOrderedSetTargetBucketSize == 0)
+            return std::max((64/sizeof(T))*8, (size_t)2);
+        else
+            return g_semiOrderedSetTargetBucketSize;
     }
 
 public:
@@ -240,14 +244,12 @@ public:
     bool empty() const noexcept { return celem == 0; }
     size_t size() const noexcept { return celem; }
 
-    size_t bytes_used() const
+    size_t estimated_bytes_used() const
     {
-        size_t cb = sizeof(this) + (m_data.capacity()-m_data.size())*sizeof(T);
-        for (auto &vec : m_data)
-        {
-            if (vec != nullptr)
-                cb += vec->bytes_used();
-        }
+        // This estimate does't include all the overhead of the internal vectors
+        size_t cb = sizeof(this)
+            + (m_data.capacity() * sizeof(m_data[0]))
+            + sizeof(T) * size();
         return cb;
     }
 

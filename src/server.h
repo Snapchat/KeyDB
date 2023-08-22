@@ -122,6 +122,9 @@ typedef long long ustime_t; /* microsecond time type. */
 #define LOADING_BOOT 1
 #define LOADING_REPLICATION 2
 
+#define OVERLOAD_PROTECT_PERIOD_MS 10'000 // 10 seconds
+#define MAX_CLIENTS_SHED_PER_PERIOD (OVERLOAD_PROTECT_PERIOD_MS / 10)  // Restrict to one client per 10ms
+
 extern int g_fTestMode;
 extern struct redisServer *g_pserver;
 
@@ -508,6 +511,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_PREVENT_AOF_PROP (1<<19)  /* Don't propagate to AOF. */
 #define CLIENT_PREVENT_REPL_PROP (1<<20)  /* Don't propagate to slaves. */
 #define CLIENT_PREVENT_PROP (CLIENT_PREVENT_AOF_PROP|CLIENT_PREVENT_REPL_PROP)
+#define CLIENT_IGNORE_SOFT_SHUTDOWN (CLIENT_MASTER | CLIENT_SLAVE | CLIENT_BLOCKED | CLIENT_MONITOR)
 #define CLIENT_PENDING_WRITE (1<<21) /* Client has output to send but a write
                                         handler is yet not installed. */
 #define CLIENT_REPLY_OFF (1<<22)   /* Don't send replies to client. */
@@ -541,6 +545,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_REPL_RDBONLY (1ULL<<42) /* This client is a replica that only wants
                                           RDB without replication buffer. */
 #define CLIENT_FORCE_REPLY (1ULL<<44) /* Should addReply be forced to write the text? */
+#define CLIENT_AUDIT_LOGGING (1ULL<<45) /* Client commands required audit logging */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -1203,12 +1208,13 @@ public:
     void disableKeyCache();
     bool keycacheIsEnabled();
 
-    bool prefetchKeysAsync(client *c, struct parsed_command &command, bool fExecOK);
+    void prefetchKeysAsync(client *c, struct parsed_command &command);
 
     bool FSnapshot() const { return m_spdbSnapshotHOLDER != nullptr; }
 
     std::unique_ptr<const StorageCache> CloneStorageCache() { return std::unique_ptr<const StorageCache>(m_spstorage->clone()); }
-    void bulkStorageInsert(char **rgKeys, size_t *rgcbKeys, char **rgVals, size_t *rgcbVals, size_t celem);
+    std::shared_ptr<StorageCache> getStorageCache() { return m_spstorage; }
+    void bulkDirectStorageInsert(char **rgKeys, size_t *rgcbKeys, char **rgVals, size_t *rgcbVals, size_t celem);
 
     dict_iter find_cached_threadsafe(const char *key) const;
 
@@ -1369,7 +1375,8 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::FRehashing;
     using redisDbPersistentData::FTrackingChanges;
     using redisDbPersistentData::CloneStorageCache;
-    using redisDbPersistentData::bulkStorageInsert;
+    using redisDbPersistentData::getStorageCache;
+    using redisDbPersistentData::bulkDirectStorageInsert;
 
 public:
     const redisDbPersistentDataSnapshot *createSnapshot(uint64_t mvccCheckpoint, bool fOptional) {
@@ -1707,6 +1714,7 @@ struct client {
     size_t argv_len_sum() const;
     bool asyncCommand(std::function<void(const redisDbPersistentDataSnapshot *, const std::vector<robj_sharedptr> &)> &&mainFn, 
                         std::function<void(const redisDbPersistentDataSnapshot *)> &&postFn = nullptr);
+    char* fprint;
 };
 
 struct saveparam {
@@ -1908,6 +1916,12 @@ struct MasterSaveInfo {
             masterhost = sdsstring(sdsdup(mi.masterhost));
         masterport = mi.masterport;
     }
+    MasterSaveInfo(const MasterSaveInfo &other) {
+        masterhost = other.masterhost;
+        masterport = other.masterport;
+        memcpy(master_replid, other.master_replid, sizeof(master_replid));
+        master_initial_offset = other.master_initial_offset;
+    }
 
     MasterSaveInfo &operator=(const MasterSaveInfo &other) {
         masterhost = other.masterhost;
@@ -2000,6 +2014,8 @@ struct malloc_stats {
     size_t allocator_allocated;
     size_t allocator_active;
     size_t allocator_resident;
+    size_t sys_total;
+    size_t sys_available;
 };
 
 typedef struct socketFds {
@@ -2190,6 +2206,9 @@ struct redisServerThreadVars {
     bool modulesEnabledThisAeLoop = false; /* In this loop of aeMain, were modules enabled before 
                                               the thread went to sleep? */
     bool disable_async_commands = false; /* this is only valid for one cycle of the AE loop and is reset in afterSleep */
+    
+    int propagate_in_transaction = 0;  /* Make sure we don't propagate nested MULTI/EXEC */
+    int client_pause_in_transaction = 0; /* Was a client pause executed during this Exec? */
     std::vector<client*> vecclientsProcess;
     dictAsyncRehashCtl *rehashCtl = nullptr;
 
@@ -2295,9 +2314,7 @@ struct redisServer {
     int sentinel_mode;          /* True if this instance is a Sentinel. */
     size_t initial_memory_usage; /* Bytes used after initialization. */
     int always_show_logo;       /* Show logo even for non-stdout logging. */
-    int propagate_in_transaction;  /* Make sure we don't propagate nested MULTI/EXEC */
     char *ignore_warnings;      /* Config: warnings that should be ignored. */
-    int client_pause_in_transaction; /* Was a client pause executed during this Exec? */
     pause_type client_pause_type;      /* True if clients are currently paused */
     /* Modules */
     ::dict *moduleapi;            /* Exported core APIs dictionary for modules. */
@@ -2463,7 +2480,8 @@ struct redisServer {
     time_t lastbgsave_try;          /* Unix time of last attempted bgsave */
     time_t rdb_save_time_last;      /* Time used by last RDB save run. */
     time_t rdb_save_time_start;     /* Current RDB save start time. */
-    pid_t rdb_child_pid = -1;            /* Used only during fork bgsave */
+    mstime_t rdb_save_latency;      /* Used to track end to end latency of rdb save*/
+    pid_t rdb_child_pid = -1;       /* Used only during fork bgsave */
     int rdb_bgsave_scheduled;       /* BGSAVE when possible if true. */
     int rdb_child_type;             /* Type of save by active child. */
     int lastbgsave_status;          /* C_OK or C_ERR */
@@ -2554,11 +2572,13 @@ struct redisServer {
     int get_ack_from_slaves;            /* If true we send REPLCONF GETACK. */
     /* Limits */
     unsigned int maxclients;            /* Max number of simultaneous clients */
+    unsigned int maxclientsReserved;    /* Reserved amount for health checks (localhost conns) */
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
     unsigned long long maxstorage;  /* Max number of bytes to use in a storage provider */
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Precision of random sampling */
     int maxmemory_eviction_tenacity;/* Aggressiveness of eviction processing */
+    int force_eviction_percent;     /* Force eviction when this percent of system memory is remaining */
     int lfu_log_factor;             /* LFU logarithmic counter factor. */
     int lfu_decay_time;             /* LFU counter decay factor. */
     long long proto_max_bulk_len;   /* Protocol bulk length maximum size. */
@@ -2693,6 +2713,7 @@ struct redisServer {
     int tls_auth_clients;
     int tls_rotation;
 
+    std::set<sdsstring> tls_auditlog_blocklist; /* Certificates that can be excluded from audit logging */
     std::set<sdsstring> tls_allowlist;
     redisTLSContextConfig tls_ctx_config;
 
@@ -2721,10 +2742,23 @@ struct redisServer {
     long long repl_batch_offStart = -1;
     long long repl_batch_idxStart = -1;
 
+    long long rand_total_threshold;
+
+    int config_soft_shutdown = false;
+    bool soft_shutdown = false;
+
+    int flash_disable_key_cache = false;
+
     /* Lock Contention Ring Buffer */
     static const size_t s_lockContentionSamples = 64;
     uint16_t rglockSamples[s_lockContentionSamples];
     unsigned ilockRingHead = 0;
+
+
+    sds sdsAvailabilityZone;
+    int overload_protect_threshold = 0;
+    int is_overloaded = 0;
+    int overload_closed_clients = 0;
 
         int module_blocked_pipe[2]; /* Pipe used to awake the event loop if a
                             client blocked on a module command needs
@@ -2839,6 +2873,12 @@ typedef struct {
 
 #define OBJ_HASH_KEY 1
 #define OBJ_HASH_VALUE 2
+
+/* Used in evict.cpp */
+enum class EvictReason {
+    User,       /* User memory exceeded limit */
+    System      /* System memory exceeded limit */
+};
 
 /*-----------------------------------------------------------------------------
  * Extern declarations
@@ -3244,6 +3284,7 @@ void receiveChildInfo(void);
 void executeWithoutGlobalLock(std::function<void()> func);
 int redisFork(int type);
 int hasActiveChildProcess();
+int hasActiveChildProcessOrBGSave();
 void resetChildState();
 int isMutuallyExclusiveChildType(int type);
 
@@ -3343,7 +3384,7 @@ int zslLexValueGteMin(sds value, zlexrangespec *spec);
 int zslLexValueLteMax(sds value, zlexrangespec *spec);
 
 /* Core functions */
-int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, bool fQuickCycle = false, bool fPreSnapshot=false);
+int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, EvictReason *reason=nullptr, bool fQuickCycle=false, bool fPreSnapshot=false);
 size_t freeMemoryGetNotCountedMemory();
 int overMaxmemoryAfterAlloc(size_t moremem);
 int processCommand(client *c, int callFlags);
@@ -3628,6 +3669,9 @@ unsigned long LFUDecrAndReturn(robj_roptr o);
 #define EVICT_FAIL 2
 int performEvictions(bool fPreSnapshot);
 
+/* meminfo.cpp -- get memory info from /proc/memoryinfo for linux distros */
+size_t getMemAvailable();
+size_t getMemTotal();
 
 /* Keys hashing / comparison functions for dict.c hash tables. */
 uint64_t dictSdsHash(const void *key);
@@ -3882,13 +3926,13 @@ void incrementMvccTstamp();
 
 #if __GNUC__ >= 7 && !defined(NO_DEPRECATE_FREE)
  [[deprecated]]
-void *calloc(size_t count, size_t size);
+void *calloc(size_t count, size_t size) noexcept;
  [[deprecated]]
-void free(void *ptr);
+void free(void *ptr) noexcept;
  [[deprecated]]
-void *malloc(size_t size);
+void *malloc(size_t size) noexcept;
  [[deprecated]]
-void *realloc(void *ptr, size_t size);
+void *realloc(void *ptr, size_t size) noexcept;
 #endif
 
 /* Debugging stuff */

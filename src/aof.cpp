@@ -285,7 +285,7 @@ int startAppendOnly(void) {
             strerror(errno));
         return C_ERR;
     }
-    if (hasActiveChildProcess() && g_pserver->child_type != CHILD_TYPE_AOF) {
+    if (hasActiveChildProcessOrBGSave() && g_pserver->child_type != CHILD_TYPE_AOF) {
         g_pserver->aof_rewrite_scheduled = 1;
         serverLog(LL_WARNING,"AOF was enabled but there is already another background operation. An AOF background was scheduled to start when possible.");
     } else {
@@ -438,7 +438,7 @@ void flushAppendOnlyFile(int force) {
      * useful for graphing / monitoring purposes. */
     if (sync_in_progress) {
         latencyAddSampleIfNeeded("aof-write-pending-fsync",latency);
-    } else if (hasActiveChildProcess()) {
+    } else if (hasActiveChildProcessOrBGSave()) {
         latencyAddSampleIfNeeded("aof-write-active-child",latency);
     } else {
         latencyAddSampleIfNeeded("aof-write-alone",latency);
@@ -535,7 +535,7 @@ void flushAppendOnlyFile(int force) {
 try_fsync:
     /* Don't fsync if no-appendfsync-on-rewrite is set to yes and there are
      * children doing I/O in the background. */
-    if (g_pserver->aof_no_fsync_on_rewrite && hasActiveChildProcess())
+    if (g_pserver->aof_no_fsync_on_rewrite && hasActiveChildProcessOrBGSave())
         return;
 
     /* Perform the fsync if needed. */
@@ -752,7 +752,7 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
      * accumulate the differences between the child DB and the current one
      * in a buffer, so that when the child process will do its work we
      * can append the differences to the new append only file. */
-    if (g_pserver->child_type == CHILD_TYPE_AOF)
+    if (hasActiveChildProcess() && g_pserver->child_type == CHILD_TYPE_AOF)
         aofRewriteBufferAppend((unsigned char*)buf,sdslen(buf));
 
     sdsfree(buf);
@@ -1658,7 +1658,7 @@ int rewriteAppendOnlyFile(char *filename) {
 { // BEGIN GOTO SCOPED VARIABLES
     /* Note that we have to use a different temp name here compared to the
      * one used by rewriteAppendOnlyFileBackground() function. */
-    snprintf(tmpfile,256,"temp-rewriteaof-%d.aof", (int) getpid());
+    snprintf(tmpfile,sizeof(tmpfile),"temp-rewriteaof-%d.aof", (int) getpid());
     fp = fopen(tmpfile,"w");
     if (!fp) {
         serverLog(LL_WARNING, "Opening the temp file for AOF rewrite in rewriteAppendOnlyFile(): %s", strerror(errno));
@@ -1887,7 +1887,7 @@ void aofClosePipes(void) {
 int rewriteAppendOnlyFileBackground(void) {
     pid_t childpid;
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveChildProcessOrBGSave()) return C_ERR;
     if (aofCreatePipes() != C_OK) return C_ERR;
     if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0) {
         char tmpfile[256];
@@ -1895,7 +1895,7 @@ int rewriteAppendOnlyFileBackground(void) {
         /* Child */
         redisSetProcTitle("keydb-aof-rewrite");
         redisSetCpuAffinity(g_pserver->aof_rewrite_cpulist);
-        snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
+        snprintf(tmpfile,sizeof(tmpfile),"temp-rewriteaof-bg-%d.aof", (int) getpid());
         if (rewriteAppendOnlyFile(tmpfile) == C_OK) {
             sendChildCowInfo(CHILD_INFO_TYPE_AOF_COW_SIZE, "AOF rewrite");
             exitFromChild(0);
@@ -1930,7 +1930,7 @@ int rewriteAppendOnlyFileBackground(void) {
 void bgrewriteaofCommand(client *c) {
     if (g_pserver->child_type == CHILD_TYPE_AOF) {
         addReplyError(c,"Background append only file rewriting already in progress");
-    } else if (hasActiveChildProcess()) {
+    } else if (hasActiveChildProcessOrBGSave()) {
         g_pserver->aof_rewrite_scheduled = 1;
         addReplyStatus(c,"Background append only file rewriting scheduled");
     } else if (rewriteAppendOnlyFileBackground() == C_OK) {
@@ -1944,10 +1944,10 @@ void bgrewriteaofCommand(client *c) {
 void aofRemoveTempFile(pid_t childpid) {
     char tmpfile[256];
 
-    snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) childpid);
+    snprintf(tmpfile,sizeof(tmpfile),"temp-rewriteaof-bg-%d.aof", (int) childpid);
     bg_unlink(tmpfile);
 
-    snprintf(tmpfile,256,"temp-rewriteaof-%d.aof", (int) childpid);
+    snprintf(tmpfile,sizeof(tmpfile),"temp-rewriteaof-%d.aof", (int) childpid);
     bg_unlink(tmpfile);
 }
 
@@ -1985,7 +1985,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
         /* Flush the differences accumulated by the parent to the
          * rewritten AOF. */
         latencyStartMonitor(latency);
-        snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof",
+        snprintf(tmpfile,sizeof(tmpfile),"temp-rewriteaof-bg-%d.aof",
             (int)g_pserver->child_pid);
         newfd = open(tmpfile,O_WRONLY|O_APPEND);
         if (newfd == -1) {

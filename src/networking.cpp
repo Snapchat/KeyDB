@@ -145,7 +145,7 @@ client *createClient(connection *conn, int iel) {
     client_id = g_pserver->next_client_id.fetch_add(1);
     c->iel = iel;
     c->id = client_id;
-    sprintf(c->lock.szName, "client %" PRIu64, client_id);
+    snprintf(c->lock.szName, sizeof(c->lock.szName), "client %" PRIu64, client_id);
     c->resp = 2;
     c->conn = conn;
     c->name = NULL;
@@ -777,11 +777,11 @@ void setDeferredAggregateLen(client *c, void *node, long length, char prefix) {
          * we return NULL in addReplyDeferredLen() */
         if (node == NULL) return;
         char lenstr[128];
-        size_t lenstr_len = sprintf(lenstr, "%c%ld\r\n", prefix, length);
+        size_t lenstr_len = snprintf(lenstr, sizeof(lenstr), "%c%ld\r\n", prefix, length);
         setDeferredReply(c, node, lenstr, lenstr_len);
     } else {
         char lenstr[128];
-        int lenstr_len = sprintf(lenstr, "%c%ld\r\n", prefix, length);
+        int lenstr_len = snprintf(lenstr, sizeof(lenstr), "%c%ld\r\n", prefix, length);
 
         size_t idxSplice = (size_t)node;
         serverAssert(idxSplice <= c->replyAsync->used);
@@ -1177,6 +1177,11 @@ int chooseBestThreadForAccept()
 void clientAcceptHandler(connection *conn) {
     client *c = (client*)connGetPrivateData(conn);
 
+    if (conn->flags & CONN_FLAG_AUDIT_LOGGING_REQUIRED) {
+        c->flags |= CLIENT_AUDIT_LOGGING;
+        c->fprint = conn->fprint;
+    }
+
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
         serverLog(LL_WARNING,
                 "Error accepting a client connection: %s",
@@ -1240,6 +1245,7 @@ void clientAcceptHandler(connection *conn) {
 
 #define MAX_ACCEPTS_PER_CALL 1000
 #define MAX_ACCEPTS_PER_CALL_TLS 100
+
 static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) {
     client *c;
     char conninfo[100];
@@ -1256,21 +1262,9 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) 
         return;
     }
 
-    /* Limit the number of connections we take at the same time.
-     *
-     * Admission control will happen before a client is created and connAccept()
-     * called, because we don't want to even start transport-level negotiation
-     * if rejected. */
-    if (listLength(g_pserver->clients) + getClusterConnectionsCount()
-        >= g_pserver->maxclients)
-    {
-        const char *err;
-        if (g_pserver->cluster_enabled)
-            err = "-ERR max number of clients + cluster "
-                  "connections reached\r\n";
-        else
-            err = "-ERR max number of clients reached\r\n";
-
+    /* Prevent new connections if we're in a soft shutdown situation */
+    if (g_pserver->soft_shutdown) {
+        const char *err = "-SHUTDOWN";
         /* That's a best effort error message, don't check write errors.
          * Note that for TLS connections, no handshake was done yet so nothing
          * is written and the connection will just drop. */
@@ -1280,6 +1274,35 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip, int iel) 
         g_pserver->stat_rejected_conn++;
         connClose(conn);
         return;
+    }
+
+    /* Limit the number of connections we take at the same time.
+     *
+     * Admission control will happen before a client is created and connAccept()
+     * called, because we don't want to even start transport-level negotiation
+     * if rejected. */
+    if (listLength(g_pserver->clients) + getClusterConnectionsCount()
+        >= (g_pserver->maxclients - g_pserver->maxclientsReserved))
+    {
+        // Allow the connection if it comes from localhost and we're within the maxclientReserved buffer range
+        if ((listLength(g_pserver->clients) + getClusterConnectionsCount()) >= g_pserver->maxclients || strcmp("127.0.0.1", ip)) {
+            const char *err;
+            if (g_pserver->cluster_enabled)
+                err = "-ERR max number of clients + cluster "
+                    "connections reached\r\n";
+            else
+                err = "-ERR max number of clients reached\r\n";
+
+            /* That's a best effort error message, don't check write errors.
+            * Note that for TLS connections, no handshake was done yet so nothing
+            * is written and the connection will just drop. */
+            if (connWrite(conn,err,strlen(err)) == -1) {
+                /* Nothing to do, Just to avoid the warning... */
+            }
+            g_pserver->stat_rejected_conn++;
+            connClose(conn);
+            return;
+        }
     }
 
     /* Create connection and client */
@@ -1810,6 +1833,8 @@ int writeToClient(client *c, int handler_installed) {
        is a replica, so only attempt to do so if that's the case. */
     if (c->flags & CLIENT_SLAVE && !(c->flags & CLIENT_MONITOR) && c->replstate == SLAVE_STATE_ONLINE) {
         std::unique_lock<fastlock> repl_backlog_lock (g_pserver->repl_backlog_lock);
+        // Ensure all writes to the repl backlog are visible
+        std::atomic_thread_fence(std::memory_order_acquire);
 
         while (clientHasPendingReplies(c)) {
             long long repl_end_idx = getReplIndexFromOffset(c->repl_end_off);
@@ -1983,9 +2008,9 @@ void ProcessPendingAsyncWrites()
          * writes may have been signalled without having been copied to the replyAsync buffer,
          * thus causing the buffer to be NULL */ 
         if (c->replyAsync != nullptr){
-            int size = c->replyAsync->used;
+            size_t size = c->replyAsync->used;
 
-            if (listLength(c->reply) == 0 && size <= (PROTO_REPLY_CHUNK_BYTES - c->bufpos)) {
+            if (listLength(c->reply) == 0 && size <= static_cast<size_t>(PROTO_REPLY_CHUNK_BYTES - c->bufpos)) {
                 memcpy(c->buf + c->bufpos, c->replyAsync->buf(), size);
                 c->bufpos += size;
             } else {
@@ -2077,8 +2102,6 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
         * that may trigger write error or recreate handler. */
         if ((flags & CLIENT_PROTECTED) && !(flags & CLIENT_SLAVE)) continue;
 
-        //std::unique_lock<decltype(c->lock)> lock(c->lock);
-
         /* Don't write to clients that are going to be closed anyway. */
         if (c->flags & CLIENT_CLOSE_ASAP) continue;
 
@@ -2096,6 +2119,7 @@ int handleClientsWithPendingWrites(int iel, int aof_state) {
 
         /* If after the synchronous writes above we still have data to
         * output to the client, we need to install the writable handler. */
+        std::unique_lock<decltype(c->lock)> lock(c->lock);
         if (clientHasPendingReplies(c)) {
             if (connSetWriteHandlerWithBarrier(c->conn, sendReplyToClient, ae_flags, true) == C_ERR) {
                 freeClientAsync(c);
@@ -2580,9 +2604,7 @@ void parseClientCommandBuffer(client *c) {
             (g_pserver->m_pstorageFactory || aeLockContested(cserver.cthreads/2) || cserver.cthreads == 1) && !GlobalLocksAcquired()) {
             auto &query = c->vecqueuedcmd.back();
             if (query.argc > 0 && query.argc == query.argcMax) {
-                if (c->db->prefetchKeysAsync(c, query, c->vecqueuedcmd.size() == 1)) {
-                    c->vecqueuedcmd.erase(c->vecqueuedcmd.begin());
-                }
+                c->db->prefetchKeysAsync(c, query);
             }
         }
         c->reqtype = 0;
@@ -2740,11 +2762,12 @@ void readQueryFromClient(connection *conn) {
 
     if (cserver.cthreads > 1 || g_pserver->m_pstorageFactory) {
         parseClientCommandBuffer(c);
-        if (g_pserver->enable_async_commands && !serverTL->disable_async_commands && listLength(g_pserver->monitors) == 0 && (aeLockContention() || serverTL->rgdbSnapshot[c->db->id] || g_fTestMode)) {
+        if (g_pserver->enable_async_commands && !serverTL->disable_async_commands && listLength(g_pserver->monitors) == 0 && (aeLockContention() || serverTL->rgdbSnapshot[c->db->id] || g_fTestMode) && !serverTL->in_eval && !serverTL->in_exec) {
             // Frequent writers aren't good candidates for this optimization, they cause us to renew the snapshot too often
-            //  so we exclude them unless the snapshot we need already exists
+            //  so we exclude them unless the snapshot we need already exists.
+            // Note: In test mode we want to create snapshots as often as possibl to excercise them - we don't care about perf
             bool fSnapshotExists = c->db->mvccLastSnapshot >= c->mvccCheckpoint;
-            bool fWriteTooRecent = (((getMvccTstamp() - c->mvccCheckpoint) >> MVCC_MS_SHIFT) < static_cast<uint64_t>(g_pserver->snapshot_slip)/2);
+            bool fWriteTooRecent = !g_fTestMode && (((getMvccTstamp() - c->mvccCheckpoint) >> MVCC_MS_SHIFT) < static_cast<uint64_t>(g_pserver->snapshot_slip)/2);
 
             // The check below avoids running async commands if this is a frequent writer unless a snapshot is already there to service it
             if (!fWriteTooRecent || fSnapshotExists) {
@@ -3234,14 +3257,16 @@ NULL
                 }
                 else
                 {
-                    int iel = client->iel;
                     freeClientAsync(client);
-                    aePostFunction(g_pserver->rgthreadvar[client->iel].el, [iel] {  // note: failure is OK
-                        freeClientsInAsyncFreeQueue(iel);
-                    });
                 }
             }
             killed++;
+        }
+
+        for (int iel = 0; iel < cserver.cthreads; ++iel) {
+            aePostFunction(g_pserver->rgthreadvar[iel].el, [iel] {  // note: failure is OK
+                freeClientsInAsyncFreeQueue(iel);
+            });
         }
 
         /* Reply according to old/new format. */
@@ -3981,7 +4006,7 @@ void pauseClients(mstime_t end, pause_type type) {
      * to track this state so that we don't assert
      * in propagate(). */
     if (serverTL->in_exec) {
-        g_pserver->client_pause_in_transaction = 1;
+        serverTL->client_pause_in_transaction = 1;
     }
 }
 

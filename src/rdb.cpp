@@ -1163,7 +1163,7 @@ int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEn
 
     char szT[32];
     if (g_pserver->fActiveReplica) {
-        snprintf(szT, 32, "%" PRIu64, mvccFromObj(val));
+        snprintf(szT, sizeof(szT), "%" PRIu64, mvccFromObj(val));
         if (rdbSaveAuxFieldStrStr(rdb,"mvcc-tstamp", szT) == -1) return -1;
     }
 
@@ -1190,7 +1190,7 @@ int rdbSaveKeyValuePair(rio *rdb, robj_roptr key, robj_roptr val, const expireEn
         {
             if (itr.subkey() == nullptr)
                 continue;   // already saved
-            snprintf(szT, 32, "%lld", itr.when());
+            snprintf(szT, sizeof(szT), "%lld", itr.when());
             rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-key",itr.subkey());
             rdbSaveAuxFieldStrStr(rdb,"keydb-subexpire-when",szT);
         }
@@ -1334,7 +1334,7 @@ int rdbSaveRio(rio *rdb, const redisDbPersistentDataSnapshot **rgpdb, int *error
     if (rdbSaveModulesAux(rdb, REDISMODULE_AUX_BEFORE_RDB) == -1) goto werr;
 
     for (j = 0; j < cserver.dbnum; j++) {
-        const redisDbPersistentDataSnapshot *db = rgpdb[j];
+        const redisDbPersistentDataSnapshot *db = rgpdb != nullptr ? rgpdb[j] : g_pserver->db[j];
         if (db->size() == 0) continue;
 
         /* Write the SELECT DB opcode */
@@ -1490,7 +1490,7 @@ int rdbSaveFile(char *filename, const redisDbPersistentDataSnapshot **rgpdb, rdb
     rio rdb;
     int error = 0;
 
-    snprintf(tmpfile,256,"temp-%d-%d.rdb", getpid(), g_pserver->rdbThreadVars.tmpfileNum);
+    getTempFileName(tmpfile, g_pserver->rdbThreadVars.tmpfileNum);
     fp = fopen(tmpfile,"w");
     if (!fp) {
         char *cwdp = getcwd(cwd,MAXPATHLEN);
@@ -1657,13 +1657,20 @@ int launchRdbSaveThread(pthread_t &child, rdbSaveInfo *rsi)
 
         g_pserver->rdbThreadVars.tmpfileNum++;
         g_pserver->rdbThreadVars.fRdbThreadCancel = false;
-        if (pthread_create(&child, NULL, rdbSaveThread, args)) {
+        pthread_attr_t tattr;
+        pthread_attr_init(&tattr);
+        pthread_attr_setstacksize(&tattr, 1 << 23); // 8 MB
+        openChildInfoPipe();
+        if (pthread_create(&child, &tattr, rdbSaveThread, args)) {
+            pthread_attr_destroy(&tattr);
             for (int idb = 0; idb < cserver.dbnum; ++idb)
                 g_pserver->db[idb]->endSnapshot(args->rgpdb[idb]);
             args->~rdbSaveThreadArgs();
             zfree(args);
+            closeChildInfoPipe();
             return C_ERR;
         }
+        pthread_attr_destroy(&tattr);
         g_pserver->child_type = CHILD_TYPE_RDB;
     }
     return C_OK;
@@ -1674,24 +1681,23 @@ int rdbSaveBackground(rdbSaveInfo *rsi) {
     pthread_t child;
     long long start;
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveChildProcessOrBGSave()) return C_ERR;
 
     g_pserver->dirty_before_bgsave = g_pserver->dirty;
     g_pserver->lastbgsave_try = time(NULL);
-    openChildInfoPipe();
 
     start = ustime();
+    latencyStartMonitor(g_pserver->rdb_save_latency);
 
-    
-    g_pserver->stat_fork_time = ustime()-start;
-    g_pserver->stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / g_pserver->stat_fork_time / (1024*1024*1024); /* GB per second. */
     if (launchRdbSaveThread(child, rsi) != C_OK) {
-        closeChildInfoPipe();
         g_pserver->lastbgsave_status = C_ERR;
         serverLog(LL_WARNING,"Can't save in background: fork: %s",
             strerror(errno));
         return C_ERR;
     }
+
+    g_pserver->stat_fork_time = ustime()-start;
+    g_pserver->stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / g_pserver->stat_fork_time / (1024*1024*1024); /* GB per second. */
     latencyAddSampleIfNeeded("fork",g_pserver->stat_fork_time/1000);
     serverLog(LL_NOTICE,"Background saving started");
     g_pserver->rdb_save_time_start = time(NULL);
@@ -1709,7 +1715,7 @@ void getTempFileName(char tmpfile[], int tmpfileNum) {
     char tmpfileNumString[214];
 
     /* Generate temp rdb file name using aync-signal safe functions. */
-    int pid_len = ll2string(pid, sizeof(pid), getpid());
+    int pid_len = ll2string(pid, sizeof(pid), g_pserver->in_fork_child ? getppid() : getpid());
     int tmpfileNum_len = ll2string(tmpfileNumString, sizeof(tmpfileNumString), tmpfileNum);
     strcpy(tmpfile, "temp-");
     strncpy(tmpfile+5, pid, pid_len);
@@ -3049,7 +3055,9 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         (r->keys_since_last_callback >= g_pserver->loading_process_events_interval_keys)))
     {
         rdbAsyncWorkThread *pwthread = reinterpret_cast<rdbAsyncWorkThread*>(r->chksum_arg);
-        bool fUpdateReplication = (g_pserver->mstime - r->last_update) > 1000;
+        mstime_t mstime;
+        __atomic_load(&g_pserver->mstime, &mstime, __ATOMIC_RELAXED);
+        bool fUpdateReplication = (mstime - r->last_update) > 1000;
 
         if (fUpdateReplication) {
             listIter li;
@@ -3108,13 +3116,12 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     std::unique_ptr<rdbInsertJob> spjob;
 
     // If we're tracking changes we need to reset this
-    bool fTracking = g_pserver->db[0]->FTrackingChanges();
-    if (fTracking) {
-        // We don't want to track here because processChangesAsync is outside the normal scope handling
-        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+    std::vector<bool> fTracking(cserver.dbnum);
+    // We don't want to track here because processChangesAsync is outside the normal scope handling
+    for (int idb = 0; idb < cserver.dbnum; ++idb) {
+        if ((fTracking[idb] = g_pserver->db[idb]->FTrackingChanges()))
             if (g_pserver->db[idb]->processChanges(false))
                 g_pserver->db[idb]->commitChanges();
-        }
     }
 
     rdb->update_cksum = rdbLoadProgressCallback;
@@ -3482,11 +3489,10 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     }
 
     wqueue.endWork();
-    if (fTracking) {
-        // Reset track changes
-        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+    // Reset track changes
+    for (int idb = 0; idb < cserver.dbnum; ++idb) {
+        if (fTracking[idb])
             g_pserver->db[idb]->trackChanges(false);
-        }
     }
     if (empty_keys_skipped) {
         serverLog(LL_WARNING,
@@ -3504,11 +3510,10 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
      * the RDB file from a socket during initial SYNC (diskless replica mode),
      * we'll report the error to the caller, so that we can retry. */
 eoferr:
-    if (fTracking) {
         // Reset track changes
-        for (int idb = 0; idb < cserver.dbnum; ++idb) {
+    for (int idb = 0; idb < cserver.dbnum; ++idb) {
+        if (fTracking[idb])
             g_pserver->db[idb]->trackChanges(false);
-        }
     }
 
     wqueue.endWork();
@@ -3597,6 +3602,8 @@ static void backgroundSaveDoneHandlerDisk(int exitcode, bool fCancelled) {
         g_pserver->dirty = g_pserver->dirty - g_pserver->dirty_before_bgsave;
         g_pserver->lastsave = time(NULL);
         g_pserver->lastbgsave_status = C_OK;
+        latencyEndMonitor(g_pserver->rdb_save_latency);
+        latencyAddSampleIfNeeded("rdb-save",g_pserver->rdb_save_latency);
     } else if (!fCancelled && exitcode != 0) {
         serverLog(LL_WARNING, "Background saving error");
         g_pserver->lastbgsave_status = C_ERR;
@@ -3687,7 +3694,7 @@ void killRDBChild(bool fSynchronous) {
     serverAssert(GlobalLocksAcquired());
 
     if (cserver.fForkBgSave) {
-        kill(g_pserver->rdb_child_pid,SIGUSR1);
+        kill(g_pserver->child_pid,SIGUSR1);
     } else { 
         g_pserver->rdbThreadVars.fRdbThreadCancel = true;
         if (g_pserver->rdb_child_type == RDB_CHILD_TYPE_SOCKET) {
@@ -3778,7 +3785,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     int pipefds[2];
     rdbSaveSocketThreadArgs *args = nullptr;
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveChildProcessOrBGSave()) return C_ERR;
 
     /* Even if the previous fork child exited, don't start a new one until we
      * drained the pipe. */
@@ -3825,52 +3832,130 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     }
 
     /* Create the child process. */
-    openChildInfoPipe();
+    if (cserver.fForkBgSave) {
+        pid_t childpid;
+        if ((childpid = redisFork(CHILD_TYPE_RDB)) == 0) {
+            /* Child */
+            int retval, dummy;
+            rio rdb;
 
-    for (int idb = 0; idb < cserver.dbnum; ++idb)
-        args->rgpdb[idb] = g_pserver->db[idb]->createSnapshot(getMvccTstamp(), false /*fOptional*/);
+            rioInitWithFd(&rdb,args->rdb_pipe_write);
 
-    g_pserver->rdbThreadVars.tmpfileNum++;
-    g_pserver->rdbThreadVars.fRdbThreadCancel = false;
-    if (pthread_create(&child, nullptr, rdbSaveToSlavesSocketsThread, args)) {
-        serverLog(LL_WARNING,"Can't save in background: fork: %s",
-            strerror(errno));
+            redisSetProcTitle("keydb-rdb-to-slaves");
+            redisSetCpuAffinity(g_pserver->bgsave_cpulist);
 
-        /* Undo the state change. The caller will perform cleanup on
-            * all the slaves in BGSAVE_START state, but an early call to
-            * replicationSetupSlaveForFullResync() turned it into BGSAVE_END */
-        listRewind(g_pserver->slaves,&li);
-        while((ln = listNext(&li))) {
-            client *replica = (client*)ln->value;
-            if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
-                replica->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
+            retval = rdbSaveRioWithEOFMark(&rdb,nullptr,nullptr,rsi);
+            if (retval == C_OK && rioFlush(&rdb) == 0)
+                retval = C_ERR;
+
+            if (retval == C_OK) {
+                sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
             }
-        }
-        close(args->rdb_pipe_write);
-        close(g_pserver->rdb_pipe_read);
-        zfree(g_pserver->rdb_pipe_conns);
-        close(args->safe_to_exit_pipe);
-        g_pserver->rdb_pipe_conns = NULL;
-        g_pserver->rdb_pipe_numconns = 0;
-        g_pserver->rdb_pipe_numconns_writing = 0;
-        args->rsi.~rdbSaveInfo();
-        zfree(args);
-        closeChildInfoPipe();
-        return C_ERR;
-    }
-    g_pserver->child_type = CHILD_TYPE_RDB;
 
-    serverLog(LL_NOTICE,"Background RDB transfer started");
-    g_pserver->rdb_save_time_start = time(NULL);
-    serverAssert(!g_pserver->rdbThreadVars.fRdbThreadActive);
-    g_pserver->rdbThreadVars.rdb_child_thread = child;
-    g_pserver->rdbThreadVars.fRdbThreadActive = true;
-    g_pserver->rdb_child_type = RDB_CHILD_TYPE_SOCKET;
-    aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, []{
-        if (aeCreateFileEvent(serverTL->el, g_pserver->rdb_pipe_read, AE_READABLE, rdbPipeReadHandler,NULL) == AE_ERR) {
-            serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
+            rioFreeFd(&rdb);
+            /* wake up the reader, tell it we're done. */
+            close(args->rdb_pipe_write);
+            close(g_pserver->rdb_child_exit_pipe); /* close write end so that we can detect the close on the parent. */
+            /* hold exit until the parent tells us it's safe. we're not expecting
+            * to read anything, just get the error when the pipe is closed. */
+            dummy = read(args->safe_to_exit_pipe, pipefds, 1);
+            UNUSED(dummy);
+            exitFromChild((retval == C_OK) ? 0 : 1);
+        } else {
+            /* Parent */
+            close(args->safe_to_exit_pipe);
+            if (childpid == -1) {
+                serverLog(LL_WARNING,"Can't save in background: fork: %s",
+                    strerror(errno));
+
+                /* Undo the state change. The caller will perform cleanup on
+                * all the slaves in BGSAVE_START state, but an early call to
+                * replicationSetupSlaveForFullResync() turned it into BGSAVE_END */
+                listRewind(g_pserver->slaves,&li);
+                while((ln = listNext(&li))) {
+                    client *replica = (client*)ln->value;
+                    if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
+                        replica->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
+                    }
+                }
+                close(args->rdb_pipe_write);
+                close(g_pserver->rdb_pipe_read);
+                zfree(g_pserver->rdb_pipe_conns);
+                g_pserver->rdb_pipe_conns = NULL;
+                g_pserver->rdb_pipe_numconns = 0;
+                g_pserver->rdb_pipe_numconns_writing = 0;
+                args->rsi.~rdbSaveInfo();
+                zfree(args);
+            } else {
+                serverLog(LL_NOTICE,"Background RDB transfer started by pid %ld",
+                    (long)childpid);
+                g_pserver->rdb_save_time_start = time(NULL);
+                g_pserver->rdb_child_type = RDB_CHILD_TYPE_SOCKET;
+                g_pserver->rdbThreadVars.fRdbThreadActive = true;
+                updateDictResizePolicy();
+                close(args->rdb_pipe_write); /* close write in parent so that it can detect the close on the child. */
+                aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, []{
+                    if (aeCreateFileEvent(serverTL->el, g_pserver->rdb_pipe_read, AE_READABLE, rdbPipeReadHandler, nullptr) == AE_ERR) {
+                        serverPanic("Unrecoverable error creating g_pserver->rdb_pipe_read file event.");
+                    }
+                });
+            }
+            return (childpid == -1) ? C_ERR : C_OK;
         }
-    });
+    }
+    else {
+        openChildInfoPipe();
+
+        for (int idb = 0; idb < cserver.dbnum; ++idb)
+            args->rgpdb[idb] = g_pserver->db[idb]->createSnapshot(getMvccTstamp(), false /*fOptional*/);
+
+        g_pserver->rdbThreadVars.tmpfileNum++;
+        g_pserver->rdbThreadVars.fRdbThreadCancel = false;
+        pthread_attr_t tattr;
+        pthread_attr_init(&tattr);
+        pthread_attr_setstacksize(&tattr, 1 << 23); // 8 MB
+        if (pthread_create(&child, &tattr, rdbSaveToSlavesSocketsThread, args)) {
+            pthread_attr_destroy(&tattr);
+            serverLog(LL_WARNING,"Can't save in background: fork: %s",
+                strerror(errno));
+
+            /* Undo the state change. The caller will perform cleanup on
+                * all the slaves in BGSAVE_START state, but an early call to
+                * replicationSetupSlaveForFullResync() turned it into BGSAVE_END */
+            listRewind(g_pserver->slaves,&li);
+            while((ln = listNext(&li))) {
+                client *replica = (client*)ln->value;
+                if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
+                    replica->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
+                }
+            }
+            close(args->rdb_pipe_write);
+            close(g_pserver->rdb_pipe_read);
+            zfree(g_pserver->rdb_pipe_conns);
+            close(args->safe_to_exit_pipe);
+            g_pserver->rdb_pipe_conns = NULL;
+            g_pserver->rdb_pipe_numconns = 0;
+            g_pserver->rdb_pipe_numconns_writing = 0;
+            args->rsi.~rdbSaveInfo();
+            zfree(args);
+            closeChildInfoPipe();
+            return C_ERR;
+        }
+        pthread_attr_destroy(&tattr);
+        g_pserver->child_type = CHILD_TYPE_RDB;
+
+        serverLog(LL_NOTICE,"Background RDB transfer started");
+        g_pserver->rdb_save_time_start = time(NULL);
+        serverAssert(!g_pserver->rdbThreadVars.fRdbThreadActive);
+        g_pserver->rdbThreadVars.rdb_child_thread = child;
+        g_pserver->rdbThreadVars.fRdbThreadActive = true;
+        g_pserver->rdb_child_type = RDB_CHILD_TYPE_SOCKET;
+        aePostFunction(g_pserver->rgthreadvar[IDX_EVENT_LOOP_MAIN].el, []{
+            if (aeCreateFileEvent(serverTL->el, g_pserver->rdb_pipe_read, AE_READABLE, rdbPipeReadHandler, nullptr) == AE_ERR) {
+                serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
+            }
+        });
+    }
 
     return C_OK; /* Unreached. */
 }

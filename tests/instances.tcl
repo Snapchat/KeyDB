@@ -21,6 +21,7 @@ set ::tls 0
 set ::pause_on_error 0
 set ::dont_clean 0
 set ::simulate_error 0
+set ::flash 0
 set ::failed 0
 set ::sentinel_instances {}
 set ::redis_instances {}
@@ -79,6 +80,10 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
             set cfg [open $cfgfile a+]
         } else {
             set cfg [open $cfgfile w]
+        }
+
+        if {$::flash} {
+            puts $cfg "storage-provider flash ./flash_$base_port"
         }
 
         if {$::tls} {
@@ -266,6 +271,8 @@ proc parse_options {} {
             set val2 [lindex $::argv [expr $j+2]]
             dict set ::global_config $val $val2
             incr j 2
+        } elseif {$opt eq {--flash}} {
+            set ::flash 1
         } elseif {$opt eq "--help"} {
             puts "--single <pattern>      Only runs tests specified by pattern."
             puts "--dont-clean            Keep log files on exit."
@@ -275,6 +282,7 @@ proc parse_options {} {
             puts "--tls                   Run tests in TLS mode."
             puts "--host <host>           Use hostname instead of 127.0.0.1."
             puts "--config <k> <v>        Extra config argument(s)."
+            puts "--flash                 Run the whole suite with flash enabled"
             puts "--help                  Shows this help."
             exit 0
         } else {
@@ -301,11 +309,15 @@ proc pause_on_error {} {
             break
         } elseif {$cmd eq {show-keydb-logs}} {
             set count 10
+            set instance {}
             if {[lindex $argv 1] ne {}} {set count [lindex $argv 1]}
+            if {[lindex $argv 2] ne {}} {set instance [lindex $argv 2]}
             foreach_redis_id id {
-                puts "=== KeyDB $id ===="
-                puts [exec tail -$count redis_$id/log.txt]
-                puts "---------------------\n"
+                if {$instance eq $id || $instance eq {}} {
+                    puts "=== KeyDB $id ===="
+                    puts [exec tail -$count redis_$id/log.txt]
+                    puts "---------------------\n"
+                }
             }
         } elseif {$cmd eq {show-sentinel-logs}} {
             set count 10
@@ -350,7 +362,7 @@ proc pause_on_error {} {
         } elseif {$cmd eq {help}} {
             puts "ls                     List Sentinel and KeyDB instances."
             puts "show-sentinel-logs \[N\] Show latest N lines of logs."
-            puts "show-keydb-logs \[N\]    Show latest N lines of logs."
+            puts "show-keydb-logs \[N\] \[id\]    Show latest N lines of logs of server id."
             puts "S <id> cmd ... arg     Call command in Sentinel <id>."
             puts "R <id> cmd ... arg     Call command in KeyDB <id>."
             puts "SI <id> <field>        Show Sentinel <id> INFO <field>."

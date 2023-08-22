@@ -97,9 +97,6 @@ extern "C" {
 #define CC_FORCE (1<<0)         /* Re-connect if already connected. */
 #define CC_QUIET (1<<1)         /* Don't log connecting errors. */
 
-struct clusterManagerLink;
-typedef struct clusterManagerLink clusterManagerLink;
-
 /* Dict Helpers */
 
 uint64_t dictSdsHash(const void *key);
@@ -198,6 +195,7 @@ extern struct config {
     int in_multi;
     int pre_multi_dbnum;
     int quoted_input;   /* Force input args to be treated as quoted strings */
+    int force_mode;
 } config;
 
 struct clusterManager {
@@ -285,7 +283,7 @@ int clusterManagerFixOpenSlot(int slot);
 void clusterManagerPrintSlotsList(list *slots);
 int clusterManagerGetCoveredSlots(char *all_slots);
 void clusterManagerOnError(sds err);
-int clusterManagerIsConfigConsistent(void);
+int clusterManagerIsConfigConsistent(int fLog);
 void freeClusterManagerNode(clusterManagerNode *node);
 void clusterManagerLog(int level, const char* fmt, ...);
 int parseClusterNodeAddress(char *addr, char **ip_ptr, int *port_ptr,

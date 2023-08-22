@@ -136,12 +136,12 @@ void SnapshotPayloadParseState::flushQueuedKeys() {
     int idb = current_database;
     serverAssert(vecqueuedKeys.size() == vecqueuedVals.size());
     auto sizePrev = vecqueuedKeys.size();
-    ++insertsInFlight;
-    auto &insertsInFlightTmp = insertsInFlight; // C++ GRRRRRRRRRRRRRRRR, we don't want to capute "this" because that's dangerous
+    (*insertsInFlight)++;
+    std::weak_ptr<std::atomic<int>> insertsInFlightTmp = insertsInFlight; // C++ GRRRRRRRRRRRRRRRR, we don't want to capute "this" because that's dangerous
     if (current_database < cserver.dbnum) {
-        g_pserver->asyncworkqueue->AddWorkFunction([idb, vecqueuedKeys = std::move(this->vecqueuedKeys), vecqueuedKeysCb = std::move(this->vecqueuedKeysCb), vecqueuedVals = std::move(this->vecqueuedVals), vecqueuedValsCb = std::move(this->vecqueuedValsCb), &insertsInFlightTmp, pallocator = m_spallocator.release()]() mutable {
-            g_pserver->db[idb]->bulkStorageInsert(vecqueuedKeys.data(), vecqueuedKeysCb.data(), vecqueuedVals.data(), vecqueuedValsCb.data(), vecqueuedKeys.size());
-            --insertsInFlightTmp;
+        g_pserver->asyncworkqueue->AddWorkFunction([idb, vecqueuedKeys = std::move(this->vecqueuedKeys), vecqueuedKeysCb = std::move(this->vecqueuedKeysCb), vecqueuedVals = std::move(this->vecqueuedVals), vecqueuedValsCb = std::move(this->vecqueuedValsCb), insertsInFlightTmp, pallocator = m_spallocator.release()]() mutable {
+            g_pserver->db[idb]->bulkDirectStorageInsert(vecqueuedKeys.data(), vecqueuedKeysCb.data(), vecqueuedVals.data(), vecqueuedValsCb.data(), vecqueuedKeys.size());
+            (*(insertsInFlightTmp.lock()))--;
             delete pallocator;
         });
     } else {
@@ -172,7 +172,7 @@ SnapshotPayloadParseState::SnapshotPayloadParseState() {
 
     dictLongLongMetaData = dictCreate(&metadataLongLongDictType, nullptr);
     dictMetaData = dictCreate(&metadataDictType, nullptr);
-    insertsInFlight = 0;
+    insertsInFlight = std::make_shared<std::atomic<int>>();
     m_spallocator = std::make_unique<SlabAllocator>();
 }
 
@@ -214,7 +214,7 @@ void SnapshotPayloadParseState::trimState() {
     
     if (stackParse.empty()) {
         flushQueuedKeys();
-        while (insertsInFlight > 0) {
+        while (*insertsInFlight > 0) {
             // TODO: ProcessEventsWhileBlocked
             aeReleaseLock();
             aeAcquireLock();

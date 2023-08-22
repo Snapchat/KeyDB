@@ -47,6 +47,7 @@ set ::all_tests {
     integration/replication-3
     integration/replication-4
     integration/replication-psync
+    integration/replication-psync-flash
     integration/replication-active
     integration/replication-multimaster
     integration/replication-multimaster-connect
@@ -59,11 +60,13 @@ set ::all_tests {
     integration/failover
     integration/keydb-cli
     integration/keydb-benchmark
+    integration/replication-fast
     integration/replication-psync-multimaster
     unit/pubsub
     unit/slowlog
     unit/scripting
     unit/maxmemory
+    unit/flash
     unit/introspection
     unit/introspection-2
     unit/limits
@@ -78,6 +81,7 @@ set ::all_tests {
     unit/pendingquerybuf
     unit/tls
     unit/tls-name-validation
+    unit/tls-auditlog
     unit/tracking
     unit/oom-score-adj
     unit/shutdown
@@ -86,6 +90,7 @@ set ::all_tests {
     integration/logging
     integration/corrupt-dump
     integration/corrupt-dump-fuzzer
+    unit/soft_shutdown
 }
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0
@@ -733,6 +738,16 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         puts "Wrong argument: $opt"
         exit 1
     }
+}
+
+# Check if we compiled with flash
+set status [catch {exec src/keydb-server --is-flash-enabled}]
+if {$status == 0} {
+    puts "KeyDB was built with FLASH, including FLASH tests"
+    set ::flash_enabled 1
+} else {
+    puts "KeyDB was not built with FLASH.  Excluding FLASH tests"
+    set ::flash_enabled 0
 }
 
 set filtered_tests {}

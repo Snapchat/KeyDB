@@ -8,6 +8,7 @@ class TestStorageFactory : public IStorageFactory
     virtual class IStorage *createMetadataDb() override;
     virtual const char *name() const override;
     virtual size_t totalDiskspaceUsed() const override { return 0; }
+    virtual sdsstring getInfo() const override { return sdsstring(sdsempty()); }
     virtual bool FSlow() const override { return false; }
 };
 
@@ -24,6 +25,7 @@ public:
     virtual void retrieve(const char *key, size_t cchKey, callbackSingle fn) const override;
     virtual size_t clear() override;
     virtual bool enumerate(callback fn) const override;
+    virtual bool enumerate_hashslot(callback fn, unsigned int hashslot) const override;
     virtual size_t count() const override;
 
     virtual void flush() override;

@@ -95,17 +95,17 @@ JEMALLOC_LDFLAGS= $(LDFLAGS)
 
 jemalloc: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
-	cd jemalloc && ./configure --with-version=5.2.1-0-g0 --with-lg-quantum=3 --with-jemalloc-prefix=je_ --disable-cxx CFLAGS="$(JEMALLOC_CFLAGS)" LDFLAGS="$(JEMALLOC_LDFLAGS)"
+	cd jemalloc && ./configure --with-version=5.2.1-0-g0 --with-lg-quantum=3 --disable-cxx CFLAGS="$(JEMALLOC_CFLAGS)" LDFLAGS="$(JEMALLOC_LDFLAGS)"
 	cd jemalloc && $(MAKE) CFLAGS="$(JEMALLOC_CFLAGS)" LDFLAGS="$(JEMALLOC_LDFLAGS)" lib/libjemalloc.a
 
 .PHONY: jemalloc
 
 rocksdb: .make-prerequisites
-#	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
 ifeq ($(uname_M),x86_64)
-#	cd rocksdb && CFLAGS=-Wno-error PORTABLE=1 USE_SSE=1 FORCE_SSE42=1 $(MAKE) static_lib
+	cd rocksdb && CFLAGS=-Wno-error PORTABLE=1 USE_SSE=1 FORCE_SSE42=1 $(MAKE) static_lib
 else
-#	cd rocksdb && PORTABLE=1 $(MAKE) static_lib
+	cd rocksdb && PORTABLE=1 $(MAKE) static_lib
 endif
 
 .PHONY: rocksdb

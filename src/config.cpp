@@ -35,11 +35,13 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #ifdef __linux__
 #include <sys/sysinfo.h>
 #endif
 
 const char *KEYDB_SET_VERSION = KEYDB_REAL_VERSION;
+size_t g_semiOrderedSetTargetBucketSize = 0;    // Its a header only class so nowhere else for this to go
 
 /*-----------------------------------------------------------------------------
  * Config file name-value maps.
@@ -355,16 +357,17 @@ bool initializeStorageProvider(const char **err)
             return true;
         if (!strcasecmp(g_sdsProvider, "flash") && g_sdsArgs != nullptr)
         {
-            // Temporary: Disable FLASH
-            serverLog(LL_WARNING, "FLASH Is Not yet Supported");
-            _Exit(EXIT_FAILURE);
-
-
+#ifdef ENABLE_ROCKSDB
             // Create The Storage Factory (if necessary)
             serverLog(LL_NOTICE, "Initializing FLASH storage provider (this may take a long time)");
             adjustOpenFilesLimit();
             g_pserver->m_pstorageFactory = CreateRocksDBStorageFactory(g_sdsArgs, cserver.dbnum, cserver.storage_conf, cserver.storage_conf ? strlen(cserver.storage_conf) : 0);
-        }
+#else
+            serverLog(LL_WARNING, "To use the flash storage provider please compile KeyDB with ENABLE_FLASH=yes");
+            serverLog(LL_WARNING, "Exiting due to the use of an unsupported storage provider");
+            exit(EXIT_FAILURE);
+#endif
+	    }
         else if (!strcasecmp(g_sdsProvider, "test") && g_sdsArgs == nullptr)
         {
             g_pserver->m_pstorageFactory = new (MALLOC_LOCAL) TestStorageFactory();
@@ -746,6 +749,18 @@ void loadServerConfigFromString(char *config) {
                 g_pserver->fActiveReplica = CONFIG_DEFAULT_ACTIVE_REPLICA;
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
+            if (listLength(g_pserver->masters) && g_pserver->fActiveReplica) {
+                err = "must not set replica-of config before active-replica config"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0], "multi-master") && argc == 2) {
+            g_pserver->enable_multimaster = yesnotoi(argv[1]);
+            if (g_pserver->enable_multimaster == -1) {
+                g_pserver->enable_multimaster = CONFIG_DEFAULT_ENABLE_MULTIMASTER;
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+            if (listLength(g_pserver->masters) && g_pserver->enable_multimaster) {
+                err = "must not set replica-of config before multi-master config"; goto loaderr;
+            }
         } else if (!strcasecmp(argv[0], "tls-allowlist")) {
             if (argc < 2) {
                 err = "must supply at least one element in the allow list"; goto loaderr;
@@ -755,6 +770,15 @@ void loadServerConfigFromString(char *config) {
             }
             for (int i = 1; i < argc; i++)
                 g_pserver->tls_allowlist.emplace(argv[i], strlen(argv[i]));
+        } else if (!strcasecmp(argv[0], "tls-auditlog-blocklist")) {
+            if (argc < 2) {
+                err = "must supply at least one element in the block list"; goto loaderr;
+            }
+            if (!g_pserver->tls_auditlog_blocklist.empty()) {
+                err = "tls-auditlog-blocklist may only be set once"; goto loaderr;
+            }
+            for (int i = 1; i < argc; i++)
+                g_pserver->tls_auditlog_blocklist.emplace(argv[i], strlen(argv[i]));
         } else if (!strcasecmp(argv[0], "version-override") && argc == 2) {
             KEYDB_SET_VERSION = zstrdup(argv[1]);
             serverLog(LL_WARNING, "Warning version is overriden to: %s\n", KEYDB_SET_VERSION);
@@ -766,6 +790,12 @@ void loadServerConfigFromString(char *config) {
             g_sdsProvider = sdsdup(argv[1]);
             if (argc > 2)
                 g_sdsArgs = sdsdup(argv[2]);
+	    } else if (!strcasecmp(argv[0],"is-flash-enabled") && argc == 1) {
+#ifdef ENABLE_ROCKSDB
+            exit(EXIT_SUCCESS);
+#else
+            exit(EXIT_FAILURE);
+#endif
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -2091,7 +2121,10 @@ static void sdsConfigGet(client *c, typeData data) {
 }
 
 static void sdsConfigRewrite(typeData data, const char *name, struct rewriteConfigState *state) {
-    rewriteConfigSdsOption(state, name, *(data.sds.config), data.sds.default_value ? sdsnew(data.sds.default_value) : NULL);
+    sds sdsDefault = data.sds.default_value ? sdsnew(data.sds.default_value) : NULL;
+    rewriteConfigSdsOption(state, name, *(data.sds.config), sdsDefault);
+    if (sdsDefault)
+        sdsfree(sdsDefault);
 }
 
 
@@ -2448,6 +2481,32 @@ static int isValidAOFfilename(char *val, const char **err) {
     return 1;
 }
 
+static int isValidS3Bucket(char *s3bucket, const char **err) {
+    int status = EXIT_FAILURE;
+    pid_t pid = fork();
+    if (pid < 0)
+    {
+        *err = "couldn't fork to call aws cli";
+        return 0;
+    }
+
+    if (pid == 0)
+    {
+        execlp("aws", "aws", "s3", "ls", s3bucket, nullptr);
+        exit(EXIT_FAILURE);
+    }
+    else 
+    {
+        waitpid(pid, &status, 0);
+    }
+
+    if (status != EXIT_SUCCESS) {
+        *err = "could not access s3 bucket";
+        return 0;
+    }
+    return 1;
+}
+
 /* Validate specified string is a valid proc-title-template */
 static int isValidProcTitleTemplate(char *val, const char **err) {
     if (!validateProcTitleTemplate(val)) {
@@ -2580,7 +2639,7 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
         adjustOpenFilesLimit();
         if (g_pserver->maxclients != val) {
             static char msg[128];
-            sprintf(msg, "The operating system is not able to handle the specified number of clients, try with %d", g_pserver->maxclients);
+            snprintf(msg, sizeof(msg), "The operating system is not able to handle the specified number of clients, try with %d", g_pserver->maxclients);
             *err = msg;
             if (g_pserver->maxclients > prev) {
                 g_pserver->maxclients = prev;
@@ -2619,7 +2678,7 @@ static int updateMaxclients(long long val, long long prev, const char **err) {
 
                 if (res != AE_OK){
                     static char msg[128];
-                    sprintf(msg, "Failed to post the request to change setsize for Thread %d", iel);
+                    snprintf(msg, sizeof(msg),"Failed to post the request to change setsize for Thread %d", iel);
                     *err = msg;
                     return 0;
                 }
@@ -2763,7 +2822,6 @@ standardConfig configs[] = {
     createBoolConfig("replica-serve-stale-data", "slave-serve-stale-data", MODIFIABLE_CONFIG, g_pserver->repl_serve_stale_data, 1, NULL, NULL),
     createBoolConfig("replica-read-only", "slave-read-only", MODIFIABLE_CONFIG, g_pserver->repl_slave_ro, 1, NULL, NULL),
     createBoolConfig("replica-ignore-maxmemory", "slave-ignore-maxmemory", MODIFIABLE_CONFIG, g_pserver->repl_slave_ignore_maxmemory, 1, NULL, NULL),
-    createBoolConfig("multi-master", NULL, IMMUTABLE_CONFIG, g_pserver->enable_multimaster,CONFIG_DEFAULT_ENABLE_MULTIMASTER, NULL, NULL),
     createBoolConfig("jemalloc-bg-thread", NULL, MODIFIABLE_CONFIG, cserver.jemalloc_bg_thread, 1, NULL, updateJemallocBgThread),
     createBoolConfig("activedefrag", NULL, MODIFIABLE_CONFIG, cserver.active_defrag_enabled, 0, isValidActiveDefrag, NULL),
     createBoolConfig("syslog-enabled", NULL, IMMUTABLE_CONFIG, g_pserver->syslog_enabled, 0, NULL, NULL),
@@ -2771,7 +2829,7 @@ standardConfig configs[] = {
     createBoolConfig("appendonly", NULL, MODIFIABLE_CONFIG, g_pserver->aof_enabled, 0, NULL, updateAppendonly),
     createBoolConfig("cluster-allow-reads-when-down", NULL, MODIFIABLE_CONFIG, g_pserver->cluster_allow_reads_when_down, 0, NULL, NULL),
     createBoolConfig("delete-on-evict", NULL, MODIFIABLE_CONFIG, cserver.delete_on_evict, 0, NULL, NULL),
-    createBoolConfig("use-fork", NULL, IMMUTABLE_CONFIG, cserver.fForkBgSave, 0, NULL, NULL),
+    createBoolConfig("use-fork", NULL, IMMUTABLE_CONFIG, cserver.fForkBgSave, 1, NULL, NULL),
     createBoolConfig("io-threads-do-reads", NULL, IMMUTABLE_CONFIG, fDummy, 0, NULL, NULL),
     createBoolConfig("time-thread-priority", NULL, IMMUTABLE_CONFIG, cserver.time_thread_priority, 0, NULL, NULL),
     createBoolConfig("prefetch-enabled", NULL, MODIFIABLE_CONFIG, g_pserver->prefetch_enabled, 1, NULL, NULL),
@@ -2782,7 +2840,7 @@ standardConfig configs[] = {
     createBoolConfig("disable-thp", NULL, MODIFIABLE_CONFIG, g_pserver->disable_thp, 1, NULL, NULL),
     createBoolConfig("cluster-allow-replica-migration", NULL, MODIFIABLE_CONFIG, g_pserver->cluster_allow_replica_migration, 1, NULL, NULL),
     createBoolConfig("replica-announced", NULL, MODIFIABLE_CONFIG, g_pserver->replica_announced, 1, NULL, NULL),
-    createBoolConfig("enable-async-commands", NULL, MODIFIABLE_CONFIG, g_pserver->enable_async_commands, 1, NULL, NULL),
+    createBoolConfig("enable-async-commands", NULL, MODIFIABLE_CONFIG, g_pserver->enable_async_commands, 0, NULL, NULL),
     createBoolConfig("multithread-load-enabled", NULL, MODIFIABLE_CONFIG, g_pserver->multithread_load_enabled, 0, NULL, NULL),
     createBoolConfig("active-client-balancing", NULL, MODIFIABLE_CONFIG, g_pserver->active_client_balancing, 1, NULL, NULL),
 
@@ -2795,6 +2853,7 @@ standardConfig configs[] = {
     createStringConfig("cluster-announce-ip", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->cluster_announce_ip, NULL, NULL, NULL),
     createStringConfig("syslog-ident", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->syslog_ident, "redis", NULL, NULL),
     createStringConfig("dbfilename", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->rdb_filename, CONFIG_DEFAULT_RDB_FILENAME, isValidDBfilename, NULL),
+    createStringConfig("db-s3-object", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->rdb_s3bucketpath, NULL, isValidS3Bucket, NULL),
     createStringConfig("appendfilename", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, g_pserver->aof_filename, "appendonly.aof", isValidAOFfilename, NULL),
     createStringConfig("server_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->server_cpulist, NULL, NULL, NULL),
     createStringConfig("bio_cpulist", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, g_pserver->bio_cpulist, NULL, NULL, NULL),
@@ -2860,6 +2919,7 @@ standardConfig configs[] = {
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, g_pserver->maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
     createUIntConfig("loading-process-events-interval-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->loading_process_events_interval_keys, 8192, MEMORY_CONFIG, NULL, NULL),
+    createUIntConfig("maxclients-reserved", NULL, MODIFIABLE_CONFIG, 0, 100, g_pserver->maxclientsReserved, 0, INTEGER_CONFIG, NULL,  NULL),
 
     /* Unsigned Long configs */
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, cserver.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */
@@ -2873,9 +2933,10 @@ standardConfig configs[] = {
     createLongLongConfig("latency-monitor-threshold", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->latency_monitor_threshold, 0, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("proto-max-bulk-len", NULL, MODIFIABLE_CONFIG, 1024*1024, LLONG_MAX, g_pserver->proto_max_bulk_len, 512ll*1024*1024, MEMORY_CONFIG, NULL, NULL), /* Bulk request max size */
     createLongLongConfig("stream-node-max-entries", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->stream_node_max_entries, 100, INTEGER_CONFIG, NULL, NULL),
-    createLongLongConfig("repl-backlog-size", NULL, MODIFIABLE_CONFIG, 1, LLONG_MAX, g_pserver->repl_backlog_size, 1024*1024, MEMORY_CONFIG, NULL, updateReplBacklogSize), /* Default: 1mb */
+    createLongLongConfig("repl-backlog-size", NULL, MODIFIABLE_CONFIG, 1, LLONG_MAX, g_pserver->repl_backlog_config_size, 1024*1024, MEMORY_CONFIG, NULL, updateReplBacklogSize), /* Default: 1mb */
     createLongLongConfig("repl-backlog-disk-reserve", NULL, IMMUTABLE_CONFIG, 0, LLONG_MAX, cserver.repl_backlog_disk_size, 0, MEMORY_CONFIG, NULL, NULL),
     createLongLongConfig("max-snapshot-slip", NULL, MODIFIABLE_CONFIG, 0, 5000, g_pserver->snapshot_slip, 400, 0, NULL, NULL),
+    createLongLongConfig("max-rand-count", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX/2, g_pserver->rand_total_threshold, LONG_MAX/2, 0, NULL, NULL),
 
     /* Unsigned Long Long configs */
     createULongLongConfig("maxmemory", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->maxmemory, 0, MEMORY_CONFIG, NULL, updateMaxmemory),
@@ -2902,6 +2963,12 @@ standardConfig configs[] = {
     createBoolConfig("multi-master-no-forward", NULL, MODIFIABLE_CONFIG, cserver.multimaster_no_forward, 0, validateMultiMasterNoForward, NULL),
     createBoolConfig("allow-write-during-load", NULL, MODIFIABLE_CONFIG, g_pserver->fWriteDuringActiveLoad, 0, NULL, NULL),
     createBoolConfig("force-backlog-disk-reserve", NULL, MODIFIABLE_CONFIG, cserver.force_backlog_disk, 0, NULL, NULL),
+    createBoolConfig("soft-shutdown", NULL, MODIFIABLE_CONFIG, g_pserver->config_soft_shutdown, 0, NULL, NULL),
+    createBoolConfig("flash-disable-key-cache", NULL, MODIFIABLE_CONFIG, g_pserver->flash_disable_key_cache, 0, NULL, NULL),
+    createSizeTConfig("semi-ordered-set-bucket-size", NULL, MODIFIABLE_CONFIG, 0, 1024, g_semiOrderedSetTargetBucketSize, 0, INTEGER_CONFIG, NULL, NULL),
+    createSDSConfig("availability-zone", NULL, MODIFIABLE_CONFIG, 0, g_pserver->sdsAvailabilityZone, "", NULL, NULL),
+    createIntConfig("overload-protect-percent", NULL, MODIFIABLE_CONFIG, 0, 200, g_pserver->overload_protect_threshold, 0, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("force-eviction-percent", NULL, MODIFIABLE_CONFIG, 0, 100, g_pserver->force_eviction_percent, 0, INTEGER_CONFIG, NULL, NULL),
 
 #ifdef USE_OPENSSL
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->tls_port, 0, INTEGER_CONFIG, NULL, updateTLSPort), /* TCP port. */

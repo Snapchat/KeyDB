@@ -20,12 +20,12 @@ release_hdr := $(shell sh -c './mkreleasehdr.sh')
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
 uname_M := $(shell sh -c 'uname -m 2>/dev/null || echo not')
 OPTIMIZATION?=-O2 -flto
-DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram rocksdb
+DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram
 NODEPS:=clean distclean
 
 # Default settings
 STD=-pedantic -DREDIS_STATIC=''
-CXX_STD=-std=c++14 -pedantic -fno-rtti -D__STDC_FORMAT_MACROS  
+CXX_STD=-std=c++17 -pedantic -fno-rtti -D__STDC_FORMAT_MACROS  
 ifneq (,$(findstring clang,$(CC)))
   STD+=-Wno-c11-extensions
 else
@@ -62,6 +62,7 @@ endif
 endif
 
 USEASM?=true
+ENABLE_FLASH?=no
 
 ifneq ($(strip $(SANITIZE)),)
 	CFLAGS+= -fsanitize=$(SANITIZE) -DSANITIZE  -fno-omit-frame-pointer
@@ -70,6 +71,15 @@ ifneq ($(strip $(SANITIZE)),)
 	MALLOC=libc
 	USEASM=false
 endif
+
+ifeq ($(ENABLE_FLASH),yes)
+	FINAL_LIBS+= -lz -lcrypto -lbz2 -lzstd -llz4 -lsnappy
+	CXXFLAGS+= -I../deps/rocksdb/include/ -DENABLE_ROCKSDB
+	STORAGE_OBJ+= storage/rocksdb.o storage/rocksdbfactory.o
+	FINAL_LIBS+= ../deps/rocksdb/librocksdb.a 
+	DEPENDENCY_TARGETS+= rocksdb
+endif
+
 
 ifeq ($(CHECKED),true)
 	CXXFLAGS+= -DCHECKED_BUILD
@@ -135,7 +145,9 @@ FINAL_LDFLAGS=$(LDFLAGS) $(KEYDB_LDFLAGS) $(DEBUG)
 FINAL_LIBS+=-lm -lz -lcrypto
 
 ifneq ($(uname_S),Darwin)
+    ifneq ($(uname_S),FreeBSD)
 	FINAL_LIBS+=-latomic
+    endif
 endif
 # Linux ARM32 needs -latomic at linking time
 ifneq (,$(findstring armv,$(uname_M)))
@@ -201,7 +213,13 @@ ifeq ($(uname_S),NetBSD)
 else
 ifeq ($(uname_S),FreeBSD)
 	# FreeBSD
-	FINAL_LIBS+= -lpthread -lexecinfo
+	FINAL_LIBS+= -lpthread -luuid -lexecinfo
+	FINAL_CFLAGS+= -I/usr/local/include
+	FINAL_CXXFLAGS+= -I/usr/local/include
+	FINAL_LDFLAGS+= -L/usr/local/lib
+	ifeq ($(USE_BACKTRACE),yes)
+	    FINAL_CFLAGS+= -DUSE_BACKTRACE
+	endif
 else
 ifeq ($(uname_S),DragonFly)
 	# DragonFly
@@ -366,7 +384,7 @@ endif
 
 REDIS_SERVER_NAME=keydb-server$(PROG_SUFFIX)
 REDIS_SENTINEL_NAME=keydb-sentinel$(PROG_SUFFIX)
-REDIS_SERVER_OBJ=adlist.o quicklist.o ae.o anet.o dict.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o t_nhash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o crc16.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o acl.o storage.o rdb-s3.o fastlock.o new.o tracking.o cron.o connection.o tls.o sha256.o motd_server.o timeout.o setcpuaffinity.o AsyncWorkQueue.o snapshot.o storage/teststorageprovider.o keydbutils.o StorageCache.o monotonic.o cli_common.o mt19937-64.o $(ASM_OBJ)
+REDIS_SERVER_OBJ=adlist.o quicklist.o ae.o anet.o dict.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o t_nhash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o crc16.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o acl.o storage.o rdb-s3.o fastlock.o new.o tracking.o cron.o connection.o tls.o sha256.o motd_server.o timeout.o setcpuaffinity.o AsyncWorkQueue.o snapshot.o storage/teststorageprovider.o keydbutils.o StorageCache.o monotonic.o cli_common.o mt19937-64.o meminfo.o $(ASM_OBJ) $(STORAGE_OBJ)
 KEYDB_SERVER_OBJ=SnapshotPayloadParseState.o
 REDIS_CLI_NAME=keydb-cli$(PROG_SUFFIX)
 REDIS_CLI_OBJ=anet.o adlist.o dict.o redis-cli.o redis-cli-cpphelper.o zmalloc.o release.o anet.o ae.o crcspeed.o crc64.o siphash.o crc16.o storage-lite.o fastlock.o motd_client.o monotonic.o cli_common.o mt19937-64.o $(ASM_OBJ)

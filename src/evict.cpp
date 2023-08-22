@@ -380,7 +380,7 @@ size_t freeMemoryGetNotCountedMemory(void) {
 
     /* also don't count the replication backlog memory
      * that's where the replication clients get their memory from */
-    overhead += g_pserver->repl_backlog_size;
+    overhead += g_pserver->repl_backlog_size - g_pserver->repl_backlog_config_size;
 
     if (g_pserver->aof_state != AOF_OFF) {
         overhead += sdsalloc(g_pserver->aof_buf)+aofRewriteBufferSize();
@@ -411,8 +411,13 @@ size_t freeMemoryGetNotCountedMemory(void) {
  *              memory currently used. May be > 1 if we are over the memory
  *              limit.
  *              (Populated both for C_ERR and C_OK)
+ * 
+ *  'reason'    the reason why the memory limit was exceeded
+ *              EVICT_REASON_USER: reported user memory exceeded maxmemory
+ *              EVICT_REASON_SYS: available system memory under configurable threshold 
+ *              (Populated when C_ERR is returned)
  */
-int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, bool fQuickCycle, bool fPreSnapshot) {
+int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, EvictReason *reason, bool fQuickCycle, bool fPreSnapshot) {
     size_t mem_reported, mem_used, mem_tofree;
 
     /* Check if we are over the memory usage limit. If we are not, no need
@@ -421,9 +426,21 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     if (total) *total = mem_reported;
     size_t maxmemory = g_pserver->maxmemory;
     if (fPreSnapshot)
-        maxmemory = static_cast<size_t>(maxmemory * 0.9);   // derate memory by 10% since we won't be able to free during snapshot
-    if (g_pserver->FRdbSaveInProgress())
+        maxmemory = static_cast<size_t>(maxmemory*0.9);   // derate memory by 10% since we won't be able to free during snapshot
+    if (g_pserver->FRdbSaveInProgress() && !cserver.fForkBgSave)
         maxmemory = static_cast<size_t>(maxmemory*1.2);
+
+    /* If available system memory is below a certain threshold, force eviction */
+    long long sys_available_mem_buffer = 0;
+    if (g_pserver->force_eviction_percent && g_pserver->cron_malloc_stats.sys_total) {
+        float available_mem_ratio = (float)(100 - g_pserver->force_eviction_percent)/100;
+        size_t min_available_mem = static_cast<size_t>(g_pserver->cron_malloc_stats.sys_total * available_mem_ratio);
+        sys_available_mem_buffer = static_cast<long>(g_pserver->cron_malloc_stats.sys_available - min_available_mem);
+        if (sys_available_mem_buffer < 0) {
+            long long mem_threshold = mem_reported + sys_available_mem_buffer;
+            maxmemory = ((long long)maxmemory < mem_threshold) ? maxmemory : static_cast<size_t>(mem_threshold);
+        }
+    }
 
     /* We may return ASAP if there is no need to compute the level. */
     int return_ok_asap = !maxmemory || mem_reported <= maxmemory;
@@ -434,6 +451,12 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     mem_used = mem_reported;
     size_t overhead = freeMemoryGetNotCountedMemory();
     mem_used = (mem_used > overhead) ? mem_used-overhead : 0;
+
+     /* If system available memory is too low, we want to force evictions no matter
+     * what so we also offset the overhead from maxmemory. */
+    if (sys_available_mem_buffer < 0) {
+        maxmemory = (maxmemory > overhead) ? maxmemory-overhead : 0;
+    }
 
     /* Compute the ratio of memory usage. */
     if (level) {
@@ -459,6 +482,8 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     if (logical) *logical = mem_used;
     if (tofree) *tofree = mem_tofree;
 
+    if (reason) *reason = sys_available_mem_buffer < 0 ? EvictReason::System : EvictReason::User;
+
     return C_ERR;
 }
 
@@ -483,6 +508,7 @@ public:
             for (auto de : pair.second) {
                 dictFreeUnlinkedEntry(pair.first, de);
             }
+            dictRelease(pair.first);
         }
         aeReleaseLock();
         --s_clazyFreesInProgress;
@@ -513,6 +539,7 @@ public:
         );
         if (itr == vecdictvecde.end() || itr->first != d) {
             itr = vecdictvecde.insert(itr, std::make_pair(d, std::vector<dictEntry*>()));
+            __atomic_fetch_add(&d->refcount, 1, __ATOMIC_ACQ_REL);
         }
         serverAssert(itr->first == d);
         itr->second.push_back(de);
@@ -552,7 +579,7 @@ static int evictionTimeProc(
     UNUSED(clientData);
     serverAssert(GlobalLocksAcquired());
 
-    if (performEvictions(false) == EVICT_RUNNING) return 0;  /* keep evicting */
+    if (performEvictions((bool)clientData) == EVICT_RUNNING) return 0;  /* keep evicting */
 
     /* For EVICT_OK - things are good, no need to keep evicting.
      * For EVICT_FAIL - there is nothing left to evict.  */
@@ -602,6 +629,12 @@ static unsigned long evictionTimeLimitUs() {
     return ULONG_MAX;   /* No limit to eviction time */
 }
 
+static void updateSysAvailableMemory() {
+    if (g_pserver->force_eviction_percent) {
+        g_pserver->cron_malloc_stats.sys_available = getMemAvailable();
+    }
+}
+
 /* Check that memory usage is within the current "maxmemory" limit.  If over
  * "maxmemory", attempt to free memory by evicting data (if it's safe to do so).
  *
@@ -639,10 +672,11 @@ int performEvictions(bool fPreSnapshot) {
     const bool fEvictToStorage = !cserver.delete_on_evict && g_pserver->db[0]->FStorageProvider();
     int result = EVICT_FAIL;
     int ckeysFailed = 0;
+    EvictReason evictReason;
 
     std::unique_ptr<FreeMemoryLazyFree> splazy = std::make_unique<FreeMemoryLazyFree>();
 
-    if (getMaxmemoryState(&mem_reported,NULL,&mem_tofree,NULL,false,fPreSnapshot) == C_OK)
+    if (getMaxmemoryState(&mem_reported,NULL,&mem_tofree,NULL,&evictReason,false,fPreSnapshot) == C_OK)
         return EVICT_OK;
 
     if (g_pserver->maxmemory_policy == MAXMEMORY_NO_EVICTION)
@@ -771,6 +805,7 @@ int performEvictions(bool fPreSnapshot) {
                 if (db->removeCachedValue(bestkey, &deT)) {
                     mem_freed += splazy->addEntry(db->dictUnsafeKeyOnly(), deT);
                     ckeysFailed = 0;
+		    g_pserver->stat_evictedkeys++;
                 }
                 else {
                     delta = 0;
@@ -824,6 +859,9 @@ int performEvictions(bool fPreSnapshot) {
                  * across the dbAsyncDelete() call, while the thread can
                  * release the memory all the time. */
                 if (g_pserver->lazyfree_lazy_eviction) {
+                    if (evictReason == EvictReason::System) {
+                        updateSysAvailableMemory();
+                    }
                     if (getMaxmemoryState(NULL,NULL,NULL,NULL) == C_OK) {
                         break;
                     }
@@ -837,7 +875,7 @@ int performEvictions(bool fPreSnapshot) {
                     if (!isEvictionProcRunning && serverTL->el != nullptr) {
                         isEvictionProcRunning = 1;
                         aeCreateTimeEvent(serverTL->el, 0,
-                                evictionTimeProc, NULL, NULL);
+                                evictionTimeProc, (void*)fPreSnapshot, NULL);
                     }
                     break;
                 }
@@ -851,9 +889,13 @@ int performEvictions(bool fPreSnapshot) {
 
     if (splazy != nullptr && splazy->memory_queued() > 0 && !serverTL->gcEpoch.isReset()) {
         g_pserver->garbageCollector.enqueue(serverTL->gcEpoch, std::move(splazy));
-    }
+    } 
 
 cant_free:
+    if (mem_freed > 0 && evictReason == EvictReason::System) {
+        updateSysAvailableMemory();
+    }
+
     if (g_pserver->m_pstorageFactory)
     {
         if (mem_reported < g_pserver->maxmemory*1.2) {

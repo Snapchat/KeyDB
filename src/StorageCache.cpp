@@ -21,7 +21,7 @@ dictType dbStorageCacheType = {
 StorageCache::StorageCache(IStorage *storage, bool fCache)
         : m_spstorage(storage)
 {
-    if (fCache)
+    if (!g_pserver->flash_disable_key_cache && fCache)
         m_pdict = dictCreate(&dbStorageCacheType, nullptr);
 }
 
@@ -43,6 +43,8 @@ void StorageCache::clear(void(callback)(void*))
 void StorageCache::clearAsync()
 {
     std::unique_lock<fastlock> ul(m_lock);
+    if (count() == 0)
+        return;
     if (m_pdict != nullptr) {
         dict *dSav = m_pdict;
         m_pdict = dictCreate(&dbStorageCacheType, nullptr);
@@ -203,6 +205,7 @@ void StorageCache::beginWriteBatch() {
 }
 
 void StorageCache::emergencyFreeCache() {
+    std::unique_lock<fastlock> ul(m_lock);
     dict *d = m_pdict;
     m_pdict = nullptr;
     if (d != nullptr) {

@@ -51,8 +51,9 @@ int TimerCommand_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int
 
     for (int j = 0; j < 10; j++) {
         int delay = rand() % 5000;
-        char *buf = RedisModule_Alloc(256);
-        snprintf(buf,256,"After %d", delay);
+        int bufsize = 256;
+        char *buf = RedisModule_Alloc(bufsize);
+        snprintf(buf,bufsize,"After %d", delay);
         RedisModuleTimerID tid = RedisModule_CreateTimer(ctx,delay,timerHandler,buf);
         REDISMODULE_NOT_USED(tid);
     }

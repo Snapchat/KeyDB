@@ -263,7 +263,7 @@ sds writeJsonValue(sds output, const char *valIn, size_t cchIn) {
                     serverAssert(!FSimpleJsonEscapeCh(valIn[ich]));
                     if (FExtendedJsonEscapeCh(valIn[ich])) {
                         dst[ichDst++] = '\\'; dst[ichDst++] = 'u';
-                        sprintf(dst + ichDst, "%4x", valIn[ich]);
+                        snprintf(dst + ichDst, cchIn+cchEscapeExtra-ichDst, "%4x", valIn[ich]);
                         ichDst += 4;
                     } else {
                         dst[ichDst++] = valIn[ich];

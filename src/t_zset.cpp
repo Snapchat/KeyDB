@@ -4054,6 +4054,8 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
                 addReplyBulkCBuffer(c, key, sdslen(key));
                 if (withscores)
                     addReplyDouble(c, *(double*)dictGetVal(de));
+                if (c->flags & CLIENT_CLOSE_ASAP)
+                    break;
             }
         } else if (zsetobj->encoding == OBJ_ENCODING_ZIPLIST) {
             ziplistEntry *keys, *vals = NULL;
@@ -4067,6 +4069,8 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
                 count -= sample_count;
                 ziplistRandomPairs((unsigned char*)ptrFromObj(zsetobj), sample_count, keys, vals);
                 zarndmemberReplyWithZiplist(c, sample_count, keys, vals);
+                if (c->flags & CLIENT_CLOSE_ASAP)
+                    break;
             }
             zfree(keys);
             zfree(vals);
@@ -4210,12 +4214,17 @@ void zrandmemberCommand(client *c) {
     ziplistEntry ele;
 
     if (c->argc >= 3) {
-        if (getLongFromObjectOrReply(c,c->argv[2],&l,NULL) != C_OK) return;
+        if (getRangeLongFromObjectOrReply(c,c->argv[2],-LONG_MAX,LONG_MAX,&l,NULL) != C_OK) return;
         if (c->argc > 4 || (c->argc == 4 && strcasecmp(szFromObj(c->argv[3]),"withscores"))) {
             addReplyErrorObject(c,shared.syntaxerr);
             return;
-        } else if (c->argc == 4)
+        } else if (c->argc == 4) {
             withscores = 1;
+            if (l < -g_pserver->rand_total_threshold || l > g_pserver->rand_total_threshold) {
+                addReplyError(c,"value is out of range");
+                return;
+            }
+        }
         zrandmemberWithCountCommand(c, l, withscores);
         return;
     }

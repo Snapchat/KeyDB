@@ -67,6 +67,8 @@ public:
 
 /* constants */
 static time_t c_infoUpdateSeconds = 10;
+// the current Redis Cluster setup we configure replication factor as 2, each non-empty master node should have 2 replicas, given that there are 3 zones in each regions
+static const int EXPECTED_NUMBER_OF_REPLICAS = 2;
 
 StatsdClientWrapper *g_stats = nullptr;
 std::string m_strPrefix { "keydb" };
@@ -544,17 +546,19 @@ void emit_system_free_memory() {
     }
 }
 
-void emit_non_empty_primary_with_less_than_2_connected_replicas_error_metrics(struct RedisModuleCtx *ctx, long long keys) {
+void emit_metrics_for_insufficient_replicas(struct RedisModuleCtx *ctx, long long keys) {
     // non-empty
     if (keys <= 0) {
         return;
     }
     RedisModuleCallReply *reply = RedisModule_Call(ctx, "ROLE", "");
     if (RedisModule_CallReplyType(reply) != REDISMODULE_REPLY_ARRAY) {
+        RedisModule_FreeCallReply(reply);
         return;
     }
     RedisModuleCallReply *roleReply = RedisModule_CallReplyArrayElement(reply, 0);
     if (RedisModule_CallReplyType(roleReply) != REDISMODULE_REPLY_STRING) {
+        RedisModule_FreeCallReply(reply);
         return;
     }
     size_t len;
@@ -563,10 +567,11 @@ void emit_non_empty_primary_with_less_than_2_connected_replicas_error_metrics(st
     if (strncmp(role, "master", len) == 0) {
         RedisModuleCallReply *replicasReply = RedisModule_CallReplyArrayElement(reply, 2);
         // check if there are less than 2 connected replicas
-        if (RedisModule_CallReplyLength(replicasReply) < 2) {
-            g_stats->increment("hasLessThan2ConnectedReplicas_error", 1);
+        if (RedisModule_CallReplyLength(replicasReply) < EXPECTED_NUMBER_OF_REPLICAS) {
+            g_stats->increment("lessThanExpectedReplicas_error", 1);
         }
     }
+    RedisModule_FreeCallReply(reply);
 }
 
 void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64_t subevent, void *data) {
@@ -652,7 +657,7 @@ void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64
         RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Emitting metric \"keys\": %llu", keys);
         g_stats->timing("emit_keys_metric_time_taken_us", ustime() - commandStartTime);
 
-        emit_non_empty_primary_with_less_than_2_connected_replicas_error_metrics(ctx, keys);
+        emit_metrics_for_insufficient_replicas(ctx, keys);
 
         g_stats->timing("metrics_time_taken_us", ustime() - startTime);
         

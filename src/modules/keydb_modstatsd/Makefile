@@ -4,7 +4,7 @@ OBJECT_FILES := modmain.o
 MODSNAP_CXX_FLAGS := -std=gnu++14
 
 %.o: %.cpp
-	$(CXX) -o $@ -c $< $(MODULE_FLAGS) -I../../../deps/cpp-statsd-client/include $(MODSNAP_CXX_FLAGS)
+	$(CXX) -o $@ -c $< $(MODULE_FLAGS) -I../../../deps/cpp-statsd-client/include $(MODSNAP_CXX_FLAGS) -g
 
 modstatsd.so: $(OBJECT_FILES)
 	$(CXX) -shared $(OBJECT_FILES) -o modstatsd.so

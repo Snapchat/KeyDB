@@ -46,6 +46,7 @@ robj *createObject(int type, void *ptr) {
     char *oB = (char*)zcalloc(sizeof(robj)+mvccExtraBytes, MALLOC_SHARED);
     robj *o = reinterpret_cast<robj*>(oB + mvccExtraBytes);
     
+    new (o) redisObject;
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
     o->m_ptr = ptr;
@@ -418,6 +419,7 @@ void decrRefCount(robj_roptr o) {
         case OBJ_NESTEDHASH: freeNestedHashObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
+        o->~redisObject();
         if (g_pserver->fActiveReplica) {
             zfree(reinterpret_cast<redisObjectExtended*>(o.unsafe_robjcast())-1);
         } else {

@@ -160,6 +160,8 @@ public:
 
     expireEntry &operator=(expireEntry &&e)
     {
+        if (FFat())
+            delete pfatentry();
         s = e.s;
         e.s.m_whenAndPtrUnion = 0;
         e.s.fFat = false;
@@ -167,6 +169,8 @@ public:
     }
 
     expireEntry &operator=(expireEntry &e) {
+        if (FFat())
+            delete pfatentry();
         if (e.FFat()) {
             s.m_whenAndPtrUnion = reinterpret_cast<long long>(new expireEntryFat(*e.pfatentry()));
             s.fFat = true;

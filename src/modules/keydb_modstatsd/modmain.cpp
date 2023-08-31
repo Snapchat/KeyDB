@@ -680,12 +680,12 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
     }
     if (podName != nullptr) {
         m_strPrefix = podName;
+        std::replace(m_strPrefix.begin(), m_strPrefix.end(), '.', '-');
     }
     else if (unameResult == 0) {
         m_strPrefix = nodeName;
         unameResult = 1;
     }
-    std::replace(m_strPrefix.begin(), m_strPrefix.end(), '.', '-');
 
     for (int iarg = 0; iarg < argc; ++iarg) {
         size_t len = 0;

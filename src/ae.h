@@ -80,7 +80,7 @@ typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 typedef void aePostFunctionProc(void *pvArgs);
 //added to support async api IStorage
 struct StorageToken;
-typedef void aePostFunctionTokenProc(struct aeEventLoop *el, StorageToken *token);
+typedef void aePostFunctionTokenProc(struct aeEventLoop *el, struct StorageToken *token);
 
 /* File event structure */
 typedef struct aeFileEvent {

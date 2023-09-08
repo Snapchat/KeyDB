@@ -183,9 +183,11 @@ void aeProcessCmd(aeEventLoop *eventLoop, int fd, void *, int )
         }
         case AE_ASYNC_OP::PostAsynDBFunction:
         {   //added to support async api IStorage
-            std::unique_lock<decltype(g_lock)> ulock(g_lock, std::defer_lock);
-            if (cmd.fLock)
-               ulock.lock();  
+           if (cmd.fLock && !ulock.owns_lock()) {
+                g_forkLock.releaseRead();
+                ulock.lock();
+                g_forkLock.acquireRead();
+            }  
             ((aePostFunctionTokenProc*)cmd.tproc)(eventLoop,(StorageToken*)cmd.clientData);
             break; 
         }

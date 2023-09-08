@@ -72,7 +72,6 @@ extern "C" {
 #define AE_NOTUSED(V) ((void) V)
 
 struct aeEventLoop;
-
 /* Types and data structures */
 typedef void aeFileProc(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask);
 typedef int aeTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData);
@@ -81,7 +80,7 @@ typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 typedef void aePostFunctionProc(void *pvArgs);
 //added to support async api IStorage
 struct StorageToken;
-typedef void aePostFunctionTokenProc(aeEventLoop *el, StorageToken *token);
+typedef void aePostFunctionTokenProc(struct aeEventLoop *el, StorageToken *token);
 
 /* File event structure */
 typedef struct aeFileEvent {

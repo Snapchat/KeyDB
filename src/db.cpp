@@ -2875,10 +2875,10 @@ LNotFound:
             {
                 dictAdd(m_pdict, sdsNewKey, o);
                 
+                o->SetFExpires(spexpire != nullptr);
                 if (spexpire != nullptr) {
                     o->expire = std::move(*spexpire);
                 }
-                o->SetFExpires(spexpire != nullptr);
                 g_pserver->stat_storage_provider_read_hits++;
             } else {
                 sdsfree(sdsNewKey);
@@ -3249,8 +3249,8 @@ std::unique_ptr<expireEntry> deserializeExpire(const char *str, size_t cch, size
         if (subkey)
             sdsfree(subkey);
     }
-
-    *poffset = offset;
+    if (poffset != nullptr)
+        *poffset = offset;
     return spexpire;
 }
 

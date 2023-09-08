@@ -308,7 +308,7 @@ void computeDatasetDigest(unsigned char *final) {
         mixDigest(final,&aux,sizeof(aux));
 
         /* Iterate this DB writing every entry */
-        db->iterate_threadsafe([final, db](const char *key, robj_roptr o)->bool {
+        db->iterate_threadsafe([final](const char *key, robj_roptr o)->bool {
             unsigned char digest[20];
             robj *keyobj;
 
@@ -932,6 +932,21 @@ NULL
         mallctl_string(c, c->argv+2, c->argc-2);
         return;
 #endif
+    } else if(!strcasecmp(szFromObj(c->argv[1]),"flush-storage") && c->argc == 2) {
+        if (g_pserver->m_pstorageFactory != nullptr) {
+            for (int i = 0; i < cserver.dbnum; i++) {
+                g_pserver->db[i]->getStorageCache()->flush();
+            }
+            addReply(c,shared.ok);
+        } else {
+            addReplyError(c, "Can't flush storage if no storage provider is set");
+        }
+    } else if (!strcasecmp(szFromObj(c->argv[1]),"get-storage-usage") && c->argc == 2) {
+        if (g_pserver->m_pstorageFactory != nullptr) {
+            addReplyLongLong(c, g_pserver->m_pstorageFactory->totalDiskspaceUsed());
+        } else {
+            addReplyLongLong(c, 0);
+        }
     } else {
         addReplySubcommandSyntaxError(c);
         return;

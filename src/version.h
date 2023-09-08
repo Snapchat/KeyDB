@@ -7,6 +7,7 @@ enum VersionCompareResult
     EqualVersion,
     OlderVersion,
     NewerVersion,
+    IncompatibleVersion,
 };
 
 struct SymVer

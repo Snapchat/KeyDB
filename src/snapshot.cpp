@@ -587,8 +587,12 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe_core(std::function<bool(c
                 if (!fKeyOnly)
                 {
                     size_t offset = 0;
-                    deserializeExpire((const char*)data, cbData, &offset);
+                    std::unique_ptr<expireEntry> spexpire = deserializeExpire((const char*)data, cbData, &offset);
                     o = deserializeStoredObject(reinterpret_cast<const char*>(data)+offset, cbData-offset);
+                    o->SetFExpires(spexpire != nullptr);
+                    if (spexpire != nullptr) {
+                        o->expire = std::move(*spexpire);
+                    }
                 }
                 fContinue = fn(sdsKey, o);
                 if (o != nullptr)

@@ -274,7 +274,6 @@ int aePostFunction(aeEventLoop *eventLoop, aePostFunctionProc *proc, void *arg)
 int aePostFunction(aeEventLoop *eventLoop, aePostFunctionTokenProc *proc, StorageToken *token)
 {
   //added to support async api IStorage
-    proc(eventLoop,token);
     aeCommand cmd = {};
     cmd.op = AE_ASYNC_OP::PostAsynDBFunction; 
     cmd.tproc = proc;

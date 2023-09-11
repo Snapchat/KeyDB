@@ -76,7 +76,7 @@ std::string m_strPrefix { "keydb" };
 const std::regex g_replica_or_db_info_regex { "^(slave|db)(\\d+)" };
 const char *g_string_counter_separator = "__";
 const uint64_t g_stats_buffer_size_bytes = 1600;
-utsname sysName;
+std::string nodeName;
 int unameResult;
 
 enum class StatsD_Type {
@@ -600,7 +600,7 @@ void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64
 
         /* node name */
         if (unameResult == 0) {
-            g_stats->increment("node_name" + std::string(g_string_counter_separator) + sysName.nodename);
+            g_stats->increment("node_name" + std::string(g_string_counter_separator) + nodeName);
         }
 
         /* Log INFO Fields */
@@ -672,17 +672,20 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
     RedisModule_AutoMemory(ctx);
     /* Use pod name if available*/
     const char *podName = getenv("POD_NAME");
+    utsname sysName;
     unameResult = uname(&sysName);
+    if (unameResult == 0) {
+        nodeName = std::string(sysName.nodename);
+        std::replace(nodeName.begin(), nodeName.end(), '.', '-');
+    }
     if (podName != nullptr) {
         m_strPrefix = podName;
+        std::replace(m_strPrefix.begin(), m_strPrefix.end(), '.', '-');
     }
-    else {
-        if (unameResult == 0) {
-            m_strPrefix = std::string(sysName.nodename);
-            unameResult = 1;
-        }
+    else if (unameResult == 0) {
+        m_strPrefix = nodeName;
+        unameResult = 1;
     }
-    std::replace(m_strPrefix.begin(), m_strPrefix.end(), '.', '-');
 
     for (int iarg = 0; iarg < argc; ++iarg) {
         size_t len = 0;

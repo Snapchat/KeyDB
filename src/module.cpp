@@ -690,8 +690,9 @@ void moduleHandlePropagationAfterCommandCallback(RedisModuleCtx *ctx) {
 }
 
 /* Free the context after the user function was called. */
-void moduleFreeContext(RedisModuleCtx *ctx) {
-    moduleHandlePropagationAfterCommandCallback(ctx);
+void moduleFreeContext(RedisModuleCtx *ctx, bool propogate) {
+    if (propogate)
+        moduleHandlePropagationAfterCommandCallback(ctx);
     autoMemoryCollect(ctx);
     poolAllocRelease(ctx);
     if (ctx->postponed_arrays) {

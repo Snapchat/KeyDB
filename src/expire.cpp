@@ -396,126 +396,152 @@ void pexpireMemberAtCommand(client *c)
          * distribute the time evenly across DBs. */
         current_db++;
 
-        /* Continue to expire if at the end of the cycle there are still
-         * a big percentage of keys to expire, compared to the number of keys
-         * we scanned. The percentage, stored in config_cycle_acceptable_stale
-         * is not fixed, but depends on the Redis configured "expire effort". */
-        do {
-            unsigned long num, slots;
-            long long now, ttl_sum;
-            int ttl_samples;
-            iteration++;
+        if (g_pserver->m_pstorageFactory == nullptr) {
+            /* Continue to expire if at the end of the cycle there are still
+            * a big percentage of keys to expire, compared to the number of keys
+            * we scanned. The percentage, stored in config_cycle_acceptable_stale
+            * is not fixed, but depends on the Redis configured "expire effort". */
+            do {
+                unsigned long num, slots;
+                long long now, ttl_sum;
+                int ttl_samples;
+                iteration++;
 
-            /* If there is nothing to expire try next DB ASAP. */
-            if (db->expireSize() == 0) {
-                db->avg_ttl = 0;
-                break;
-            }
-            num = dictSize(db->m_pdict);
-            slots = dictSlots(db->m_pdict);
-            now = mstime();
-
-            /* When there are less than 1% filled slots, sampling the key
-             * space is expensive, so stop here waiting for better times...
-             * The dictionary will be resized asap. */
-            if (slots > DICT_HT_INITIAL_SIZE &&
-                (num*100/slots < 1)) break;
-
-            /* The main collection cycle. Sample random keys among keys
-             * with an expire set, checking for expired ones. */
-            expired = 0;
-            sampled = 0;
-            ttl_sum = 0;
-            ttl_samples = 0;
-
-            if (num > config_keys_per_loop)
-                num = config_keys_per_loop;
-
-            /* Here we access the low level representation of the hash table
-             * for speed concerns: this makes this code coupled with dict.c,
-             * but it hardly changed in ten years.
-             *
-             * Note that certain places of the hash table may be empty,
-             * so we want also a stop condition about the number of
-             * buckets that we scanned. However scanning for free buckets
-             * is very fast: we are in the cache line scanning a sequential
-             * array of NULL pointers, so we can scan a lot more buckets
-             * than keys in the same time. */
-            long max_buckets = num*20;
-            long checked_buckets = 0;
-
-            while (sampled < num && checked_buckets < max_buckets) {
-                for (int table = 0; table < 2; table++) {
-                    if (table == 1 && !dictIsRehashing(db->m_pdict)) break;
-
-                    unsigned long idx = db->expires_cursor;
-                    idx &= db->m_pdict->ht[table].sizemask;
-                    dictEntry *de = db->m_pdict->ht[table].table[idx];
-                    long long ttl;
-
-                    /* Scan the current bucket of the current table. */
-                    checked_buckets++;
-                    while(de) {
-                        /* Get the next entry now since this entry may get
-                         * deleted. */
-                        dictEntry *e = de;
-                        robj *o = (robj*)dictGetVal(de);
-                        de = de->next;
-                        if (!o->FExpires())
-                            continue;
-
-                        expireEntry *exp = &o->expire;
-
-                        serverAssert(exp->when() > 0);
-                        ttl = exp->when()-now;
-                        size_t tried = 0;
-                        if (exp->when() <= now) {
-                            if (activeExpireCycleExpire(db,(const char*)dictGetKey(e),*exp,now,tried)) expired++;
-                            serverAssert(ttl <= 0);
-                        } else {
-                            serverAssert(ttl > 0);
-                        }
-                        if (ttl > 0) {
-                            /* We want the average TTL of keys yet
-                             * not expired. */
-                            ttl_sum += ttl;
-                            ttl_samples++;
-                        }
-                        sampled++;
-                    }
-                }
-                db->expires_cursor++;
-            }
-            total_expired += expired;
-            total_sampled += sampled;
-
-            /* Update the average TTL stats for this database. */
-            if (ttl_samples) {
-                long long avg_ttl = ttl_sum/ttl_samples;
-
-                /* Do a simple running average with a few samples.
-                 * We just use the current estimate with a weight of 2%
-                 * and the previous estimate with a weight of 98%. */
-                if (db->avg_ttl == 0) db->avg_ttl = avg_ttl;
-                db->avg_ttl = (db->avg_ttl/50)*49 + (avg_ttl/50);
-            }
-
-            /* We can't block forever here even if there are many keys to
-             * expire. So after a given amount of milliseconds return to the
-             * caller waiting for the other active expire cycle. */
-            if ((iteration & 0xf) == 0) { /* check once every 16 iterations. */
-                elapsed = ustime()-start;
-                if (elapsed > timelimit) {
-                    timelimit_exit = 1;
-                    g_pserver->stat_expired_time_cap_reached_count++;
+                /* If there is nothing to expire try next DB ASAP. */
+                if (db->expireSize() == 0) {
+                    db->avg_ttl = 0;
                     break;
                 }
+                num = dictSize(db->m_pdict);
+                slots = dictSlots(db->m_pdict);
+                now = mstime();
+
+                /* When there are less than 1% filled slots, sampling the key
+                * space is expensive, so stop here waiting for better times...
+                * The dictionary will be resized asap. */
+                if (slots > DICT_HT_INITIAL_SIZE &&
+                    (num*100/slots < 1)) break;
+
+                /* The main collection cycle. Sample random keys among keys
+                * with an expire set, checking for expired ones. */
+                expired = 0;
+                sampled = 0;
+                ttl_sum = 0;
+                ttl_samples = 0;
+
+                if (num > config_keys_per_loop)
+                    num = config_keys_per_loop;
+
+                /* Here we access the low level representation of the hash table
+                * for speed concerns: this makes this code coupled with dict.c,
+                * but it hardly changed in ten years.
+                *
+                * Note that certain places of the hash table may be empty,
+                * so we want also a stop condition about the number of
+                * buckets that we scanned. However scanning for free buckets
+                * is very fast: we are in the cache line scanning a sequential
+                * array of NULL pointers, so we can scan a lot more buckets
+                * than keys in the same time. */
+                long max_buckets = num*20;
+                long checked_buckets = 0;
+
+                while (sampled < num && checked_buckets < max_buckets) {
+                    for (int table = 0; table < 2; table++) {
+                        if (table == 1 && !dictIsRehashing(db->m_pdict)) break;
+
+                        unsigned long idx = db->expires_cursor;
+                        idx &= db->m_pdict->ht[table].sizemask;
+                        dictEntry *de = db->m_pdict->ht[table].table[idx];
+                        long long ttl;
+
+                        /* Scan the current bucket of the current table. */
+                        checked_buckets++;
+                        while(de) {
+                            /* Get the next entry now since this entry may get
+                            * deleted. */
+                            dictEntry *e = de;
+                            robj *o = (robj*)dictGetVal(de);
+                            de = de->next;
+                            if (!o->FExpires())
+                                continue;
+
+                            expireEntry *exp = &o->expire;
+
+                            serverAssert(exp->when() > 0);
+                            ttl = exp->when()-now;
+                            size_t tried = 0;
+                            if (exp->when() <= now) {
+                                if (activeExpireCycleExpire(db,(const char*)dictGetKey(e),*exp,now,tried)) expired++;
+                                serverAssert(ttl <= 0);
+                            } else {
+                                serverAssert(ttl > 0);
+                            }
+                            if (ttl > 0) {
+                                /* We want the average TTL of keys yet
+                                * not expired. */
+                                ttl_sum += ttl;
+                                ttl_samples++;
+                            }
+                            sampled++;
+                        }
+                    }
+                    db->expires_cursor++;
+                }
+                total_expired += expired;
+                total_sampled += sampled;
+
+                /* Update the average TTL stats for this database. */
+                if (ttl_samples) {
+                    long long avg_ttl = ttl_sum/ttl_samples;
+
+                    /* Do a simple running average with a few samples.
+                    * We just use the current estimate with a weight of 2%
+                    * and the previous estimate with a weight of 98%. */
+                    if (db->avg_ttl == 0) db->avg_ttl = avg_ttl;
+                    db->avg_ttl = (db->avg_ttl/50)*49 + (avg_ttl/50);
+                }
+
+                /* We can't block forever here even if there are many keys to
+                * expire. So after a given amount of milliseconds return to the
+                * caller waiting for the other active expire cycle. */
+                if ((iteration & 0xf) == 0) { /* check once every 16 iterations. */
+                    elapsed = ustime()-start;
+                    if (elapsed > timelimit) {
+                        timelimit_exit = 1;
+                        g_pserver->stat_expired_time_cap_reached_count++;
+                        break;
+                    }
+                }
+                /* We don't repeat the cycle for the current database if there are
+                * an acceptable amount of stale keys (logically expired but yet
+                * not reclaimed). */
+            } while (sampled == 0 ||
+                    (expired*100/sampled) > config_cycle_acceptable_stale);
+        } else {
+            long prev_expired;
+            long long now = mstime();
+            size_t tried = 0;
+            std::vector<std::string> keys;
+            do {
+                prev_expired = total_expired;
+                keys = db->getStorageCache()->getExpirationCandidates(ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP);
+                for (std::string key : keys) {
+                    robj* keyobj = createStringObject(key.c_str(), key.size());
+                    db->find(szFromObj(keyobj));
+                    expireEntry *e = db->getExpire(keyobj);
+                    if (e != nullptr && e->when() < now)
+                        total_expired += activeExpireCycleExpire(db, szFromObj(keyobj), *e, now, tried);
+                    decrRefCount(keyobj);
+                }
+                total_sampled += keys.size();
+                elapsed = ustime()-start;
+            } while (keys.size() > 0 && (elapsed < timelimit) && (total_expired - prev_expired) > 0);
+
+            if (ustime()-start > timelimit) {
+                timelimit_exit = 1;
+                g_pserver->stat_expired_time_cap_reached_count++;
             }
-            /* We don't repeat the cycle for the current database if there are
-             * an acceptable amount of stale keys (logically expired but yet
-             * not reclaimed). */
-        } while (sampled == 0 ||
-                 (expired*100/sampled) > config_cycle_acceptable_stale);
+        }
     }
 
     elapsed = ustime()-start;

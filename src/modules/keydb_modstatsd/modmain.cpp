@@ -582,7 +582,7 @@ void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64
         size_t startTime = ustime();
 
 #ifdef __linux__
-        /* Log CPU Usage */
+	/* Log CPU Usage */
 	static long long s_mscpuLast = 0;
 	struct rusage self_ru;
 	getrusage(RUSAGE_SELF, &self_ru);
@@ -591,7 +591,7 @@ void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64
 			+ (self_ru.ru_stime.tv_sec * 1000) + (self_ru.ru_stime.tv_usec / 1000);
 
 
-        g_stats->gauge("cpu_load_perc", ((double)(mscpuCur - s_mscpuLast) / ((curTime - lastTime)*1000))*100, true /* prefixOnly */);   
+	g_stats->gauge("cpu_load_perc", ((double)(mscpuCur - s_mscpuLast) / ((curTime - lastTime)*1000))*100, false /* prefixOnly */);   
 	s_mscpuLast = mscpuCur;
 #endif
 
@@ -653,7 +653,7 @@ void event_cron_handler(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64
         reply = RedisModule_Call(ctx, "dbsize", "");
         long long keys = RedisModule_CallReplyInteger(reply);
         RedisModule_FreeCallReply(reply);
-        g_stats->gauge("keys", keys);
+        g_stats->gauge("keys", keys, false /* prefixOnly */);
         RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Emitting metric \"keys\": %llu", keys);
         g_stats->timing("emit_keys_metric_time_taken_us", ustime() - commandStartTime);
 

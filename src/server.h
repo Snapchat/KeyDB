@@ -2918,7 +2918,7 @@ int moduleGetCommandKeysViaAPI(struct redisCommand *cmd, robj **argv, int argc, 
 moduleType *moduleTypeLookupModuleByID(uint64_t id);
 void moduleTypeNameByID(char *name, uint64_t moduleid);
 const char *moduleTypeModuleName(moduleType *mt);
-void moduleFreeContext(struct RedisModuleCtx *ctx);
+void moduleFreeContext(struct RedisModuleCtx *ctx, bool propogate = true);
 void unblockClientFromModule(client *c);
 void moduleHandleBlockedClients(int iel);
 void moduleBlockedClientTimedOut(client *c);

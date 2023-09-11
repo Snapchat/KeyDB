@@ -2542,7 +2542,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int *error, uint64_t mvcc_ts
          * encoding version in the lower 10 bits of the module ID. */
         void *ptr = mt->rdb_load(&io,moduleid&1023);
         if (io.ctx) {
-            moduleFreeContext(io.ctx);
+            moduleFreeContext(io.ctx, false /* propogate */);
             zfree(io.ctx);
         }
 

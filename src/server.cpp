@@ -5663,7 +5663,8 @@ sds genRedisInfoString(const char *section) {
             "lru_clock:%u\r\n"
             "executable:%s\r\n"
             "config_file:%s\r\n"
-            "availability_zone:%s\r\n",
+            "availability_zone:%s\r\n"
+            "features:%s\r\n",
             KEYDB_SET_VERSION,
             redisGitSHA1(),
             strtol(redisGitDirty(),NULL,10) > 0,
@@ -5690,7 +5691,8 @@ sds genRedisInfoString(const char *section) {
             lruclock,
             cserver.executable ? cserver.executable : "",
             cserver.configfile ? cserver.configfile : "",
-            g_pserver->sdsAvailabilityZone);
+            g_pserver->sdsAvailabilityZone,
+            "cluster_mget");
     }
 
     /* Clients */

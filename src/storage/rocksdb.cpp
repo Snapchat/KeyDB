@@ -277,3 +277,22 @@ bool RocksDBStorageProvider::FKeyExists(std::string& key) const
         return m_spbatch->GetFromBatchAndDB(m_spdb.get(), ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key), &slice).ok();
     return m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(key), &slice).ok();
 }
+
+struct RetrievalStorageToken : public StorageToken {
+    std::string key;
+};
+
+StorageToken *RocksDBStorageProvider::begin_retrieve(struct aeEventLoop *el, aePostFunctionTokenProc callback, const char *key, size_t cchKey) {
+    RetrievalStorageToken *tok = new RetrievalStorageToken();
+    tok->key = std::string(key, cchKey);
+    aePostFunction(el, callback, tok);
+    return tok;
+}
+
+void RocksDBStorageProvider::complete_retrieve(StorageToken *tok, callbackSingle fn) {
+    rocksdb::PinnableSlice slice;
+    RetrievalStorageToken *rtok = static_cast<RetrievalStorageToken*>(tok);
+    auto status = m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(rtok->key), &slice);
+    if (status.ok())
+        fn(rtok->key.data(), rtok->key.size(), slice.data(), slice.size());
+}

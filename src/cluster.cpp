@@ -5952,7 +5952,6 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
         numkeys = getKeysFromCommand(mcmd,margv,margc,&result);
         keyindex = result.keys;
 
-        bool fFirstKeyThisServer = false;
         for (j = 0; j < numkeys; j++) {
             robj *thiskey = margv[keyindex[j]];
             int thisslot = keyHashSlot((char*)ptrFromObj(thiskey),
@@ -5988,20 +5987,13 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
                 } else if (g_pserver->cluster->importing_slots_from[slot] != NULL) {
                     importing_slot = 1;
                 }
-
-                if (n == myself && !importing_slot && !migrating_slot) {
-                    fFirstKeyThisServer = true;
-                }
             } else {
                 /* If it is not the first key, make sure it is exactly
                  * the same key as the first we saw. */
                 if (!equalStringObjects(firstkey,thiskey)) {
                     clusterNode* nThisKey = g_pserver->cluster->slots[slot];
-                    if (fFirstKeyThisServer && nThisKey == myself && g_pserver->cluster->migrating_slots_to[slot] == nullptr && g_pserver->cluster->importing_slots_from[slot] == nullptr) {
-                        continue;
-                    }
 
-                    if (slot != thisslot) {
+                    if (nThisKey != n || migrating_slot || importing_slot || (g_pserver->cluster->migrating_slots_to[slot] != nullptr && g_pserver->cluster->importing_slots_from[slot] != nullptr)) {
                         /* Error: multiple keys from different slots. */
                         getKeysFreeResult(&result);
                         if (error_code)

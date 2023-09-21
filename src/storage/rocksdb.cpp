@@ -57,8 +57,9 @@ void RocksDBStorageProvider::insert(const char *key, size_t cchKey, void *data, 
         ++m_count;
 }
 
-void RocksDBStorageProvider::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem)
+void RocksDBStorageProvider::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, char *rgfOverwrite, size_t celem)
 {
+    size_t coverwrites = 0;
     if (celem >= 16384) {
         rocksdb::Options options = DefaultRocksDBOptions();
         rocksdb::SstFileWriter sst_file_writer(rocksdb::EnvOptions(), options, options.comparator);
@@ -108,8 +109,15 @@ void RocksDBStorageProvider::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **
         m_spdb->Write(WriteOptions(), spbatch.get());
     }
 
+    if (rgfOverwrite != nullptr) {
+        for (size_t ielem = 0; ielem < celem; ++ielem) {
+            if (rgfOverwrite[ielem])
+                ++coverwrites;
+        }
+    }
+
     std::unique_lock<fastlock> l(m_lock);
-    m_count += celem;
+    m_count += celem - coverwrites;
 }
 
 bool RocksDBStorageProvider::erase(const char *key, size_t cchKey)

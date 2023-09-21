@@ -39,7 +39,7 @@ public:
     virtual void beginWriteBatch() override;
     virtual void endWriteBatch() override;
 
-    virtual void bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem) override;
+    virtual void bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, char *rgfOverwrite, size_t celem) override;
 
     virtual void batch_lock() override;
     virtual void batch_unlock() override;

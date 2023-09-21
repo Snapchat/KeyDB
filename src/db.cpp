@@ -2960,15 +2960,13 @@ void redisDbPersistentData::storeDatabase()
     dictReleaseIterator(di);
 }
 
-/* static */ void redisDbPersistentData::serializeAndStoreChange(StorageCache *storage, redisDbPersistentData *db, const char *key, bool fUpdate)
+/* static */ sds redisDbPersistentData::serializeChange(redisDbPersistentData *db, const char *key)
 {
     auto itr = db->find_cached_threadsafe(key);
     if (itr == nullptr)
-        return;
+        return nullptr;
     robj *o = itr.val();
-    sds temp = serializeStoredObjectAndExpire(db, (const char*) itr.key(), o);
-    storage->insert((sds)key, temp, sdslen(temp), fUpdate);
-    sdsfree(temp);
+    return serializeStoredObjectAndExpire(db, (const char*) itr.key(), o);
 }
 
 bool redisDbPersistentData::processChanges(bool fSnapshot)
@@ -3011,10 +3009,30 @@ bool redisDbPersistentData::processChanges(bool fSnapshot)
             {
                 dictIterator *di = dictGetIterator(m_dictChanged);
                 dictEntry *de;
+                std::vector<char*> veckeys;
+                std::vector<size_t> veccbkeys;
+                std::vector<char*> vecvals;
+                std::vector<size_t> veccbvals;
+                std::vector<char> vecoverwrite;
+                veckeys.reserve(dictSize(m_dictChanged));
+                veccbkeys.reserve(dictSize(m_dictChanged));
+                vecvals.reserve(dictSize(m_dictChanged));
+                veccbvals.reserve(dictSize(m_dictChanged));
+                vecoverwrite.reserve(dictSize(m_dictChanged));
                 while ((de = dictNext(di)) != nullptr)
                 {
-                    serializeAndStoreChange(m_spstorage.get(), this, (const char*)dictGetKey(de), (bool)dictGetVal(de));
+                    sds val = serializeChange(this, (const char*)dictGetKey(de));
+                    if (val != nullptr) {
+                        veckeys.push_back((char*)dictGetKey(de));
+                        veccbkeys.push_back(sdslen((sds)dictGetKey(de)));
+                        vecvals.push_back(val);
+                        veccbvals.push_back(sdslen(val));
+                        vecoverwrite.push_back((bool)dictGetVal(de));
+                    }
                 }
+                m_spstorage->bulkInsert(veckeys.data(), veccbkeys.data(), vecvals.data(), veccbvals.data(), vecoverwrite.data(), veckeys.size());
+                for (auto val : vecvals)
+                    sdsfree(val);
                 dictReleaseIterator(di);
             }
         }
@@ -3048,7 +3066,7 @@ void redisDbPersistentData::processChangesAsync(std::atomic<int> &pendingJobs)
             vecvals.push_back(temp);
             veccbvals.push_back(sdslen(temp));
         }
-        m_spstorage->bulkInsert(veckeys.data(), veccbkeys.data(), vecvals.data(), veccbvals.data(), veckeys.size());
+        m_spstorage->bulkInsert(veckeys.data(), veccbkeys.data(), vecvals.data(), veccbvals.data(), nullptr, veckeys.size());
         for (auto val : vecvals)
             sdsfree(val);
         dictReleaseIterator(di);
@@ -3067,7 +3085,7 @@ void redisDbPersistentData::bulkDirectStorageInsert(char **rgKeys, size_t *rgcbK
         }
         aeReleaseLock();
     }
-    m_spstorage->bulkInsert(rgKeys, rgcbKeys, rgVals, rgcbVals, celem);
+    m_spstorage->bulkInsert(rgKeys, rgcbKeys, rgVals, rgcbVals, nullptr, celem);
 }
 
 void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **psnapshotFree)
@@ -3076,10 +3094,30 @@ void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **
     {
         dictIterator *di = dictGetIterator(m_dictChangedStorageFlush);
         dictEntry *de;
+        std::vector<char*> veckeys;
+        std::vector<size_t> veccbkeys;
+        std::vector<char*> vecvals;
+        std::vector<size_t> veccbvals;
+        std::vector<char> vecoverwrite;
+        veckeys.reserve(dictSize(m_dictChanged));
+        veccbkeys.reserve(dictSize(m_dictChanged));
+        vecvals.reserve(dictSize(m_dictChanged));
+        veccbvals.reserve(dictSize(m_dictChanged));
+        vecoverwrite.resize(dictSize(m_dictChanged));
         while ((de = dictNext(di)) != nullptr)
         {
-            serializeAndStoreChange(m_spstorage.get(), (redisDbPersistentData*)m_pdbSnapshotStorageFlush, (const char*)dictGetKey(de), (bool)dictGetVal(de));
+            sds val = serializeChange((redisDbPersistentData*)m_pdbSnapshotStorageFlush, (const char*)dictGetKey(de));
+            if (val != nullptr) {
+                veckeys.push_back((char*)dictGetKey(de));
+                veccbkeys.push_back(sdslen((sds)dictGetKey(de)));
+                vecvals.push_back(val);
+                veccbvals.push_back(sdslen(val));
+                vecoverwrite.push_back((bool)dictGetVal(de));
+            }
         }
+        m_spstorage->bulkInsert(veckeys.data(), veccbkeys.data(), vecvals.data(), veccbvals.data(), vecoverwrite.data(), veckeys.size());
+        for (auto val : vecvals)
+            sdsfree(val);
         dictReleaseIterator(di);
         dictRelease(m_dictChangedStorageFlush);
         m_dictChangedStorageFlush = nullptr;

@@ -114,13 +114,14 @@ void StorageCache::insert(sds key, const void *data, size_t cbdata, bool fOverwr
 }
 
 long _dictKeyIndex(dict *d, const void *key, uint64_t hash, dictEntry **existing);
-void StorageCache::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem)
+void StorageCache::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, char *rgfOverwrite, size_t celem)
 {
     std::vector<dictEntry*> vechashes;
     if (m_pdict != nullptr) {
         vechashes.reserve(celem);
 
         for (size_t ielem = 0; ielem < celem; ++ielem) {
+            if (rgfOverwrite != nullptr && rgfOverwrite[ielem]) continue;
             dictEntry *de = (dictEntry*)zmalloc(sizeof(dictEntry));
             de->key = (void*)dictGenHashFunction(rgkeys[ielem], (int)rgcbkeys[ielem]);
             de->v.u64 = 1;
@@ -152,7 +153,7 @@ void StorageCache::bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, si
     }
     ul.unlock();
 
-    m_spstorage->bulkInsert(rgkeys, rgcbkeys, rgvals, rgcbvals, celem);
+    m_spstorage->bulkInsert(rgkeys, rgcbkeys, rgvals, rgcbvals, rgfOverwrite, celem);
 
     bulkInsertsInProgress--;
 }

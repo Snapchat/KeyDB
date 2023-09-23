@@ -2740,6 +2740,13 @@ void redisDbPersistentData::clear(void(callback)(void*))
     if (m_spstorage != nullptr)
         m_spstorage->clear(callback);
     dictEmpty(m_pdictTombstone,callback);
+
+    // To avoid issues with async rehash we completly free the old dict and create a fresh one
+    dictRelease(m_pdict);
+    dictRelease(m_pdictTombstone);
+    m_pdict = dictCreate(&dbDictType, this);
+    m_pdictTombstone = dictCreate(&dbTombstoneDictType, this);
+
     m_pdbSnapshot = nullptr;
     m_numexpires = 0;
 }

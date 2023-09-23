@@ -2306,6 +2306,7 @@ struct redisServer {
     rax *errors;                /* Errors table */
     int activerehashing;        /* Incremental rehash in serverCron() */
     int active_defrag_running;  /* Active defragmentation running (holds current scan aggressiveness) */
+    int enable_async_rehash = 1;    /* Should we use the async rehash feature? */
     int cronloops;              /* Number of times the cron function run */
     char runid[CONFIG_RUN_ID_SIZE+1];  /* ID always different at every exec. */
     int sentinel_mode;          /* True if this instance is a Sentinel. */

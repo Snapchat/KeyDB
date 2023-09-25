@@ -2774,7 +2774,7 @@ void readQueryFromClient(connection *conn) {
                 processInputBuffer(c, false, CMD_CALL_SLOWLOG | CMD_CALL_STATS | CMD_CALL_ASYNC);
             }
         }
-        if (!c->vecqueuedcmd.empty())
+        if (!c->vecqueuedcmd.empty() && !(c->flags & CLIENT_BLOCKED))
             serverTL->vecclientsProcess.push_back(c);
     } else {
         // If we're single threaded its actually better to just process the command here while the query is hot in the cache

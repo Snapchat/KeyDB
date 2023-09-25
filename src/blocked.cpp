@@ -207,6 +207,8 @@ void unblockClient(client *c) {
     } else if (c->btype == BLOCKED_PAUSE) {
         listDelNode(g_pserver->paused_clients,c->paused_list_node);
         c->paused_list_node = NULL;
+    } else if (c->btype == BLOCKED_STORAGE) {
+        serverTL->vecclientsProcess.push_back(c);
     } else {
         serverPanic("Unknown btype in unblockClient().");
     }

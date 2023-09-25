@@ -557,7 +557,8 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define BLOCKED_ZSET 5    /* BZPOP et al. */
 #define BLOCKED_PAUSE 6   /* Blocked by CLIENT PAUSE */
 #define BLOCKED_ASYNC 7
-#define BLOCKED_NUM 8     /* Number of blocked states. */
+#define BLOCKED_STORAGE 8
+#define BLOCKED_NUM 9     /* Number of blocked states. */
 
 /* Client request types */
 #define PROTO_REQ_INLINE 1
@@ -1217,6 +1218,8 @@ public:
     void bulkDirectStorageInsert(char **rgKeys, size_t *rgcbKeys, char **rgVals, size_t *rgcbVals, size_t celem);
 
     dict_iter find_cached_threadsafe(const char *key) const;
+
+    static void storageLoadCallback(struct aeEventLoop *el, struct StorageToken *token);
 
 protected:
     uint64_t m_mvccCheckpoint = 0;

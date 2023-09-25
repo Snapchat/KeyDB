@@ -1,5 +1,6 @@
 #pragma once
 #include "rocksdb.h"
+#include "../AsyncWorkQueue.h"
 
 class RocksDBStorageFactory : public IStorageFactory
 {
@@ -10,7 +11,9 @@ class RocksDBStorageFactory : public IStorageFactory
     bool m_fCreatedTempFolder = false;
 
 public:
-    RocksDBStorageFactory(const char *dbfile, int dbnum, const char *rgchConfig, size_t cchConfig);
+    AsyncWorkQueue **m_wqueue;
+
+    RocksDBStorageFactory(const char *dbfile, int dbnum, const char *rgchConfig, size_t cchConfig, AsyncWorkQueue **wqueue);
     ~RocksDBStorageFactory();
 
     virtual IStorage *create(int db, key_load_iterator iter, void *privdata) override;

@@ -188,6 +188,24 @@ void StorageCache::retrieve(sds key, IStorage::callbackSingle fn) const
     m_spstorage->retrieve(key, sdslen(key), fn);
 }
 
+StorageToken *StorageCache::begin_retrieve(struct aeEventLoop *el, aePostFunctionTokenProc proc, sds key) {
+    std::unique_lock<fastlock> ul(m_lock);
+    if (m_pdict != nullptr)
+    {
+        uint64_t hash = dictSdsHash(key);
+        dictEntry *de = dictFind(m_pdict, reinterpret_cast<void*>(hash));
+        
+        if (de == nullptr)
+            return nullptr; // Not found
+    }
+    ul.unlock();
+    return m_spstorage->begin_retrieve(el, proc, key, sdslen(key));
+}
+
+void StorageCache::complete_retrieve(StorageToken *tok, IStorage::callbackSingle fn) {
+    m_spstorage->complete_retrieve(tok, fn);
+}
+
 size_t StorageCache::count() const
 {
     std::unique_lock<fastlock> ul(m_lock, std::defer_lock);

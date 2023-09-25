@@ -280,19 +280,29 @@ bool RocksDBStorageProvider::FKeyExists(std::string& key) const
 
 struct RetrievalStorageToken : public StorageToken {
     std::string key;
+    std::vector<char> data;
+    bool fFound = false;
 };
 
 StorageToken *RocksDBStorageProvider::begin_retrieve(struct aeEventLoop *el, aePostFunctionTokenProc callback, const char *key, size_t cchKey) {
     RetrievalStorageToken *tok = new RetrievalStorageToken();
     tok->key = std::string(key, cchKey);
-    aePostFunction(el, callback, tok);
+    (*m_pfactory->m_wqueue)->AddWorkFunction([this, el, callback, tok]{
+        rocksdb::PinnableSlice slice;
+        auto status = m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(prefixKey(tok->key.data(), tok->key.size())), &slice);
+        if (status.ok()) {
+            tok->data.resize(slice.size());
+            memcpy(tok->data.data(), slice.data(), slice.size());
+            tok->fFound = true;
+        }
+        aePostFunction(el, callback, tok);
+    });
     return tok;
 }
 
 void RocksDBStorageProvider::complete_retrieve(StorageToken *tok, callbackSingle fn) {
-    rocksdb::PinnableSlice slice;
-    RetrievalStorageToken *rtok = static_cast<RetrievalStorageToken*>(tok);
-    auto status = m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(rtok->key), &slice);
-    if (status.ok())
-        fn(rtok->key.data(), rtok->key.size(), slice.data(), slice.size());
+    RetrievalStorageToken *rtok = reinterpret_cast<RetrievalStorageToken*>(tok);
+    if (rtok->fFound)
+        fn(rtok->key.data(), rtok->key.size(), rtok->data.data(), rtok->data.size());
+    delete rtok;
 }

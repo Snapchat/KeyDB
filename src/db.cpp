@@ -3383,76 +3383,58 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
         if (this->find_cached_threadsafe(szFromObj(objKey)) == nullptr)
             veckeys.push_back(objKey);
     }
-    lock.disarm();
 
     getKeysFreeResult(&result);
 
     std::vector<std::tuple<sds, robj*, std::unique_ptr<expireEntry>>> vecInserts;
     for (robj *objKey : veckeys)
     {
-        sds sharedKey = sdsdupshared((sds)szFromObj(objKey));
         std::unique_ptr<expireEntry> spexpire;
-        robj *o = nullptr;
-        m_spstorage->retrieve((sds)szFromObj(objKey), [&](const char *, size_t, const void *data, size_t cb){
-                size_t offset = 0;
-                spexpire = deserializeExpire(sharedKey, (const char*)data, cb, &offset);    
-                o = deserializeStoredObject(this, sharedKey, reinterpret_cast<const char*>(data) + offset, cb - offset);
-                serverAssert(o != nullptr);
-        });
-
-        if (o != nullptr) {
-            vecInserts.emplace_back(sharedKey, o, std::move(spexpire));
-        } else if (sharedKey != nullptr) {
-            sdsfree(sharedKey);
+        auto *tok = m_spstorage->begin_retrieve(serverTL->el, storageLoadCallback, (sds)szFromObj(objKey));
+        if (tok != nullptr) {
+            tok->c = c;
+            tok->db = this;
+            blockClient(c, BLOCKED_STORAGE);
         }
-    }
-
-    if (!vecInserts.empty()) {
-        lock.arm(c);
-        for (auto &tuple : vecInserts)
-        {
-            sds sharedKey = std::get<0>(tuple);
-            robj *o = std::get<1>(tuple);
-            std::unique_ptr<expireEntry> spexpire = std::move(std::get<2>(tuple));
-
-            if (o != nullptr)
-            {
-                if (this->find_cached_threadsafe(sharedKey) != nullptr)
-                {
-                    // While unlocked this was already ensured
-                    decrRefCount(o);
-                    sdsfree(sharedKey);
-                }
-                else
-                {
-                    if (spexpire != nullptr) {
-                        if (spexpire->when() < mstime()) {
-                            break;
-                        }
-                    }
-                    dictAdd(m_pdict, sharedKey, o);
-                    o->SetFExpires(spexpire != nullptr);
-
-                    std::unique_lock<fastlock> ul(g_expireLock);
-                    if (spexpire != nullptr)
-                    {
-                        auto itr = m_setexpire->find(sharedKey);
-                        if (itr != m_setexpire->end())
-                            m_setexpire->erase(itr);
-                        m_setexpire->insert(std::move(*spexpire));
-                        serverAssert(m_setexpire->find(sharedKey) != m_setexpire->end());
-                    }
-                    serverAssert(o->FExpires() == (m_setexpire->find(sharedKey) != m_setexpire->end()));
-                }
-            }
-            else
-            {
-                if (sharedKey != nullptr)
-                    sdsfree(sharedKey); // BUG but don't bother crashing
-            }
-        }
-        lock.disarm();
     }
 
     return;
+}
+
+/*static*/ void redisDbPersistentData::storageLoadCallback(aeEventLoop *el, StorageToken *tok) {
+    tok->db->m_spstorage->complete_retrieve(tok, [&](const char *szKey, size_t cbKey, const void *data, size_t cb) {
+        auto *db = tok->db;
+        size_t offset = 0;
+        sds key = sdsnewlen(szKey, -((ssize_t)cbKey));
+        auto spexpire = deserializeExpire(key, (const char*)data, cb, &offset);    
+        robj *o = deserializeStoredObject(db, key, reinterpret_cast<const char*>(data) + offset, cb - offset);
+        serverAssert(o != nullptr);
+
+        if (db->find_cached_threadsafe(key) != nullptr) {
+        LUnneeded:
+            // While unlocked this was already ensured
+            decrRefCount(o);
+            sdsfree(key);
+        } else {
+            if (spexpire != nullptr) {
+                if (spexpire->when() < mstime()) {
+                    goto LUnneeded;
+                }
+            }
+            dictAdd(db->m_pdict, key, o);
+            o->SetFExpires(spexpire != nullptr);
+
+            std::unique_lock<fastlock> ul(g_expireLock);
+            if (spexpire != nullptr) {
+                auto itr = db->m_setexpire->find(key);
+                if (itr != db->m_setexpire->end())
+                    db->m_setexpire->erase(itr);
+                db->m_setexpire->insert(std::move(*spexpire));
+                serverAssert(db->m_setexpire->find(key) != db->m_setexpire->end());
+            }
+            serverAssert(o->FExpires() == (db->m_setexpire->find(key) != db->m_setexpire->end()));
+        }
+    });
+    std::unique_lock<fastlock> ul(tok->c->lock);
+    unblockClient(tok->c);
 }

@@ -6,6 +6,8 @@
 #define METADATA_DB_IDENTIFIER "c299fde0-6d42-4ec4-b939-34f680ffe39f"
 
 struct StorageToken {
+    struct client *c;
+    struct redisDbPersistentData *db;
     virtual ~StorageToken() {}
 };
 

@@ -861,7 +861,7 @@ void aeReleaseForkLock()
 
 void aeForkLockInChild()
 {
-    g_forkLock.setNotify(false);
+    g_forkLock.setMulti(false);
 }
 
 int aeThreadOwnsLock()

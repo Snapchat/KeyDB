@@ -3399,6 +3399,9 @@ void redisDbPersistentData::prefetchKeysFlash(std::unordered_set<client*> &setc)
         }
     }
 
+    if (veckeys.empty())
+        return;
+
     auto *tok = m_spstorage->begin_retrieve(serverTL->el, storageLoadCallback, veckeys.data(), veckeys.size());
     if (tok != nullptr) {
         for (client *c : setcBlocked) {

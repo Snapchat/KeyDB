@@ -1,12 +1,13 @@
 #pragma once
 #include <functional>
+#include <unordered_set>
 #include "sds.h"
 #include "ae.h"
 
 #define METADATA_DB_IDENTIFIER "c299fde0-6d42-4ec4-b939-34f680ffe39f"
 
 struct StorageToken {
-    struct client *c;
+    std::unordered_set<struct client *> setc;
     struct redisDbPersistentData *db;
     virtual ~StorageToken() {}
 };
@@ -42,7 +43,7 @@ public:
     virtual bool enumerate_hashslot(callback fn, unsigned int hashslot) const = 0;
     virtual size_t count() const = 0;
 
-    virtual StorageToken *begin_retrieve(struct aeEventLoop *, aePostFunctionTokenProc, const char * /*key*/, size_t /*cchKey*/) {return nullptr;};
+    virtual StorageToken *begin_retrieve(struct aeEventLoop *, aePostFunctionTokenProc, sds *, size_t) {return nullptr;};
     virtual void complete_retrieve(StorageToken * /*tok*/, callbackSingle /*fn*/) {};
 
     virtual void bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem) {

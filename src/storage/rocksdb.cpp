@@ -279,21 +279,41 @@ bool RocksDBStorageProvider::FKeyExists(std::string& key) const
 }
 
 struct RetrievalStorageToken : public StorageToken {
-    std::string key;
-    std::vector<char> data;
-    bool fFound = false;
+    std::unordered_map<std::string, std::unique_ptr<rocksdb::PinnableSlice>> mapkeydata;
 };
 
-StorageToken *RocksDBStorageProvider::begin_retrieve(struct aeEventLoop *el, aePostFunctionTokenProc callback, const char *key, size_t cchKey) {
+StorageToken *RocksDBStorageProvider::begin_retrieve(struct aeEventLoop *el, aePostFunctionTokenProc callback, sds *rgkey, size_t ckey) {
     RetrievalStorageToken *tok = new RetrievalStorageToken();
-    tok->key = std::string(key, cchKey);
+
+    for (size_t ikey = 0; ikey < ckey; ++ikey) {
+        tok->mapkeydata.insert(std::make_pair(std::string(rgkey[ikey], sdslen(rgkey[ikey])), nullptr));
+    }
+    
     (*m_pfactory->m_wqueue)->AddWorkFunction([this, el, callback, tok]{
-        rocksdb::PinnableSlice slice;
-        auto status = m_spdb->Get(ReadOptions(), m_spcolfamily.get(), rocksdb::Slice(prefixKey(tok->key.data(), tok->key.size())), &slice);
-        if (status.ok()) {
-            tok->data.resize(slice.size());
-            memcpy(tok->data.data(), slice.data(), slice.size());
-            tok->fFound = true;
+        std::vector<std::string> veckeysStr;
+        std::vector<rocksdb::Slice> veckeys;
+        std::vector<rocksdb::PinnableSlice> vecvals;
+        std::vector<rocksdb::Status> vecstatus;
+        veckeys.reserve(tok->mapkeydata.size());
+        veckeysStr.reserve(tok->mapkeydata.size());
+        vecvals.resize(tok->mapkeydata.size());
+        vecstatus.resize(tok->mapkeydata.size());
+        for (auto &pair : tok->mapkeydata) {
+            veckeysStr.emplace_back(prefixKey(pair.first.data(), pair.first.size()));
+            veckeys.emplace_back(veckeysStr.back().data(), veckeysStr.back().size());
+        }
+
+        m_spdb->MultiGet(ReadOptions(),
+            m_spcolfamily.get(),
+            veckeys.size(), const_cast<const rocksdb::Slice*>(veckeys.data()),
+            vecvals.data(), vecstatus.data());
+
+        auto itrDst = tok->mapkeydata.begin();
+        for (size_t ires = 0; ires < veckeys.size(); ++ires) {
+            if (vecstatus[ires].ok()) {
+                itrDst->second = std::make_unique<rocksdb::PinnableSlice>(std::move(vecvals[ires]));
+            }
+            ++itrDst;
         }
         aePostFunction(el, callback, tok);
     });
@@ -302,7 +322,10 @@ StorageToken *RocksDBStorageProvider::begin_retrieve(struct aeEventLoop *el, aeP
 
 void RocksDBStorageProvider::complete_retrieve(StorageToken *tok, callbackSingle fn) {
     RetrievalStorageToken *rtok = reinterpret_cast<RetrievalStorageToken*>(tok);
-    if (rtok->fFound)
-        fn(rtok->key.data(), rtok->key.size(), rtok->data.data(), rtok->data.size());
+    for (auto &pair : rtok->mapkeydata) {
+        if (pair.second != nullptr) {
+            fn(pair.first.data(), pair.first.size(), pair.second->data(), pair.second->size());
+        }
+    }
     delete rtok;
 }

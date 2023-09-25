@@ -3363,45 +3363,60 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
 #endif
         return;
     }
+}
 
-    AeLocker lock;
+void redisDbPersistentData::prefetchKeysFlash(std::unordered_set<client*> &setc)
+{
+    serverAssert(GlobalLocksAcquired());
+    std::vector<sds> veckeys;
+    std::unordered_set<client*> setcBlocked;
 
-    std::vector<robj*> veckeys;
-    lock.arm(c);
-    getKeysResult result = GETKEYS_RESULT_INIT;
-    auto cmd = lookupCommand(szFromObj(command.argv[0]));
-    if (cmd == nullptr)
-        return; // Bad command? It's not for us to judge, just bail
-    
-    if (command.argc < std::abs(cmd->arity))
-        return; // Invalid number of args
-    
-    int numkeys = getKeysFromCommand(cmd, command.argv, command.argc, &result);
-    for (int ikey = 0; ikey < numkeys; ++ikey)
-    {
-        robj *objKey = command.argv[result.keys[ikey]];
-        if (this->find_cached_threadsafe(szFromObj(objKey)) == nullptr)
-            veckeys.push_back(objKey);
-    }
+    for (client *c : setc) {
+        for (auto &command : c->vecqueuedcmd) {
+            getKeysResult result = GETKEYS_RESULT_INIT;
+            auto cmd = lookupCommand(szFromObj(command.argv[0]));
+            if (cmd == nullptr)
+                return; // Bad command? It's not for us to judge, just bail
+            
+            if (command.argc < std::abs(cmd->arity))
+                return; // Invalid number of args
+            
+            int numkeys = getKeysFromCommand(cmd, command.argv, command.argc, &result);
+            bool fQueued = false;
+            for (int ikey = 0; ikey < numkeys; ++ikey)
+            {
+                robj *objKey = command.argv[result.keys[ikey]];
+                if (this->find_cached_threadsafe(szFromObj(objKey)) == nullptr) {
+                    veckeys.push_back(szFromObj(objKey));
+                    fQueued = true;
+                }
+            }
 
-    getKeysFreeResult(&result);
-
-    std::vector<std::tuple<sds, robj*, std::unique_ptr<expireEntry>>> vecInserts;
-    for (robj *objKey : veckeys)
-    {
-        std::unique_ptr<expireEntry> spexpire;
-        auto *tok = m_spstorage->begin_retrieve(serverTL->el, storageLoadCallback, (sds)szFromObj(objKey));
-        if (tok != nullptr) {
-            tok->c = c;
-            tok->db = this;
-            blockClient(c, BLOCKED_STORAGE);
+            if (fQueued) {
+                setcBlocked.insert(c);
+            }
+            getKeysFreeResult(&result);
         }
     }
 
+    auto *tok = m_spstorage->begin_retrieve(serverTL->el, storageLoadCallback, veckeys.data(), veckeys.size());
+    if (tok != nullptr) {
+        for (client *c : setcBlocked) {
+            if (!(c->flags & CLIENT_BLOCKED))
+                blockClient(c, BLOCKED_STORAGE);
+        }
+        tok->setc = std::move(setcBlocked);
+        tok->db = this;
+    }
     return;
 }
 
-/*static*/ void redisDbPersistentData::storageLoadCallback(aeEventLoop *el, StorageToken *tok) {
+/*static*/ void redisDbPersistentData::storageLoadCallback(aeEventLoop *, StorageToken *tok) {
+    serverTL->setStorageTokensProcess.insert(tok);
+}
+
+void redisDbPersistentData::processStorageToken(StorageToken *tok) {
+    auto setc = std::move(tok->setc);
     tok->db->m_spstorage->complete_retrieve(tok, [&](const char *szKey, size_t cbKey, const void *data, size_t cb) {
         auto *db = tok->db;
         size_t offset = 0;
@@ -3435,6 +3450,13 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
             serverAssert(o->FExpires() == (db->m_setexpire->find(key) != db->m_setexpire->end()));
         }
     });
-    std::unique_lock<fastlock> ul(tok->c->lock);
-    unblockClient(tok->c);
+    tok = nullptr;  // Invalid past this point
+
+    for (client *c : setc) {
+        std::unique_lock<fastlock> ul(c->lock);
+        if (c->flags & CLIENT_BLOCKED)
+            unblockClient(c);
+        else
+            serverTL->setclientsProcess.insert(c);
+    }
 }

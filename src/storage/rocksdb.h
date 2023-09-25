@@ -31,7 +31,7 @@ public:
     virtual bool erase(const char *key, size_t cchKey) override;
     virtual void retrieve(const char *key, size_t cchKey, callbackSingle fn) const override;
 
-    virtual StorageToken *begin_retrieve(struct aeEventLoop *el, aePostFunctionTokenProc callback, const char *key, size_t cchKey);
+    virtual StorageToken *begin_retrieve(struct aeEventLoop *el, aePostFunctionTokenProc callback, sds *rgkey, size_t ckey);
     virtual void complete_retrieve(StorageToken *tok, callbackSingle fn);
 
     virtual size_t clear() override;

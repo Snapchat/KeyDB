@@ -278,7 +278,7 @@ int aePostFunction(aeEventLoop *eventLoop, aePostFunctionTokenProc *proc, Storag
     cmd.op = AE_ASYNC_OP::PostAsynDBFunction; 
     cmd.tproc = proc;
     cmd.clientData = (void*)token; 
-    cmd.fLock = true;
+    cmd.fLock = false;
     auto size = write(eventLoop->fdCmdWrite, &cmd, sizeof(cmd));
     if (size != sizeof(cmd))
         return AE_ERR;

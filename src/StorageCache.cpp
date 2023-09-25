@@ -188,7 +188,8 @@ void StorageCache::retrieve(sds key, IStorage::callbackSingle fn) const
     m_spstorage->retrieve(key, sdslen(key), fn);
 }
 
-StorageToken *StorageCache::begin_retrieve(struct aeEventLoop *el, aePostFunctionTokenProc proc, sds key) {
+StorageToken *StorageCache::begin_retrieve(struct aeEventLoop *el, aePostFunctionTokenProc proc, sds *rgkey, size_t ckey) {
+#if 0
     std::unique_lock<fastlock> ul(m_lock);
     if (m_pdict != nullptr)
     {
@@ -199,7 +200,8 @@ StorageToken *StorageCache::begin_retrieve(struct aeEventLoop *el, aePostFunctio
             return nullptr; // Not found
     }
     ul.unlock();
-    return m_spstorage->begin_retrieve(el, proc, key, sdslen(key));
+#endif 
+    return m_spstorage->begin_retrieve(el, proc, rgkey, ckey);
 }
 
 void StorageCache::complete_retrieve(StorageToken *tok, IStorage::callbackSingle fn) {

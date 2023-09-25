@@ -43,7 +43,7 @@ public:
     void insert(sds key, const void *data, size_t cbdata, bool fOverwrite);
     void bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem);
     void retrieve(sds key, IStorage::callbackSingle fn) const;
-    StorageToken *begin_retrieve(struct aeEventLoop *el, aePostFunctionTokenProc proc, sds key);
+    StorageToken *begin_retrieve(struct aeEventLoop *el, aePostFunctionTokenProc proc, sds *rgkey, size_t ckey);
     void complete_retrieve(StorageToken *tok, IStorage::callbackSingle fn);
     bool erase(sds key);
     void emergencyFreeCache();

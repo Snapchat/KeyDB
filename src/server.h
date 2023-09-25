@@ -1210,6 +1210,8 @@ public:
     bool keycacheIsEnabled();
 
     void prefetchKeysAsync(client *c, struct parsed_command &command);
+    void prefetchKeysFlash(std::unordered_set<client*> &setc);
+    void processStorageToken(StorageToken *tok);
 
     bool FSnapshot() const { return m_spdbSnapshotHOLDER != nullptr; }
 
@@ -1374,6 +1376,8 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::dictUnsafeKeyOnly;
     using redisDbPersistentData::resortExpire;
     using redisDbPersistentData::prefetchKeysAsync;
+    using redisDbPersistentData::prefetchKeysFlash;
+    using redisDbPersistentData::processStorageToken;
     using redisDbPersistentData::prepOverwriteForSnapshot;
     using redisDbPersistentData::FRehashing;
     using redisDbPersistentData::FTrackingChanges;
@@ -2212,7 +2216,9 @@ struct redisServerThreadVars {
     
     int propagate_in_transaction = 0;  /* Make sure we don't propagate nested MULTI/EXEC */
     int client_pause_in_transaction = 0; /* Was a client pause executed during this Exec? */
-    std::vector<client*> vecclientsProcess;
+    std::unordered_set<client*> setclientsProcess;
+    std::unordered_set<client*> setclientsPrefetch;
+    std::unordered_set<StorageToken*> setStorageTokensProcess;
     dictAsyncRehashCtl *rehashCtl = nullptr;
 
     int getRdbKeySaveDelay();

@@ -1593,7 +1593,8 @@ void unlinkClient(client *c) {
         c->fPendingAsyncWrite = FALSE;
     }
 
-    serverTL->vecclientsProcess.erase(std::remove(serverTL->vecclientsProcess.begin(), serverTL->vecclientsProcess.end(), c), serverTL->vecclientsProcess.end());
+    serverTL->setclientsProcess.erase(c);
+    serverTL->setclientsPrefetch.erase(c);
 
     /* Clear the tracking status. */
     if (c->flags & CLIENT_TRACKING) disableTracking(c);
@@ -2774,8 +2775,13 @@ void readQueryFromClient(connection *conn) {
                 processInputBuffer(c, false, CMD_CALL_SLOWLOG | CMD_CALL_STATS | CMD_CALL_ASYNC);
             }
         }
-        if (!c->vecqueuedcmd.empty() && !(c->flags & CLIENT_BLOCKED))
-            serverTL->vecclientsProcess.push_back(c);
+        if (!c->vecqueuedcmd.empty()) {
+            if (g_pserver->m_pstorageFactory != nullptr && g_pserver->prefetch_enabled) {
+                serverTL->setclientsPrefetch.insert(c);
+            } else {
+                serverTL->setclientsProcess.insert(c);
+            }
+        }
     } else {
         // If we're single threaded its actually better to just process the command here while the query is hot in the cache
         //  multithreaded lock contention dominates and batching is better
@@ -2790,9 +2796,9 @@ void processClients()
     serverAssert(GlobalLocksAcquired());
 
     // Note that this function is reentrant and vecclients may be modified by code called from processInputBuffer
-    while (!serverTL->vecclientsProcess.empty()) {
-        client *c = serverTL->vecclientsProcess.front();
-        serverTL->vecclientsProcess.erase(serverTL->vecclientsProcess.begin());
+    while (!serverTL->setclientsProcess.empty()) {
+        client *c = *serverTL->setclientsProcess.begin();
+        serverTL->setclientsProcess.erase(serverTL->setclientsProcess.begin());
 
         /* There is more data in the client input buffer, continue parsing it
         * in case to check if there is a full command to execute. */

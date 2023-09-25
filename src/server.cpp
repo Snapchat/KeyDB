@@ -2840,6 +2840,20 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     locker.arm();
 
+    for (auto *tok : serverTL->setStorageTokensProcess) {
+        tok->db->processStorageToken(tok);
+    }
+    serverTL->setStorageTokensProcess.clear();
+
+    if (g_pserver->m_pstorageFactory != nullptr && !serverTL->setclientsPrefetch.empty()) {
+        g_pserver->db[0]->prefetchKeysFlash(serverTL->setclientsPrefetch);
+        for (client *c : serverTL->setclientsPrefetch) {
+            if (!(c->flags & CLIENT_BLOCKED))
+                serverTL->setclientsProcess.insert(c);
+        }
+        serverTL->setclientsPrefetch.clear();
+    }
+
     /* end any snapshots created by fast async commands */
     for (int idb = 0; idb < cserver.dbnum; ++idb) {
         if (serverTL->rgdbSnapshot[idb] != nullptr && serverTL->rgdbSnapshot[idb]->FStale()) {
@@ -4146,7 +4160,7 @@ void InitServerLast() {
     set_jemalloc_bg_thread(cserver.jemalloc_bg_thread);
     g_pserver->initial_memory_usage = zmalloc_used_memory();
 
-    g_pserver->asyncworkqueue = new (MALLOC_LOCAL) AsyncWorkQueue(cserver.cthreads);
+    g_pserver->asyncworkqueue = new (MALLOC_LOCAL) AsyncWorkQueue(cserver.cthreads*10);
 
     // Allocate the repl backlog
     

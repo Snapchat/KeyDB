@@ -3181,7 +3181,7 @@ void redisDbPersistentData::trackChanges(bool fBulk, size_t sizeHint)
     if (fBulk)
         m_fAllChanged.fetch_add(1, std::memory_order_acq_rel);
 
-    if (sizeHint > 0)
+    if (sizeHint > 0 && aeThreadOwnsLock())
         dictExpand(m_dictChanged, sizeHint, false);
 }
 

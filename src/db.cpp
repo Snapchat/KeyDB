@@ -3376,10 +3376,10 @@ void redisDbPersistentData::prefetchKeysFlash(std::unordered_set<client*> &setc)
             getKeysResult result = GETKEYS_RESULT_INIT;
             auto cmd = lookupCommand(szFromObj(command.argv[0]));
             if (cmd == nullptr)
-                return; // Bad command? It's not for us to judge, just bail
+                break; // Bad command? It's not for us to judge, just bail
             
             if (command.argc < std::abs(cmd->arity))
-                return; // Invalid number of args
+                break; // Invalid number of args
             
             int numkeys = getKeysFromCommand(cmd, command.argv, command.argc, &result);
             bool fQueued = false;

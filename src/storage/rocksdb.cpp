@@ -288,8 +288,10 @@ StorageToken *RocksDBStorageProvider::begin_retrieve(struct aeEventLoop *el, aeP
     for (size_t ikey = 0; ikey < ckey; ++ikey) {
         tok->mapkeydata.insert(std::make_pair(std::string(rgkey[ikey], sdslen(rgkey[ikey])), nullptr));
     }
-    
-    (*m_pfactory->m_wqueue)->AddWorkFunction([this, el, callback, tok]{
+
+    auto opts = ReadOptions();
+    opts.async_io = true;
+    (*m_pfactory->m_wqueue)->AddWorkFunction([this, el, callback, tok, opts]{
         std::vector<std::string> veckeysStr;
         std::vector<rocksdb::Slice> veckeys;
         std::vector<rocksdb::PinnableSlice> vecvals;

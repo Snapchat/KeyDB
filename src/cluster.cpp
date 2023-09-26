@@ -5993,7 +5993,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
                 if (!equalStringObjects(firstkey,thiskey)) {
                     clusterNode* nThisKey = g_pserver->cluster->slots[slot];
 
-                    if (nThisKey != n || migrating_slot || importing_slot || g_pserver->cluster->migrating_slots_to[slot] != nullptr || g_pserver->cluster->importing_slots_from[slot] != nullptr) {
+                    if ((slot != thisslot) && (nThisKey != n || migrating_slot || importing_slot || g_pserver->cluster->migrating_slots_to[slot] != nullptr || g_pserver->cluster->importing_slots_from[slot] != nullptr)) {
                         /* Error: multiple keys from different slots. */
                         getKeysFreeResult(&result);
                         if (error_code)

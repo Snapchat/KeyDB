@@ -1518,6 +1518,16 @@ dictType dbDictType = {
     dictGCAsyncFree             /* async free destructor */
 };
 
+dictType dbExpiresDictType = {
+        dictSdsHash,                /* hash function */
+        NULL,                       /* key dup */
+        NULL,                       /* val dup */
+        dictSdsKeyCompare,          /* key compare */
+        NULL,                       /* key destructor */
+        NULL,                       /* val destructor */
+        dictExpandAllowed           /* allow to expand */
+    };
+
 /* db->pdict, keys are sds strings, vals are Redis objects. */
 dictType dbTombstoneDictType = {
     dictSdsHash,                /* hash function */
@@ -1548,17 +1558,6 @@ dictType shaScriptObjectDictType = {
     dictSdsDestructor,          /* key destructor */
     dictObjectDestructor,       /* val destructor */
     NULL                        /* allow to expand */
-};
-
-/* Db->expires */
-dictType dbExpiresDictType = {
-    dictSdsHash,                /* hash function */
-    NULL,                       /* key dup */
-    NULL,                       /* val dup */
-    dictSdsKeyCompare,          /* key compare */
-    NULL,                       /* key destructor */
-    NULL,                       /* val destructor */
-    dictExpandAllowed           /* allow to expand */
 };
 
 /* Command table. sds string -> command struct pointer. */
@@ -1871,6 +1870,9 @@ VersionCompareResult compareVersion(SymVer *pver)
     if ((symVerThis.major == 0 && symVerThis.minor == 0 && symVerThis.build == 0)
         || (pver->major == 0 && pver->minor == 0 && pver->build == 0))
         return VersionCompareResult::EqualVersion;
+
+    if (pver->major <= 6 && pver->minor <= 3 && pver->build <= 3)
+        return VersionCompareResult::IncompatibleVersion;
     
     for (int iver = 0; iver < 3; ++iver)
     {
@@ -2135,7 +2137,7 @@ void databasesCron(bool fMainThread) {
                 ::dict *dict = g_pserver->db[rehash_db]->dictUnsafeKeyOnly();
                 /* Are we async rehashing? And if so is it time to re-calibrate? */
                 /* The recalibration limit is a prime number to ensure balancing across threads */
-                if (rehashes_per_ms > 0 && async_rehashes < 131 && !cserver.active_defrag_enabled && cserver.cthreads > 1 && dictSize(dict) > 2048 && dictIsRehashing(dict) && !g_pserver->loading) {
+                if (g_pserver->enable_async_rehash && rehashes_per_ms > 0 && async_rehashes < 131 && !cserver.active_defrag_enabled && cserver.cthreads > 1 && dictSize(dict) > 2048 && dictIsRehashing(dict) && !g_pserver->loading && aeLockContention() > 1) {
                     serverTL->rehashCtl = dictRehashAsyncStart(dict, rehashes_per_ms * ((1000 / g_pserver->hz) / 10));  // Estimate 10% CPU time spent in lock contention
                     if (serverTL->rehashCtl)
                         ++async_rehashes;
@@ -5661,7 +5663,8 @@ sds genRedisInfoString(const char *section) {
             "lru_clock:%u\r\n"
             "executable:%s\r\n"
             "config_file:%s\r\n"
-            "availability_zone:%s\r\n",
+            "availability_zone:%s\r\n"
+            "features:%s\r\n",
             KEYDB_SET_VERSION,
             redisGitSHA1(),
             strtol(redisGitDirty(),NULL,10) > 0,
@@ -5688,7 +5691,8 @@ sds genRedisInfoString(const char *section) {
             lruclock,
             cserver.executable ? cserver.executable : "",
             cserver.configfile ? cserver.configfile : "",
-            g_pserver->sdsAvailabilityZone);
+            g_pserver->sdsAvailabilityZone,
+            "cluster_mget");
     }
 
     /* Clients */

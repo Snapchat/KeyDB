@@ -5,6 +5,7 @@ class RocksDBStorageFactory : public IStorageFactory
 {
     std::shared_ptr<rocksdb::DB> m_spdb;    // Note: This must be first so it is deleted last
     std::vector<std::unique_ptr<rocksdb::ColumnFamilyHandle>> m_vecspcols;
+    std::vector<std::unique_ptr<rocksdb::ColumnFamilyHandle>> m_vecspexpirecols;
     std::shared_ptr<rocksdb::SstFileManager> m_pfilemanager;
     std::string m_path;
     bool m_fCreatedTempFolder = false;

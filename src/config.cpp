@@ -2597,6 +2597,19 @@ static int updateMaxmemory(long long val, long long prev, const char **err) {
     return 1;
 }
 
+static int updateFlashMaxmemory(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    UNUSED(err);
+    if (val && g_pserver->m_pstorageFactory) {
+        size_t used = g_pserver->m_pstorageFactory->totalDiskspaceUsed();
+        if ((unsigned long long)val < used) {
+            serverLog(LL_WARNING,"WARNING: the new maxstorage value set via CONFIG SET (%llu) is smaller than the current storage usage (%zu). This will result in key eviction and/or the inability to accept new write commands depending on the maxmemory-policy.", g_pserver->maxstorage, used);
+        }
+        performEvictions(false /*fPreSnapshot*/);
+    }
+    return 1;
+}
+
 static int updateGoodSlaves(long long val, long long prev, const char **err) {
     UNUSED(val);
     UNUSED(prev);
@@ -2908,7 +2921,7 @@ standardConfig configs[] = {
     createIntConfig("list-compress-depth", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->list_compress_depth, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("rdb-key-save-delay", NULL, MODIFIABLE_CONFIG, INT_MIN, INT_MAX, g_pserver->rdb_key_save_delay, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("key-load-delay", NULL, MODIFIABLE_CONFIG, INT_MIN, INT_MAX, g_pserver->key_load_delay, 0, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("active-expire-effort", NULL, MODIFIABLE_CONFIG, 1, 10, cserver.active_expire_effort, 1, INTEGER_CONFIG, NULL, NULL), /* From 1 to 10. */
+    createIntConfig("active-expire-effort", NULL, MODIFIABLE_CONFIG, 1, 10, g_pserver->active_expire_effort, 1, INTEGER_CONFIG, NULL, NULL), /* From 1 to 10. */
     createIntConfig("hz", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->config_hz, CONFIG_DEFAULT_HZ, INTEGER_CONFIG, NULL, updateHZ),
     createIntConfig("min-replicas-to-write", "min-slaves-to-write", MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->repl_min_slaves_to_write, 0, INTEGER_CONFIG, NULL, updateGoodSlaves),
     createIntConfig("min-replicas-max-lag", "min-slaves-max-lag", MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->repl_min_slaves_max_lag, 10, INTEGER_CONFIG, NULL, updateGoodSlaves),
@@ -2940,7 +2953,7 @@ standardConfig configs[] = {
 
     /* Unsigned Long Long configs */
     createULongLongConfig("maxmemory", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->maxmemory, 0, MEMORY_CONFIG, NULL, updateMaxmemory),
-    createULongLongConfig("maxstorage", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->maxstorage, 0, MEMORY_CONFIG, NULL, NULL),
+    createULongLongConfig("maxstorage", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->maxstorage, 0, MEMORY_CONFIG, NULL, updateFlashMaxmemory),
 
     /* Size_t configs */
     createSizeTConfig("hash-max-ziplist-entries", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->hash_max_ziplist_entries, 512, INTEGER_CONFIG, NULL, NULL),
@@ -2969,6 +2982,7 @@ standardConfig configs[] = {
     createSDSConfig("availability-zone", NULL, MODIFIABLE_CONFIG, 0, g_pserver->sdsAvailabilityZone, "", NULL, NULL),
     createIntConfig("overload-protect-percent", NULL, MODIFIABLE_CONFIG, 0, 200, g_pserver->overload_protect_threshold, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("force-eviction-percent", NULL, MODIFIABLE_CONFIG, 0, 100, g_pserver->force_eviction_percent, 0, INTEGER_CONFIG, NULL, NULL),
+    createBoolConfig("enable-async-rehash", NULL, MODIFIABLE_CONFIG, g_pserver->enable_async_rehash, 1, NULL, NULL),
 
 #ifdef USE_OPENSSL
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->tls_port, 0, INTEGER_CONFIG, NULL, updateTLSPort), /* TCP port. */

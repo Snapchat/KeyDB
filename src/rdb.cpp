@@ -1237,18 +1237,14 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     return 1;
 }
 
-int saveKey(rio *rdb, const redisDbPersistentDataSnapshot *db, int flags, size_t *processed, const char *keystr, robj_roptr o)
+int saveKey(rio *rdb, int flags, size_t *processed, const char *keystr, robj_roptr o)
 {    
     redisObjectStack key;
 
     initStaticStringObject(key,(char*)keystr);
-    std::unique_lock<fastlock> ul(g_expireLock, std::defer_lock);
     const expireEntry *pexpire = nullptr;
-    if (o->FExpires())
-    {
-        ul.lock();
-        pexpire = db->getExpire(&key);
-        serverAssert((o->FExpires() && pexpire != nullptr) || (!o->FExpires() && pexpire == nullptr));
+    if (o->FExpires()) {
+        pexpire = &o->expire;
     }
 
     if (rdbSaveKeyValuePair(rdb,&key,o,pexpire) == -1)
@@ -1355,7 +1351,7 @@ int rdbSaveRio(rio *rdb, const redisDbPersistentDataSnapshot **rgpdb, int *error
             if (o->FExpires())
                 ++ckeysExpired;
             
-            if (!saveKey(rdb, db, rdbflags, &processed, keystr, o))
+            if (!saveKey(rdb, rdbflags, &processed, keystr, o))
                 return false;
 
             /* Update child info every 1 second (approximately).
@@ -2546,7 +2542,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int *error, uint64_t mvcc_ts
          * encoding version in the lower 10 bits of the module ID. */
         void *ptr = mt->rdb_load(&io,moduleid&1023);
         if (io.ctx) {
-            moduleFreeContext(io.ctx);
+            moduleFreeContext(io.ctx, false /* propogate */);
             zfree(io.ctx);
         }
 

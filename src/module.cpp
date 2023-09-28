@@ -690,8 +690,9 @@ void moduleHandlePropagationAfterCommandCallback(RedisModuleCtx *ctx) {
 }
 
 /* Free the context after the user function was called. */
-void moduleFreeContext(RedisModuleCtx *ctx) {
-    moduleHandlePropagationAfterCommandCallback(ctx);
+void moduleFreeContext(RedisModuleCtx *ctx, bool propogate) {
+    if (propogate)
+        moduleHandlePropagationAfterCommandCallback(ctx);
     autoMemoryCollect(ctx);
     poolAllocRelease(ctx);
     if (ctx->postponed_arrays) {
@@ -2442,11 +2443,10 @@ int RM_UnlinkKey(RedisModuleKey *key) {
  * If no TTL is associated with the key or if the key is empty,
  * REDISMODULE_NO_EXPIRE is returned. */
 mstime_t RM_GetExpire(RedisModuleKey *key) {
-    std::unique_lock<fastlock> ul(g_expireLock);
-    expireEntry *pexpire = key->db->getExpire(key->key);
+    auto itr = key->db->find(key->key);
     mstime_t expire = INVALID_EXPIRE;
-    if (pexpire != nullptr)
-        pexpire->FGetPrimaryExpire(&expire);
+    if (itr->FExpires())
+        itr->expire.FGetPrimaryExpire(&expire);
     
     if (expire == INVALID_EXPIRE || key->value == NULL)
         return REDISMODULE_NO_EXPIRE;

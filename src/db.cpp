@@ -55,8 +55,8 @@ struct dbBackup {
 int expireIfNeeded(redisDb *db, robj *key, robj *o);
 void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add);
 
-std::unique_ptr<expireEntry> deserializeExpire(sds key, const char *str, size_t cch, size_t *poffset);
-sds serializeStoredObjectAndExpire(redisDbPersistentData *db, const char *key, robj_roptr o);
+std::unique_ptr<expireEntry> deserializeExpire(const char *str, size_t cch, size_t *poffset);
+sds serializeStoredObjectAndExpire(robj_roptr o);
 
 dictType dictChangeDescType {
     dictSdsHash,                /* hash function */
@@ -83,6 +83,7 @@ void updateExpire(redisDb *db, sds key, robj *valOld, robj *valNew)
     
     serverAssert(db->FKeyExpires((const char*)key));
     
+    valNew->expire = std::move(valOld->expire);
     valNew->SetFExpires(true);
     valOld->SetFExpires(false);
     return;
@@ -281,8 +282,8 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
-bool dbAddCore(redisDb *db, sds key, robj *val, bool fUpdateMvcc, bool fAssumeNew = false, dict_iter *piterExisting = nullptr) {
-    serverAssert(!val->FExpires());
+bool dbAddCore(redisDb *db, sds key, robj *val, bool fUpdateMvcc, bool fAssumeNew = false, dict_iter *piterExisting = nullptr, bool fValExpires = false) {
+    serverAssert(fValExpires || !val->FExpires());
     sds copy = sdsdupshared(key);
     
     uint64_t mvcc = getMvccTstamp();
@@ -1494,15 +1495,6 @@ void renameGenericCommand(client *c, int nx) {
 
     incrRefCount(o);
 
-    std::unique_ptr<expireEntry> spexpire;
-
-    {   // scope pexpireOld since it will be invalid soon
-    std::unique_lock<fastlock> ul(g_expireLock);
-    expireEntry *pexpireOld = c->db->getExpire(c->argv[1]);
-    if (pexpireOld != nullptr)
-        spexpire = std::make_unique<expireEntry>(std::move(*pexpireOld));
-    }
-
     if (lookupKeyWrite(c->db,c->argv[2]) != NULL) {
         if (nx) {
             decrRefCount(o);
@@ -1513,10 +1505,12 @@ void renameGenericCommand(client *c, int nx) {
          * with the same name. */
         dbDelete(c->db,c->argv[2]);
     }
+    bool fExpires = o->FExpires();
+    long long whenT = o->expire.when();
     dbDelete(c->db,c->argv[1]);
-    dbAdd(c->db,c->argv[2],o);
-    if (spexpire != nullptr) 
-        setExpire(c,c->db,c->argv[2],std::move(*spexpire));
+    o->SetFExpires(fExpires);
+    dbAddCore(c->db,szFromObj(c->argv[2]),o,true /*fUpdateMvcc*/,true/*fAssumeNew*/,nullptr,true/*fValExpires*/);
+    serverAssert(whenT == o->expire.when());    // dbDelete and dbAdd must not modify the expire, just the FExpire bit
     signalModifiedKey(c,c->db,c->argv[1]);
     signalModifiedKey(c,c->db,c->argv[2]);
     notifyKeyspaceEvent(NOTIFY_GENERIC,"rename_from",
@@ -1579,22 +1573,15 @@ void moveCommand(client *c) {
         return;
     }
 
-    std::unique_ptr<expireEntry> spexpire;
-    {   // scope pexpireOld
-    std::unique_lock<fastlock> ul(g_expireLock);
-    expireEntry *pexpireOld = c->db->getExpire(c->argv[1]);
-    if (pexpireOld != nullptr)
-        spexpire = std::make_unique<expireEntry>(std::move(*pexpireOld));
-    }
-    if (o->FExpires())
-        removeExpire(c->db,c->argv[1]);
-    serverAssert(!o->FExpires());
     incrRefCount(o);
+    bool fExpire = o->FExpires();
+    long long whenT = o->expire.when();
     dbDelete(src,c->argv[1]);
     g_pserver->dirty++;
 
-    dbAdd(dst,c->argv[1],o);
-    if (spexpire != nullptr) setExpire(c,dst,c->argv[1],std::move(*spexpire));
+    o->SetFExpires(fExpire);
+    dbAddCore(dst, szFromObj(c->argv[1]), o, true /*fUpdateMvcc*/, true /*fAssumeNew*/, nullptr, true /*fValExpires*/);
+    serverAssert(whenT == o->expire.when());    // add/delete must not modify the expire time
 
     signalModifiedKey(c,src,c->argv[1]);
     signalModifiedKey(c,dst,c->argv[1]);
@@ -1662,7 +1649,7 @@ void copyCommand(client *c) {
         addReply(c,shared.czero);
         return;
     }
-    expire = c->db->getExpire(key);
+    expire = o->FExpires() ? &o->expire : nullptr;
 
     /* Return zero if the key already exists in the target DB. 
      * If REPLACE option is selected, delete newkey from targetDB. */
@@ -1829,61 +1816,46 @@ int redisDbPersistentData::removeExpire(robj *key, dict_iter itr) {
     /* An expire may only be removed if there is a corresponding entry in the
      * main dict. Otherwise, the key will never be freed. */
     serverAssertWithInfo(NULL,key,itr != nullptr);
-    std::unique_lock<fastlock> ul(g_expireLock);
 
     robj *val = itr.val();
     if (!val->FExpires())
         return 0;
 
     trackkey(key, true /* fUpdate */);
-    auto itrExpire = m_setexpire->find(itr.key());
-    serverAssert(itrExpire != m_setexpire->end());
-    m_setexpire->erase(itrExpire);
     val->SetFExpires(false);
+    serverAssert(m_numexpires > 0);
+    m_numexpires--;
     return 1;
 }
 
 int redisDbPersistentData::removeSubkeyExpire(robj *key, robj *subkey) {
     auto de = find(szFromObj(key));
     serverAssertWithInfo(NULL,key,de != nullptr);
-    std::unique_lock<fastlock> ul(g_expireLock);
 
     robj *val = de.val();
     if (!val->FExpires())
         return 0;
-    
-    auto itr = m_setexpire->find(de.key());
-    serverAssert(itr != m_setexpire->end());
-    serverAssert(itr->key() == de.key());
-    if (!itr->FFat())
+
+    if (!val->expire.FFat())
         return 0;
 
     int found = 0;
-    for (auto subitr : *itr)
+    for (auto subitr : val->expire)
     {
         if (subitr.subkey() == nullptr)
             continue;
         if (sdscmp((sds)subitr.subkey(), szFromObj(subkey)) == 0)
         {
-            itr->erase(subitr);
+            val->expire.erase(subitr);
             found = 1;
             break;
         }
     }
 
-    if (itr->pfatentry()->size() == 0)
+    if (val->expire.pfatentry()->size() == 0)
         this->removeExpire(key, de);
 
     return found;
-}
-
-void redisDbPersistentData::resortExpire(expireEntry &e)
-{
-    std::unique_lock<fastlock> ul(g_expireLock);
-    auto itr = m_setexpire->find(e.key());
-    expireEntry eT = std::move(e);
-    m_setexpire->erase(itr);
-    m_setexpire->insert(eT);
 }
 
 /* Set an expire to the specified key. If the expire is set in the context
@@ -1940,10 +1912,7 @@ void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
     if (kde.val()->FExpires())
         removeExpire(db, key);
 
-    e.setKeyUnsafe(kde.key());
-    db->setExpire(std::move(e));
-    kde.val()->SetFExpires(true);
-
+    db->setExpire(kde.key(), std::move(e));
 
     int writable_slave = listLength(g_pserver->masters) && g_pserver->repl_slave_ro == 0 && !g_pserver->fActiveReplica;
     if (c && writable_slave && !(c->flags & CLIENT_MASTER))
@@ -1954,14 +1923,15 @@ void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e)
  * is associated with this key (i.e. the key is non volatile) */
 expireEntry *redisDbPersistentDataSnapshot::getExpire(const char *key) {
     /* No expire? return ASAP */
-    std::unique_lock<fastlock> ul(g_expireLock);
     if (expireSize() == 0)
         return nullptr;
 
-    auto itrExpire = m_setexpire->find(key);
-    if (itrExpire == m_setexpire->end())
+    auto itr = find_cached_threadsafe(key);
+    if (itr == end())
         return nullptr;
-    return itrExpire.operator->();
+    if (!itr.val()->FExpires())
+        return nullptr;
+    return &itr.val()->expire;
 }
 
 const expireEntry *redisDbPersistentDataSnapshot::getExpire(const char *key) const
@@ -2062,15 +2032,13 @@ int keyIsExpired(const redisDbPersistentDataSnapshot *db, robj *key) {
     /* Don't expire anything while loading. It will be done later. */
     if (g_pserver->loading) return 0;
     
-    std::unique_lock<fastlock> ul(g_expireLock);
     const expireEntry *pexpire = db->getExpire(key);
     mstime_t now;
+    long long when;
 
     if (pexpire == nullptr) return 0; /* No expire for this key */
 
-    long long when = pexpire->FGetPrimaryExpire();
-
-    if (when == INVALID_EXPIRE)
+    if (!pexpire->FGetPrimaryExpire(&when))
         return 0;
 
     /* If we are in the context of a Lua script, we pretend that time is
@@ -2632,7 +2600,6 @@ void redisDbPersistentData::initialize()
     m_pdbSnapshot = nullptr;
     m_pdict = dictCreate(&dbDictType,this);
     m_pdictTombstone = dictCreate(&dbTombstoneDictType,this);
-    m_setexpire = new(MALLOC_LOCAL) expireset();
     m_fAllChanged = 0;
     m_fTrackingChanges = 0;
 }
@@ -2668,7 +2635,6 @@ void moduleClusterLoadCallback(const char * rgchKey, size_t cchKey, void *data) 
 void redisDb::initialize(int id)
 {
     redisDbPersistentData::initialize();
-    this->expireitr = setexpire()->end();
     this->blocking_keys = dictCreate(&keylistDictType,NULL);
     this->ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
     this->watched_keys = dictCreate(&keylistDictType,NULL);
@@ -2714,6 +2680,8 @@ bool redisDbPersistentData::insert(char *key, robj *o, bool fAssumeNew, dict_ite
             serverAssert(dictFind(m_pdictTombstone, key) != nullptr);
         }
 #endif
+        if (o->FExpires())
+            ++m_numexpires;
         trackkey(key, false /* fUpdate */);
     }
     else
@@ -2735,11 +2703,6 @@ void redisDbPersistentData::prepOverwriteForSnapshot(char *key)
         auto itr = m_pdbSnapshot->find_cached_threadsafe(key);
         if (itr.key() != nullptr)
         {
-            if (itr.val()->FExpires()) {
-                // Note: I'm sure we could handle this, but its too risky at the moment.
-                //  There are known bugs doing this with expires
-                return;
-            }
             sds keyNew = sdsdupshared(itr.key());
             if (dictAdd(m_pdictTombstone, keyNew, (void*)dictHashKey(m_pdict, key)) != DICT_OK)
                 sdsfree(keyNew);
@@ -2761,7 +2724,7 @@ size_t redisDb::clear(bool fAsync, void(callback)(void*))
     } else {
         redisDbPersistentData::clear(callback);
     }
-    expireitr = setexpire()->end();
+    expires_cursor = 0;
     return removed;
 }
 
@@ -2774,59 +2737,64 @@ void redisDbPersistentData::clear(void(callback)(void*))
         m_cnewKeysPending = 0;
         m_fAllChanged++;
     }
-    {
-    std::unique_lock<fastlock> ul(g_expireLock);
-    delete m_setexpire;
-    m_setexpire = new (MALLOC_LOCAL) expireset();
-    }
     if (m_spstorage != nullptr)
         m_spstorage->clear(callback);
     dictEmpty(m_pdictTombstone,callback);
+
+    // To avoid issues with async rehash we completly free the old dict and create a fresh one
+    dictRelease(m_pdict);
+    dictRelease(m_pdictTombstone);
+    m_pdict = dictCreate(&dbDictType, this);
+    m_pdictTombstone = dictCreate(&dbTombstoneDictType, this);
+
     m_pdbSnapshot = nullptr;
+    m_numexpires = 0;
 }
 
 void redisDbPersistentData::setExpire(robj *key, robj *subkey, long long when)
 {
     /* Reuse the sds from the main dict in the expire dict */
-    std::unique_lock<fastlock> ul(g_expireLock);
     dictEntry *kde = dictFind(m_pdict,ptrFromObj(key));
     serverAssertWithInfo(NULL,key,kde != NULL);
     trackkey(key, true /* fUpdate */);
 
-    if (((robj*)dictGetVal(kde))->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
+    robj *o = (robj*)dictGetVal(kde);
+    if (o->getrefcount(std::memory_order_relaxed) == OBJ_SHARED_REFCOUNT)
     {
         // shared objects cannot have the expire bit set, create a real object
-        dictSetVal(m_pdict, kde, dupStringObject((robj*)dictGetVal(kde)));
+        dictSetVal(m_pdict, kde, dupStringObject(o));
+        o = (robj*)dictGetVal(kde);
     }
 
     const char *szSubKey = (subkey != nullptr) ? szFromObj(subkey) : nullptr;
-    if (((robj*)dictGetVal(kde))->FExpires()) {
-        auto itr = m_setexpire->find((sds)dictGetKey(kde));
-        serverAssert(itr != m_setexpire->end());
-        expireEntry eNew(std::move(*itr));
-        eNew.update(szSubKey, when);
-        m_setexpire->erase(itr);
-        m_setexpire->insert(eNew);
+    if (o->FExpires()) {
+        o->expire.update(szSubKey, when);
     }
     else
     {
-        expireEntry e((sds)dictGetKey(kde), szSubKey, when);
-        ((robj*)dictGetVal(kde))->SetFExpires(true);
-        m_setexpire->insert(e);
+        expireEntry e(szSubKey, when);
+        o->expire = std::move(e);
+        o->SetFExpires(true);
+        ++m_numexpires;
     }
 }
 
-void redisDbPersistentData::setExpire(expireEntry &&e)
+void redisDbPersistentData::setExpire(const char *key, expireEntry &&e)
 {
-    std::unique_lock<fastlock> ul(g_expireLock);
-    trackkey(e.key(), true /* fUpdate */);
-    m_setexpire->insert(e);
+    trackkey(key, true /* fUpdate */);
+    auto itr = find(key);
+    if (!itr->FExpires())
+        m_numexpires++;
+    itr->expire = std::move(e);
+    itr->SetFExpires(true);
 }
 
 bool redisDb::FKeyExpires(const char *key)
 {
-    std::unique_lock<fastlock> ul(g_expireLock);
-    return setexpireUnsafe()->find(key) != setexpire()->end();
+    auto itr = find(key);
+    if (itr == end())
+        return false;
+    return itr->FExpires();
 }
 
 void redisDbPersistentData::updateValue(dict_iter itr, robj *val)
@@ -2850,7 +2818,6 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
     serverAssert(m_refCount == 0);
     if (m_pdbSnapshot == nullptr && g_pserver->m_pstorageFactory == nullptr)
         return;
-    std::unique_lock<fastlock> ul(g_expireLock);
 
     // First see if the key can be obtained from a snapshot
     if (*pde == nullptr && m_pdbSnapshot != nullptr)
@@ -2872,7 +2839,11 @@ void redisDbPersistentData::ensure(const char *sdsKey, dictEntry **pde)
                 else
                 {
                     sds strT = serializeStoredObject(itr.val());
-                    robj *objNew = deserializeStoredObject(this, sdsKey, strT, sdslen(strT));
+                    robj *objNew = deserializeStoredObject(strT, sdslen(strT));
+                    if (itr->FExpires()) {
+                        objNew->expire = itr->expire;
+                        objNew->SetFExpires(true);
+                    }
                     sdsfree(strT);
                     dictAdd(m_pdict, keyNew, objNew);
                     serverAssert(objNew->getrefcount(std::memory_order_relaxed) == 1);
@@ -2902,26 +2873,19 @@ LNotFound:
             std::unique_ptr<expireEntry> spexpire;
             m_spstorage->retrieve((sds)sdsKey, [&](const char *, size_t, const void *data, size_t cb){
                 size_t offset = 0;
-                spexpire = deserializeExpire(sdsNewKey, (const char*)data, cb, &offset);    
-                o = deserializeStoredObject(this, sdsNewKey, reinterpret_cast<const char*>(data) + offset, cb - offset);
+                spexpire = deserializeExpire((const char*)data, cb, &offset);    
+                o = deserializeStoredObject(reinterpret_cast<const char*>(data) + offset, cb - offset);
                 serverAssert(o != nullptr);
             });
             
             if (o != nullptr)
             {
                 dictAdd(m_pdict, sdsNewKey, o);
-                o->SetFExpires(spexpire != nullptr);
                 
-                std::unique_lock<fastlock> ul(g_expireLock);
-                if (spexpire != nullptr)
-                {
-                    auto itr = m_setexpire->find(sdsKey);
-                    if (itr != m_setexpire->end())
-                        m_setexpire->erase(itr);
-                    m_setexpire->insert(std::move(*spexpire));
-                    serverAssert(m_setexpire->find(sdsKey) != m_setexpire->end());
+                o->SetFExpires(spexpire != nullptr);
+                if (spexpire != nullptr) {
+                    o->expire = std::move(*spexpire);
                 }
-                serverAssert(o->FExpires() == (m_setexpire->find(sdsKey) != m_setexpire->end()));
                 g_pserver->stat_storage_provider_read_hits++;
             } else {
                 sdsfree(sdsNewKey);
@@ -2931,18 +2895,11 @@ LNotFound:
             *pde = dictFind(m_pdict, sdsKey);
         }
     }
-
-    if (*pde != nullptr && dictGetVal(*pde) != nullptr)
-    {
-        robj *o = (robj*)dictGetVal(*pde);
-        std::unique_lock<fastlock> ul(g_expireLock);
-        serverAssert(o->FExpires() == (m_setexpire->find(sdsKey) != m_setexpire->end()));
-    }
 }
 
 void redisDbPersistentData::storeKey(sds key, robj *o, bool fOverwrite)
 {
-    sds temp = serializeStoredObjectAndExpire(this, key, o);
+    sds temp = serializeStoredObjectAndExpire(o);
     m_spstorage->insert(key, temp, sdslen(temp), fOverwrite);
     sdsfree(temp);
 }
@@ -2966,7 +2923,7 @@ void redisDbPersistentData::storeDatabase()
     if (itr == nullptr)
         return;
     robj *o = itr.val();
-    sds temp = serializeStoredObjectAndExpire(db, (const char*) itr.key(), o);
+    sds temp = serializeStoredObjectAndExpire(o);
     storage->insert((sds)key, temp, sdslen(temp), fUpdate);
     sdsfree(temp);
 }
@@ -3042,7 +2999,7 @@ void redisDbPersistentData::processChangesAsync(std::atomic<int> &pendingJobs)
         while ((de = dictNext(di)) != nullptr)
         {
             robj *o = (robj*)dictGetVal(de);
-            sds temp = serializeStoredObjectAndExpire(this, (const char*) dictGetKey(de), o);
+            sds temp = serializeStoredObjectAndExpire(o);
             veckeys.push_back((sds)dictGetKey(de));
             veccbkeys.push_back(sdslen((sds)dictGetKey(de)));
             vecvals.push_back(temp);
@@ -3106,9 +3063,7 @@ redisDbPersistentData::~redisDbPersistentData()
     if (m_dictChanged)
         dictRelease(m_dictChanged);
     if (m_dictChangedStorageFlush)
-        dictRelease(m_dictChangedStorageFlush);
-    
-    delete m_setexpire;
+        dictRelease(m_dictChangedStorageFlush);    
 }
 
 dict_iter redisDbPersistentData::random()
@@ -3262,7 +3217,7 @@ sds serializeExpire(const expireEntry *pexpire)
     return str;
 }
 
-std::unique_ptr<expireEntry> deserializeExpire(sds key, const char *str, size_t cch, size_t *poffset)
+std::unique_ptr<expireEntry> deserializeExpire(const char *str, size_t cch, size_t *poffset)
 {
     unsigned celem;
     if (cch < sizeof(unsigned))
@@ -3294,25 +3249,21 @@ std::unique_ptr<expireEntry> deserializeExpire(sds key, const char *str, size_t 
         offset += sizeof(long long);
 
         if (spexpire == nullptr)
-            spexpire = std::make_unique<expireEntry>(key, subkey, when);
+            spexpire = std::make_unique<expireEntry>(subkey, when);
         else
             spexpire->update(subkey, when);
 
         if (subkey)
             sdsfree(subkey);
     }
-
-    *poffset = offset;
+    if (poffset != nullptr)
+        *poffset = offset;
     return spexpire;
 }
 
-sds serializeStoredObjectAndExpire(redisDbPersistentData *db, const char *key, robj_roptr o)
+sds serializeStoredObjectAndExpire(robj_roptr o)
 {
-    std::unique_lock<fastlock> ul(g_expireLock);
-    auto itrExpire = db->setexpire()->find(key);
-    const expireEntry *pexpire = nullptr;
-    if (itrExpire != db->setexpire()->end())
-        pexpire = &(*itrExpire);
+    const expireEntry *pexpire = o->FExpires() ?  &o->expire : nullptr;
 
     sds str = serializeExpire(pexpire);
     str = serializeStoredObject(o, str);
@@ -3395,8 +3346,8 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
         robj *o = nullptr;
         m_spstorage->retrieve((sds)szFromObj(objKey), [&](const char *, size_t, const void *data, size_t cb){
                 size_t offset = 0;
-                spexpire = deserializeExpire(sharedKey, (const char*)data, cb, &offset);    
-                o = deserializeStoredObject(this, sharedKey, reinterpret_cast<const char*>(data) + offset, cb - offset);
+                spexpire = deserializeExpire((const char*)data, cb, &offset);    
+                o = deserializeStoredObject(reinterpret_cast<const char*>(data) + offset, cb - offset);
                 serverAssert(o != nullptr);
         });
 
@@ -3431,18 +3382,9 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
                         }
                     }
                     dictAdd(m_pdict, sharedKey, o);
-                    o->SetFExpires(spexpire != nullptr);
-
-                    std::unique_lock<fastlock> ul(g_expireLock);
                     if (spexpire != nullptr)
-                    {
-                        auto itr = m_setexpire->find(sharedKey);
-                        if (itr != m_setexpire->end())
-                            m_setexpire->erase(itr);
-                        m_setexpire->insert(std::move(*spexpire));
-                        serverAssert(m_setexpire->find(sharedKey) != m_setexpire->end());
-                    }
-                    serverAssert(o->FExpires() == (m_setexpire->find(sharedKey) != m_setexpire->end()));
+                        o->expire = std::move(*spexpire);
+                    o->SetFExpires(spexpire != nullptr);
                 }
             }
             else

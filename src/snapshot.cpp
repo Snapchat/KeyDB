@@ -74,6 +74,7 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     spdb->m_fTrackingChanges = 0;
     spdb->m_pdict = m_pdict;
     spdb->m_pdictTombstone = m_pdictTombstone;
+    spdb->m_numexpires = m_numexpires;
     // Add a fake iterator so the dicts don't rehash (they need to be read only)
     dictPauseRehashing(spdb->m_pdict);
     dictForceRehash(spdb->m_pdictTombstone);    // prevent rehashing by finishing the rehash now
@@ -83,12 +84,6 @@ const redisDbPersistentDataSnapshot *redisDbPersistentData::createSnapshot(uint6
     spdb->m_pdbSnapshot = m_pdbSnapshot;
     spdb->m_refCount = 1;
     spdb->m_mvccCheckpoint = getMvccTstamp();
-    if (m_setexpire != nullptr)
-    {
-        std::unique_lock<fastlock> ul(g_expireLock);
-        spdb->m_setexpire =  new (MALLOC_LOCAL) expireset(*m_setexpire);
-        spdb->m_setexpire->pause_rehash();  // needs to be const
-    }
 
     if (dictIsRehashing(spdb->m_pdict) || dictIsRehashing(spdb->m_pdictTombstone)) {
         serverLog(LL_VERBOSE, "NOTICE: Suboptimal snapshot");
@@ -171,11 +166,6 @@ void redisDbPersistentData::restoreSnapshot(const redisDbPersistentDataSnapshot 
     size_t expectedSize = psnapshot->size();
     dictEmpty(m_pdict, nullptr);
     dictEmpty(m_pdictTombstone, nullptr);
-    {
-    std::unique_lock<fastlock> ul(g_expireLock);
-    delete m_setexpire;
-    m_setexpire = new (MALLOC_LOCAL) expireset(*psnapshot->m_setexpire);
-    }
     endSnapshot(psnapshot);
     serverAssert(size() == expectedSize);
 }
@@ -597,8 +587,12 @@ bool redisDbPersistentDataSnapshot::iterate_threadsafe_core(std::function<bool(c
                 if (!fKeyOnly)
                 {
                     size_t offset = 0;
-                    deserializeExpire(sdsKey, (const char*)data, cbData, &offset);
-                    o = deserializeStoredObject(this, sdsKey, reinterpret_cast<const char*>(data)+offset, cbData-offset);
+                    std::unique_ptr<expireEntry> spexpire = deserializeExpire((const char*)data, cbData, &offset);
+                    o = deserializeStoredObject(reinterpret_cast<const char*>(data)+offset, cbData-offset);
+                    o->SetFExpires(spexpire != nullptr);
+                    if (spexpire != nullptr) {
+                        o->expire = std::move(*spexpire);
+                    }
                 }
                 fContinue = fn(sdsKey, o);
                 if (o != nullptr)

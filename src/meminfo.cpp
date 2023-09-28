@@ -19,6 +19,7 @@ static size_t getMemKey(std::string key) {
     }
     return 0;
 # else
+    (void)key;
     return 0;
 # endif
 }

@@ -79,6 +79,7 @@ void printCrashReport(void);
 void bugReportEnd(int killViaSignal, int sig);
 void logStackTrace(void *eip, int uplevel);
 void getTempFileName(char tmpfile[], int tmpfileNum);
+bool initializeStorageProvider(const char **err);
 
 /* ================================= Debugging ============================== */
 
@@ -535,29 +536,74 @@ NULL
                 return;
             }
         }
+        
+        if (g_pserver->m_pstorageFactory) {
+            protectClient(c);
 
-        /* The default behavior is to save the RDB file before loading
-         * it back. */
-        if (save) {
-            rdbSaveInfo rsi, *rsiptr;
-            rsiptr = rdbPopulateSaveInfo(&rsi);
-            if (rdbSave(nullptr, rsiptr) != C_OK) {
-                addReply(c,shared.err);
+            for (int idb = 0; idb < cserver.dbnum; ++idb) {
+                if (g_pserver->db[idb]->processChanges(false))
+                    g_pserver->db[idb]->commitChanges();
+                g_pserver->db[idb]->storageProviderDelete();
+            }
+            delete g_pserver->metadataDb;
+
+            if (flush) emptyDb(-1,EMPTYDB_NO_FLAGS,NULL);
+
+            delete g_pserver->m_pstorageFactory;
+
+            const char *err;
+            if (!initializeStorageProvider(&err))
+            {
+                serverLog(LL_WARNING, "Failed to initialize storage provider: %s",err);
+                exit(EXIT_FAILURE);
+            }
+
+            g_pserver->metadataDb = g_pserver->m_pstorageFactory->createMetadataDb();
+            for (int idb = 0; idb < cserver.dbnum; ++idb)
+            {
+                int dbid = idb;
+                std::string dbid_key = "db-" + std::to_string(idb);
+                g_pserver->metadataDb->retrieve(dbid_key.c_str(), dbid_key.length(), [&](const char *, size_t, const void *data, size_t){
+                    dbid = *(int*)data;
+                });
+                delete g_pserver->db[idb];
+                g_pserver->db[idb] = new (MALLOC_LOCAL) redisDb();
+                g_pserver->db[idb]->initialize(dbid);
+            }
+
+            moduleFireServerEvent(REDISMODULE_EVENT_LOADING, REDISMODULE_SUBEVENT_LOADING_FLASH_START, NULL);
+            for (int idb = 0; idb < cserver.dbnum; ++idb)
+            {
+                g_pserver->db[idb]->storageProviderInitialize();
+                g_pserver->db[idb]->trackChanges(false);
+            }
+            moduleFireServerEvent(REDISMODULE_EVENT_LOADING, REDISMODULE_SUBEVENT_LOADING_ENDED, NULL);
+            
+            unprotectClient(c);
+        } else {
+            /* The default behavior is to save the RDB file before loading
+            * it back. */
+            if (save) {
+                rdbSaveInfo rsi, *rsiptr;
+                rsiptr = rdbPopulateSaveInfo(&rsi);
+                if (rdbSave(nullptr, rsiptr) != C_OK) {
+                    addReply(c,shared.err);
+                    return;
+                }
+            }
+
+            /* The default behavior is to remove the current dataset from
+            * memory before loading the RDB file, however when MERGE is
+            * used together with NOFLUSH, we are able to merge two datasets. */
+            if (flush) emptyDb(-1,EMPTYDB_NO_FLAGS,NULL);
+
+            protectClient(c);
+            int ret = rdbLoadFile(g_pserver->rdb_filename,NULL,flags);
+            unprotectClient(c);
+            if (ret != C_OK) {
+                addReplyError(c,"Error trying to load the RDB dump");
                 return;
             }
-        }
-
-        /* The default behavior is to remove the current dataset from
-         * memory before loading the RDB file, however when MERGE is
-         * used together with NOFLUSH, we are able to merge two datasets. */
-        if (flush) emptyDb(-1,EMPTYDB_NO_FLAGS,NULL);
-
-        protectClient(c);
-        int ret = rdbLoadFile(g_pserver->rdb_filename,NULL,flags);
-        unprotectClient(c);
-        if (ret != C_OK) {
-            addReplyError(c,"Error trying to load the RDB dump");
-            return;
         }
         serverLog(LL_WARNING,"DB reloaded by DEBUG RELOAD");
         addReply(c,shared.ok);

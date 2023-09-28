@@ -149,11 +149,22 @@ size_t RocksDBStorageProvider::clear()
 
     rocksdb::ColumnFamilyHandle *handle = nullptr;
     rocksdb::ColumnFamilyOptions cf_options(m_pfactory->RocksDbOptions());
+    cf_options.level_compaction_dynamic_level_bytes = true;
     m_spdb->CreateColumnFamily(cf_options, strName, &handle);
     m_spcolfamily = std::shared_ptr<rocksdb::ColumnFamilyHandle>(handle);
 
     if (!status.ok())
         throw status.ToString();
+   
+    status = m_spdb->DropColumnFamily(m_spexpirecolfamily.get());
+    strName = m_spexpirecolfamily->GetName();
+
+    m_spdb->CreateColumnFamily(cf_options, strName, &handle);
+    m_spexpirecolfamily = std::shared_ptr<rocksdb::ColumnFamilyHandle>(handle);
+
+    if (!status.ok())
+        throw status.ToString();
+
     m_count = 0;
     return celem;
 }

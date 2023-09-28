@@ -46,6 +46,7 @@ robj *createObject(int type, void *ptr) {
     char *oB = (char*)zcalloc(sizeof(robj)+mvccExtraBytes, MALLOC_SHARED);
     robj *o = reinterpret_cast<robj*>(oB + mvccExtraBytes);
     
+    new (o) redisObject;
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
     o->m_ptr = ptr;
@@ -418,6 +419,7 @@ void decrRefCount(robj_roptr o) {
         case OBJ_NESTEDHASH: freeNestedHashObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
+        o->~redisObject();
         if (g_pserver->fActiveReplica) {
             zfree(reinterpret_cast<redisObjectExtended*>(o.unsafe_robjcast())-1);
         } else {
@@ -1141,10 +1143,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
         mh->db[mh->num_dbs].overhead_ht_main = mem;
         mem_total+=mem;
         
-        std::unique_lock<fastlock> ul(g_expireLock);
-        mem = db->setexpire()->estimated_bytes_used();
-        mh->db[mh->num_dbs].overhead_ht_expires = mem;
-        mem_total+=mem;
+        mh->db[mh->num_dbs].overhead_ht_expires = 0;
 
         mh->num_dbs++;
     }
@@ -1628,7 +1627,7 @@ robj *deserializeStoredStringObject(const char *data, size_t cb)
     return newObject;
 }
 
-robj *deserializeStoredObjectCore(const void *data, size_t cb)
+robj *deserializeStoredObject(const void *data, size_t cb)
 {
     switch (((char*)data)[0])
     {
@@ -1663,14 +1662,6 @@ robj *deserializeStoredObjectCore(const void *data, size_t cb)
             return obj;
     }
     serverPanic("Unknown object type loading from storage");
-}
-
-robj *deserializeStoredObject(const redisDbPersistentData *db, const char *key, const void *data, size_t cb)
-{
-    robj *o = deserializeStoredObjectCore(data, cb);
-    std::unique_lock<fastlock> ul(g_expireLock);
-    o->SetFExpires(db->setexpire()->exists(key));
-    return o;
 }
 
 sds serializeStoredObject(robj_roptr o, sds sdsPrefix)

@@ -51,10 +51,17 @@ public:
     bool enumerate(IStorage::callback fn) const { return m_spstorage->enumerate(fn); }
     bool enumerate_hashslot(IStorage::callback fn, unsigned int hashslot) const { return m_spstorage->enumerate_hashslot(fn, hashslot); }
 
+    std::vector<std::string> getExpirationCandidates(unsigned int count) { return m_spstorage->getExpirationCandidates(count); }
+    std::vector<std::string> getEvictionCandidates(unsigned int count) { return m_spstorage->getEvictionCandidates(count); }
+    void setExpire(const char *key, size_t cchKey, long long expire) { m_spstorage->setExpire(key, cchKey, expire); }
+    void removeExpire(const char *key, size_t cchKey, long long expire) { m_spstorage->removeExpire(key, cchKey, expire); }
+
     void beginWriteBatch();
     void endWriteBatch() { m_spstorage->endWriteBatch(); }
     void batch_lock() { return m_spstorage->batch_lock(); }
     void batch_unlock() { return m_spstorage->batch_unlock(); }
+
+    void flush() { m_spstorage->flush(); }
 
     size_t count() const;
 

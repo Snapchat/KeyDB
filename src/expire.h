@@ -22,9 +22,11 @@ public:
         {}
 
         subexpireEntry(const subexpireEntry &other)
-            : spsubkey((const char*)sdsdupshared(other.spsubkey.get()), sdsfree)
+            : spsubkey(nullptr, sdsfree)
         {
             when = other.when;
+            if (other.spsubkey != nullptr)
+                spsubkey = std::unique_ptr<const char, void(*)(const char*)>((const char*)sdsdupshared(other.spsubkey.get()), sdsfree);
         }
 
         subexpireEntry(subexpireEntry &&) = default;
@@ -41,26 +43,29 @@ public:
     };
 
 private:
-    sdsimmutablestring m_keyPrimary;
     std::vector<subexpireEntry> m_vecexpireEntries;  // Note a NULL for the sds portion means the expire is for the primary key
     dict *m_dictIndex = nullptr;
+    long long m_whenPrimary = LLONG_MAX;
 
     void createIndex();
 public:
-    expireEntryFat(const sdsimmutablestring &keyPrimary)
-        : m_keyPrimary(keyPrimary)
-        {}
+    expireEntryFat() = default;
+    expireEntryFat(const expireEntryFat &);
     ~expireEntryFat();
 
-    expireEntryFat(const expireEntryFat &e);
-    expireEntryFat(expireEntryFat &&e);
-
     long long when() const noexcept { return m_vecexpireEntries.front().when; }
-    const char *key() const noexcept { return static_cast<const char*>(m_keyPrimary); }
 
     bool operator<(long long when) const noexcept { return this->when() <  when; }
 
     void expireSubKey(const char *szSubkey, long long when);
+
+    bool FGetPrimaryExpire(long long *pwhen) const {
+        if (m_whenPrimary != LLONG_MAX) {
+            *pwhen = m_whenPrimary;
+            return true;
+        }
+        return false;
+    }
 
     bool FEmpty() const noexcept { return m_vecexpireEntries.empty(); }
     const subexpireEntry &nextExpireEntry() const noexcept { return m_vecexpireEntries.front(); }
@@ -70,19 +75,11 @@ public:
 };
 
 class expireEntry {
-    struct
-    {
-        sdsimmutablestring m_key;
-        expireEntryFat *m_pfatentry = nullptr;
-    } u;
-    long long m_when;   // bit wise and with FFatMask means this is a fat entry and we should use the pointer
-
-    /* Mask to check if an entry is Fat, most significant bit of m_when being set means it is Fat otherwise it is not */
-    long long FFatMask() const noexcept {
-        return (1LL) << (sizeof(long long)*CHAR_BIT - 1);
-    }
-
-    expireEntry() = default;
+    struct {
+        uint64_t m_whenAndPtrUnion : 63,
+                fFat : 1;
+    } s;
+    static_assert(sizeof(expireEntryFat*) <= sizeof(int64_t), "The pointer must fit in the union");
 public:
     class iter
     {
@@ -118,92 +115,107 @@ public:
         const iter &operator*() const { return *this; }
     };
 
-    expireEntry(sds key, const char *subkey, long long when)
+    expireEntry() 
+    {
+        s.fFat = 0;
+        s.m_whenAndPtrUnion = 0;
+    }
+
+    expireEntry(const char *subkey, long long when)
     {
         if (subkey != nullptr)
         {
-            m_when = FFatMask() | INVALID_EXPIRE;
-            u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(sdsimmutablestring(sdsdupshared(key)));
-            u.m_pfatentry->expireSubKey(subkey, when);
+            auto pfatentry = new (MALLOC_LOCAL) expireEntryFat();
+            pfatentry->expireSubKey(subkey, when);
+            s.m_whenAndPtrUnion = reinterpret_cast<long long>(pfatentry);
+            s.fFat = true;
         }
         else
         {
-            u.m_key = sdsimmutablestring(sdsdupshared(key));
-            m_when = when;
+            s.m_whenAndPtrUnion = when;
+            s.fFat = false;
         }
-    }
-
-    expireEntry(const expireEntry &e)
-    {
-        *this = e;
-    }
-    expireEntry(expireEntry &&e)
-    {
-        u.m_key = std::move(e.u.m_key);
-        u.m_pfatentry = std::move(e.u.m_pfatentry);
-        m_when = e.m_when;
-        e.m_when = 0;
-        e.u.m_pfatentry = nullptr;
     }
 
     expireEntry(expireEntryFat *pfatentry)
     {
-        u.m_pfatentry = pfatentry;
-        m_when = FFatMask() | INVALID_EXPIRE;
-        for (auto itr : *this)
-        {
-            if (itr.subkey() == nullptr)
-            {
-                m_when = FFatMask() | itr.when();
-                break;
-            }
+        assert(pfatentry != nullptr);
+        s.m_whenAndPtrUnion = reinterpret_cast<long long>(pfatentry);
+        s.fFat = true;
+    }
+
+    expireEntry(const expireEntry &e) {
+        if (e.FFat()) {
+            s.m_whenAndPtrUnion = reinterpret_cast<long long>(new expireEntryFat(*e.pfatentry()));
+            s.fFat = true;
+        } else {
+            s = e.s;
         }
+    }
+
+    expireEntry(expireEntry &&e)
+    {
+        s = e.s;
+    }
+
+    expireEntry &operator=(expireEntry &&e)
+    {
+        if (FFat())
+            delete pfatentry();
+        s = e.s;
+        e.s.m_whenAndPtrUnion = 0;
+        e.s.fFat = false;
+        return *this;
+    }
+
+    expireEntry &operator=(expireEntry &e) {
+        if (FFat())
+            delete pfatentry();
+        if (e.FFat()) {
+            s.m_whenAndPtrUnion = reinterpret_cast<long long>(new expireEntryFat(*e.pfatentry()));
+            s.fFat = true;
+        } else {
+            s = e.s;
+        }
+        return *this;
     }
 
     // Duplicate the expire, note this is intended to be passed directly to setExpire
     expireEntry duplicate() const {
         expireEntry dst;
-        dst.m_when = m_when;
         if (FFat()) {
-            dst.u.m_pfatentry = new expireEntryFat(*u.m_pfatentry);
+            auto pfatentry = new expireEntryFat(*expireEntry::pfatentry());
+            dst.s.m_whenAndPtrUnion = reinterpret_cast<long long>(pfatentry);
+            dst.s.fFat = true;
         } else {
-            dst.u.m_key = u.m_key;
+            dst.s.m_whenAndPtrUnion = s.m_whenAndPtrUnion;
+            dst.s.fFat = false;
         }
         return dst;
+    }
+
+    void reset() {
+        if (FFat())
+            delete pfatentry();
+        s.fFat = false;
+        s.m_whenAndPtrUnion = 0;
     }
 
     ~expireEntry()
     {
         if (FFat())
-            delete u.m_pfatentry;
+            delete pfatentry();
     }
 
-    expireEntry &operator=(const expireEntry &e)
-    {
-        u.m_key = e.u.m_key;
-        m_when = e.m_when;
-        if (e.FFat())
-            u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(*e.u.m_pfatentry);
-        return *this;
+    inline bool FFat() const noexcept { return s.fFat; }
+    expireEntryFat *pfatentry() { 
+        assert(FFat()); 
+        return reinterpret_cast<expireEntryFat*>(s.m_whenAndPtrUnion);
+    }
+    const expireEntryFat *pfatentry() const { 
+        return const_cast<expireEntry*>(this)->pfatentry();
     }
 
-    void setKeyUnsafe(sds key)
-    {
-        if (FFat())
-            u.m_pfatentry->m_keyPrimary = sdsimmutablestring(sdsdupshared(key));
-        else
-            u.m_key = sdsimmutablestring(sdsdupshared(key));
-    }
-
-    inline bool FFat() const noexcept { return m_when & FFatMask(); }
-    expireEntryFat *pfatentry() { assert(FFat()); return u.m_pfatentry; }
-    const expireEntryFat *pfatentry() const { assert(FFat()); return u.m_pfatentry; }
-
-
-    bool operator==(const sdsview &key) const noexcept
-    { 
-        return key == this->key(); 
-    }
 
     bool operator<(const expireEntry &e) const noexcept
     { 
@@ -214,17 +226,11 @@ public:
         return this->when() < when;
     }
 
-    const char *key() const noexcept
-    { 
-        if (FFat())
-            return u.m_pfatentry->key();
-        return static_cast<const char*>(u.m_key);
-    }
     long long when() const noexcept
     { 
         if (FFat())
-            return u.m_pfatentry->when();
-        return FGetPrimaryExpire();
+            return pfatentry()->when();
+        return s.m_whenAndPtrUnion;
     }
 
     void update(const char *subkey, long long when)
@@ -233,30 +239,27 @@ public:
         {
             if (subkey == nullptr)
             {
-                m_when = when;
+                s.m_whenAndPtrUnion = when;
                 return;
             }
             else
             {
                 // we have to upgrade to a fat entry
-                long long whenT = m_when;
-                sdsimmutablestring keyPrimary = u.m_key;
-                m_when |= FFatMask();
-                u.m_pfatentry = new (MALLOC_LOCAL) expireEntryFat(keyPrimary);
-                u.m_pfatentry->expireSubKey(nullptr, whenT);
+                auto pfatentry = new (MALLOC_LOCAL) expireEntryFat();
+                pfatentry->expireSubKey(nullptr, s.m_whenAndPtrUnion);
+                s.m_whenAndPtrUnion = reinterpret_cast<long long>(pfatentry);
+                s.fFat = true;
                 // at this point we're fat so fall through
             }
         }
-        if (subkey == nullptr)
-            m_when = when | FFatMask();
-        u.m_pfatentry->expireSubKey(subkey, when);
+        pfatentry()->expireSubKey(subkey, when);
     }
     
     iter begin() const { return iter(this, 0); }
     iter end() const
     {
         if (FFat())
-            return iter(this, u.m_pfatentry->size());
+            return iter(this, pfatentry()->size());
         return iter(this, 1);
     }
     
@@ -268,26 +271,39 @@ public:
             pfatentry()->m_vecexpireEntries.begin() + itr.m_idx);
     }
 
-    size_t size() const
-    {
+    size_t size() const {
         if (FFat())
-            return u.m_pfatentry->size();
+            return pfatentry()->size();
         return 1;
-    }
-
-    long long FGetPrimaryExpire() const noexcept
-    { 
-        return m_when & (~FFatMask()); 
     }
 
     bool FGetPrimaryExpire(long long *pwhen) const noexcept
     { 
-        *pwhen = FGetPrimaryExpire();
-        return *pwhen != INVALID_EXPIRE;
+        if (FFat()) {
+            return pfatentry()->FGetPrimaryExpire(pwhen);
+        } else {
+            *pwhen = s.m_whenAndPtrUnion;
+            return true;
+        }
     }
 
-    explicit operator sdsview() const noexcept { return key(); }
+    void *release_as_void() {
+        uint64_t whenT = s.m_whenAndPtrUnion;
+        whenT |= static_cast<uint64_t>(s.fFat) << 63;
+        s.m_whenAndPtrUnion = 0;
+        s.fFat = 0;
+        return reinterpret_cast<void*>(whenT);
+    }
+
+    static expireEntry *from_void(void **src) {
+        uintptr_t llV = reinterpret_cast<uintptr_t>(src);
+        return reinterpret_cast<expireEntry*>(llV);
+    }
+    static const expireEntry *from_void(void *const*src) {
+        uintptr_t llV = reinterpret_cast<uintptr_t>(src);
+        return reinterpret_cast<expireEntry*>(llV);
+    }
+
     explicit operator long long() const noexcept { return when(); }
 };
-typedef semiorderedset<expireEntry, sdsview, true /*expireEntry can be memmoved*/> expireset;
-extern fastlock g_expireLock;
+static_assert(sizeof(expireEntry) == sizeof(long long), "This must fit in a long long so it can be put in a dictEntry");

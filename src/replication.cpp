@@ -188,6 +188,8 @@ int bg_unlink(const char *filename) {
 /* ---------------------------------- MASTER -------------------------------- */
 
 bool createDiskBacklog() {
+    if (g_pserver->repl_backlog_disk != nullptr)
+        return true;    // already exists
     // Lets create some disk backed pages and add them here
     std::string path = "./repl-backlog-temp" + std::to_string(gettid());
 #if (defined __APPLE__ || defined __FreeBSD__)

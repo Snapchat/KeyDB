@@ -1,6 +1,7 @@
 #include "../IStorage.h"
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 class TestStorageFactory : public IStorageFactory
 {
@@ -27,6 +28,11 @@ public:
     virtual bool enumerate(callback fn) const override;
     virtual bool enumerate_hashslot(callback fn, unsigned int hashslot) const override;
     virtual size_t count() const override;
+
+    virtual std::vector<std::string> getExpirationCandidates(unsigned int) override { return std::vector<std::string>(); }
+    virtual std::vector<std::string> getEvictionCandidates(unsigned int) override { return std::vector<std::string>(); }
+    virtual void setExpire(const char *, size_t, long long) override {}
+    virtual void removeExpire(const char *, size_t, long long) override {}
 
     virtual void flush() override;
 

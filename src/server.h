@@ -3923,7 +3923,7 @@ void updateActiveReplicaMastersFromRsi(rdbSaveInfo *rsi);
 uint64_t getMvccTstamp();
 void incrementMvccTstamp();
 
-#if __GNUC__ >= 7 && !defined(NO_DEPRECATE_FREE)
+#if __GNUC__ >= 7 && !defined(NO_DEPRECATE_FREE) && !defined(ALPINE)
  [[deprecated]]
 void *calloc(size_t count, size_t size) noexcept;
  [[deprecated]]

@@ -358,6 +358,7 @@ endif
 OS := $(shell cat /etc/os-release | grep ID= | head -n 1 | cut -d'=' -f2)
 ifeq ($(OS),alpine)
     FINAL_CXXFLAGS+=-DUNW_LOCAL_ONLY
+	FINAL_CXXFLAGS+=-DALPINE
     FINAL_LIBS += -lunwind
 endif
 

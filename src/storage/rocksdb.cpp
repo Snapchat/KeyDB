@@ -144,12 +144,13 @@ void RocksDBStorageProvider::retrieve(const char *key, size_t cchKey, callbackSi
 size_t RocksDBStorageProvider::clear()
 {
     size_t celem = count();
+    auto options = m_spdb->GetOptions(m_spcolfamily.get());
     auto status = m_spdb->DropColumnFamily(m_spcolfamily.get());
     auto strName = m_spcolfamily->GetName();
 
     rocksdb::ColumnFamilyHandle *handle = nullptr;
-    rocksdb::ColumnFamilyOptions cf_options(m_pfactory->RocksDbOptions());
-    cf_options.level_compaction_dynamic_level_bytes = true;
+    rocksdb::ColumnFamilyOptions cf_options(options);
+
     m_spdb->CreateColumnFamily(cf_options, strName, &handle);
     m_spcolfamily = std::shared_ptr<rocksdb::ColumnFamilyHandle>(handle);
 

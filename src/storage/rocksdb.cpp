@@ -7,6 +7,8 @@
 #include "../cluster.h"
 #include "rocksdbfactor_internal.h"
 
+template class std::basic_string<char>;
+
 static const char keyprefix[] = INTERNAL_KEY_PREFIX;
 
 rocksdb::Options DefaultRocksDBOptions();

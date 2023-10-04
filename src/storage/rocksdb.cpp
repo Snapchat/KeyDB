@@ -27,7 +27,7 @@ bool FInternalKey(const char *key, size_t cch)
 std::string getPrefix(unsigned int hashslot)
 {
     char *hash_char = (char *)&hashslot;
-    return std::string(hash_char + (sizeof(unsigned int) - 2), 2);
+    return std::string(hash_char, sizeof(unsigned int));
 }
 
 std::string prefixKey(const char *key, size_t cchKey)
@@ -186,7 +186,7 @@ bool RocksDBStorageProvider::enumerate(callback fn) const
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
         ++count;
-        bool fContinue = fn(it->key().data()+2, it->key().size()-2, it->value().data(), it->value().size());
+        bool fContinue = fn(it->key().data()+sizeof(unsigned int), it->key().size()-sizeof(unsigned int), it->value().data(), it->value().size());
         if (!fContinue)
             break;
     }
@@ -205,15 +205,17 @@ bool RocksDBStorageProvider::enumerate_hashslot(callback fn, unsigned int hashsl
     std::string prefix = getPrefix(hashslot);
     std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spcolfamily.get()));
     size_t count = 0;
-    for (it->Seek(prefix.c_str()); it->Valid(); it->Next()) {
+    for (it->Seek(prefix); it->Valid(); it->Next()) {
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
-        if (strncmp(it->key().data(),prefix.c_str(),2) != 0)
+        if (strncmp(it->key().data(),prefix.c_str(),sizeof(unsigned int)) != 0)
             break;
         ++count;
-        bool fContinue = fn(it->key().data()+2, it->key().size()-2, it->value().data(), it->value().size());
+        bool fContinue = fn(it->key().data()+sizeof(unsigned int), it->key().size()-sizeof(unsigned int), it->value().data(), it->value().size());
         if (!fContinue)
             break;
+        serverLog(LL_WARNING, "%d %d", hashslot, *it->key().data());
+        serverLog(LL_WARNING, "Found key %d of %d with len %d: %.*s", count, g_pserver->cluster->slots_keys_count[hashslot], (int)it->key().size()-sizeof(unsigned int), (int)it->key().size()-sizeof(unsigned int), it->key().data()+sizeof(unsigned int));
     }
     bool full_iter = !it->Valid() || (strncmp(it->key().data(),prefix.c_str(),2) != 0);
     if (full_iter && count != g_pserver->cluster->slots_keys_count[hashslot])
@@ -280,7 +282,7 @@ std::vector<std::string> RocksDBStorageProvider::getEvictionCandidates(unsigned 
         for (it->Seek(randomHashSlot()); it->Valid() && result.size() < count; it->Next()) {
             if (FInternalKey(it->key().data(), it->key().size()))
                 continue;
-            result.emplace_back(it->key().data() + 2, it->key().size() - 2);
+            result.emplace_back(it->key().data() + sizeof(unsigned int), it->key().size() - sizeof(unsigned int));
         }
     } else {
         std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spexpirecolfamily.get()));

@@ -208,7 +208,7 @@ bool RocksDBStorageProvider::enumerate_hashslot(callback fn, unsigned int hashsl
     for (it->Seek(prefix); it->Valid(); it->Next()) {
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
-        if ((unsigned int)*it->key().data() != hashslot)
+        if (*(unsigned int *)it->key().data() != hashslot)
             break;
         ++count;
         bool fContinue = fn(it->key().data()+sizeof(unsigned int), it->key().size()-sizeof(unsigned int), it->value().data(), it->value().size());

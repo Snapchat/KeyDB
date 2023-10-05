@@ -72,7 +72,7 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
     rocksdb::DB *db = nullptr;
 
     auto options = RocksDbOptions();
-    options.prefix_extractor.reset(rocksdb::NewFixedPrefixTransform(2));
+    options.prefix_extractor.reset(rocksdb::NewFixedPrefixTransform(sizeof(unsigned int)));
 
     for (int idb = 0; idb < dbnum; ++idb)
     {

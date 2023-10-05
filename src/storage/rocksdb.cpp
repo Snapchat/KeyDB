@@ -214,10 +214,8 @@ bool RocksDBStorageProvider::enumerate_hashslot(callback fn, unsigned int hashsl
         bool fContinue = fn(it->key().data()+sizeof(unsigned int), it->key().size()-sizeof(unsigned int), it->value().data(), it->value().size());
         if (!fContinue)
             break;
-        serverLog(LL_WARNING, "%d %d %d", hashslot, (unsigned int)*it->key().data(), (unsigned int)*prefix.c_str());
-        serverLog(LL_WARNING, "Found key %d of %d with len %d: %.*s", count, g_pserver->cluster->slots_keys_count[hashslot], (int)it->key().size()-sizeof(unsigned int), (int)it->key().size()-sizeof(unsigned int), it->key().data()+sizeof(unsigned int));
     }
-    bool full_iter = !it->Valid() || (strncmp(it->key().data(),prefix.c_str(),2) != 0);
+    bool full_iter = !it->Valid() || (*(unsigned int *)it->key().data() != hashslot);
     if (full_iter && count != g_pserver->cluster->slots_keys_count[hashslot])
     {
         printf("WARNING: rocksdb hashslot count mismatch");

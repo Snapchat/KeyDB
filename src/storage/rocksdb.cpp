@@ -3,6 +3,7 @@
 #include <sstream>
 #include <mutex>
 #include <unistd.h>
+#include <arpa/inet.h>
 #include "../server.h"
 #include "../cluster.h"
 #include "rocksdbfactor_internal.h"
@@ -230,7 +231,8 @@ void RocksDBStorageProvider::setExpire(const char *key, size_t cchKey, long long
 {
     rocksdb::Status status;
     std::unique_lock<fastlock> l(m_lock);
-    std::string prefix((const char *)&expire,sizeof(long long));
+    long long beExpire = htonll(expire);
+    std::string prefix((const char *)&beExpire,sizeof(long long));
     std::string strKey(key, cchKey);
     if (m_spbatch != nullptr)
         status = m_spbatch->Put(m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), rocksdb::Slice(strKey));
@@ -244,7 +246,8 @@ void RocksDBStorageProvider::removeExpire(const char *key, size_t cchKey, long l
 {
     rocksdb::Status status;
     std::unique_lock<fastlock> l(m_lock);
-    std::string prefix((const char *)&expire,sizeof(long long));
+    long long beExpire = htonll(expire);
+    std::string prefix((const char *)&beExpire,sizeof(long long));
     std::string strKey(key, cchKey);
     std::string fullKey = prefix + strKey;
     if (!FExpireExists(fullKey))

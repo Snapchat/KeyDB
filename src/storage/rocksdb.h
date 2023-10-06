@@ -4,7 +4,13 @@
 #include "../IStorage.h"
 #include <rocksdb/db.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
+#ifdef __APPLE__
+#include <libkern/OSByteOrder.h>
+#define htole16(x) OSSwapHostToLittleInt16(x)
+#define le16toh(x) OSSwapLittleToHostInt16(x)
+#else
 #include <endian.h>
+#endif
 #include "../fastlock.h"
 
 #define INTERNAL_KEY_PREFIX "\x00\x04\x03\x00\x05\x02\x04"

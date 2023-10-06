@@ -6,8 +6,9 @@
 #include <rocksdb/utilities/write_batch_with_index.h>
 #ifdef __APPLE__
 #include <libkern/OSByteOrder.h>
-#define htole16(x) OSSwapHostToLittleInt16(x)
-#define le16toh(x) OSSwapLittleToHostInt16(x)
+#define htole16 OSSwapHostToLittleInt16
+#define le16toh OSSwapLittleToHostInt16
+#define htobe64 OSSwapHostToBigInt64
 #else
 #include <endian.h>
 #endif

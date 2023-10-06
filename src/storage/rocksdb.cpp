@@ -26,8 +26,9 @@ bool FInternalKey(const char *key, size_t cch)
 
 std::string getPrefix(unsigned int hashslot)
 {
-    char *hash_char = (char *)&hashslot;
-    return std::string(hash_char, sizeof(unsigned int));
+    HASHSLOT_PREFIX_TYPE slot = (HASHSLOT_PREFIX_TYPE)hashslot;
+    char *hash_char = (char *)&slot;
+    return std::string(hash_char, HASHSLOT_PREFIX_BYTES);
 }
 
 std::string prefixKey(const char *key, size_t cchKey)
@@ -186,7 +187,7 @@ bool RocksDBStorageProvider::enumerate(callback fn) const
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
         ++count;
-        bool fContinue = fn(it->key().data()+sizeof(unsigned int), it->key().size()-sizeof(unsigned int), it->value().data(), it->value().size());
+        bool fContinue = fn(it->key().data()+HASHSLOT_PREFIX_BYTES, it->key().size()-HASHSLOT_PREFIX_BYTES, it->value().data(), it->value().size());
         if (!fContinue)
             break;
     }
@@ -208,14 +209,14 @@ bool RocksDBStorageProvider::enumerate_hashslot(callback fn, unsigned int hashsl
     for (it->Seek(prefix); it->Valid(); it->Next()) {
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
-        if (*(unsigned int *)it->key().data() != hashslot)
+        if (*(HASHSLOT_PREFIX_TYPE *)it->key().data() != hashslot)
             break;
         ++count;
-        bool fContinue = fn(it->key().data()+sizeof(unsigned int), it->key().size()-sizeof(unsigned int), it->value().data(), it->value().size());
+        bool fContinue = fn(it->key().data()+HASHSLOT_PREFIX_BYTES, it->key().size()-HASHSLOT_PREFIX_BYTES, it->value().data(), it->value().size());
         if (!fContinue)
             break;
     }
-    bool full_iter = !it->Valid() || (*(unsigned int *)it->key().data() != hashslot);
+    bool full_iter = !it->Valid() || (*(HASHSLOT_PREFIX_TYPE *)it->key().data() != hashslot);
     if (full_iter && count != g_pserver->cluster->slots_keys_count[hashslot])
     {
         printf("WARNING: rocksdb hashslot count mismatch");
@@ -280,7 +281,7 @@ std::vector<std::string> RocksDBStorageProvider::getEvictionCandidates(unsigned 
         for (it->Seek(randomHashSlot()); it->Valid() && result.size() < count; it->Next()) {
             if (FInternalKey(it->key().data(), it->key().size()))
                 continue;
-            result.emplace_back(it->key().data() + sizeof(unsigned int), it->key().size() - sizeof(unsigned int));
+            result.emplace_back(it->key().data() + HASHSLOT_PREFIX_BYTES, it->key().size() - HASHSLOT_PREFIX_BYTES);
         }
     } else {
         std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spexpirecolfamily.get()));

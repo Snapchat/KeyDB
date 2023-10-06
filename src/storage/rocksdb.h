@@ -4,11 +4,14 @@
 #include "../IStorage.h"
 #include <rocksdb/db.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
+#include <endian.h>
 #include "../fastlock.h"
 
 #define INTERNAL_KEY_PREFIX "\x00\x04\x03\x00\x05\x02\x04"
 #define HASHSLOT_PREFIX_TYPE uint16_t
 #define HASHSLOT_PREFIX_BYTES sizeof(HASHSLOT_PREFIX_TYPE)
+#define HASHSLOT_PREFIX_ENDIAN htole16
+#define HASHSLOT_PREFIX_RECOVER le16toh
 static const char count_key[] = INTERNAL_KEY_PREFIX "__keydb__count\1";
 static const char version_key[] = INTERNAL_KEY_PREFIX "__keydb__version\1";
 static const char meta_key[] = INTERNAL_KEY_PREFIX "__keydb__metadata\1";

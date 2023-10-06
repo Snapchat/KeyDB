@@ -26,7 +26,7 @@ bool FInternalKey(const char *key, size_t cch)
 
 std::string getPrefix(unsigned int hashslot)
 {
-    HASHSLOT_PREFIX_TYPE slot = (HASHSLOT_PREFIX_TYPE)hashslot;
+    HASHSLOT_PREFIX_TYPE slot = HASHSLOT_PREFIX_ENDIAN((HASHSLOT_PREFIX_TYPE)hashslot);
     char *hash_char = (char *)&slot;
     return std::string(hash_char, HASHSLOT_PREFIX_BYTES);
 }
@@ -209,14 +209,14 @@ bool RocksDBStorageProvider::enumerate_hashslot(callback fn, unsigned int hashsl
     for (it->Seek(prefix); it->Valid(); it->Next()) {
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
-        if (*(HASHSLOT_PREFIX_TYPE *)it->key().data() != hashslot)
+        if (HASHSLOT_PREFIX_RECOVER(*(HASHSLOT_PREFIX_TYPE *)it->key().data()) != hashslot)
             break;
         ++count;
         bool fContinue = fn(it->key().data()+HASHSLOT_PREFIX_BYTES, it->key().size()-HASHSLOT_PREFIX_BYTES, it->value().data(), it->value().size());
         if (!fContinue)
             break;
     }
-    bool full_iter = !it->Valid() || (*(HASHSLOT_PREFIX_TYPE *)it->key().data() != hashslot);
+    bool full_iter = !it->Valid() || (HASHSLOT_PREFIX_RECOVER(*(HASHSLOT_PREFIX_TYPE *)it->key().data()) != hashslot);
     if (full_iter && count != g_pserver->cluster->slots_keys_count[hashslot])
     {
         printf("WARNING: rocksdb hashslot count mismatch");

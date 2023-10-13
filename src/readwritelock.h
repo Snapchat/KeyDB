@@ -42,9 +42,9 @@ public:
             while (m_readCount > 0)
                 m_cv.wait(rm);
             if (exclusive) {
-                /* Another thread might have the write lock while we have the read lock
-                but won't be able to release it until they can acquire the read lock
-                so release the read lock and try again instead of waiting to avoid deadlock */
+                /* Another thread might have the write lock while we have the internal lock
+                but won't be able to release it until they can acquire the internal lock
+                so release the internal lock and try again instead of waiting to avoid deadlock */
                 while(!m_writeLock.try_lock())
                     m_cv.wait(rm);
             }

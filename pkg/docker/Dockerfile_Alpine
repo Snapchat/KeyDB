@@ -1,4 +1,4 @@
-FROM alpine:3.12
+FROM alpine:3.18
 # add our user and group first to make sure their IDs get assigned consistently, regardless of whatever dependencies get added
 RUN addgroup -S -g 1000 keydb && adduser -S -G keydb -u 999 keydb
 RUN mkdir -p /etc/keydb

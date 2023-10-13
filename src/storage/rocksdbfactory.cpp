@@ -72,7 +72,7 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
     rocksdb::DB *db = nullptr;
 
     auto options = RocksDbOptions();
-    options.prefix_extractor.reset(rocksdb::NewFixedPrefixTransform(2));
+    options.prefix_extractor.reset(rocksdb::NewFixedPrefixTransform(HASHSLOT_PREFIX_BYTES));
 
     for (int idb = 0; idb < dbnum; ++idb)
     {
@@ -196,7 +196,7 @@ IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *pr
                 printf("\tDatabase %d was not shutdown cleanly, recomputing metrics\n", db);
             fFirstRealKey = false;
             if (iter != nullptr)
-                iter(it->key().data()+2, it->key().size()-2, privdata);
+                iter(it->key().data()+HASHSLOT_PREFIX_BYTES, it->key().size()-HASHSLOT_PREFIX_BYTES, privdata);
             ++count;
         }
     }

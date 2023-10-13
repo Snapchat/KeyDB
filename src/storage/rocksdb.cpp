@@ -7,6 +7,8 @@
 #include "../cluster.h"
 #include "rocksdbfactor_internal.h"
 
+template class std::basic_string<char>;
+
 static const char keyprefix[] = INTERNAL_KEY_PREFIX;
 
 rocksdb::Options DefaultRocksDBOptions();
@@ -24,8 +26,9 @@ bool FInternalKey(const char *key, size_t cch)
 
 std::string getPrefix(unsigned int hashslot)
 {
-    char *hash_char = (char *)&hashslot;
-    return std::string(hash_char + (sizeof(unsigned int) - 2), 2);
+    HASHSLOT_PREFIX_TYPE slot = HASHSLOT_PREFIX_ENDIAN((HASHSLOT_PREFIX_TYPE)hashslot);
+    char *hash_char = (char *)&slot;
+    return std::string(hash_char, HASHSLOT_PREFIX_BYTES);
 }
 
 std::string prefixKey(const char *key, size_t cchKey)
@@ -184,7 +187,7 @@ bool RocksDBStorageProvider::enumerate(callback fn) const
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
         ++count;
-        bool fContinue = fn(it->key().data()+2, it->key().size()-2, it->value().data(), it->value().size());
+        bool fContinue = fn(it->key().data()+HASHSLOT_PREFIX_BYTES, it->key().size()-HASHSLOT_PREFIX_BYTES, it->value().data(), it->value().size());
         if (!fContinue)
             break;
     }
@@ -203,17 +206,17 @@ bool RocksDBStorageProvider::enumerate_hashslot(callback fn, unsigned int hashsl
     std::string prefix = getPrefix(hashslot);
     std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spcolfamily.get()));
     size_t count = 0;
-    for (it->Seek(prefix.c_str()); it->Valid(); it->Next()) {
+    for (it->Seek(prefix); it->Valid(); it->Next()) {
         if (FInternalKey(it->key().data(), it->key().size()))
             continue;
-        if (strncmp(it->key().data(),prefix.c_str(),2) != 0)
+        if (HASHSLOT_PREFIX_RECOVER(*(HASHSLOT_PREFIX_TYPE *)it->key().data()) != hashslot)
             break;
         ++count;
-        bool fContinue = fn(it->key().data()+2, it->key().size()-2, it->value().data(), it->value().size());
+        bool fContinue = fn(it->key().data()+HASHSLOT_PREFIX_BYTES, it->key().size()-HASHSLOT_PREFIX_BYTES, it->value().data(), it->value().size());
         if (!fContinue)
             break;
     }
-    bool full_iter = !it->Valid() || (strncmp(it->key().data(),prefix.c_str(),2) != 0);
+    bool full_iter = !it->Valid() || (HASHSLOT_PREFIX_RECOVER(*(HASHSLOT_PREFIX_TYPE *)it->key().data()) != hashslot);
     if (full_iter && count != g_pserver->cluster->slots_keys_count[hashslot])
     {
         printf("WARNING: rocksdb hashslot count mismatch");
@@ -227,7 +230,8 @@ void RocksDBStorageProvider::setExpire(const char *key, size_t cchKey, long long
 {
     rocksdb::Status status;
     std::unique_lock<fastlock> l(m_lock);
-    std::string prefix((const char *)&expire,sizeof(long long));
+    long long beExpire = htobe64(expire);
+    std::string prefix((const char *)&beExpire,sizeof(long long));
     std::string strKey(key, cchKey);
     if (m_spbatch != nullptr)
         status = m_spbatch->Put(m_spexpirecolfamily.get(), rocksdb::Slice(prefix + strKey), rocksdb::Slice(strKey));
@@ -241,7 +245,8 @@ void RocksDBStorageProvider::removeExpire(const char *key, size_t cchKey, long l
 {
     rocksdb::Status status;
     std::unique_lock<fastlock> l(m_lock);
-    std::string prefix((const char *)&expire,sizeof(long long));
+    long long beExpire = htobe64(expire);
+    std::string prefix((const char *)&beExpire,sizeof(long long));
     std::string strKey(key, cchKey);
     std::string fullKey = prefix + strKey;
     if (!FExpireExists(fullKey))
@@ -278,7 +283,7 @@ std::vector<std::string> RocksDBStorageProvider::getEvictionCandidates(unsigned 
         for (it->Seek(randomHashSlot()); it->Valid() && result.size() < count; it->Next()) {
             if (FInternalKey(it->key().data(), it->key().size()))
                 continue;
-            result.emplace_back(it->key().data() + 2, it->key().size() - 2);
+            result.emplace_back(it->key().data() + HASHSLOT_PREFIX_BYTES, it->key().size() - HASHSLOT_PREFIX_BYTES);
         }
     } else {
         std::unique_ptr<rocksdb::Iterator> it = std::unique_ptr<rocksdb::Iterator>(m_spdb->NewIterator(ReadOptions(), m_spexpirecolfamily.get()));

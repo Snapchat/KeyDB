@@ -620,7 +620,7 @@ typedef enum {
 #define SLAVE_CAPA_EOF (1<<0)    /* Can parse the RDB EOF streaming format. */
 #define SLAVE_CAPA_PSYNC2 (1<<1) /* Supports PSYNC2 protocol. */
 #define SLAVE_CAPA_ACTIVE_EXPIRE (1<<2) /* Will the slave perform its own expirations? (Don't send delete) */
-#define SLAVE_CAPA_ROCKSDB_SNAPSHOT (1<<3)
+#define SLAVE_CAPA_KEYDB_FASTSYNC (1<<3)
 
 /* Synchronous read timeout - replica side */
 #define CONFIG_REPL_SYNCIO_TIMEOUT 5
@@ -1871,7 +1871,7 @@ struct redisMaster {
     long long master_initial_offset;           /* Master PSYNC offset. */
 
     bool isActive = false;
-    bool isRocksdbSnapshotRepl = false;
+    bool isKeydbFastsync = false;
     int repl_state;          /* Replication status if the instance is a replica */
     off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
     off_t repl_transfer_read; /* Amount of RDB read from master during sync. */

@@ -1158,7 +1158,7 @@ int rdbSaveSnapshotForReplication(rdbSaveInfo *rsi) {
     listRewind(g_pserver->slaves, &li);
     while (replica == nullptr && (ln = listNext(&li))) {
         client *replicaCur = (client*)listNodeValue(ln);
-        if ((replicaCur->slave_capa & SLAVE_CAPA_ROCKSDB_SNAPSHOT) && (replicaCur->replstate == SLAVE_STATE_WAIT_BGSAVE_START)) {
+        if ((replicaCur->slave_capa & SLAVE_CAPA_KEYDB_FASTSYNC) && (replicaCur->replstate == SLAVE_STATE_WAIT_BGSAVE_START)) {
             replica = replicaCur;
             spreplBuf->addReplica(replica);
             replicaCur->replstate = SLAVE_STATE_FASTSYNC_TX;
@@ -1302,7 +1302,7 @@ int startBgsaveForReplication(int mincapa) {
     /* Only do rdbSave* when rsiptr is not NULL,
      * otherwise replica will miss repl-stream-db. */
     if (rsiptr) {
-        if (mincapa & SLAVE_CAPA_ROCKSDB_SNAPSHOT && g_pserver->m_pstorageFactory)
+        if (mincapa & SLAVE_CAPA_KEYDB_FASTSYNC && g_pserver->m_pstorageFactory)
             retval = rdbSaveSnapshotForReplication(rsiptr);
         else if (socket_target)
             retval = rdbSaveToSlavesSockets(rsiptr);
@@ -1481,7 +1481,7 @@ void syncCommand(client *c) {
     }
 
     /* CASE 0: Fast Sync */
-    if ((c->slave_capa & SLAVE_CAPA_ROCKSDB_SNAPSHOT) && g_pserver->m_pstorageFactory) {
+    if ((c->slave_capa & SLAVE_CAPA_KEYDB_FASTSYNC) && g_pserver->m_pstorageFactory) {
         serverLog(LL_NOTICE,"Fast SYNC on next replication cycle");
     /* CASE 1: BGSAVE is in progress, with disk target. */
     } else if (g_pserver->FRdbSaveInProgress() &&
@@ -1673,7 +1673,7 @@ void replconfCommand(client *c) {
             else if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]), "activeExpire"))
                 c->slave_capa |= SLAVE_CAPA_ACTIVE_EXPIRE;
             else if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]), "rocksdb-snapshot-load"))
-                c->slave_capa |= SLAVE_CAPA_ROCKSDB_SNAPSHOT;
+                c->slave_capa |= SLAVE_CAPA_KEYDB_FASTSYNC;
 
             fCapaCommand = true;
         } else if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"ack")) {
@@ -1740,7 +1740,7 @@ void replconfCommand(client *c) {
         sds reply = sdsnew("+OK");
         if (g_pserver->fActiveReplica)
             reply = sdscat(reply, " active-replica");
-        if (g_pserver->m_pstorageFactory && (c->slave_capa & SLAVE_CAPA_ROCKSDB_SNAPSHOT) && !g_pserver->fActiveReplica)
+        if (g_pserver->m_pstorageFactory && (c->slave_capa & SLAVE_CAPA_KEYDB_FASTSYNC) && !g_pserver->fActiveReplica)
             reply = sdscat(reply, " rocksdb-snapshot-save");
         reply = sdscat(reply, "\r\n");
         addReplySds(c, reply);
@@ -3001,7 +3001,7 @@ void readSyncBulkPayload(connection *conn) {
         return;
     }
 
-    if (mi->isRocksdbSnapshotRepl) {
+    if (mi->isKeydbFastsync) {
         if (!readSnapshotBulkPayload(conn, mi, rsi))
             return;
     } else {
@@ -3014,7 +3014,7 @@ void readSyncBulkPayload(connection *conn) {
 
     /* Final setup of the connected slave <- master link */
     replicationCreateMasterClient(mi,mi->repl_transfer_s,rsi.repl_stream_db);
-    if (mi->isRocksdbSnapshotRepl) {
+    if (mi->isKeydbFastsync) {
         /* We need to handle the case where the initial querybuf data was read by fast sync */
         /* This should match the work readQueryFromClient would do for a master client */
         mi->master->querybuf = sdscatsds(mi->master->querybuf, mi->bulkreadBuffer);
@@ -3063,13 +3063,13 @@ void readSyncBulkPayload(connection *conn) {
     }
 
     /* Send the initial ACK immediately to put this replica in online state. */
-    if (usemark || mi->isRocksdbSnapshotRepl) replicationSendAck(mi);
+    if (usemark || mi->isKeydbFastsync) replicationSendAck(mi);
 
     /* Restart the AOF subsystem now that we finished the sync. This
      * will trigger an AOF rewrite, and when done will start appending
      * to the new file. */
     if (g_pserver->aof_enabled) restartAOFAfterSYNC();
-    if (mi->isRocksdbSnapshotRepl)
+    if (mi->isKeydbFastsync)
         readQueryFromClient(conn); // There may be querybuf data we just appeneded
     return;
 }
@@ -3395,7 +3395,7 @@ void parseMasterCapa(redisMaster *mi, sds strcapa)
     char *pchEnd = szStart;
 
     mi->isActive = false;
-    mi->isRocksdbSnapshotRepl = false;
+    mi->isKeydbFastsync = false;
     for (;;)
     {
         if (*pchEnd == ' ' || *pchEnd == '\0') {
@@ -3403,7 +3403,7 @@ void parseMasterCapa(redisMaster *mi, sds strcapa)
             if (strncmp(szStart, "active-replica", pchEnd - szStart) == 0) {
                 mi->isActive = true;
             } else if (strncmp(szStart, "rocksdb-snapshot-save", pchEnd - szStart) == 0) {
-                mi->isRocksdbSnapshotRepl = true;
+                mi->isKeydbFastsync = true;
             }
             szStart = pchEnd + 1;
         }

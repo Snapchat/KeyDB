@@ -163,7 +163,6 @@ client *createClient(connection *conn, int iel) {
     c->multibulklen = 0;
     c->bulklen = -1;
     c->sentlen = 0;
-    c->sentlenAsync = 0;
     c->flags = 0;
     c->fPendingAsyncWrite = FALSE;
     c->fPendingAsyncWriteHandler = FALSE;

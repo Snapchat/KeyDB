@@ -1610,7 +1610,6 @@ struct client {
     unsigned long long reply_bytes; /* Tot bytes of objects in reply list. */
     size_t sentlen;         /* Amount of bytes already sent in the current
                                buffer or object being sent. */
-    size_t sentlenAsync;    /* same as sentlen buf for async buffers (which are a different stream) */
     time_t ctime;           /* Client creation time. */
     long duration;          /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     time_t lastinteraction; /* Time of the last interaction, used for timeout */

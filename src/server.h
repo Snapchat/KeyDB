@@ -2688,6 +2688,7 @@ struct redisServer {
 
     int fActiveReplica;                          /* Can this replica also be a master? */
     int fWriteDuringActiveLoad;                  /* Can this active-replica write during an RDB load? */
+    int fEnableFastSync = true;
 
     // Format:
     //  Lower 20 bits: a counter incrementing for each command executed in the same millisecond
@@ -3182,6 +3183,7 @@ void trimStringObjectIfNeeded(robj *o);
 robj *deserializeStoredObject(const void *data, size_t cb);
 std::unique_ptr<expireEntry> deserializeExpire(const char *str, size_t cch, size_t *poffset);
 sds serializeStoredObject(robj_roptr o, sds sdsPrefix = nullptr);
+sds serializeStoredObjectAndExpire(robj_roptr o);
 
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
 
@@ -3969,6 +3971,10 @@ inline int ielFromEventLoop(const aeEventLoop *eventLoop)
     }
     serverAssert(iel < cserver.cthreads);
     return iel;
+}
+
+inline bool FFastSyncEnabled() {
+    return g_pserver->fEnableFastSync && !g_pserver->fActiveReplica;
 }
 
 inline int FCorrectThread(client *c)

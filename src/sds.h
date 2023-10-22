@@ -418,7 +418,10 @@ public:
     sdsstring &operator=(const sdsstring &other)
     {
         sdsfree(m_str);
-        m_str = sdsdup(other.m_str);
+        if (other.m_str != nullptr)
+            m_str = sdsdup(other.m_str);
+        else
+            m_str = nullptr;
         return *this;
     }
 

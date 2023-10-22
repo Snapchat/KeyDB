@@ -182,6 +182,8 @@ proc test_slave_buffers {test_name cmd_count payload_len limit_memory pipeline} 
                 fail "Replication not started."
             }
 
+            after 100
+
             # measure used memory after the slave connected and set maxmemory
             set orig_used [s -1 used_memory]
             set orig_client_buf [s -1 mem_clients_normal]

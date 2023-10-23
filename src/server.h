@@ -2687,7 +2687,7 @@ struct redisServer {
 
     int fActiveReplica;                          /* Can this replica also be a master? */
     int fWriteDuringActiveLoad;                  /* Can this active-replica write during an RDB load? */
-    int fEnableFastSync = true;
+    int fEnableFastSync = false;
 
     // Format:
     //  Lower 20 bits: a counter incrementing for each command executed in the same millisecond

@@ -3436,7 +3436,13 @@ void redisDbPersistentData::prefetchKeysFlash(std::unordered_set<client*> &setc)
 
 void redisDbPersistentData::processStorageToken(StorageToken *tok) {
     auto setc = std::move(tok->setc);
-    tok->db->m_spstorage->complete_retrieve(tok, [&](const char *szKey, size_t cbKey, const void *data, size_t cb) {
+    switch (tok->type)
+    {
+
+    case StorageToken::TokenType::SingleRead:
+    {
+        tok->db->m_spstorage->complete_retrieve(tok, [&](const char *szKey, size_t cbKey, const void *data, size_t cb)
+                                                {
         auto *db = tok->db;
         size_t offset = 0;
         sds key = sdsnewlen(szKey, -((ssize_t)cbKey));
@@ -3467,11 +3473,27 @@ void redisDbPersistentData::processStorageToken(StorageToken *tok) {
                 serverAssert(db->m_setexpire->find(key) != db->m_setexpire->end());
             }
             serverAssert(o->FExpires() == (db->m_setexpire->find(key) != db->m_setexpire->end()));
-        }
-    });
-    tok = nullptr;  // Invalid past this point
+        } });
+        break;
+    }
+    case StorageToken::TokenType::BatchWrite:
+    {
+        tok->db->m_spstorage->complete_endWriteBatch(tok);
+        break;
+    }
+    case StorageToken::TokenType::SingleWrite:
+    {
+        tok->db->m_spstorage->complete_insert(tok);
+        break;
+    }
+    default:
+        break;
+    } //switch end
 
-    for (client *c : setc) {
+    tok = nullptr; // Invalid past this point
+
+    for (client *c : setc)
+    {
         std::unique_lock<fastlock> ul(c->lock);
         if (c->flags & CLIENT_BLOCKED)
             unblockClient(c);

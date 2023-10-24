@@ -255,6 +255,21 @@ void RocksDBStorageProvider::endWriteBatch()
     m_lock.unlock();
 }
 
+StorageToken* RocksDBStorageProvider::begin_endWriteBatch(struct aeEventLoop *el, aePostFunctionTokenProc* callback)
+{
+    StorageToken *tok = new StorageToken();
+    auto pbatch = m_spbatch.get();
+    (*m_pfactory->m_wqueue)->AddWorkFunction([this, el,callback,tok,&pbatch]{
+        m_spdb->Write(WriteOptions(),pbatch);
+        aePostFunction(el,callback,tok);
+    });
+}
+
+void RocksDBStorageProvider::complete_endWriteBatch(StorageToken* tok){
+   // m_spbatch = nullptr;
+    m_lock.unlock();
+}
+
 void RocksDBStorageProvider::batch_lock()
 {
     m_lock.lock();

@@ -42,6 +42,8 @@ public:
 
     virtual void beginWriteBatch() override;
     virtual void endWriteBatch() override;
+    virtual StorageToken* begin_endWriteBatch(struct aeEventLoop *el, aePostFunctionTokenProc* proc);
+    virtual void complete_endWriteBatch(StorageToken *tok);
 
     virtual void bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem) override;
 

@@ -7,6 +7,13 @@
 #define METADATA_DB_IDENTIFIER "c299fde0-6d42-4ec4-b939-34f680ffe39f"
 
 struct StorageToken {
+    enum class TokenType {
+        SingleRead,
+        SingleWrite,
+        Delete,
+        BatchWrite,
+    };
+    TokenType type;
     std::unordered_set<struct client *> setc;
     struct redisDbPersistentData *db;
     virtual ~StorageToken() {}
@@ -45,6 +52,9 @@ public:
 
     virtual StorageToken *begin_retrieve(struct aeEventLoop *, aePostFunctionTokenProc, sds *, size_t) {return nullptr;};
     virtual void complete_retrieve(StorageToken * /*tok*/, callbackSingle /*fn*/) {};
+
+    virtual StorageToken* begin_endWriteBatch(struct aeEventLoop *, aePostFunctionTokenProc*) {} // NOP
+    virtual void complete_endWriteBatch(StorageToken * /*tok*/) {};
 
     virtual void bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem) {
         beginWriteBatch();

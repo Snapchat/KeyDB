@@ -45,6 +45,8 @@ public:
     void retrieve(sds key, IStorage::callbackSingle fn) const;
     StorageToken *begin_retrieve(struct aeEventLoop *el, aePostFunctionTokenProc proc, sds *rgkey, size_t ckey);
     void complete_retrieve(StorageToken *tok, IStorage::callbackSingle fn);
+    StorageToken* begin_endWriteBatch(struct aeEventLoop *el, aePostFunctionTokenProc* proc) {m_spstorage->begin_endWriteBatch(el,proc);} // NOP
+    void complete_endWriteBatch(StorageToken *tok) {m_spstorage->complete_endWriteBatch(tok);};
     bool erase(sds key);
     void emergencyFreeCache();
     bool keycacheIsEnabled() const { return m_pdict != nullptr; }

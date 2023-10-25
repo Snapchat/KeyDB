@@ -3483,7 +3483,6 @@ void redisDbPersistentData::processStorageToken(StorageToken *tok) {
     }
     case StorageToken::TokenType::SingleWrite:
     {
-        tok->db->m_spstorage->complete_insert(tok);
         break;
     }
     default:

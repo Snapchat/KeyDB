@@ -3091,7 +3091,7 @@ void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **
     
     if (m_spstorage != nullptr)
     {
-        auto tok = m_spstorage->begin_endWriteBatch(serverTL->el, storageLoadCallback);
+        auto *tok = m_spstorage->begin_endWriteBatch(serverTL->el, storageLoadCallback);
         if (tok != nullptr)
         {
             for (client *c : setcBlocked) //need to check how to push client to blocked list

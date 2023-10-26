@@ -136,14 +136,33 @@ void SnapshotPayloadParseState::flushQueuedKeys() {
     int idb = current_database;
     serverAssert(vecqueuedKeys.size() == vecqueuedVals.size());
     auto sizePrev = vecqueuedKeys.size();
-    (*insertsInFlight)++;
-    std::weak_ptr<std::atomic<int>> insertsInFlightTmp = insertsInFlight; // C++ GRRRRRRRRRRRRRRRR, we don't want to capute "this" because that's dangerous
     if (current_database < cserver.dbnum) {
-        g_pserver->asyncworkqueue->AddWorkFunction([idb, vecqueuedKeys = std::move(this->vecqueuedKeys), vecqueuedKeysCb = std::move(this->vecqueuedKeysCb), vecqueuedVals = std::move(this->vecqueuedVals), vecqueuedValsCb = std::move(this->vecqueuedValsCb), insertsInFlightTmp, pallocator = m_spallocator.release()]() mutable {
-            g_pserver->db[idb]->bulkDirectStorageInsert(vecqueuedKeys.data(), vecqueuedKeysCb.data(), vecqueuedVals.data(), vecqueuedValsCb.data(), vecqueuedKeys.size());
-            (*(insertsInFlightTmp.lock()))--;
-            delete pallocator;
-        });
+        if (g_pserver->m_pstorageFactory) {
+            (*insertsInFlight)++;
+            std::weak_ptr<std::atomic<int>> insertsInFlightTmp = insertsInFlight; // C++ GRRRRRRRRRRRRRRRR, we don't want to capute "this" because that's dangerous
+            g_pserver->asyncworkqueue->AddWorkFunction([idb, vecqueuedKeys = std::move(this->vecqueuedKeys), vecqueuedKeysCb = std::move(this->vecqueuedKeysCb), vecqueuedVals = std::move(this->vecqueuedVals), vecqueuedValsCb = std::move(this->vecqueuedValsCb), insertsInFlightTmp, pallocator = m_spallocator.release()]() mutable {
+                g_pserver->db[idb]->bulkDirectStorageInsert(vecqueuedKeys.data(), vecqueuedKeysCb.data(), vecqueuedVals.data(), vecqueuedValsCb.data(), vecqueuedKeys.size());
+                (*(insertsInFlightTmp.lock()))--;
+                delete pallocator;
+            });
+        } else {
+            for (size_t ival = 0; ival < vecqueuedKeys.size(); ++ival) {
+                size_t offset = 0;
+                auto spexpire = deserializeExpire(vecqueuedVals[ival], vecqueuedValsCb[ival], &offset);    
+                auto o = deserializeStoredObject(vecqueuedVals[ival] + offset, vecqueuedValsCb[ival] - offset);
+                sds sdsKey = sdsnewlen(vecqueuedKeys[ival], -static_cast<ssize_t>(vecqueuedKeysCb[ival]));
+                if (dbMerge(g_pserver->db[idb], sdsKey, o, false)) {
+                    if (spexpire != nullptr)
+                        g_pserver->db[idb]->setExpire(sdsKey, std::move(*spexpire));
+                } else {
+                    sdsfree(sdsKey);
+                }
+            }
+            vecqueuedKeys.clear();
+            vecqueuedKeysCb.clear();
+            vecqueuedVals.clear();
+            vecqueuedValsCb.clear();
+        }
     } else {
         // else drop the data
         vecqueuedKeys.clear();

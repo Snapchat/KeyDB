@@ -51,7 +51,7 @@ if {$::tls} {
         }
     }
 
-    test {TLS: Able to connect while with SAN having a comprehensive list} {
+    test {TLS Audit Log: Able to connect while with SAN having a comprehensive list} {
         start_server {tags {"tls"} overrides {tls-auditlog-blocklist {dummy.keydb.dev san2.keydb.dev other.keydb.dev}}} {
             catch {r PING} e
             assert_match {PONG} $e
@@ -65,7 +65,7 @@ if {$::tls} {
         }
     }
 
-    test {TLS Audit LogTLS: Able to connect while with SAN having a comprehensive list with wildcards} {
+    test {TLS Audit Log: Able to connect while with SAN having a comprehensive list with wildcards} {
         start_server {tags {"tls"} overrides {tls-auditlog-blocklist {dummy.* san*.dev other.*}}} {
             catch {r PING} e
             assert_match {PONG} $e

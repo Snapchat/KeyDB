@@ -620,7 +620,7 @@ typedef enum {
 #define SLAVE_CAPA_EOF (1<<0)    /* Can parse the RDB EOF streaming format. */
 #define SLAVE_CAPA_PSYNC2 (1<<1) /* Supports PSYNC2 protocol. */
 #define SLAVE_CAPA_ACTIVE_EXPIRE (1<<2) /* Will the slave perform its own expirations? (Don't send delete) */
-#define SLAVE_CAPA_ROCKSDB_SNAPSHOT (1<<3)
+#define SLAVE_CAPA_KEYDB_FASTSYNC (1<<3)
 
 /* Synchronous read timeout - replica side */
 #define CONFIG_REPL_SYNCIO_TIMEOUT 5
@@ -1610,7 +1610,6 @@ struct client {
     unsigned long long reply_bytes; /* Tot bytes of objects in reply list. */
     size_t sentlen;         /* Amount of bytes already sent in the current
                                buffer or object being sent. */
-    size_t sentlenAsync;    /* same as sentlen buf for async buffers (which are a different stream) */
     time_t ctime;           /* Client creation time. */
     long duration;          /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     time_t lastinteraction; /* Time of the last interaction, used for timeout */
@@ -1871,7 +1870,7 @@ struct redisMaster {
     long long master_initial_offset;           /* Master PSYNC offset. */
 
     bool isActive = false;
-    bool isRocksdbSnapshotRepl = false;
+    bool isKeydbFastsync = false;
     int repl_state;          /* Replication status if the instance is a replica */
     off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
     off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
@@ -2688,6 +2687,7 @@ struct redisServer {
 
     int fActiveReplica;                          /* Can this replica also be a master? */
     int fWriteDuringActiveLoad;                  /* Can this active-replica write during an RDB load? */
+    int fEnableFastSync = false;
 
     // Format:
     //  Lower 20 bits: a counter incrementing for each command executed in the same millisecond
@@ -3182,6 +3182,7 @@ void trimStringObjectIfNeeded(robj *o);
 robj *deserializeStoredObject(const void *data, size_t cb);
 std::unique_ptr<expireEntry> deserializeExpire(const char *str, size_t cch, size_t *poffset);
 sds serializeStoredObject(robj_roptr o, sds sdsPrefix = nullptr);
+sds serializeStoredObjectAndExpire(robj_roptr o);
 
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
 
@@ -3969,6 +3970,10 @@ inline int ielFromEventLoop(const aeEventLoop *eventLoop)
     }
     serverAssert(iel < cserver.cthreads);
     return iel;
+}
+
+inline bool FFastSyncEnabled() {
+    return g_pserver->fEnableFastSync && !g_pserver->fActiveReplica;
 }
 
 inline int FCorrectThread(client *c)

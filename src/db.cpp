@@ -56,7 +56,6 @@ int expireIfNeeded(redisDb *db, robj *key, robj *o);
 void slotToKeyUpdateKeyCore(const char *key, size_t keylen, int add);
 
 std::unique_ptr<expireEntry> deserializeExpire(const char *str, size_t cch, size_t *poffset);
-sds serializeStoredObjectAndExpire(robj_roptr o);
 
 dictType dictChangeDescType {
     dictSdsHash,                /* hash function */

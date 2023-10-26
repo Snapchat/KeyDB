@@ -5102,8 +5102,8 @@ int processCommand(client *c, int callFlags) {
 
             sds str = sdsempty();
             for (int j = 0; j < numkeys; j++) {
-                sdscatsds(str, (sds)ptrFromObj(c->argv[keyindex[j]]));
-                sdscat(str, " ");
+                str = sdscatsds(str, (sds)ptrFromObj(c->argv[keyindex[j]]));
+                str = sdscat(str, " ");
             }
         
             if (numkeys > 0)

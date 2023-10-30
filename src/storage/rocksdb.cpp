@@ -257,7 +257,7 @@ void RocksDBStorageProvider::endWriteBatch()
 
 struct BatchStorageToken : public StorageToken {
     std::shared_ptr<rocksdb::DB> tspdb;    // Note: This must be first so it is deleted last
-    rocksdb::WriteBatch* tspbatch;
+    std::unique_ptr<rocksdb::WriteBatch> tspbatch;
     ~BatchStorageToken(){
         tspdb.reset();
         tspdb = nullptr;
@@ -265,23 +265,23 @@ struct BatchStorageToken : public StorageToken {
     }
 };
 
-StorageToken* RocksEncoderStorageProvider::begin_endWriteBatch(struct aeEventLoop *el, aePostFunctionTokenProc* callback)
+StorageToken* RocksDBStorageProvider::begin_endWriteBatch(struct aeEventLoop *el, aePostFunctionTokenProc* callback)
 {
-   // serverLog(LL_WARNING, "RocksEncoderStorageProvider::begin_endWriteBatch");
+    serverLog(LL_WARNING, "RocksDBStorageProvider::begin_endWriteBatch");
     BatchStorageToken *tok = new BatchStorageToken();
-    tok->tspbatch = m_spbatch.get();
+    tok->tspbatch = std::move(m_spbatch);
     tok->tspdb = m_spdb;
     (*m_pfactory->m_wqueue)->AddWorkFunction([this, el,callback,tok]{
-       // serverAssert(db);
-        serverAssert(tok->tspdb);
-        tok->tspdb->Write(WriteOptions(),tok->tspbatch);
+        tok->tspdb->Write(WriteOptions(),tok->tspbatch.get());
         aePostFunction(el,callback,tok);
     });
+    m_spbatch = nullptr;
+    m_lock.unlock();
     return tok;
 }
 
-void RocksEncoderStorageProvider::complete_endWriteBatch(StorageToken* tok){
-   // serverLog(LL_WARNING, "RocksEncoderStorageProvider::complete_endWriteBatch");
+void RocksDBStorageProvider::complete_endWriteBatch(StorageToken* tok){
+   // serverLog(LL_WARNING, "RocksDBStorageProvider::complete_endWriteBatch");
     m_lock.unlock();
     delete tok;
     tok = nullptr;

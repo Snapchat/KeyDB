@@ -1,3 +1,86 @@
+keydb (6:6.3.4-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * Add keydb_modstatsd, a module for providing keydb stats to a local statsd server. Can be found under src/modules/keydb_modstatsd
+  * Fixed FreeBSD compile(Thanks to @bra-fsn)
+  * Fixed a bug in s3 bucket config that blocked startup(Thanks to Alexandre Chichmanian)
+  * Fixed a bug causing crash if keys command is called after a blocking command (Fixes issues #659, #605, #532)
+  * Added proper error checking of replica configs, now KeyDB will throw an error if replica-of config is passed before active-replica or multimaster configs
+  * Fixed double free bug in lazy free
+  * Added "overload-protect-percent" config, when enabled this will load shed clients whenever CPU usage exceeds configured value
+  * Added "availability-zone" config, this can be passed any string which will then be reported by info command
+  * Updated eviction logic to account for total system memory availability using sysinfo
+  * Fixed a bug where repl-backlog-size config was modified in keydb.conf with the runtime value during config rewrite
+  * Fixed a possible deadlock when running CLIENT KILL with large number of clients
+  * Fixed a bug where KeyDB would overcommit memory during fork BG save
+  * Fixed a bug with disk repl_backlog causing double free
+  * Fixed integer overflow issue in the temp rdb file naming (Thanks to @karthyuom)
+  * Fixed compile issue with GCC 13.1.1 (Thanks to @michieldwitte)
+  * Removed expireset and restored redis expire behaviour
+  * Fixed a bug causing forked processes to hang, specifically affecting RDB and AOF(Fixes issues #675, #619)
+  * Added "CLUSTER REPLICATE NO ONE" to turn a replica into an empty primary
+  * Added RDB-less full sync, can be enabled with config 'enable-keydb-fastsync'
+  * Added "flash-disable-key-cache" config to disable key cache which stores every key(but not value) in memory
+  * Moved cluster slot to key map to being stored by storage provider, rather than in memory
+  * Moved expires to be stored by storage provider, rather than in memory
+  * Enabled expiry/eviction from storage provider, previously only data stored in memory could be expired/evicted(Fixes #645 along with the 2 previous updates)
+  * Fixed a bug where swapdb result was not recovered after keydb restarts in FLASH mode (Thanks to @karthyuom)
+  * Fixed double free bug when fast sync was canceled early
+  * Fixed a bug where a temp rdb file with zero bytes is generated in flash mode (Thanks to @karthyuom)
+  * Fixed a bug where flash CF options are being reset to default after flushall (Thanks to @karthyuom)(Fixes issue #717)
+  * Updated debug reload command to work with flash
+  * Added support for KEYDB_PASSWORD env variable(Thanks to @einar-pexip)
+  * Compile with flash in Dockerfile(Thanks to @der-eismann)
+  * Fix broken redis-cli symlink (Thanks to @pimvandenbroek)
+  * Use tini for alpine docker(Thanks to @rofafor)
+
+-- Malavan Sotheeswaran <msotheeswaran@snapchat.com>  Sun, 29 Oct 2023 8:39:21 +0000
+
+keydb (6:6.3.3-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * To help accelerate our development efforts for KeyDB, this will be the last release containing support for Centos 7, Ubuntu 16.04, Ubuntu 18.04, Debian 9 and 32-bit builds
+  * This release contains fixes for 11 issues along with improvements to the KeyDB FLASH feature:
+  * Fixed race condition with expireset access (Issue #597)
+  * Fixed keys command with lua, and added keydb as an alternative to redis as lua variable to access db (Issue #562 and #594)
+  * Fixed hang in aof child (Issue #554)
+  * Fixed leaking fds from RDB save (Issue #453 and #584)
+  * Added config for S3 RDB load/save (Issue #584)
+  * Enabled active defrag during forkless background save to improve average memory efficiency (Issue #460)
+  * Fixed crash with fork background save during replication (Issue #567)
+  * RocksDB has been updated to v7.9.2
+  * Fixed missing slot_to_key map in FLASH cluster mode (Issue #574)
+  * Added keyspace notifications for keys loaded from FLASH at startup
+  * Fixed race condition in prefetchKeysAsync with FLASH enabled (Issue #571)
+  * Fixed integer overflow in rand family of commands(Issue #631, #632, #633)
+  * Fixed bad value in hincrbyfloat(Issue #634)
+  * Fixed OOM hang in rand family of commands(Issue #635)
+  * Added config to limit count of return values in rand family of commands(Issue #636)
+
+-- Ben Schermel <ben@eqalpha.com>  Tue, 18 Apr 2023 10:00:37 +0000
+
+keydb (6:6.3.2-1distribution_placeholder) codename_placeholder; urgency=medium
+
+  * This release contains Beta level support for KeyDB FLASH, new ASYNC commands, latency improvements and a number of bug fixes. 
+  * KeyDB FLASH is included as a Beta feature. FLASH allows KeyDB to persist data to the storage medium it is written to, avoiding the need for AOF/RDB files. KeyDB uses rocksdb as the persistent storage provider and can be enabled with config "storage-provider flash /path/to/rocksdb/output". Read more at https://docs.keydb.dev/docs/flash/
+  * In addition to GET/MGET, ASYNC support has been added for the following commands: HGET, HMGET, HKEYS, HVALS, HGETALL, HSCAN and can be enable with config "enable-async-commands yes”
+  * Packaging support for Ubuntu 22.04 (Jammy) and Debian 12 (Bookworm) has been included with this release
+  * Added new soft shutdown feature, can be enabled with config "soft-shutdown yes".
+  * If soft shutdown is enabled, instead of shutting down right away, the server will wait until all clients have disconnected, and will reject all new connection attempts.
+  * Fixed memory leak with tls certificates when tls allowlist is enabled
+  * Fixed bug in rdb load with flash enabled to ensure all dbs are safe to load (previously only checked db[0])
+  * Fixed race conditions in rdb load and replication
+  * Fixed memory access of rdb file after it should have been deleted
+  * Fixed integer overflow bug in flash(Issue #486)
+  * Improve TLS latency by queueing new commands before executing instead of after
+  * Removed O(n) count of memory usage from info command(replaced by O(1) estimate)
+  * Improved latency of clearing large number of flash DBs(Thanks to Paul Chen for this fix)(Issue #516)
+  * replaced sprintf with snprintf to avoid potential security bugs
+  * Fixed bug where a failed move due to key already existing in move target would result in the key being removed from move source(Thanks to Paul Chen for this fix)(Issue #497)
+  * Fixed usage of deprecated OpenSSL api in OpenSSL v>3.0.1(Issue #392)
+  * Imported security fixes from Redis (CVE-2023-22458 CVE-2022-35977)
+  * Other fixed issues: #480 #477 #454 #452 #303 #425 #492 #541
+
+-- Ben Schermel <ben@eqalpha.com>  Fri, 20 Jan 2023 20:00:37 +0000
+
 keydb (6:6.3.1-1distribution_placeholder) codename_placeholder; urgency=medium
 
   * This point release contains fixes to bugs related to expires, active-rep, and rdb saving

@@ -257,7 +257,7 @@ void RocksDBStorageProvider::endWriteBatch()
 
 struct BatchStorageToken : public StorageToken {
     std::shared_ptr<rocksdb::DB> tspdb;    // Note: This must be first so it is deleted last
-    std::unique_ptr<rocksdb::WriteBatch> tspbatch;
+    std::unique_ptr<rocksdb::WriteBatchWithIndex> tspbatch;
     ~BatchStorageToken(){
         tspdb.reset();
         tspdb = nullptr;
@@ -273,7 +273,7 @@ StorageToken* RocksDBStorageProvider::begin_endWriteBatch(struct aeEventLoop *el
     m_spbatch = nullptr;
     m_lock.unlock();
     (*m_pfactory->m_wqueue)->AddWorkFunction([this, el,callback,tok]{
-        tok->tspdb->Write(WriteOptions(),tok->tspbatch.get());
+        tok->tspdb->Write(WriteOptions(),tok->tspbatch.get()->GetWriteBatch());
         aePostFunction(el,callback,tok);
     });
 
@@ -322,7 +322,7 @@ StorageToken *RocksDBStorageProvider::begin_retrieve(struct aeEventLoop *el, aeP
     }
 
     auto opts = ReadOptions();
-    opts.async_io = true;
+    //opts.async_io = true;
     (*m_pfactory->m_wqueue)->AddWorkFunction([this, el, callback, tok, opts]{
         std::vector<std::string> veckeysStr;
         std::vector<rocksdb::Slice> veckeys;

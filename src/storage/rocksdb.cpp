@@ -322,7 +322,7 @@ StorageToken *RocksDBStorageProvider::begin_retrieve(struct aeEventLoop *el, aeP
     }
 
     auto opts = ReadOptions();
-    //opts.async_io = true;
+    opts.async_io = true;
     (*m_pfactory->m_wqueue)->AddWorkFunction([this, el, callback, tok, opts]{
         std::vector<std::string> veckeysStr;
         std::vector<rocksdb::Slice> veckeys;

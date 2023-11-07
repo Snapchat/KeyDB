@@ -308,10 +308,14 @@ void resizeReplicationBacklog(long long newsize) {
                 auto cbActiveBacklog = cbPhase1 + g_pserver->repl_backlog_idx;
                 serverAssert(g_pserver->repl_backlog_histlen == cbActiveBacklog);
             }
-            if (g_pserver->repl_backlog != g_pserver->repl_backlog_disk)
+            if (g_pserver->repl_backlog != g_pserver->repl_backlog_disk) {
                 zfree(g_pserver->repl_backlog);
-            else
+            } else {
                 serverLog(LL_NOTICE, "Returning to memory backed replication backlog");
+                // The kernel doesn't make promises with how it will manage the memory but users really want to
+                //  see the RSS go down.  So lets encourage that to happen.
+                madvise(g_pserver->repl_backlog_disk, cserver.repl_backlog_disk_size, MADV_DONTNEED);
+            }
             g_pserver->repl_backlog = backlog;
             g_pserver->repl_backlog_idx = g_pserver->repl_backlog_histlen;
             if (g_pserver->repl_batch_idxStart >= 0) {

@@ -283,7 +283,7 @@ void resizeReplicationBacklog(long long newsize) {
             
             if (cserver.repl_backlog_disk_size != 0) {
                 if (newsize > g_pserver->repl_backlog_config_size || cserver.force_backlog_disk) {
-                    if (g_pserver->repl_backlog == g_pserver->repl_backlog_disk)
+                    if (g_pserver->repl_backlog_disk == nullptr || g_pserver->repl_backlog == g_pserver->repl_backlog_disk)
                         return; // Can't do anything more
                     serverLog(LL_NOTICE, "Switching to disk backed replication backlog due to exceeding memory limits");
                     backlog = g_pserver->repl_backlog_disk;
@@ -312,9 +312,20 @@ void resizeReplicationBacklog(long long newsize) {
                 zfree(g_pserver->repl_backlog);
             } else {
                 serverLog(LL_NOTICE, "Returning to memory backed replication backlog");
-                // The kernel doesn't make promises with how it will manage the memory but users really want to
-                //  see the RSS go down.  So lets encourage that to happen.
-                madvise(g_pserver->repl_backlog_disk, cserver.repl_backlog_disk_size, MADV_DONTNEED);
+                auto repl_backlog = g_pserver->repl_backlog_disk;
+                g_pserver->repl_backlog_disk = nullptr;
+                g_pserver->asyncworkqueue->AddWorkFunction([repl_backlog, size = cserver.repl_backlog_disk_size]{
+                    // The kernel doesn't make promises with how it will manage the memory but users really want to
+                    //  see the RSS go down.  So lets encourage that to happen.
+                    madvise(repl_backlog, size, MADV_DONTNEED); // NOTE: This will block until all pages are released
+                    aeAcquireLock();
+                    if (g_pserver->repl_backlog_disk == nullptr && cserver.repl_backlog_disk_size == size) {
+                        g_pserver->repl_backlog_disk = repl_backlog;
+                    } else {
+                        munmap(g_pserver->repl_backlog_disk, size);
+                    }
+                    aeReleaseLock();
+                }, true /*fHiPri*/);
             }
             g_pserver->repl_backlog = backlog;
             g_pserver->repl_backlog_idx = g_pserver->repl_backlog_histlen;

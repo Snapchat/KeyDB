@@ -3072,8 +3072,6 @@ void redisDbPersistentData::bulkDirectStorageInsert(char **rgKeys, size_t *rgcbK
 
 void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **psnapshotFree)
 {
-
-    std::unordered_set<client *> setcBlocked;
     if (m_pdbSnapshotStorageFlush)
     {
         dictIterator *di = dictGetIterator(m_dictChangedStorageFlush);
@@ -3094,12 +3092,6 @@ void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **
         auto *tok = m_spstorage->begin_endWriteBatch(serverTL->el, storageLoadCallback);
         if (tok != nullptr)
         {
-            for (client *c : setcBlocked) //need to check how to push client to blocked list
-            {
-                if (!(c->flags & CLIENT_BLOCKED))
-                    blockClient(c, BLOCKED_STORAGE);
-            }
-           // tok->setc = std::move(setcBlocked);
             tok->db = this;
             tok->type = StorageToken::TokenType::BatchWrite;
         }

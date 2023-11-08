@@ -3086,7 +3086,6 @@ void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **
         *psnapshotFree = m_pdbSnapshotStorageFlush;
         m_pdbSnapshotStorageFlush = nullptr;
     }
-    
     if (m_spstorage != nullptr)
     {
         auto *tok = m_spstorage->begin_endWriteBatch(serverTL->el, storageLoadCallback);

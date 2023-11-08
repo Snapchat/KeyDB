@@ -3472,11 +3472,8 @@ void redisDbPersistentData::processStorageToken(StorageToken *tok) {
         tok->db->m_spstorage->complete_endWriteBatch(tok);
         break;
     }
-    case StorageToken::TokenType::SingleWrite:
-    {
-        break;
-    }
     default:
+        serverAssert((tok->type == StorageToken::TokenType::SingleRead) || (tok->type == StorageToken::TokenType::BatchWrite));
         break;
     } //switch end
 

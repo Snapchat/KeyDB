@@ -258,15 +258,9 @@ void RocksDBStorageProvider::endWriteBatch()
 struct BatchStorageToken : public StorageToken {
     std::shared_ptr<rocksdb::DB> tspdb;    // Note: This must be first so it is deleted last
     std::unique_ptr<rocksdb::WriteBatchWithIndex> tspbatch;
-    ~BatchStorageToken(){
-        tspdb.reset();
-        tspdb = nullptr;
-        tspbatch = nullptr;
-    }
 };
 
 StorageToken* RocksDBStorageProvider::begin_endWriteBatch(struct aeEventLoop *el, aePostFunctionTokenProc* callback){
-    serverLog(LL_WARNING, "RocksDBStorageProvider::begin_endWriteBatch");
     BatchStorageToken *tok = new BatchStorageToken();
     tok->tspbatch = std::move(m_spbatch);
     tok->tspdb = m_spdb;
@@ -281,7 +275,6 @@ StorageToken* RocksDBStorageProvider::begin_endWriteBatch(struct aeEventLoop *el
 }
 
 void RocksDBStorageProvider::complete_endWriteBatch(StorageToken* tok){
-    serverLog(LL_WARNING, "RocksDBStorageProvider::complete_endWriteBatch");
     delete tok;
     tok = nullptr;
 }

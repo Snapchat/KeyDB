@@ -429,6 +429,24 @@ void touchAllWatchedKeysInDb(redisDb *emptied, redisDb *replaced_with) {
     dictReleaseIterator(di);
 }
 
+/* Update the DB of the watchedKey structure incase if the c->db (currently selected DB) is updated.
+ * For example, it may happen during the SWAPDB.
+ * watchForKey() sets the original DB of the watchedKey structure with the c->db
+ * but the c->db can be updated incase of SWAPDB command. */
+void updateDBWatchedKey(int dbid, client *c) {
+    listIter li;
+    listNode *ln;
+    watchedKey *wk;
+
+    listRewind(c->watched_keys,&li);
+    while((ln = listNext(&li))) {
+        wk = (watchedKey*)listNodeValue(ln);
+        if (wk->db->id == dbid) {
+            wk->db = c->db;
+        }
+    }
+}
+
 void watchCommand(client *c) {
     int j;
 

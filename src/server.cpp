@@ -3925,18 +3925,18 @@ void initServer(void) {
             g_pserver->db[j]->initialize(j);
         }
     } else {
-        // Read FLASH metadata and load the appropriate dbid into each databse index, as each DB index can have different dbid mapped due to the swapdb command.
+        // Read FLASH metadata and load the appropriate storage dbid into each databse index, as each DB index can have different storage dbid mapped due to the swapdb command.
         g_pserver->metadataDb = g_pserver->m_pstorageFactory->createMetadataDb();
         for (int idb = 0; idb < cserver.dbnum; ++idb)
         {
-            int dbid = idb;
+            int storage_dbid = idb;
             std::string dbid_key = "db-" + std::to_string(idb);
             g_pserver->metadataDb->retrieve(dbid_key.c_str(), dbid_key.length(), [&](const char *, size_t, const void *data, size_t){
-                dbid = *(int*)data;
+                storage_dbid = *(int*)data;
             });
 
             g_pserver->db[idb] = new (MALLOC_LOCAL) redisDb();
-            g_pserver->db[idb]->initialize(dbid);
+            g_pserver->db[idb]->initialize(idb, storage_dbid);
         }
     }
 

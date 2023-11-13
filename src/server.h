@@ -1325,7 +1325,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
 
     redisDb() = default;
 
-    void initialize(int id);
+    void initialize(int id, int storage_id=-1 /* default no storage */);
     void storageProviderInitialize();
     void storageProviderDelete();
     virtual ~redisDb();
@@ -1389,6 +1389,7 @@ public:
     dict *ready_keys;           /* Blocked keys that received a PUSH */
     dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
     int id;                     /* Database ID */
+    int storage_id;             /* Mapped storage provider DB id which is same as the redisdb id above. But, when the database is swapped, the redisdb id above might be swapped to be consistent with the database index (id <-> g_pserver->db[index]) however the storage_id remains unchanged in order to maintain correct mapping to the underlying storage provider DB. This is valid only if there is a storage provider set.*/
     long long last_expire_set;  /* when the last expire was set */
     double avg_ttl;             /* Average TTL, just for stats */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
@@ -3114,6 +3115,7 @@ void queueMultiCommand(client *c);
 void touchWatchedKey(redisDb *db, robj *key);
 int isWatchedKeyExpired(client *c);
 void touchAllWatchedKeysInDb(redisDb *emptied, redisDb *replaced_with);
+void updateDBWatchedKey(int dbid, client *c);
 void discardTransaction(client *c);
 void flagTransaction(client *c);
 void execCommandAbort(client *c, sds error);

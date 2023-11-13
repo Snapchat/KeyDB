@@ -1723,16 +1723,17 @@ int dbSwapDatabases(int id1, int id2) {
         id2 < 0 || id2 >= cserver.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
     std::swap(g_pserver->db[id1], g_pserver->db[id2]);
-    
-    //swap db's id too, otherwise db does not match its id
-    std::swap(g_pserver->db[id1]->id, g_pserver->db[id2]->id);
 
     /* Note that we don't swap blocking_keys,
      * ready_keys and watched_keys, since we want clients to
      * remain in the same DB they were. so put them back */
     std::swap(g_pserver->db[id1]->blocking_keys, g_pserver->db[id2]->blocking_keys);
-    std::swap(g_pserver->db[id2]->ready_keys, g_pserver->db[id2]->ready_keys);
-    std::swap(g_pserver->db[id2]->watched_keys, g_pserver->db[id2]->watched_keys);
+    std::swap(g_pserver->db[id1]->ready_keys, g_pserver->db[id2]->ready_keys);
+    std::swap(g_pserver->db[id1]->watched_keys, g_pserver->db[id2]->watched_keys);
+
+    /* Don't swap the redisdb id, as it is expected to be same as database index everywhere else.
+       For example, flushdb, master/slave replication, etc. */
+    std::swap(g_pserver->db[id1]->id, g_pserver->db[id2]->id);
 
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
@@ -1755,7 +1756,11 @@ int dbSwapDatabases(int id1, int id2) {
 
 /* SWAPDB db1 db2 */
 void swapdbCommand(client *c) {
-    int id1, id2, oriIdx;
+    int id1, id2;
+
+    listNode *ln;
+    listIter li;
+    client *cl;
 
     /* Not allowed in cluster mode: we have just DB 0 there. */
     if (g_pserver->cluster_enabled) {
@@ -1772,14 +1777,6 @@ void swapdbCommand(client *c) {
         "invalid second DB index") != C_OK)
         return;
 
-    // get client's original db's index
-    for (int idb=0; idb < cserver.dbnum; ++idb) {
-        if (g_pserver->db[idb]->id == c->db->id) {
-            oriIdx = idb;
-            break;
-        }
-    }
-
     /* Swap... */
     if (dbSwapDatabases(id1,id2) == C_ERR) {
         addReplyError(c,"DB index is out of range");
@@ -1789,18 +1786,29 @@ void swapdbCommand(client *c) {
         moduleFireServerEvent(REDISMODULE_EVENT_SWAPDB,0,&si);
         g_pserver->dirty++;
 
-        // set client's db to original db
-        c->db=g_pserver->db[oriIdx];
-
-        // Persist the databse index to dbid mapping into FLASH for later recovery.
+        // Persist the databse index to storage dbid mapping into FLASH for later recovery.
         if (g_pserver->m_pstorageFactory != nullptr && g_pserver->metadataDb != nullptr) {
             std::string dbid_key = "db-" + std::to_string(id1);
-            g_pserver->metadataDb->insert(dbid_key.c_str(), dbid_key.length(), &g_pserver->db[id1]->id, sizeof(g_pserver->db[id1]->id), true);
+            g_pserver->metadataDb->insert(dbid_key.c_str(), dbid_key.length(), &g_pserver->db[id1]->storage_id, sizeof(g_pserver->db[id1]->storage_id), true);
 
             dbid_key = "db-" + std::to_string(id2);
-            g_pserver->metadataDb->insert(dbid_key.c_str(), dbid_key.length(), &g_pserver->db[id2]->id, sizeof(g_pserver->db[id2]->id), true);
+            g_pserver->metadataDb->insert(dbid_key.c_str(), dbid_key.length(), &g_pserver->db[id2]->storage_id, sizeof(g_pserver->db[id2]->storage_id), true);
         }
         addReply(c,shared.ok);
+        
+        listRewind(g_pserver->clients,&li);
+        while ((ln = listNext(&li)) != NULL) {
+            cl = reinterpret_cast<struct client*>(listNodeValue(ln));
+            std::unique_lock<decltype(cl->lock)> lock(cl->lock);
+            if (cl->db->id == g_pserver->db[id1]->id) {
+                cl->db = g_pserver->db[id2];
+                updateDBWatchedKey(id1, cl);
+            }
+            else if (cl->db->id == g_pserver->db[id2]->id) {
+                cl->db = g_pserver->db[id1];
+                updateDBWatchedKey(id2, cl);
+            }
+        }
     }
 }
 
@@ -2631,13 +2639,14 @@ void moduleClusterLoadCallback(const char * rgchKey, size_t cchKey, void *data) 
     moduleLoadCallback(rgchKey, cchKey, data);
 }
 
-void redisDb::initialize(int id)
+void redisDb::initialize(int id, int storage_id /* default no storage */)
 {
     redisDbPersistentData::initialize();
     this->blocking_keys = dictCreate(&keylistDictType,NULL);
     this->ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
     this->watched_keys = dictCreate(&keylistDictType,NULL);
     this->id = id;
+    this->storage_id = storage_id;
     this->avg_ttl = 0;
     this->last_expire_set = 0;
     this->defrag_later = listCreate();
@@ -2649,7 +2658,7 @@ void redisDb::storageProviderInitialize()
     if (g_pserver->m_pstorageFactory != nullptr)
     {
         IStorageFactory::key_load_iterator itr = g_pserver->cluster_enabled ? moduleClusterLoadCallback : moduleLoadCallback;
-        this->setStorageProvider(StorageCache::create(g_pserver->m_pstorageFactory, id, itr, &id));
+        this->setStorageProvider(StorageCache::create(g_pserver->m_pstorageFactory, storage_id, itr, &id));
     }
 }
 

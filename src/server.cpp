@@ -4039,7 +4039,7 @@ void initServer(void) {
     g_pserver->cron_malloc_stats.allocator_active = 0;
     g_pserver->cron_malloc_stats.allocator_resident = 0;
     g_pserver->cron_malloc_stats.sys_available = 0;
-    g_pserver->cron_malloc_stats.sys_total = g_pserver->force_eviction_percent ? getMemTotal() : 0;
+    g_pserver->cron_malloc_stats.sys_total = getMemTotal();
     g_pserver->lastbgsave_status = C_OK;
     g_pserver->aof_last_write_status = C_OK;
     g_pserver->aof_last_write_errno = 0;

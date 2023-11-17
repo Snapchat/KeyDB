@@ -266,7 +266,7 @@ StorageToken* RocksDBStorageProvider::begin_endWriteBatch(struct aeEventLoop *el
     tok->tspdb = m_spdb;
     m_spbatch = nullptr;
     m_lock.unlock();
-    (*m_pfactory->m_wqueue)->AddWorkFunction([this, el,callback,tok]{
+    (*m_pfactory->m_wworkqueue)->AddWorkFunction([this, el,callback,tok]{
         tok->tspdb->Write(WriteOptions(),tok->tspbatch.get()->GetWriteBatch());
         aePostFunction(el,callback,tok);
     });

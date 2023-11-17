@@ -2218,6 +2218,7 @@ struct redisServerThreadVars {
     int client_pause_in_transaction = 0; /* Was a client pause executed during this Exec? */
     std::unordered_set<client*> setclientsProcess;
     std::unordered_set<client*> setclientsPrefetch;
+    std::unordered_set<client*> setclientsCommit;
     std::unordered_set<StorageToken*> setStorageTokensProcess;
     dictAsyncRehashCtl *rehashCtl = nullptr;
 
@@ -2705,6 +2706,7 @@ struct redisServer {
     uint64_t mvcc_tstamp;
 
     AsyncWorkQueue *asyncworkqueue;
+    AsyncWorkQueue *asyncwriteworkqueue;
 
     /* System hardware info */
     size_t system_memory_size;  /* Total memory in system as reported by OS */

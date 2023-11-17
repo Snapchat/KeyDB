@@ -1965,7 +1965,7 @@ int closeClientOnOverload(client *c) {
     if (g_pserver->overload_closed_clients > MAX_CLIENTS_SHED_PER_PERIOD) return false;
     if (!g_pserver->is_overloaded) return false;
     // Don't close masters, replicas, or pub/sub clients
-    if (c->flags & (CLIENT_MASTER | CLIENT_SLAVE | CLIENT_PENDING_WRITE | CLIENT_PUBSUB | CLIENT_BLOCKED)) return false;
+    if (c->flags & (CLIENT_MASTER | CLIENT_SLAVE | CLIENT_PENDING_WRITE | CLIENT_PUBSUB | CLIENT_BLOCKED | CLIENT_IGNORE_OVERLOAD)) return false;
     freeClient(c);
     ++g_pserver->overload_closed_clients;
     return true;

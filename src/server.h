@@ -546,6 +546,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                                           RDB without replication buffer. */
 #define CLIENT_FORCE_REPLY (1ULL<<44) /* Should addReply be forced to write the text? */
 #define CLIENT_AUDIT_LOGGING (1ULL<<45) /* Client commands required audit logging */
+#define CLIENT_IGNORE_OVERLOAD (1ULL<<46) /* Client that should not be disconnected by overload protection */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -2714,6 +2715,7 @@ struct redisServer {
 
     std::set<sdsstring> tls_auditlog_blocklist; /* Certificates that can be excluded from audit logging */
     std::set<sdsstring> tls_allowlist;
+    std::set<sdsstring> overload_ignorelist;
     redisTLSContextConfig tls_ctx_config;
 
     /* cpu affinity */

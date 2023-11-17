@@ -779,6 +779,15 @@ void loadServerConfigFromString(char *config) {
             }
             for (int i = 1; i < argc; i++)
                 g_pserver->tls_auditlog_blocklist.emplace(argv[i], strlen(argv[i]));
+        } else if (!strcasecmp(argv[0], "overload-ignorelist")) {
+            if (argc < 2) {
+                err = "must supply at least one element in the ignore list"; goto loaderr;
+            }
+            if (!g_pserver->overload_ignorelist.empty()) {
+                err = "overload-ignorelist may only be set once"; goto loaderr;
+            }
+            for (int i = 1; i < argc; i++)
+                g_pserver->overload_ignorelist.emplace(argv[i], strlen(argv[i]));
         } else if (!strcasecmp(argv[0], "version-override") && argc == 2) {
             KEYDB_SET_VERSION = zstrdup(argv[1]);
             serverLog(LL_WARNING, "Warning version is overriden to: %s\n", KEYDB_SET_VERSION);
@@ -908,8 +917,8 @@ void configSetCommand(client *c) {
 
     if (c->argc < 4 || c->argc > 4) {
         o = nullptr;
-        // Variadic set is only supported for tls-allowlist
-        if (strcasecmp(szFromObj(c->argv[2]), "tls-allowlist")) {
+        // Variadic set is only supported for tls-allowlist, tls-auditlog-blocklist and overload-ignorelist
+        if (strcasecmp(szFromObj(c->argv[2]), "tls-allowlist") && strcasecmp(szFromObj(c->argv[2]), "tls-auditlog-blocklist") && strcasecmp(szFromObj(c->argv[2]), "overload-ignorelist")) {
             addReplySubcommandSyntaxError(c);
             return;
         }
@@ -1083,6 +1092,18 @@ void configSetCommand(client *c) {
         for (int i = 3; i < c->argc; ++i) {
             robj *val = c->argv[i];
             g_pserver->tls_allowlist.emplace(szFromObj(val), sdslen(szFromObj(val)));
+        }
+    } config_set_special_field("tls-auditlog-blocklist") {
+        g_pserver->tls_auditlog_blocklist.clear();
+        for (int i = 3; i < c->argc; ++i) {
+            robj *val = c->argv[i];
+            g_pserver->tls_auditlog_blocklist.emplace(szFromObj(val), sdslen(szFromObj(val)));
+        }
+    } config_set_special_field("overload-ignorelist") {
+        g_pserver->overload_ignorelist.clear();
+        for (int i = 3; i < c->argc; ++i) {
+            robj *val = c->argv[i];
+            g_pserver->overload_ignorelist.emplace(szFromObj(val), sdslen(szFromObj(val)));
         }
     /* Everything else is an error... */
     } config_set_else {
@@ -1291,6 +1312,22 @@ void configGetCommand(client *c) {
         addReplyBulkCString(c,"tls-allowlist");
         addReplyArrayLen(c, (long)g_pserver->tls_allowlist.size());
         for (auto &elem : g_pserver->tls_allowlist) {
+            addReplyBulkCBuffer(c, elem.get(), elem.size()); // addReplyBulkSds will free which we absolutely don't want
+        }
+        matches++;
+    }
+    if (stringmatch(pattern, "tls-auditlog-blocklist", 1)) {
+        addReplyBulkCString(c,"tls-auditlog-blocklist");
+        addReplyArrayLen(c, (long)g_pserver->tls_auditlog_blocklist.size());
+        for (auto &elem : g_pserver->tls_auditlog_blocklist) {
+            addReplyBulkCBuffer(c, elem.get(), elem.size()); // addReplyBulkSds will free which we absolutely don't want
+        }
+        matches++;
+    }
+    if (stringmatch(pattern, "overload-ignorelist", 1)) {
+        addReplyBulkCString(c,"overload-ignorelist");
+        addReplyArrayLen(c, (long)g_pserver->overload_ignorelist.size());
+        for (auto &elem : g_pserver->overload_ignorelist) {
             addReplyBulkCBuffer(c, elem.get(), elem.size()); // addReplyBulkSds will free which we absolutely don't want
         }
         matches++;
@@ -1976,6 +2013,34 @@ int rewriteConfig(char *path, int force_all) {
         // note: conf is owned by rewriteConfigRewriteLine - no need to free
     } else {
         rewriteConfigMarkAsProcessed(state, "tls-allowlist"); // ensure the line is removed if it existed
+    }
+
+    if (!g_pserver->tls_auditlog_blocklist.empty()) {
+        sds conf = sdsnew("tls-auditlog-blocklist ");
+        for (auto &elem : g_pserver->tls_auditlog_blocklist) {
+            conf = sdscatsds(conf, (sds)elem.get());
+            conf = sdscat(conf, " ");
+        }
+        // trim the trailing space
+        sdsrange(conf, 0, -1);
+        rewriteConfigRewriteLine(state,"tls-auditlog-blocklist",conf,1 /*force*/);
+        // note: conf is owned by rewriteConfigRewriteLine - no need to free
+    } else {
+        rewriteConfigMarkAsProcessed(state, "tls-auditlog-blocklist"); // ensure the line is removed if it existed
+    }
+
+    if (!g_pserver->overload_ignorelist.empty()) {
+        sds conf = sdsnew("overload-ignorelist ");
+        for (auto &elem : g_pserver->overload_ignorelist) {
+            conf = sdscatsds(conf, (sds)elem.get());
+            conf = sdscat(conf, " ");
+        }
+        // trim the trailing space
+        sdsrange(conf, 0, -1);
+        rewriteConfigRewriteLine(state,"overload-ignorelist",conf,1 /*force*/);
+        // note: conf is owned by rewriteConfigRewriteLine - no need to free
+    } else {
+        rewriteConfigMarkAsProcessed(state, "overload-ignorelist"); // ensure the line is removed if it existed
     }
 
     /* Rewrite Sentinel config if in Sentinel mode. */

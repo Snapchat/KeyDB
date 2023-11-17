@@ -35,9 +35,8 @@ rocksdb::Options DefaultRocksDBOptions() {
     return options;
 }
 
-IStorageFactory *CreateRocksDBStorageFactory(const char *path, int dbnum, const char *rgchConfig, size_t cchConfig, AsyncWorkQueue **wqueue)
-{
-    return new RocksDBStorageFactory(path, dbnum, rgchConfig, cchConfig, wqueue);
+IStorageFactory *CreateRocksDBStorageFactory(const char *path, int dbnum, const char *rgchConfig, size_t cchConfig, AsyncWorkQueue **wqueue, AsyncWorkQueue **wworkqueue)
+    return new RocksDBStorageFactory(path, dbnum, rgchConfig, cchConfig, wqueue, wworkqueue);
 }
 
 rocksdb::Options RocksDBStorageFactory::RocksDbOptions()
@@ -52,8 +51,8 @@ rocksdb::Options RocksDBStorageFactory::RocksDbOptions()
     return options;
 }
 
-RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, const char *rgchConfig, size_t cchConfig, AsyncWorkQueue **wqueue)
-    : m_path(dbfile), m_wqueue(wqueue)
+RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, const char *rgchConfig, size_t cchConfig, AsyncWorkQueue **wqueue, AsyncWorkQueue **wworkqueue)
+    : m_path(dbfile), m_wqueue(wqueue), m_wworkqueue(wworkqueue)
 {
     dbnum++; // create an extra db for metadata
     // Get the count of column families in the actual database

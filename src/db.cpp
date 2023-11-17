@@ -415,6 +415,13 @@ void genericSetKey(client *c, redisDb *db, robj *key, robj *val, int keepttl, in
     }
     incrRefCount(val);
     if (signal) signalModifiedKey(c,db,key);
+
+    if(g_pserver->m_pstorageFactory != nullptr) {
+        if (!(c->flags & CLIENT_BLOCKED)) {
+            blockClient(c, BLOCKED_STORAGE);
+        }
+        serverTL->setclientsCommit.insert(c);
+    }
 }
 
 /* Common case for genericSetKey() where the TTL is not retained. */
@@ -3091,9 +3098,18 @@ void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **
         auto *tok = m_spstorage->begin_endWriteBatch(serverTL->el, storageLoadCallback);
         if (tok != nullptr)
         {
+            for (client *c : serverTL->setclientsCommit)
+            {
+                /* Remove from the list of pending writes if needed. */
+                if (c->flags & CLIENT_PENDING_WRITE) {
+                    c->flags &= ~CLIENT_PENDING_WRITE;
+                }
+            }
+            tok->setc = std::move(serverTL->setclientsCommit);
             tok->db = this;
             tok->type = StorageToken::TokenType::BatchWrite;
         }
+        serverTL->setclientsCommit.clear();
     }
 }
 
@@ -3416,6 +3432,7 @@ void redisDbPersistentData::prefetchKeysFlash(std::unordered_set<client*> &setc)
                 blockClient(c, BLOCKED_STORAGE);
         }
         tok->setc = std::move(setcBlocked);
+        tok->type = StorageToken::TokenType::SingleRead;
         tok->db = this;
     }
     return;

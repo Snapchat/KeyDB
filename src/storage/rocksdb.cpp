@@ -266,7 +266,7 @@ StorageToken* RocksDBStorageProvider::begin_endWriteBatch(struct aeEventLoop *el
     tok->tspdb = m_spdb;
     m_spbatch = nullptr;
     m_lock.unlock();
-    (*m_pfactory->m_wqueue)->AddWorkFunction([this, el,callback,tok]{
+    (*m_pfactory->m_wwqueue)->AddWorkFunction([this, el,callback,tok]{
         tok->tspdb->Write(WriteOptions(),tok->tspbatch.get()->GetWriteBatch());
         aePostFunction(el,callback,tok);
     });
@@ -316,7 +316,7 @@ StorageToken *RocksDBStorageProvider::begin_retrieve(struct aeEventLoop *el, aeP
 
     auto opts = ReadOptions();
     opts.async_io = true;
-    (*m_pfactory->m_wqueue)->AddWorkFunction([this, el, callback, tok, opts]{
+    (*m_pfactory->m_rwqueue)->AddWorkFunction([this, el, callback, tok, opts]{
         std::vector<std::string> veckeysStr;
         std::vector<rocksdb::Slice> veckeys;
         std::vector<rocksdb::PinnableSlice> vecvals;

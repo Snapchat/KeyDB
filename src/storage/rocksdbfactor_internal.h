@@ -11,9 +11,10 @@ class RocksDBStorageFactory : public IStorageFactory
     bool m_fCreatedTempFolder = false;
 
 public:
-    AsyncWorkQueue **m_wqueue;
+    AsyncWorkQueue **m_rwqueue;
+    AsyncWorkQueue **m_wwqueue;
 
-    RocksDBStorageFactory(const char *dbfile, int dbnum, const char *rgchConfig, size_t cchConfig, AsyncWorkQueue **wqueue);
+    RocksDBStorageFactory(const char *dbfile, int dbnum, const char *rgchConfig, size_t cchConfig, AsyncWorkQueue **rwqueue, AsyncWorkQueue **wwqueue);
     ~RocksDBStorageFactory();
 
     virtual IStorage *create(int db, key_load_iterator iter, void *privdata) override;

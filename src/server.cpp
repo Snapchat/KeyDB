@@ -4158,7 +4158,12 @@ void InitServerLast() {
     set_jemalloc_bg_thread(cserver.jemalloc_bg_thread);
     g_pserver->initial_memory_usage = zmalloc_used_memory();
 
-    g_pserver->asyncworkqueue = new (MALLOC_LOCAL) AsyncWorkQueue(cserver.cthreads*10);
+    g_pserver->asyncworkqueue = new (MALLOC_LOCAL) AsyncWorkQueue(cserver.cthreads);
+
+    g_pserver->asyncreadworkqueue = new (MALLOC_LOCAL) AsyncWorkQueue(cserver.cthreads*10);
+
+    //Process one write/commit at a time to ensure consistency
+    g_pserver->asyncwriteworkqueue = new (MALLOC_LOCAL) AsyncWorkQueue(1);
 
     // Allocate the repl backlog
     

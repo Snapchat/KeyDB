@@ -2705,6 +2705,8 @@ struct redisServer {
     uint64_t mvcc_tstamp;
 
     AsyncWorkQueue *asyncworkqueue;
+    AsyncWorkQueue *asyncreadworkqueue;
+    AsyncWorkQueue *asyncwriteworkqueue;
 
     /* System hardware info */
     size_t system_memory_size;  /* Total memory in system as reported by OS */

@@ -3416,6 +3416,7 @@ void redisDbPersistentData::prefetchKeysFlash(std::unordered_set<client*> &setc)
                 blockClient(c, BLOCKED_STORAGE);
         }
         tok->setc = std::move(setcBlocked);
+        tok->type = StorageToken::TokenType::SingleRead;
         tok->db = this;
     }
     return;

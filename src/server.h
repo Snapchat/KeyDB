@@ -2758,6 +2758,7 @@ struct redisServer {
 
     sds sdsAvailabilityZone;
     int overload_protect_threshold = 0;
+    float last_overload_cpu_reading = 0.0f;
     int is_overloaded = 0;
     int overload_closed_clients = 0;
 

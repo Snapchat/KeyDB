@@ -253,6 +253,7 @@ std::unordered_map<std::string, StatsRecord> g_mapInfoFields = {
     { "cluster_size", { StatsD_Type::STATSD_GAUGE_LONGLONG }},
     { "storage_flash_available_bytes", { StatsD_Type::STATSD_GAUGE_BYTES }},
     { "storage_flash_total_bytes", { StatsD_Type::STATSD_GAUGE_BYTES }},
+    { "last_overload_cpu_reading", { StatsD_Type::STATSD_GAUGE_FLOAT }},
 };
 
 /* Globals */

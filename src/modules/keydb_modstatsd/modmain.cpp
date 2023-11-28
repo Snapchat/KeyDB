@@ -564,14 +564,8 @@ void emit_metrics_for_insufficient_replicas(struct RedisModuleCtx *ctx, long lon
     // check if the current node is a primary
     if (strncmp(role, "master", len) == 0) {
         RedisModuleCallReply *replicasReply = RedisModule_CallReplyArrayElement(reply, 2);
-        // check if there are less than 2 connected replicas
-        size_t numberOfReplicas = RedisModule_CallReplyLength(replicasReply);
-        if (numberOfReplicas == 0) {
-            g_stats->increment("lessThanExpectedReplicas_noReplicas_criticalError", 1);
-        }
-        else if (numberOfReplicas == 1) {
-            g_stats->increment("lessThanExpectedReplicas_1ReplicaLeft_error", 1);
-        }
+        size_t numberOfActiveReplicas = RedisModule_CallReplyLength(replicasReply);
+        g_stats->gauge("numberOfActiveReplicas", numberOfActiveReplicas);
     }
     RedisModule_FreeCallReply(reply);
 }

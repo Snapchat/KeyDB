@@ -208,7 +208,8 @@ void unblockClient(client *c) {
         listDelNode(g_pserver->paused_clients,c->paused_list_node);
         c->paused_list_node = NULL;
     } else {
-        serverPanic("Unknown btype in unblockClient().");
+        serverPanic("Unknown btype %d in unblockClient() for client %llu.",
+            c->btype, (unsigned long long) c->id);
     }
 
     /* Reset the client for a new query since, for blocking commands
@@ -243,7 +244,8 @@ void replyToBlockedClientTimedOut(client *c) {
     } else if (c->btype == BLOCKED_MODULE) {
         moduleBlockedClientTimedOut(c);
     } else {
-        serverPanic("Unknown btype in replyToBlockedClientTimedOut().");
+        serverPanic("Unknown btype %d in replyToBlockedClientTimedOut() for client %llu.",
+            c->btype, (unsigned long long) c->id);
     }
 }
 

@@ -67,8 +67,6 @@ public:
 
 /* constants */
 static time_t c_infoUpdateSeconds = 10;
-// the current Redis Cluster setup we configure replication factor as 2, each non-empty master node should have 2 replicas, given that there are 3 zones in each regions
-static const int EXPECTED_NUMBER_OF_REPLICAS = 2;
 
 StatsdClientWrapper *g_stats = nullptr;
 std::string m_strPrefix { "keydb" };
@@ -567,10 +565,8 @@ void emit_metrics_for_insufficient_replicas(struct RedisModuleCtx *ctx, long lon
     // check if the current node is a primary
     if (strncmp(role, "master", len) == 0) {
         RedisModuleCallReply *replicasReply = RedisModule_CallReplyArrayElement(reply, 2);
-        // check if there are less than 2 connected replicas
-        if (RedisModule_CallReplyLength(replicasReply) < EXPECTED_NUMBER_OF_REPLICAS) {
-            g_stats->increment("lessThanExpectedReplicas_error", 1);
-        }
+        size_t numberOfActiveReplicas = RedisModule_CallReplyLength(replicasReply);
+        g_stats->gauge("numberOfActiveReplicas", numberOfActiveReplicas);
     }
     RedisModule_FreeCallReply(reply);
 }

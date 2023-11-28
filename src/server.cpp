@@ -2610,6 +2610,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             perc /= cserver.cthreads;
             perc *= 100.0;
             serverLog(LL_WARNING, "CPU Used: %.2f", perc);
+            g_pserver->last_overload_cpu_reading = static_cast<float>(perc);
             if (perc > g_pserver->overload_protect_threshold) {
                 serverLog(LL_WARNING, "\tWARNING: CPU overload detected.");
                 g_pserver->is_overloaded = true;
@@ -6271,13 +6272,15 @@ sds genRedisInfoString(const char *section) {
         "used_cpu_sys_children:%ld.%06ld\r\n"
         "used_cpu_user_children:%ld.%06ld\r\n"
         "server_threads:%d\r\n"
-        "long_lock_waits:%" PRIu64 "\r\n",
+        "long_lock_waits:%" PRIu64 "\r\n"
+        "last_overload_cpu_reading:%.2f\r\n",
         (long)self_ru.ru_stime.tv_sec, (long)self_ru.ru_stime.tv_usec,
         (long)self_ru.ru_utime.tv_sec, (long)self_ru.ru_utime.tv_usec,
         (long)c_ru.ru_stime.tv_sec, (long)c_ru.ru_stime.tv_usec,
         (long)c_ru.ru_utime.tv_sec, (long)c_ru.ru_utime.tv_usec,
         cserver.cthreads,
-        fastlock_getlongwaitcount());
+        fastlock_getlongwaitcount(),
+        g_pserver->last_overload_cpu_reading);
 #ifdef RUSAGE_THREAD
         struct rusage m_ru;
         getrusage(RUSAGE_THREAD, &m_ru);

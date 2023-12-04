@@ -555,19 +555,6 @@ void tlsSetCertificateFingerprint(tls_connection* conn, X509 * cert) {
 #define ASN1_STRING_get0_data ASN1_STRING_data 
 #endif 
 
-class TCleanup {
-    std::function<void()> fn;
-
-public:
-    TCleanup(std::function<void()> fn)
-        : fn(fn)
-    {}
-
-    ~TCleanup() {
-        fn();
-    }
-};
-
 bool tlsCheckCertificateAgainstAllowlist(tls_connection* conn, std::set<sdsstring> allowlist, const char** commonName){
     if (allowlist.empty()){
         // An empty list implies acceptance of all

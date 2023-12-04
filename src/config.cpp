@@ -474,6 +474,90 @@ void initConfigValues() {
     }
 }
 
+struct in_addr maskFromBitsIPV4(int bits) {
+    struct in_addr mask;
+    memset(&mask, 0, sizeof(mask));
+    mask.s_addr = htonl(ULONG_MAX << (IPV4_BITS - bits));
+    return mask;
+}
+
+bool validateAndAddIPV4(sds string) {
+    struct in_addr ip, mask;
+    int subnetParts;
+    sds* subnetSplit = sdssplitlen(string, sdslen(string), "/", 1, &subnetParts);
+    TCleanup splitCleanup([&](){
+        sdsfreesplitres(subnetSplit, subnetParts);
+    });
+    if (subnetParts > 2) {
+        return false;
+    } else if (subnetParts == 2) {
+        char* endptr;
+        long bits = strtol(subnetSplit[1], &endptr, 10);
+        if (*endptr != '\0' || bits < 0 || bits > IPV4_BITS) {
+            return false;
+        }
+        mask = maskFromBitsIPV4(bits);
+    } else {
+        mask = maskFromBitsIPV4(IPV4_BITS);
+    }
+    if (subnetParts > 0) {
+        if (inet_pton(AF_INET, subnetSplit[0], &ip) == 0) {
+            return false;
+        }
+        g_pserver->overload_ignorelist.emplace(ip, mask);
+        return true;
+    } else {
+        return false;
+    }
+}
+
+struct in6_addr maskFromBitsIPV6(int bits) {
+    struct in6_addr mask;
+    memset(&mask, 0, sizeof(mask));
+    for (unsigned int i = 0; i < sizeof(struct in6_addr); i++) {
+        if (bits >= CHAR_BIT) {
+            mask.s6_addr[i] = UCHAR_MAX;
+            bits -= CHAR_BIT;
+        } else if (bits > 0) {
+            mask.s6_addr[i] = UCHAR_MAX << (CHAR_BIT - bits);
+            bits = 0;
+        } else {
+            break;
+        }
+    }
+    return mask;
+}
+
+bool validateAndAddIPV6(sds string) {
+    struct in6_addr ip, mask;
+    int subnetParts;
+    sds* subnetSplit = sdssplitlen(string, sdslen(string), "/", 1, &subnetParts);
+    TCleanup splitCleanup([&](){
+        sdsfreesplitres(subnetSplit, subnetParts);
+    });
+    if (subnetParts > 2) {
+        return false;
+    } else if (subnetParts == 2) {
+        char* endptr;
+        long bits = strtol(subnetSplit[1], &endptr, 10);
+        if (*endptr != '\0' || bits < 0 || bits > IPV6_BITS) {
+            return false;
+        }
+        mask = maskFromBitsIPV6(bits);
+    } else {
+        mask = maskFromBitsIPV6(IPV6_BITS);
+    }
+    if (subnetParts > 0) {
+        if (inet_pton(AF_INET6, subnetSplit[0], &ip) == 0) {
+            return false;
+        }
+        g_pserver->overload_ignorelist_ipv6.emplace(ip, mask);
+        return true;
+    } else {
+        return false;
+    }
+}
+
 void loadServerConfigFromString(char *config) {
     const char *err = NULL;
     int linenum = 0, totlines, i;
@@ -783,11 +867,14 @@ void loadServerConfigFromString(char *config) {
             if (argc < 2) {
                 err = "must supply at least one element in the ignore list"; goto loaderr;
             }
-            if (!g_pserver->overload_ignorelist.empty()) {
+            if (!g_pserver->overload_ignorelist.empty() || !g_pserver->overload_ignorelist_ipv6.empty()) {
                 err = "overload-ignorelist may only be set once"; goto loaderr;
             }
-            for (int i = 1; i < argc; i++)
-                g_pserver->overload_ignorelist.emplace(argv[i], strlen(argv[i]));
+            for (int i = 1; i < argc; i++) {
+                if (!validateAndAddIPV4(argv[i]) && !validateAndAddIPV6(argv[i])) {
+                    err = "overload-ignorelist must be a list of valid IP addresses or subnets"; goto loaderr;
+                }
+            }
         } else if (!strcasecmp(argv[0], "version-override") && argc == 2) {
             KEYDB_SET_VERSION = zstrdup(argv[1]);
             serverLog(LL_WARNING, "Warning version is overriden to: %s\n", KEYDB_SET_VERSION);
@@ -1101,9 +1188,13 @@ void configSetCommand(client *c) {
         }
     } config_set_special_field("overload-ignorelist") {
         g_pserver->overload_ignorelist.clear();
+        g_pserver->overload_ignorelist_ipv6.clear();
         for (int i = 3; i < c->argc; ++i) {
             robj *val = c->argv[i];
-            g_pserver->overload_ignorelist.emplace(szFromObj(val), sdslen(szFromObj(val)));
+            if (!validateAndAddIPV4(szFromObj(val)) && !validateAndAddIPV6(szFromObj(val))) {
+                addReplyError(c, "overload-ignorelist must be a list of valid IP addresses or subnets");
+                return;
+            }
         }
     /* Everything else is an error... */
     } config_set_else {
@@ -1326,9 +1417,16 @@ void configGetCommand(client *c) {
     }
     if (stringmatch(pattern, "overload-ignorelist", 1)) {
         addReplyBulkCString(c,"overload-ignorelist");
-        addReplyArrayLen(c, (long)g_pserver->overload_ignorelist.size());
+        addReplyArrayLen(c, (long)g_pserver->overload_ignorelist.size() + (long)g_pserver->overload_ignorelist_ipv6.size());
         for (auto &elem : g_pserver->overload_ignorelist) {
-            addReplyBulkCBuffer(c, elem.get(), elem.size()); // addReplyBulkSds will free which we absolutely don't want
+            sds elem_sds = elem.getString();
+            addReplyBulkCBuffer(c, elem_sds, sdslen(elem_sds));
+            sdsfree(elem_sds);
+        }
+        for (auto &elem : g_pserver->overload_ignorelist_ipv6) {
+            sds elem_sds = elem.getString();
+            addReplyBulkCBuffer(c, elem_sds, sdslen(elem_sds));
+            sdsfree(elem_sds);
         }
         matches++;
     }
@@ -2029,10 +2127,18 @@ int rewriteConfig(char *path, int force_all) {
         rewriteConfigMarkAsProcessed(state, "tls-auditlog-blocklist"); // ensure the line is removed if it existed
     }
 
-    if (!g_pserver->overload_ignorelist.empty()) {
+    if (!g_pserver->overload_ignorelist.empty() || !g_pserver->overload_ignorelist_ipv6.empty()) {
         sds conf = sdsnew("overload-ignorelist ");
         for (auto &elem : g_pserver->overload_ignorelist) {
-            conf = sdscatsds(conf, (sds)elem.get());
+            sds elem_sds = elem.getString();
+            conf = sdscatsds(conf, elem_sds);
+            sdsfree(elem_sds);
+            conf = sdscat(conf, " ");
+        }
+        for (auto &elem : g_pserver->overload_ignorelist_ipv6) {
+            sds elem_sds = elem.getString();
+            conf = sdscatsds(conf, elem_sds);
+            sdsfree(elem_sds);
             conf = sdscat(conf, " ");
         }
         // trim the trailing space

@@ -64,6 +64,7 @@
 #include <string>
 #include <mutex>
 #include <unordered_set>
+#include <arpa/inet.h>
 #ifdef __cplusplus
 extern "C" {
 #include <lua.h>
@@ -125,8 +126,24 @@ typedef long long ustime_t; /* microsecond time type. */
 #define OVERLOAD_PROTECT_PERIOD_MS 10'000 // 10 seconds
 #define MAX_CLIENTS_SHED_PER_PERIOD (OVERLOAD_PROTECT_PERIOD_MS / 10)  // Restrict to one client per 10ms
 
+#define IPV4_BITS 32
+#define IPV6_BITS 128
+
 extern int g_fTestMode;
 extern struct redisServer *g_pserver;
+
+class TCleanup {
+    std::function<void()> fn;
+
+public:
+    TCleanup(std::function<void()> fn)
+        : fn(fn)
+    {}
+
+    ~TCleanup() {
+        fn();
+    }
+};
 
 struct redisObject;
 class robj_roptr
@@ -2715,7 +2732,93 @@ struct redisServer {
 
     std::set<sdsstring> tls_auditlog_blocklist; /* Certificates that can be excluded from audit logging */
     std::set<sdsstring> tls_allowlist;
-    std::set<sdsstring> overload_ignorelist;
+    class IPV4 {
+        struct in_addr m_ip;
+        struct in_addr m_mask;
+
+        int bitsFromMask() const {
+            uint32_t mask = ntohl(m_mask.s_addr);
+            int bits = 0;
+            while (mask > 0) {
+                bits += mask & 1;
+                mask >>= 1;
+            }
+            return bits;
+        }
+
+    public:
+        IPV4(struct in_addr ip, struct in_addr mask) : m_ip(ip), m_mask(mask) {};
+        bool match(struct in_addr ip) const
+        {
+            return (ip.s_addr & m_mask.s_addr) == m_ip.s_addr;
+        }
+
+        sds getString() const
+        {
+            sds result = sdsempty();
+            char buf[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &m_ip, buf, sizeof(buf));
+            result = sdscat(result, buf);
+            int bits = bitsFromMask();
+            if (bits != IPV4_BITS) {
+                result = sdscat(result, "/");
+                result = sdscat(result, std::to_string(bits).c_str());
+            }
+            return result;
+        }
+
+        bool operator<(const IPV4& rhs) const
+        {
+            return memcmp(&m_ip, &rhs.m_ip, sizeof(m_ip)) < 0 || (memcmp(&m_ip, &rhs.m_ip, sizeof(m_ip)) == 0 && memcmp(&m_mask, &rhs.m_mask, sizeof(m_mask)) < 0);
+        }
+    };
+    class IPV6 {
+        struct in6_addr m_ip;
+        struct in6_addr m_mask;
+
+        int bitsFromMask() const {
+            int bits = 0;
+            for (unsigned int i = 0; i < sizeof(struct in6_addr); i++) {
+                uint8_t mask = m_mask.s6_addr[i];
+                while (mask > 0) {
+                    bits += mask & 1;
+                    mask >>= 1;
+                }
+            }
+            return bits;
+        }
+    public:
+        IPV6(struct in6_addr ip, struct in6_addr mask) : m_ip(ip), m_mask(mask) {};
+        bool match(struct in6_addr ip) const
+        {
+            for (unsigned int i = 0; i < sizeof(struct in6_addr); i++) {
+                if ((ip.s6_addr[i] & m_mask.s6_addr[i]) != m_ip.s6_addr[i])
+                    return false;
+            }
+            return true;
+        }
+
+        sds getString() const
+        {
+            sds result = sdsempty();
+            char buf[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, &m_ip, buf, sizeof(buf));
+            result = sdscat(result, buf);
+            int bits = bitsFromMask();
+            if (bits != IPV6_BITS) {
+                result = sdscat(result, "/");
+                result = sdscat(result, std::to_string(bits).c_str());
+            }
+            return result;
+        }
+
+        bool operator<(const IPV6& rhs) const
+        {
+            return memcmp(&m_ip, &rhs.m_ip, sizeof(m_ip)) < 0 || (memcmp(&m_ip, &rhs.m_ip, sizeof(m_ip)) == 0 && memcmp(&m_mask, &rhs.m_mask, sizeof(m_mask)) < 0);
+        }
+    };
+    std::set<IPV4> overload_ignorelist;
+    std::set<IPV6> overload_ignorelist_ipv6;
     redisTLSContextConfig tls_ctx_config;
 
     /* cpu affinity */

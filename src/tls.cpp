@@ -627,6 +627,18 @@ bool tlsCheckCertificateAgainstAllowlist(tls_connection* conn, std::set<sdsstrin
     return false;
 }
 
+bool tlsCertificateIgnoreLoadShedding(tls_connection* conn) {
+    const char* cn = "";
+    if (tlsCheckCertificateAgainstAllowlist(conn, g_pserver->tls_overload_ignorelist, &cn)) {
+        // Certificate is in exclusion list, no need to audit log
+        serverLog(LL_NOTICE, "Loadshedding: disabled for %s", conn->c.fprint);
+        return true;
+    } else {
+        serverLog(LL_NOTICE, "Loadshedding: enabled for %s", conn->c.fprint);
+        return false;
+    }
+}
+
 bool tlsCertificateRequiresAuditLogging(tls_connection* conn){
     const char* cn = "";
     if (tlsCheckCertificateAgainstAllowlist(conn, g_pserver->tls_auditlog_blocklist, &cn)) {
@@ -878,6 +890,9 @@ void tlsHandleEvent(tls_connection *conn, int mask) {
                     conn->c.state = CONN_STATE_CONNECTED;
                     if (tlsCertificateRequiresAuditLogging(conn)){
                         conn->c.flags |= CONN_FLAG_AUDIT_LOGGING_REQUIRED;
+                    }
+                    if (tlsCertificateIgnoreLoadShedding(conn)){
+                        conn->c.flags |= CONN_FLAG_IGNORE_OVERLOAD;
                     }
                 }
             }

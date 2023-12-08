@@ -52,6 +52,7 @@ typedef enum {
 #define CONN_FLAG_READ_THREADSAFE        (1<<2)
 #define CONN_FLAG_WRITE_THREADSAFE       (1<<3)
 #define CONN_FLAG_AUDIT_LOGGING_REQUIRED (1<<4)
+#define CONN_FLAG_IGNORE_OVERLOAD (1<<5)
 
 #define CONN_TYPE_SOCKET            1
 #define CONN_TYPE_TLS               2

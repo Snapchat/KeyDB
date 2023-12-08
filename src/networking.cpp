@@ -1175,6 +1175,9 @@ int chooseBestThreadForAccept()
 }
 
 bool checkOverloadIgnorelist(connection *conn) {
+    if (conn->flags & CONN_FLAG_IGNORE_OVERLOAD) {
+        return true;
+    }
     struct sockaddr_storage sa;
     socklen_t salen = sizeof(sa);
     if (getpeername(conn->fd, (struct sockaddr *)&sa, &salen) == -1) {

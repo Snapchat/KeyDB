@@ -172,6 +172,7 @@ start_server {tags {"introspection"}} {
             repl-backlog-disk-reserve
             tls-allowlist
             tls-auditlog-blocklist
+            tls-overload-ignorelist
             overload-ignorelist
             db-s3-object
         }

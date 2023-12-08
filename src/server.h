@@ -2731,6 +2731,7 @@ struct redisServer {
     int tls_rotation;
 
     std::set<sdsstring> tls_auditlog_blocklist; /* Certificates that can be excluded from audit logging */
+    std::set<sdsstring> tls_overload_ignorelist; /* Certificates that are be excluded load shedding */
     std::set<sdsstring> tls_allowlist;
     class IPV4 {
         struct in_addr m_ip;

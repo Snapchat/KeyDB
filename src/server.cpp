@@ -1962,12 +1962,12 @@ void getExpansiveClientsInfo(size_t *in_usage, size_t *out_usage) {
 }
 
 int closeClientOnOverload(client *c) {
-    if (g_pserver->overload_closed_clients > MAX_CLIENTS_SHED_PER_PERIOD) return false;
+    if (g_pserver->overload_closeable_clients <= 0) return false;
     if (!g_pserver->is_overloaded) return false;
     // Don't close masters, replicas, or pub/sub clients
     if (c->flags & (CLIENT_MASTER | CLIENT_SLAVE | CLIENT_PENDING_WRITE | CLIENT_PUBSUB | CLIENT_BLOCKED | CLIENT_IGNORE_OVERLOAD)) return false;
     freeClient(c);
-    ++g_pserver->overload_closed_clients;
+    --g_pserver->overload_closeable_clients;
     return true;
 }
 
@@ -2602,7 +2602,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Check for CPU Overload */
     run_with_period(10'000) {
         g_pserver->is_overloaded = false;
-        g_pserver->overload_closed_clients = 0;
+        g_pserver->overload_closeable_clients = (listLength(g_pserver->clients)-listLength(g_pserver->slaves)) * (g_pserver->overload_protect_tenacity/100);
         static clock_t last = 0;
         if (g_pserver->overload_protect_threshold > 0) {
             clock_t cur = clock();

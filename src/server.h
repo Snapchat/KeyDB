@@ -2861,9 +2861,10 @@ struct redisServer {
 
     sds sdsAvailabilityZone;
     int overload_protect_threshold = 0;
+    int overload_protect_tenacity = 0;
     float last_overload_cpu_reading = 0.0f;
     int is_overloaded = 0;
-    int overload_closed_clients = 0;
+    int overload_closeable_clients = 0;
 
         int module_blocked_pipe[2]; /* Pipe used to awake the event loop if a
                             client blocked on a module command needs

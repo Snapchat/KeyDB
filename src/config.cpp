@@ -3152,6 +3152,7 @@ standardConfig configs[] = {
     createSizeTConfig("semi-ordered-set-bucket-size", NULL, MODIFIABLE_CONFIG, 0, 1024, g_semiOrderedSetTargetBucketSize, 0, INTEGER_CONFIG, NULL, NULL),
     createSDSConfig("availability-zone", NULL, MODIFIABLE_CONFIG, 0, g_pserver->sdsAvailabilityZone, "", NULL, NULL),
     createIntConfig("overload-protect-percent", NULL, MODIFIABLE_CONFIG, 0, 200, g_pserver->overload_protect_threshold, 0, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("overload-protect-tenacity", NULL, MODIFIABLE_CONFIG, 0, 100, g_pserver->overload_protect_tenacity, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("force-eviction-percent", NULL, MODIFIABLE_CONFIG, 0, 100, g_pserver->force_eviction_percent, 0, INTEGER_CONFIG, NULL, NULL),
     createBoolConfig("enable-async-rehash", NULL, MODIFIABLE_CONFIG, g_pserver->enable_async_rehash, 1, NULL, NULL),
     createBoolConfig("enable-keydb-fastsync", NULL, MODIFIABLE_CONFIG, g_pserver->fEnableFastSync, 0, NULL, NULL),

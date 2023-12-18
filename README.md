@@ -49,8 +49,6 @@ Join us on [Slack](https://docs.keydb.dev/slack/)
 
 Learn more using KeyDB's extensive [documentation](https://docs.keydb.dev)
 
-Post to our [Community Forum](https://community.keydb.dev)
-
 See the [KeyDB Roadmap](https://docs.keydb.dev/docs/coming-soon) to see what's in store
 
 

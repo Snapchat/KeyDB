@@ -53,7 +53,7 @@ public:
     virtual StorageToken *begin_retrieve(struct aeEventLoop *, aePostFunctionTokenProc, sds *, size_t) {return nullptr;};
     virtual void complete_retrieve(StorageToken * /*tok*/, callbackSingle /*fn*/) {};
 
-    virtual StorageToken* begin_endWriteBatch(struct aeEventLoop *, aePostFunctionTokenProc*) {} // NOP
+    virtual StorageToken* begin_endWriteBatch(struct aeEventLoop *, aePostFunctionTokenProc*) { return nullptr; } // NOP
     virtual void complete_endWriteBatch(StorageToken * /*tok*/) {};
 
     virtual void bulkInsert(char **rgkeys, size_t *rgcbkeys, char **rgvals, size_t *rgcbvals, size_t celem) {

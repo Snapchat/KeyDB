@@ -2608,8 +2608,11 @@ bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi
             if (mi->parseState->depth() != 0)
                 return false;
 
-            static_assert(sizeof(long) == sizeof(long long),"");
-            rsi.repl_stream_db = mi->parseState->getMetaDataLongLong("repl-stream-db");
+            long long repl_stream_db = mi->parseState->getMetaDataLongLong("repl-stream-db");
+            if (repl_stream_db < INT_MIN || repl_stream_db > INT_MAX) {
+                throw "Invalid repl_stream_db value";
+            }
+            rsi.repl_stream_db = static_cast<int>(repl_stream_db);
             rsi.repl_offset = mi->parseState->getMetaDataLongLong("repl-offset");
             sds str = mi->parseState->getMetaDataStr("repl-id");
             if (sdslen(str) == CONFIG_RUN_ID_SIZE) {

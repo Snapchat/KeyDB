@@ -1762,7 +1762,7 @@ struct sharedObjectsStruct {
     *emptyarray, *wrongtypeerr, *nokeyerr, *syntaxerr, *sameobjecterr,
     *outofrangeerr, *noscripterr, *loadingerr, *slowscripterr, *bgsaveerr,
     *masterdownerr, *roslaveerr, *execaborterr, *noautherr, *noreplicaserr,
-    *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
+    *busykeyerr, *oomerr, *overloaderr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
     *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink,
     *rpop, *lpop, *lpush, *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax,
     *emptyscan, *multi, *exec, *left, *right, *hset, *srem, *xgroup, *xclaim,  
@@ -2863,13 +2863,13 @@ struct redisServer {
     sds sdsAvailabilityZone;
     int overload_protect_threshold = 0;
     int overload_protect_tenacity = 0;
+    int overload_protect_strength = 0;
     float last_overload_cpu_reading = 0.0f;
     int is_overloaded = 0;
-    int overload_closeable_clients = 0;
 
-        int module_blocked_pipe[2]; /* Pipe used to awake the event loop if a
-                            client blocked on a module command needs
-                            to be processed. */
+    int module_blocked_pipe[2]; /* Pipe used to awake the event loop if a
+                                client blocked on a module command needs
+                                to be processed. */
 
     bool FRdbSaveInProgress() const { return g_pserver->rdbThreadVars.fRdbThreadActive; }
 };

@@ -2793,9 +2793,9 @@ void readQueryFromClient(connection *conn) {
         return;
     }
 
-    if (cserver.cthreads > 1 || g_pserver->m_pstorageFactory) {
+    if (cserver.cthreads > 1 || g_pserver->m_pstorageFactory || g_pserver->is_overloaded) {
         parseClientCommandBuffer(c);
-        if (g_pserver->enable_async_commands && !serverTL->disable_async_commands && listLength(g_pserver->monitors) == 0 && (aeLockContention() || serverTL->rgdbSnapshot[c->db->id] || g_fTestMode) && !serverTL->in_eval && !serverTL->in_exec) {
+        if (g_pserver->enable_async_commands && !serverTL->disable_async_commands && listLength(g_pserver->monitors) == 0 && (aeLockContention() || serverTL->rgdbSnapshot[c->db->id] || g_fTestMode) && !serverTL->in_eval && !serverTL->in_exec && !g_pserver->is_overloaded) {
             // Frequent writers aren't good candidates for this optimization, they cause us to renew the snapshot too often
             //  so we exclude them unless the snapshot we need already exists.
             // Note: In test mode we want to create snapshots as often as possibl to excercise them - we don't care about perf
@@ -2807,8 +2807,16 @@ void readQueryFromClient(connection *conn) {
                 processInputBuffer(c, false, CMD_CALL_SLOWLOG | CMD_CALL_STATS | CMD_CALL_ASYNC);
             }
         }
-        if (!c->vecqueuedcmd.empty())
-            serverTL->vecclientsProcess.push_back(c);
+        if (!c->vecqueuedcmd.empty()) {
+            if (g_pserver->is_overloaded && !(c->flags & (CLIENT_MASTER | CLIENT_SLAVE | CLIENT_PENDING_WRITE | CLIENT_PUBSUB | CLIENT_BLOCKED | CLIENT_IGNORE_OVERLOAD)) && ((random() % 100) < g_pserver->overload_protect_strength)) {
+                for (unsigned i = 0; i < c->vecqueuedcmd.size(); i++) {
+                    addReply(c, shared.overloaderr);
+                }
+                c->vecqueuedcmd.clear();
+            } else {
+                serverTL->vecclientsProcess.push_back(c);
+            }
+        }
     } else {
         // If we're single threaded its actually better to just process the command here while the query is hot in the cache
         //  multithreaded lock contention dominates and batching is better

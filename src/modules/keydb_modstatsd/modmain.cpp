@@ -437,6 +437,8 @@ void handle_cluster_nodes_response(struct RedisModuleCtx *ctx, const char *szRep
     const char *pchLineStart = szReply;
     long long primaries = 0;
     long long replicas = 0;
+    long long handshakes = 0;
+    long long errors = 0;
     while (SAFETY_CHECK_POINTER(pchLineStart) && *pchLineStart != '\0') {
         // Loop Each Line
         const char *pchLineEnd = pchLineStart;
@@ -449,6 +451,10 @@ void handle_cluster_nodes_response(struct RedisModuleCtx *ctx, const char *szRep
             ++primaries;
         } else if (std::string::npos != line.find("slave")) {
             ++replicas;
+        } else if (std::string::npos != line.find("handshake")) {
+            ++handshakes;
+        } else if (std::string::npos != line.find("fail?") || std::string::npos != line.find("fail") || std::string::npos != line.find("noaddr") || std::string::npos != line.find("nofailover") || std::string::npos != line.find("noflags") ) {
+            ++errors;
         } else {
             RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING, "Unexpected NODE format returned by \"CLUSTER NODES\" command: \"%s\"", line.c_str());
         }
@@ -480,6 +486,10 @@ void handle_cluster_nodes_response(struct RedisModuleCtx *ctx, const char *szRep
     RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Emitting metric \"primaries\": %llu", primaries);
     g_stats->gauge("replicas", replicas);
     RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Emitting metric \"replicas\": %llu", replicas);
+    g_stats->gauge("handshakes", handshakes);
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Emitting metric \"handshakes\": %llu", handshakes);
+    g_stats->gauge("cluster_nodes_error_nodes", errors);
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Emitting metric \"cluster_nodes_error_nodes\": %llu", errors);
     #undef SAFETY_CHECK_POINTER
 }
 

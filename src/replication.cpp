@@ -346,6 +346,17 @@ void resizeReplicationBacklog(long long newsize) {
             /* Next byte we have is... the next since the buffer is empty. */
             g_pserver->repl_backlog_off = g_pserver->master_repl_offset+1;
             g_pserver->repl_backlog_start = g_pserver->master_repl_offset;
+            listIter li;
+            listNode *ln;
+            listRewind(g_pserver->slaves, &li);
+            while ((ln = listNext(&li))) {
+                client *replica = (client*)listNodeValue(ln);
+
+                std::unique_lock<fastlock> ul(replica->lock);
+
+                replica->repl_curr_off = g_pserver->master_repl_offset;
+                replica->repl_end_off = g_pserver->master_repl_offset;
+            }
         }
     }
     g_pserver->repl_backlog_size = newsize;

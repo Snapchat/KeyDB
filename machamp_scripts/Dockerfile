@@ -73,7 +73,25 @@ RUN set -eux; \
                | xargs -r apt-mark manual \
         ; \
         apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
-        rm -rf /var/lib/apt/lists/*; \
+        rm -rf /var/lib/apt/lists/*
+# build RedisBloom
+RUN set -eux; \
+        savedAptMark="$(apt-mark showmanual)"; \
+        apt-get update; \
+        DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confnew" install -qqy --no-install-recommends \
+                ca-certificates \
+                wget \
+                make \
+                pkg-config \
+                build-essential \
+                git; \
+        git clone --recursive https://github.com/RedisBloom/RedisBloom.git; \
+        cd RedisBloom; \
+        ./sbin/setup; \
+        bash -l; \
+        make; \
+        redisBloomPath=`make run -n | awk '{print $NF}'`; \
+        cp $redisBloomPath /usr/local/lib/
 # create working directories and organize files
 RUN \
         mkdir /data && chown keydb:keydb /data; \

@@ -92,7 +92,8 @@ void blockClient(client *c, int btype) {
     /* Master client should never be blocked unless pause or module */
     serverAssert(!(c->flags & CLIENT_MASTER &&
                    btype != BLOCKED_MODULE &&
-                   btype != BLOCKED_PAUSE));
+                   btype != BLOCKED_PAUSE &&
+                   btype != BLOCKED_STORAGE));
 
     c->flags |= CLIENT_BLOCKED;
     c->btype = btype;

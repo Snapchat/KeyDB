@@ -1,0 +1,18 @@
+name: Windows
+
+on: [push, pull_request]
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: dependencies
+        run: |
+          choco install cmake
+      - name: build
+        run: |
+          cmake -S . -B build -G "Visual Studio 16 2019" -A x64
+          cmake --build build --target ALL_BUILD --config Release
+      - name: test
+        run: |
+          cmake --build build --target RUN_TESTS --config Release

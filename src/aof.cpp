@@ -1592,8 +1592,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
             }
             /* Save the expire time */
             if (o->FExpires()) {
-                std::unique_lock<fastlock> ul(g_expireLock);
-                expireEntry *pexpire = db->getExpire(&key);
+                expireEntry *pexpire = &o->expire;
                 for (auto &subExpire : *pexpire) {
                     if (subExpire.subkey() == nullptr)
                     {

@@ -1518,6 +1518,16 @@ dictType dbDictType = {
     dictGCAsyncFree             /* async free destructor */
 };
 
+dictType dbExpiresDictType = {
+        dictSdsHash,                /* hash function */
+        NULL,                       /* key dup */
+        NULL,                       /* val dup */
+        dictSdsKeyCompare,          /* key compare */
+        NULL,                       /* key destructor */
+        NULL,                       /* val destructor */
+        dictExpandAllowed           /* allow to expand */
+    };
+
 /* db->pdict, keys are sds strings, vals are Redis objects. */
 dictType dbTombstoneDictType = {
     dictSdsHash,                /* hash function */
@@ -1548,17 +1558,6 @@ dictType shaScriptObjectDictType = {
     dictSdsDestructor,          /* key destructor */
     dictObjectDestructor,       /* val destructor */
     NULL                        /* allow to expand */
-};
-
-/* Db->expires */
-dictType dbExpiresDictType = {
-    dictSdsHash,                /* hash function */
-    NULL,                       /* key dup */
-    NULL,                       /* val dup */
-    dictSdsKeyCompare,          /* key compare */
-    NULL,                       /* key destructor */
-    NULL,                       /* val destructor */
-    dictExpandAllowed           /* allow to expand */
 };
 
 /* Command table. sds string -> command struct pointer. */
@@ -1871,6 +1870,9 @@ VersionCompareResult compareVersion(SymVer *pver)
     if ((symVerThis.major == 0 && symVerThis.minor == 0 && symVerThis.build == 0)
         || (pver->major == 0 && pver->minor == 0 && pver->build == 0))
         return VersionCompareResult::EqualVersion;
+
+    if (pver->major <= 6 && pver->minor <= 3 && pver->build <= 3)
+        return VersionCompareResult::IncompatibleVersion;
     
     for (int iver = 0; iver < 3; ++iver)
     {
@@ -1959,15 +1961,6 @@ void getExpansiveClientsInfo(size_t *in_usage, size_t *out_usage) {
     *out_usage = o;
 }
 
-int closeClientOnOverload(client *c) {
-    if (g_pserver->overload_closed_clients > MAX_CLIENTS_SHED_PER_PERIOD) return false;
-    if (!g_pserver->is_overloaded) return false;
-    // Don't close masters, replicas, or pub/sub clients
-    if (c->flags & (CLIENT_MASTER | CLIENT_SLAVE | CLIENT_PENDING_WRITE | CLIENT_PUBSUB | CLIENT_BLOCKED)) return false;
-    freeClient(c);
-    ++g_pserver->overload_closed_clients;
-    return true;
-}
 
 /* This function is called by serverCron() and is used in order to perform
  * operations on clients that are important to perform constantly. For instance
@@ -2039,7 +2032,6 @@ void clientsCron(int iel) {
             if (clientsCronTrackExpansiveClients(c, curr_peak_mem_usage_slot)) goto LContinue;
             if (clientsCronTrackClientsMemUsage(c)) goto LContinue;
             if (closeClientOnOutputBufferLimitReached(c, 0)) continue; // Client also free'd
-            if (closeClientOnOverload(c)) continue;
         LContinue:
             fastlock_unlock(&c->lock);
         }        
@@ -2135,7 +2127,7 @@ void databasesCron(bool fMainThread) {
                 ::dict *dict = g_pserver->db[rehash_db]->dictUnsafeKeyOnly();
                 /* Are we async rehashing? And if so is it time to re-calibrate? */
                 /* The recalibration limit is a prime number to ensure balancing across threads */
-                if (rehashes_per_ms > 0 && async_rehashes < 131 && !cserver.active_defrag_enabled && cserver.cthreads > 1 && dictSize(dict) > 2048 && dictIsRehashing(dict) && !g_pserver->loading) {
+                if (g_pserver->enable_async_rehash && rehashes_per_ms > 0 && async_rehashes < 131 && !cserver.active_defrag_enabled && cserver.cthreads > 1 && dictSize(dict) > 2048 && dictIsRehashing(dict) && !g_pserver->loading && aeLockContention() > 1) {
                     serverTL->rehashCtl = dictRehashAsyncStart(dict, rehashes_per_ms * ((1000 / g_pserver->hz) / 10));  // Estimate 10% CPU time spent in lock contention
                     if (serverTL->rehashCtl)
                         ++async_rehashes;
@@ -2599,8 +2591,13 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Check for CPU Overload */
     run_with_period(10'000) {
+        if (g_pserver->is_overloaded) {
+            if (g_pserver->overload_protect_strength < 100)
+                g_pserver->overload_protect_strength *= 2;
+        } else {
+            g_pserver->overload_protect_strength = g_pserver->overload_protect_tenacity;
+        }
         g_pserver->is_overloaded = false;
-        g_pserver->overload_closed_clients = 0;
         static clock_t last = 0;
         if (g_pserver->overload_protect_threshold > 0) {
             clock_t cur = clock();
@@ -2608,6 +2605,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             perc /= cserver.cthreads;
             perc *= 100.0;
             serverLog(LL_WARNING, "CPU Used: %.2f", perc);
+            g_pserver->last_overload_cpu_reading = static_cast<float>(perc);
             if (perc > g_pserver->overload_protect_threshold) {
                 serverLog(LL_WARNING, "\tWARNING: CPU overload detected.");
                 g_pserver->is_overloaded = true;
@@ -3129,7 +3127,8 @@ void createSharedObjects(void) {
         "-NOREPLICAS Not enough good replicas to write.\r\n")));
     shared.busykeyerr = makeObjectShared(createObject(OBJ_STRING,sdsnew(
         "-BUSYKEY Target key name already exists.\r\n")));
-    
+    shared.overloaderr = makeObjectShared(createObject(OBJ_STRING,sdsnew(
+        "-OVERLOAD KeyDB is overloaded.\r\n")));
 
     /* The shared NULL depends on the protocol version. */
     shared.null[0] = NULL;
@@ -4049,7 +4048,7 @@ void initServer(void) {
     g_pserver->cron_malloc_stats.allocator_active = 0;
     g_pserver->cron_malloc_stats.allocator_resident = 0;
     g_pserver->cron_malloc_stats.sys_available = 0;
-    g_pserver->cron_malloc_stats.sys_total = g_pserver->force_eviction_percent ? getMemTotal() : 0;
+    g_pserver->cron_malloc_stats.sys_total = getMemTotal();
     g_pserver->lastbgsave_status = C_OK;
     g_pserver->aof_last_write_status = C_OK;
     g_pserver->aof_last_write_errno = 0;
@@ -5117,8 +5116,8 @@ int processCommand(client *c, int callFlags) {
 
             sds str = sdsempty();
             for (int j = 0; j < numkeys; j++) {
-                sdscatsds(str, (sds)ptrFromObj(c->argv[keyindex[j]]));
-                sdscat(str, " ");
+                str = sdscatsds(str, (sds)ptrFromObj(c->argv[keyindex[j]]));
+                str = sdscat(str, " ");
             }
         
             if (numkeys > 0)
@@ -5678,7 +5677,8 @@ sds genRedisInfoString(const char *section) {
             "lru_clock:%u\r\n"
             "executable:%s\r\n"
             "config_file:%s\r\n"
-            "availability_zone:%s\r\n",
+            "availability_zone:%s\r\n"
+            "features:%s\r\n",
             KEYDB_SET_VERSION,
             redisGitSHA1(),
             strtol(redisGitDirty(),NULL,10) > 0,
@@ -5705,7 +5705,8 @@ sds genRedisInfoString(const char *section) {
             lruclock,
             cserver.executable ? cserver.executable : "",
             cserver.configfile ? cserver.configfile : "",
-            g_pserver->sdsAvailabilityZone);
+            g_pserver->sdsAvailabilityZone,
+            "cluster_mget");
     }
 
     /* Clients */
@@ -6284,13 +6285,15 @@ sds genRedisInfoString(const char *section) {
         "used_cpu_sys_children:%ld.%06ld\r\n"
         "used_cpu_user_children:%ld.%06ld\r\n"
         "server_threads:%d\r\n"
-        "long_lock_waits:%" PRIu64 "\r\n",
+        "long_lock_waits:%" PRIu64 "\r\n"
+        "last_overload_cpu_reading:%.2f\r\n",
         (long)self_ru.ru_stime.tv_sec, (long)self_ru.ru_stime.tv_usec,
         (long)self_ru.ru_utime.tv_sec, (long)self_ru.ru_utime.tv_usec,
         (long)c_ru.ru_stime.tv_sec, (long)c_ru.ru_stime.tv_usec,
         (long)c_ru.ru_utime.tv_sec, (long)c_ru.ru_utime.tv_usec,
         cserver.cthreads,
-        fastlock_getlongwaitcount());
+        fastlock_getlongwaitcount(),
+        g_pserver->last_overload_cpu_reading);
 #ifdef RUSAGE_THREAD
         struct rusage m_ru;
         getrusage(RUSAGE_THREAD, &m_ru);

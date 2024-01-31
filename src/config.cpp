@@ -474,6 +474,90 @@ void initConfigValues() {
     }
 }
 
+struct in_addr maskFromBitsIPV4(int bits) {
+    struct in_addr mask;
+    memset(&mask, 0, sizeof(mask));
+    mask.s_addr = htonl(ULONG_MAX << (IPV4_BITS - bits));
+    return mask;
+}
+
+bool validateAndAddIPV4(sds string) {
+    struct in_addr ip, mask;
+    int subnetParts;
+    sds* subnetSplit = sdssplitlen(string, sdslen(string), "/", 1, &subnetParts);
+    TCleanup splitCleanup([&](){
+        sdsfreesplitres(subnetSplit, subnetParts);
+    });
+    if (subnetParts > 2) {
+        return false;
+    } else if (subnetParts == 2) {
+        char* endptr;
+        long bits = strtol(subnetSplit[1], &endptr, 10);
+        if (*endptr != '\0' || bits < 0 || bits > IPV4_BITS) {
+            return false;
+        }
+        mask = maskFromBitsIPV4(bits);
+    } else {
+        mask = maskFromBitsIPV4(IPV4_BITS);
+    }
+    if (subnetParts > 0) {
+        if (inet_pton(AF_INET, subnetSplit[0], &ip) == 0) {
+            return false;
+        }
+        g_pserver->overload_ignorelist.emplace(ip, mask);
+        return true;
+    } else {
+        return false;
+    }
+}
+
+struct in6_addr maskFromBitsIPV6(int bits) {
+    struct in6_addr mask;
+    memset(&mask, 0, sizeof(mask));
+    for (unsigned int i = 0; i < sizeof(struct in6_addr); i++) {
+        if (bits >= CHAR_BIT) {
+            mask.s6_addr[i] = UCHAR_MAX;
+            bits -= CHAR_BIT;
+        } else if (bits > 0) {
+            mask.s6_addr[i] = UCHAR_MAX << (CHAR_BIT - bits);
+            bits = 0;
+        } else {
+            break;
+        }
+    }
+    return mask;
+}
+
+bool validateAndAddIPV6(sds string) {
+    struct in6_addr ip, mask;
+    int subnetParts;
+    sds* subnetSplit = sdssplitlen(string, sdslen(string), "/", 1, &subnetParts);
+    TCleanup splitCleanup([&](){
+        sdsfreesplitres(subnetSplit, subnetParts);
+    });
+    if (subnetParts > 2) {
+        return false;
+    } else if (subnetParts == 2) {
+        char* endptr;
+        long bits = strtol(subnetSplit[1], &endptr, 10);
+        if (*endptr != '\0' || bits < 0 || bits > IPV6_BITS) {
+            return false;
+        }
+        mask = maskFromBitsIPV6(bits);
+    } else {
+        mask = maskFromBitsIPV6(IPV6_BITS);
+    }
+    if (subnetParts > 0) {
+        if (inet_pton(AF_INET6, subnetSplit[0], &ip) == 0) {
+            return false;
+        }
+        g_pserver->overload_ignorelist_ipv6.emplace(ip, mask);
+        return true;
+    } else {
+        return false;
+    }
+}
+
 void loadServerConfigFromString(char *config) {
     const char *err = NULL;
     int linenum = 0, totlines, i;
@@ -779,6 +863,27 @@ void loadServerConfigFromString(char *config) {
             }
             for (int i = 1; i < argc; i++)
                 g_pserver->tls_auditlog_blocklist.emplace(argv[i], strlen(argv[i]));
+        } else if (!strcasecmp(argv[0], "tls-overload-ignorelist")) {
+            if (argc < 2) {
+                err = "must supply at least one element in the ignore list"; goto loaderr;
+            }
+            if (!g_pserver->tls_overload_ignorelist.empty()) {
+                err = "tls-overload-ignorelist may only be set once"; goto loaderr;
+            }
+            for (int i = 1; i < argc; i++)
+                g_pserver->tls_overload_ignorelist.emplace(argv[i], strlen(argv[i]));
+        } else if (!strcasecmp(argv[0], "overload-ignorelist")) {
+            if (argc < 2) {
+                err = "must supply at least one element in the ignore list"; goto loaderr;
+            }
+            if (!g_pserver->overload_ignorelist.empty() || !g_pserver->overload_ignorelist_ipv6.empty()) {
+                err = "overload-ignorelist may only be set once"; goto loaderr;
+            }
+            for (int i = 1; i < argc; i++) {
+                if (!validateAndAddIPV4(argv[i]) && !validateAndAddIPV6(argv[i])) {
+                    err = "overload-ignorelist must be a list of valid IP addresses or subnets"; goto loaderr;
+                }
+            }
         } else if (!strcasecmp(argv[0], "version-override") && argc == 2) {
             KEYDB_SET_VERSION = zstrdup(argv[1]);
             serverLog(LL_WARNING, "Warning version is overriden to: %s\n", KEYDB_SET_VERSION);
@@ -908,8 +1013,8 @@ void configSetCommand(client *c) {
 
     if (c->argc < 4 || c->argc > 4) {
         o = nullptr;
-        // Variadic set is only supported for tls-allowlist
-        if (strcasecmp(szFromObj(c->argv[2]), "tls-allowlist")) {
+        // Variadic set is only supported for tls-allowlist, tls-auditlog-blocklist, overload-ignorelist and tls-overload-ignorelist
+        if (strcasecmp(szFromObj(c->argv[2]), "tls-allowlist") && strcasecmp(szFromObj(c->argv[2]), "tls-auditlog-blocklist") && strcasecmp(szFromObj(c->argv[2]), "overload-ignorelist") && strcasecmp(szFromObj(c->argv[2]), "tls-overload-ignorelist") ) {
             addReplySubcommandSyntaxError(c);
             return;
         }
@@ -1083,6 +1188,28 @@ void configSetCommand(client *c) {
         for (int i = 3; i < c->argc; ++i) {
             robj *val = c->argv[i];
             g_pserver->tls_allowlist.emplace(szFromObj(val), sdslen(szFromObj(val)));
+        }
+    } config_set_special_field("tls-auditlog-blocklist") {
+        g_pserver->tls_auditlog_blocklist.clear();
+        for (int i = 3; i < c->argc; ++i) {
+            robj *val = c->argv[i];
+            g_pserver->tls_auditlog_blocklist.emplace(szFromObj(val), sdslen(szFromObj(val)));
+        }
+    } config_set_special_field("tls-overload-ignorelist") {
+        g_pserver->tls_overload_ignorelist.clear();
+        for (int i = 3; i < c->argc; ++i) {
+            robj *val = c->argv[i];
+            g_pserver->tls_overload_ignorelist.emplace(szFromObj(val), sdslen(szFromObj(val)));
+        }
+    } config_set_special_field("overload-ignorelist") {
+        g_pserver->overload_ignorelist.clear();
+        g_pserver->overload_ignorelist_ipv6.clear();
+        for (int i = 3; i < c->argc; ++i) {
+            robj *val = c->argv[i];
+            if (!validateAndAddIPV4(szFromObj(val)) && !validateAndAddIPV6(szFromObj(val))) {
+                addReplyError(c, "overload-ignorelist must be a list of valid IP addresses or subnets");
+                return;
+            }
         }
     /* Everything else is an error... */
     } config_set_else {
@@ -1292,6 +1419,37 @@ void configGetCommand(client *c) {
         addReplyArrayLen(c, (long)g_pserver->tls_allowlist.size());
         for (auto &elem : g_pserver->tls_allowlist) {
             addReplyBulkCBuffer(c, elem.get(), elem.size()); // addReplyBulkSds will free which we absolutely don't want
+        }
+        matches++;
+    }
+    if (stringmatch(pattern, "tls-auditlog-blocklist", 1)) {
+        addReplyBulkCString(c,"tls-auditlog-blocklist");
+        addReplyArrayLen(c, (long)g_pserver->tls_auditlog_blocklist.size());
+        for (auto &elem : g_pserver->tls_auditlog_blocklist) {
+            addReplyBulkCBuffer(c, elem.get(), elem.size()); // addReplyBulkSds will free which we absolutely don't want
+        }
+        matches++;
+    }
+    if (stringmatch(pattern, "tls-overload-ignorelist", 1)) {
+        addReplyBulkCString(c,"tls-overload-ignorelist");
+        addReplyArrayLen(c, (long)g_pserver->tls_overload_ignorelist.size());
+        for (auto &elem : g_pserver->tls_overload_ignorelist) {
+            addReplyBulkCBuffer(c, elem.get(), elem.size()); // addReplyBulkSds will free which we absolutely don't want
+        }
+        matches++;
+    }
+    if (stringmatch(pattern, "overload-ignorelist", 1)) {
+        addReplyBulkCString(c,"overload-ignorelist");
+        addReplyArrayLen(c, (long)g_pserver->overload_ignorelist.size() + (long)g_pserver->overload_ignorelist_ipv6.size());
+        for (auto &elem : g_pserver->overload_ignorelist) {
+            sds elem_sds = elem.getString();
+            addReplyBulkCBuffer(c, elem_sds, sdslen(elem_sds));
+            sdsfree(elem_sds);
+        }
+        for (auto &elem : g_pserver->overload_ignorelist_ipv6) {
+            sds elem_sds = elem.getString();
+            addReplyBulkCBuffer(c, elem_sds, sdslen(elem_sds));
+            sdsfree(elem_sds);
         }
         matches++;
     }
@@ -1978,6 +2136,56 @@ int rewriteConfig(char *path, int force_all) {
         rewriteConfigMarkAsProcessed(state, "tls-allowlist"); // ensure the line is removed if it existed
     }
 
+    if (!g_pserver->tls_overload_ignorelist.empty()) {
+        sds conf = sdsnew("tls-overload-ignorelist ");
+        for (auto &elem : g_pserver->tls_overload_ignorelist) {
+            conf = sdscatsds(conf, (sds)elem.get());
+            conf = sdscat(conf, " ");
+        }
+        // trim the trailing space
+        sdsrange(conf, 0, -1);
+        rewriteConfigRewriteLine(state,"tls-overload-ignorelist",conf,1 /*force*/);
+        // note: conf is owned by rewriteConfigRewriteLine - no need to free
+    } else {
+        rewriteConfigMarkAsProcessed(state, "tls-overload-ignorelist"); // ensure the line is removed if it existed
+    }
+
+    if (!g_pserver->tls_auditlog_blocklist.empty()) {
+        sds conf = sdsnew("tls-auditlog-blocklist ");
+        for (auto &elem : g_pserver->tls_auditlog_blocklist) {
+            conf = sdscatsds(conf, (sds)elem.get());
+            conf = sdscat(conf, " ");
+        }
+        // trim the trailing space
+        sdsrange(conf, 0, -1);
+        rewriteConfigRewriteLine(state,"tls-auditlog-blocklist",conf,1 /*force*/);
+        // note: conf is owned by rewriteConfigRewriteLine - no need to free
+    } else {
+        rewriteConfigMarkAsProcessed(state, "tls-auditlog-blocklist"); // ensure the line is removed if it existed
+    }
+
+    if (!g_pserver->overload_ignorelist.empty() || !g_pserver->overload_ignorelist_ipv6.empty()) {
+        sds conf = sdsnew("overload-ignorelist ");
+        for (auto &elem : g_pserver->overload_ignorelist) {
+            sds elem_sds = elem.getString();
+            conf = sdscatsds(conf, elem_sds);
+            sdsfree(elem_sds);
+            conf = sdscat(conf, " ");
+        }
+        for (auto &elem : g_pserver->overload_ignorelist_ipv6) {
+            sds elem_sds = elem.getString();
+            conf = sdscatsds(conf, elem_sds);
+            sdsfree(elem_sds);
+            conf = sdscat(conf, " ");
+        }
+        // trim the trailing space
+        sdsrange(conf, 0, -1);
+        rewriteConfigRewriteLine(state,"overload-ignorelist",conf,1 /*force*/);
+        // note: conf is owned by rewriteConfigRewriteLine - no need to free
+    } else {
+        rewriteConfigMarkAsProcessed(state, "overload-ignorelist"); // ensure the line is removed if it existed
+    }
+
     /* Rewrite Sentinel config if in Sentinel mode. */
     if (g_pserver->sentinel_mode) rewriteConfigSentinelOption(state);
 
@@ -2597,6 +2805,19 @@ static int updateMaxmemory(long long val, long long prev, const char **err) {
     return 1;
 }
 
+static int updateFlashMaxmemory(long long val, long long prev, const char **err) {
+    UNUSED(prev);
+    UNUSED(err);
+    if (val && g_pserver->m_pstorageFactory) {
+        size_t used = g_pserver->m_pstorageFactory->totalDiskspaceUsed();
+        if ((unsigned long long)val < used) {
+            serverLog(LL_WARNING,"WARNING: the new maxstorage value set via CONFIG SET (%llu) is smaller than the current storage usage (%zu). This will result in key eviction and/or the inability to accept new write commands depending on the maxmemory-policy.", g_pserver->maxstorage, used);
+        }
+        performEvictions(false /*fPreSnapshot*/);
+    }
+    return 1;
+}
+
 static int updateGoodSlaves(long long val, long long prev, const char **err) {
     UNUSED(val);
     UNUSED(prev);
@@ -2908,7 +3129,7 @@ standardConfig configs[] = {
     createIntConfig("list-compress-depth", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->list_compress_depth, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("rdb-key-save-delay", NULL, MODIFIABLE_CONFIG, INT_MIN, INT_MAX, g_pserver->rdb_key_save_delay, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("key-load-delay", NULL, MODIFIABLE_CONFIG, INT_MIN, INT_MAX, g_pserver->key_load_delay, 0, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("active-expire-effort", NULL, MODIFIABLE_CONFIG, 1, 10, cserver.active_expire_effort, 1, INTEGER_CONFIG, NULL, NULL), /* From 1 to 10. */
+    createIntConfig("active-expire-effort", NULL, MODIFIABLE_CONFIG, 1, 10, g_pserver->active_expire_effort, 1, INTEGER_CONFIG, NULL, NULL), /* From 1 to 10. */
     createIntConfig("hz", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->config_hz, CONFIG_DEFAULT_HZ, INTEGER_CONFIG, NULL, updateHZ),
     createIntConfig("min-replicas-to-write", "min-slaves-to-write", MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->repl_min_slaves_to_write, 0, INTEGER_CONFIG, NULL, updateGoodSlaves),
     createIntConfig("min-replicas-max-lag", "min-slaves-max-lag", MODIFIABLE_CONFIG, 0, INT_MAX, g_pserver->repl_min_slaves_max_lag, 10, INTEGER_CONFIG, NULL, updateGoodSlaves),
@@ -2940,7 +3161,7 @@ standardConfig configs[] = {
 
     /* Unsigned Long Long configs */
     createULongLongConfig("maxmemory", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->maxmemory, 0, MEMORY_CONFIG, NULL, updateMaxmemory),
-    createULongLongConfig("maxstorage", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->maxstorage, 0, MEMORY_CONFIG, NULL, NULL),
+    createULongLongConfig("maxstorage", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, g_pserver->maxstorage, 0, MEMORY_CONFIG, NULL, updateFlashMaxmemory),
 
     /* Size_t configs */
     createSizeTConfig("hash-max-ziplist-entries", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, g_pserver->hash_max_ziplist_entries, 512, INTEGER_CONFIG, NULL, NULL),
@@ -2968,7 +3189,10 @@ standardConfig configs[] = {
     createSizeTConfig("semi-ordered-set-bucket-size", NULL, MODIFIABLE_CONFIG, 0, 1024, g_semiOrderedSetTargetBucketSize, 0, INTEGER_CONFIG, NULL, NULL),
     createSDSConfig("availability-zone", NULL, MODIFIABLE_CONFIG, 0, g_pserver->sdsAvailabilityZone, "", NULL, NULL),
     createIntConfig("overload-protect-percent", NULL, MODIFIABLE_CONFIG, 0, 200, g_pserver->overload_protect_threshold, 0, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("overload-protect-tenacity", NULL, MODIFIABLE_CONFIG, 0, 100, g_pserver->overload_protect_tenacity, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("force-eviction-percent", NULL, MODIFIABLE_CONFIG, 0, 100, g_pserver->force_eviction_percent, 0, INTEGER_CONFIG, NULL, NULL),
+    createBoolConfig("enable-async-rehash", NULL, MODIFIABLE_CONFIG, g_pserver->enable_async_rehash, 1, NULL, NULL),
+    createBoolConfig("enable-keydb-fastsync", NULL, MODIFIABLE_CONFIG, g_pserver->fEnableFastSync, 0, NULL, NULL),
 
 #ifdef USE_OPENSSL
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, g_pserver->tls_port, 0, INTEGER_CONFIG, NULL, updateTLSPort), /* TCP port. */

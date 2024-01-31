@@ -61,8 +61,8 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
     auto status = rocksdb::DB::ListColumnFamilies(rocksdb::Options(), dbfile, &vecT);
     // RocksDB requires we know the count of col families before opening, if the user only wants to see less
     //  we still have to make room for all column family handles regardless
-    if (status.ok() && (int)vecT.size() > dbnum)
-        dbnum = (int)vecT.size();
+    if (status.ok() && (int)vecT.size()/2 > dbnum)
+        dbnum = (int)vecT.size()/2;
 
     std::vector<rocksdb::ColumnFamilyDescriptor> veccoldesc;
     veccoldesc.push_back(rocksdb::ColumnFamilyDescriptor(rocksdb::kDefaultColumnFamilyName, rocksdb::ColumnFamilyOptions()));  // ignore default col family
@@ -79,6 +79,7 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
         rocksdb::ColumnFamilyOptions cf_options(options);
         cf_options.level_compaction_dynamic_level_bytes = true;
         veccoldesc.push_back(rocksdb::ColumnFamilyDescriptor(std::to_string(idb), cf_options));
+        veccoldesc.push_back(rocksdb::ColumnFamilyDescriptor(std::to_string(idb) + "_expires", cf_options));
     }
 
     if (rgchConfig != nullptr)
@@ -100,23 +101,29 @@ RocksDBStorageFactory::RocksDBStorageFactory(const char *dbfile, int dbnum, cons
     m_spdb = std::shared_ptr<rocksdb::DB>(db);
     for (auto handle : handles)
     {
-        std::string strVersion;
-        auto status = m_spdb->Get(rocksdb::ReadOptions(), handle, rocksdb::Slice(version_key, sizeof(version_key)), &strVersion);
-        if (!status.ok())
-        {
-            setVersion(handle);
-        }
-        else
-        {
-            SymVer ver = parseVersion(strVersion.c_str());
-            auto cmp = compareVersion(&ver);
-            if (cmp == NewerVersion)
-                throw "Cannot load FLASH database created by newer version of KeyDB";
-            if (cmp == OlderVersion)
+        if (handle->GetName().size() > 7 && !strncmp(handle->GetName().substr(handle->GetName().size() - 7).c_str(), "expires", 7)) {
+            m_vecspexpirecols.emplace_back(handle);
+        } else {
+            std::string strVersion;
+            auto status = m_spdb->Get(rocksdb::ReadOptions(), handle, rocksdb::Slice(version_key, sizeof(version_key)), &strVersion);
+            if (!status.ok())
+            {
                 setVersion(handle);
+            }
+            else
+            {
+                SymVer ver = parseVersion(strVersion.c_str());
+                auto cmp = compareVersion(&ver);
+                if (cmp == NewerVersion)
+                    throw "Cannot load FLASH database created by newer version of KeyDB";
+                if (cmp == IncompatibleVersion)
+                    throw "Cannot load FLASH database from before 6.3.4";
+                if (cmp == OlderVersion)
+                    setVersion(handle);
+            }
+            m_vecspcols.emplace_back(handle);
         }
-        m_vecspcols.emplace_back(handle);
-    }   
+    }
 }
 
 RocksDBStorageFactory::~RocksDBStorageFactory()
@@ -156,6 +163,7 @@ IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *pr
 {
     ++db;   // skip default col family
     std::shared_ptr<rocksdb::ColumnFamilyHandle> spcolfamily(m_vecspcols[db].release());
+    std::shared_ptr<rocksdb::ColumnFamilyHandle> spexpirecolfamily(m_vecspexpirecols[db].release());
     size_t count = 0;
     bool fUnclean = false;
     
@@ -192,7 +200,7 @@ IStorage *RocksDBStorageFactory::create(int db, key_load_iterator iter, void *pr
             ++count;
         }
     }
-    return new RocksDBStorageProvider(this, m_spdb, spcolfamily, nullptr, count);
+    return new RocksDBStorageProvider(this, m_spdb, spcolfamily, spexpirecolfamily, nullptr, count);
 }
 
 const char *RocksDBStorageFactory::name() const

@@ -100,6 +100,36 @@ unsigned long long estimateObjectIdleTime(robj_roptr o) {
     }
 }
 
+unsigned long long getIdle(robj *obj, const expireEntry *e) {
+    unsigned long long idle;
+    /* Calculate the idle time according to the policy. This is called
+        * idle just because the code initially handled LRU, but is in fact
+        * just a score where an higher score means better candidate. */
+    if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LRU) {
+        idle = (obj != nullptr) ? estimateObjectIdleTime(obj) : 0;
+    } else if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+        /* When we use an LRU policy, we sort the keys by idle time
+            * so that we expire keys starting from greater idle time.
+            * However when the policy is an LFU one, we have a frequency
+            * estimation, and we want to evict keys with lower frequency
+            * first. So inside the pool we put objects using the inverted
+            * frequency subtracting the actual frequency to the maximum
+            * frequency of 255. */
+        idle = 255-LFUDecrAndReturn(obj);
+    } else if (g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
+        /* In this case the sooner the expire the better. */
+        if (e != nullptr)
+            idle = ULLONG_MAX - e->when();
+        else
+            idle = 0;
+    } else if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
+        idle = ULLONG_MAX;
+    } else {
+        serverPanic("Unknown eviction policy in storage eviction");
+    }
+    return idle;
+}
+
 /* LRU approximation algorithm
  *
  * Redis uses an approximation of the LRU algorithm that runs in constant
@@ -137,28 +167,7 @@ void evictionPoolAlloc(void) {
 
 void processEvictionCandidate(int dbid, sds key, robj *o, const expireEntry *e, struct evictionPoolEntry *pool)
 {
-    unsigned long long idle;
-
-    /* Calculate the idle time according to the policy. This is called
-        * idle just because the code initially handled LRU, but is in fact
-        * just a score where an higher score means better candidate. */
-    if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LRU) {
-        idle = (o != nullptr) ? estimateObjectIdleTime(o) : 0;
-    } else if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-        /* When we use an LRU policy, we sort the keys by idle time
-            * so that we expire keys starting from greater idle time.
-            * However when the policy is an LFU one, we have a frequency
-            * estimation, and we want to evict keys with lower frequency
-            * first. So inside the pool we put objects using the inverted
-            * frequency subtracting the actual frequency to the maximum
-            * frequency of 255. */
-        idle = 255-LFUDecrAndReturn(o);
-    } else if (g_pserver->maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
-        /* In this case the sooner the expire the better. */
-        idle = ULLONG_MAX - e->when();
-    } else {
-        serverPanic("Unknown eviction policy in evictionPoolPopulate()");
-    }
+    unsigned long long idle = getIdle(o,e);
 
     /* Insert the element inside the pool.
         * First, find the first empty bucket or the first populated
@@ -222,52 +231,23 @@ void processEvictionCandidate(int dbid, sds key, robj *o, const expireEntry *e, 
  * idle time are on the left, and keys with the higher idle time on the
  * right. */
 
-struct visitFunctor
+int evictionPoolPopulate(int dbid, redisDb *db, bool fVolatile, struct evictionPoolEntry *pool)
 {
-    int dbid;
-    dict *dbdict;
-    struct evictionPoolEntry *pool;
-    int count = 0;
-    int tries = 0;
-
-    bool operator()(const expireEntry &e)
-    {
-        dictEntry *de = dictFind(dbdict, e.key());
-        if (de != nullptr)
+    int returnCount = 0;
+    dictEntry **samples = (dictEntry**)alloca(g_pserver->maxmemory_samples * sizeof(dictEntry*));
+    int count = dictGetSomeKeys(db->dictUnsafeKeyOnly(),samples,g_pserver->maxmemory_samples);
+    for (int j = 0; j < count; j++) {
+        robj *o = (robj*)dictGetVal(samples[j]);
+        // If the object is in second tier storage we don't need to evict it (since it already is)
+        if (o != nullptr)
         {
-            processEvictionCandidate(dbid, (sds)dictGetKey(de), (robj*)dictGetVal(de), &e, pool);
-            ++count;
-        }
-        ++tries;
-        return tries < g_pserver->maxmemory_samples;
-    }
-};
-int evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct evictionPoolEntry *pool)
-{
-    if (setexpire != nullptr)
-    {
-        std::unique_lock<fastlock> ul(g_expireLock);
-        visitFunctor visitor { dbid, db->dictUnsafeKeyOnly(), pool, 0 };
-        setexpire->random_visit(visitor);
-        return visitor.count;
-    }
-    else
-    {
-        int returnCount = 0;
-        dictEntry **samples = (dictEntry**)alloca(g_pserver->maxmemory_samples * sizeof(dictEntry*));
-        int count = dictGetSomeKeys(db->dictUnsafeKeyOnly(),samples,g_pserver->maxmemory_samples);
-        for (int j = 0; j < count; j++) {
-            robj *o = (robj*)dictGetVal(samples[j]);
-            // If the object is in second tier storage we don't need to evict it (since it alrady is)
-            if (o != nullptr)
-            {
-                processEvictionCandidate(dbid, (sds)dictGetKey(samples[j]), o, nullptr, pool);
+            if (!fVolatile || o->FExpires()) {
+                processEvictionCandidate(dbid, (sds)dictGetKey(samples[j]), o, &o->expire, pool);
                 ++returnCount;
             }
         }
-        return returnCount;
     }
-    return 0;
+    return returnCount;
 }
 
 /* ----------------------------------------------------------------------------
@@ -629,6 +609,31 @@ static unsigned long evictionTimeLimitUs() {
     return ULONG_MAX;   /* No limit to eviction time */
 }
 
+void evict(redisDb *db, robj *keyobj) {
+    mstime_t eviction_latency;
+    propagateExpire(db,keyobj,g_pserver->lazyfree_lazy_eviction);
+    /* We compute the amount of memory freed by db*Delete() alone.
+    * It is possible that actually the memory needed to propagate
+    * the DEL in AOF and replication link is greater than the one
+    * we are freeing removing the key, but we can't account for
+    * that otherwise we would never exit the loop.
+    *
+    * AOF and Output buffer memory will be freed eventually so
+    * we only care about memory used by the key space. */
+    latencyStartMonitor(eviction_latency);
+    if (g_pserver->lazyfree_lazy_eviction)
+        dbAsyncDelete(db,keyobj);
+    else
+        dbSyncDelete(db,keyobj);
+    latencyEndMonitor(eviction_latency);
+    latencyAddSampleIfNeeded("eviction-del",eviction_latency);
+
+    signalModifiedKey(NULL,db,keyobj);
+    notifyKeyspaceEvent(NOTIFY_EVICTED, "evicted",
+        keyobj, db->id);
+    decrRefCount(keyobj);
+}
+
 static void updateSysAvailableMemory() {
     if (g_pserver->force_eviction_percent) {
         g_pserver->cron_malloc_stats.sys_available = getMemAvailable();
@@ -666,7 +671,7 @@ int performEvictions(bool fPreSnapshot) {
     int keys_freed = 0;
     size_t mem_reported, mem_tofree;
     long long mem_freed; /* May be negative */
-    mstime_t latency, eviction_latency;
+    mstime_t latency;
     long long delta;
     int slaves = listLength(g_pserver->slaves);
     const bool fEvictToStorage = !cserver.delete_on_evict && g_pserver->db[0]->FStorageProvider();
@@ -690,6 +695,43 @@ int performEvictions(bool fPreSnapshot) {
 
     monotime evictionTimer;
     elapsedStart(&evictionTimer);
+
+    if (g_pserver->maxstorage && g_pserver->m_pstorageFactory != nullptr) {
+        while (g_pserver->m_pstorageFactory->totalDiskspaceUsed() >= g_pserver->maxstorage && elapsedUs(evictionTimer) < eviction_time_limit_us) {
+            redisDb *db;
+            std::vector<std::string> evictionPool;
+            robj *bestkey = nullptr;
+            redisDb *bestdb = nullptr;
+            unsigned long long bestidle = 0;
+            for (int i = 0; i < cserver.dbnum; i++) {
+                db = g_pserver->db[i];
+                evictionPool = db->getStorageCache()->getEvictionCandidates(g_pserver->maxmemory_samples);
+                for (std::string key : evictionPool) {
+                    robj *keyobj = createStringObject(key.c_str(), key.size());
+                    robj *obj = db->find(szFromObj(keyobj));
+                    if (obj != nullptr) {
+                        expireEntry *e = db->getExpire(keyobj);
+                        unsigned long long idle = getIdle(obj, e);
+
+                        if (bestkey == nullptr || bestidle < idle) {
+                            if (bestkey != nullptr)
+                                decrRefCount(bestkey);
+                            incrRefCount(keyobj);
+                            bestkey = keyobj;
+                            bestidle = idle;
+                            bestdb = db;
+                        }
+                    }
+                    decrRefCount(keyobj);
+                }
+            }
+            if (bestkey) {
+                evict(bestdb, bestkey);
+            } else {
+                break; //could not find a key to evict so stop now
+            }
+        }
+    }
 
     if (g_pserver->maxstorage && g_pserver->m_pstorageFactory != nullptr && g_pserver->m_pstorageFactory->totalDiskspaceUsed() >= g_pserver->maxstorage)
         goto cant_free_storage;
@@ -718,14 +760,14 @@ int performEvictions(bool fPreSnapshot) {
                     if (g_pserver->maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS)
                     {
                         if ((keys = db->size()) != 0) {
-                            total_keys += evictionPoolPopulate(i, db, nullptr, pool);
+                            total_keys += evictionPoolPopulate(i, db, false, pool);
                         }
                     }
                     else
                     {
                         keys = db->expireSize();
                         if (keys != 0)
-                            total_keys += evictionPoolPopulate(i, db, db->setexpireUnsafe(), pool);
+                            total_keys += evictionPoolPopulate(i, db, true, pool);
                     }
                 }
                 if (!total_keys) break; /* No keys to evict. */
@@ -786,7 +828,7 @@ int performEvictions(bool fPreSnapshot) {
                 {
                     if (db->expireSize())
                     {
-                        bestkey = (sds)db->random_expire().key();
+                        db->random_expire(&bestkey);
                         bestdbid = j;
                         break;
                     }
@@ -805,7 +847,7 @@ int performEvictions(bool fPreSnapshot) {
                 if (db->removeCachedValue(bestkey, &deT)) {
                     mem_freed += splazy->addEntry(db->dictUnsafeKeyOnly(), deT);
                     ckeysFailed = 0;
-		    g_pserver->stat_evictedkeys++;
+                    g_pserver->stat_evictedkeys++;
                 }
                 else {
                     delta = 0;
@@ -817,30 +859,11 @@ int performEvictions(bool fPreSnapshot) {
             else
             {
                 robj *keyobj = createStringObject(bestkey,sdslen(bestkey));
-                propagateExpire(db,keyobj,g_pserver->lazyfree_lazy_eviction);
-                /* We compute the amount of memory freed by db*Delete() alone.
-                * It is possible that actually the memory needed to propagate
-                * the DEL in AOF and replication link is greater than the one
-                * we are freeing removing the key, but we can't account for
-                * that otherwise we would never exit the loop.
-                *
-                * AOF and Output buffer memory will be freed eventually so
-                * we only care about memory used by the key space. */
                 delta = (long long) zmalloc_used_memory();
-                latencyStartMonitor(eviction_latency);
-                if (g_pserver->lazyfree_lazy_eviction)
-                    dbAsyncDelete(db,keyobj);
-                else
-                    dbSyncDelete(db,keyobj);
-                latencyEndMonitor(eviction_latency);
-                latencyAddSampleIfNeeded("eviction-del",eviction_latency);
+                evict(db, keyobj);
                 delta -= (long long) zmalloc_used_memory();
                 mem_freed += delta;
                 g_pserver->stat_evictedkeys++;
-                signalModifiedKey(NULL,db,keyobj);
-                notifyKeyspaceEvent(NOTIFY_EVICTED, "evicted",
-                    keyobj, db->id);
-                decrRefCount(keyobj);
             }
             keys_freed++;
 

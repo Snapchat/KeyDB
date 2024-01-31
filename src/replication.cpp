@@ -188,6 +188,8 @@ int bg_unlink(const char *filename) {
 /* ---------------------------------- MASTER -------------------------------- */
 
 bool createDiskBacklog() {
+    if (g_pserver->repl_backlog_disk != nullptr)
+        return true;    // already exists
     // Lets create some disk backed pages and add them here
     std::string path = "./repl-backlog-temp" + std::to_string(gettid());
 #if (defined __APPLE__ || defined __FreeBSD__)
@@ -281,7 +283,7 @@ void resizeReplicationBacklog(long long newsize) {
             
             if (cserver.repl_backlog_disk_size != 0) {
                 if (newsize > g_pserver->repl_backlog_config_size || cserver.force_backlog_disk) {
-                    if (g_pserver->repl_backlog == g_pserver->repl_backlog_disk)
+                    if (g_pserver->repl_backlog_disk == nullptr || g_pserver->repl_backlog == g_pserver->repl_backlog_disk)
                         return; // Can't do anything more
                     serverLog(LL_NOTICE, "Switching to disk backed replication backlog due to exceeding memory limits");
                     backlog = g_pserver->repl_backlog_disk;
@@ -306,10 +308,25 @@ void resizeReplicationBacklog(long long newsize) {
                 auto cbActiveBacklog = cbPhase1 + g_pserver->repl_backlog_idx;
                 serverAssert(g_pserver->repl_backlog_histlen == cbActiveBacklog);
             }
-            if (g_pserver->repl_backlog != g_pserver->repl_backlog_disk)
+            if (g_pserver->repl_backlog != g_pserver->repl_backlog_disk) {
                 zfree(g_pserver->repl_backlog);
-            else
+            } else {
                 serverLog(LL_NOTICE, "Returning to memory backed replication backlog");
+                auto repl_backlog = g_pserver->repl_backlog_disk;
+                g_pserver->repl_backlog_disk = nullptr;
+                g_pserver->asyncworkqueue->AddWorkFunction([repl_backlog, size = cserver.repl_backlog_disk_size]{
+                    // The kernel doesn't make promises with how it will manage the memory but users really want to
+                    //  see the RSS go down.  So lets encourage that to happen.
+                    madvise(repl_backlog, size, MADV_DONTNEED); // NOTE: This will block until all pages are released
+                    aeAcquireLock();
+                    if (g_pserver->repl_backlog_disk == nullptr && cserver.repl_backlog_disk_size == size) {
+                        g_pserver->repl_backlog_disk = repl_backlog;
+                    } else {
+                        munmap(g_pserver->repl_backlog_disk, size);
+                    }
+                    aeReleaseLock();
+                }, true /*fHiPri*/);
+            }
             g_pserver->repl_backlog = backlog;
             g_pserver->repl_backlog_idx = g_pserver->repl_backlog_histlen;
             if (g_pserver->repl_batch_idxStart >= 0) {
@@ -329,6 +346,17 @@ void resizeReplicationBacklog(long long newsize) {
             /* Next byte we have is... the next since the buffer is empty. */
             g_pserver->repl_backlog_off = g_pserver->master_repl_offset+1;
             g_pserver->repl_backlog_start = g_pserver->master_repl_offset;
+            listIter li;
+            listNode *ln;
+            listRewind(g_pserver->slaves, &li);
+            while ((ln = listNext(&li))) {
+                client *replica = (client*)listNodeValue(ln);
+
+                std::unique_lock<fastlock> ul(replica->lock);
+
+                replica->repl_curr_off = g_pserver->master_repl_offset;
+                replica->repl_end_off = g_pserver->master_repl_offset;
+            }
         }
     }
     g_pserver->repl_backlog_size = newsize;
@@ -1017,8 +1045,6 @@ public:
     void addReplica(client *replica) {
         replicas.push_back(replica);
         replicationSetupSlaveForFullResync(replica,getPsyncInitialOffset());
-        // Optimize the socket for bulk transfer
-        //connDisableTcpNoDelay(replica->conn);
     }
 
     bool isActive() const { return !replicas.empty(); }
@@ -1091,7 +1117,7 @@ public:
         reply->used += size;
     }
 
-    void addLongWithPrefix(long val, char prefix) {
+    void addLongLongWithPrefix(long long val, char prefix) {
         char buf[128];
         int len;
 
@@ -1103,15 +1129,19 @@ public:
     }
 
     void addArrayLen(int len) {
-        addLongWithPrefix(len, '*');
+        addLongLongWithPrefix(len, '*');
     }
 
     void addLong(long val) {
-        addLongWithPrefix(val, ':');
+        addLongLongWithPrefix(val, ':');
+    }
+
+    void addLongLong(long long val) {
+        addLongLongWithPrefix(val, ':');
     }
 
     void addString(const char *s, unsigned long len) {
-        addLongWithPrefix(len, '$');
+        addLongLongWithPrefix(len, '$');
         addData(s, len);
         addData("\r\n", 2);
     }
@@ -1147,22 +1177,19 @@ int rdbSaveSnapshotForReplication(rdbSaveInfo *rsi) {
     // TODO: This needs to be on a background thread
     int retval = C_OK;
     serverAssert(GlobalLocksAcquired());
-    serverLog(LL_NOTICE, "Starting storage provider fast full sync with target: %s", "disk");
+    serverLog(LL_NOTICE, "Starting fast full sync with target: %s", "disk");
 
     std::shared_ptr<replicationBuffer> spreplBuf = std::make_shared<replicationBuffer>();
     listNode *ln;
     listIter li;
-    client *replica = nullptr;
     listRewind(g_pserver->slaves, &li);
-    while (replica == nullptr && (ln = listNext(&li))) {
+    while ((ln = listNext(&li))) {
         client *replicaCur = (client*)listNodeValue(ln);
-        if ((replicaCur->slave_capa & SLAVE_CAPA_ROCKSDB_SNAPSHOT) && (replicaCur->replstate == SLAVE_STATE_WAIT_BGSAVE_START)) {
-            replica = replicaCur;
-            spreplBuf->addReplica(replica);
+        if ((replicaCur->slave_capa & SLAVE_CAPA_KEYDB_FASTSYNC) && (replicaCur->replstate == SLAVE_STATE_WAIT_BGSAVE_START)) {
+            spreplBuf->addReplica(replicaCur);
             replicaCur->replstate = SLAVE_STATE_FASTSYNC_TX;
         }
     }
-    serverAssert(replica != nullptr);
 
     spreplBuf->addArrayLen(2);   // Two sections: Metadata and databases
 
@@ -1177,7 +1204,7 @@ int rdbSaveSnapshotForReplication(rdbSaveInfo *rsi) {
             spreplBuf->addString(rsi->repl_id, CONFIG_RUN_ID_SIZE);
         spreplBuf->addArrayLen(2);
             spreplBuf->addString("repl-offset", 11);
-            spreplBuf->addLong(rsi->master_repl_offset);
+            spreplBuf->addLongLong(rsi->master_repl_offset);
 
     if (dictSize(g_pserver->lua_scripts)) {
         dictEntry *de;
@@ -1193,13 +1220,13 @@ int rdbSaveSnapshotForReplication(rdbSaveInfo *rsi) {
         di = NULL; /* So that we don't release it again on error. */
     }
 
-    std::shared_ptr<std::vector<std::unique_ptr<const StorageCache>>> spvecspsnapshot = std::make_shared<std::vector<std::unique_ptr<const StorageCache>>>();
+    std::shared_ptr<std::vector<const redisDbPersistentDataSnapshot*>> spvecsnapshot = std::make_shared<std::vector<const redisDbPersistentDataSnapshot*>>();
     for (int idb = 0; idb < cserver.dbnum; ++idb) {
-        spvecspsnapshot->emplace_back(g_pserver->db[idb]->CloneStorageCache());
+        spvecsnapshot->emplace_back(g_pserver->db[idb]->createSnapshot(getMvccTstamp(), false));
     }
     aeReleaseLock();
 
-    g_pserver->asyncworkqueue->AddWorkFunction([spreplBuf = std::move(spreplBuf), spvecspsnapshot = std::move(spvecspsnapshot)]{
+    g_pserver->asyncworkqueue->AddWorkFunction([spreplBuf = std::move(spreplBuf), spvecsnapshot = std::move(spvecsnapshot)]{
         int retval = C_OK;
         auto timeStart = ustime();
         auto lastLogTime = timeStart;
@@ -1209,15 +1236,16 @@ int rdbSaveSnapshotForReplication(rdbSaveInfo *rsi) {
         // Databases
         replBuf.addArrayLen(cserver.dbnum);
         for (int idb = 0; idb < cserver.dbnum; ++idb) {
-            auto &spsnapshot = (*spvecspsnapshot)[idb];
-            size_t snapshotDeclaredCount = spsnapshot->count();
+            auto &spsnapshot = (*spvecsnapshot)[idb];
+            size_t snapshotDeclaredCount = spsnapshot->size();
             replBuf.addArrayLen(snapshotDeclaredCount);
             size_t count = 0;
-            bool result = spsnapshot->enumerate([&replBuf, &count, &cbData, &lastLogTime, &cbLastUpdate](const char *rgchKey, size_t cchKey, const void *rgchVal, size_t cchVal) -> bool{
+            bool result = spsnapshot->iterate_threadsafe([&replBuf, &count, &cbData, &lastLogTime, &cbLastUpdate](const char *strKey, robj_roptr o) -> bool{
                 replBuf.addArrayLen(2);
 
-                replBuf.addString(rgchKey, cchKey);
-                replBuf.addString((const char *)rgchVal, cchVal);
+                replBuf.addString(strKey, sdslen(strKey));
+                sds strT = serializeStoredObjectAndExpire(o);
+                replBuf.addString(strT, sdslen(strT));
                 ++count;
                 if ((count % 8092) == 0) {
                     auto curTime = ustime();
@@ -1228,7 +1256,8 @@ int rdbSaveSnapshotForReplication(rdbSaveInfo *rsi) {
                         lastLogTime = ustime();
                     }
                 }
-                cbData += cchKey + cchVal;
+                cbData += sdslen(strKey) + sdslen(strT);
+                sdsfree(strT);
                 return replBuf.isActive();
             });
 
@@ -1300,7 +1329,7 @@ int startBgsaveForReplication(int mincapa) {
     /* Only do rdbSave* when rsiptr is not NULL,
      * otherwise replica will miss repl-stream-db. */
     if (rsiptr) {
-        if (mincapa & SLAVE_CAPA_ROCKSDB_SNAPSHOT && g_pserver->m_pstorageFactory)
+        if (mincapa & SLAVE_CAPA_KEYDB_FASTSYNC && FFastSyncEnabled())
             retval = rdbSaveSnapshotForReplication(rsiptr);
         else if (socket_target)
             retval = rdbSaveToSlavesSockets(rsiptr);
@@ -1479,7 +1508,7 @@ void syncCommand(client *c) {
     }
 
     /* CASE 0: Fast Sync */
-    if ((c->slave_capa & SLAVE_CAPA_ROCKSDB_SNAPSHOT) && g_pserver->m_pstorageFactory) {
+    if (c->slave_capa & SLAVE_CAPA_KEYDB_FASTSYNC && FFastSyncEnabled()) {
         serverLog(LL_NOTICE,"Fast SYNC on next replication cycle");
     /* CASE 1: BGSAVE is in progress, with disk target. */
     } else if (g_pserver->FRdbSaveInProgress() &&
@@ -1670,8 +1699,8 @@ void replconfCommand(client *c) {
                 c->slave_capa |= SLAVE_CAPA_PSYNC2;
             else if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]), "activeExpire"))
                 c->slave_capa |= SLAVE_CAPA_ACTIVE_EXPIRE;
-            else if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]), "rocksdb-snapshot-load"))
-                c->slave_capa |= SLAVE_CAPA_ROCKSDB_SNAPSHOT;
+            else if (!strcasecmp((const char*)ptrFromObj(c->argv[j+1]), "keydb-fastsync"))
+                c->slave_capa |= SLAVE_CAPA_KEYDB_FASTSYNC;
 
             fCapaCommand = true;
         } else if (!strcasecmp((const char*)ptrFromObj(c->argv[j]),"ack")) {
@@ -1736,10 +1765,14 @@ void replconfCommand(client *c) {
 
     if (fCapaCommand) {
         sds reply = sdsnew("+OK");
-        if (g_pserver->fActiveReplica)
+        if (g_pserver->fActiveReplica) {
             reply = sdscat(reply, " active-replica");
-        if (g_pserver->m_pstorageFactory && (c->slave_capa & SLAVE_CAPA_ROCKSDB_SNAPSHOT) && !g_pserver->fActiveReplica)
-            reply = sdscat(reply, " rocksdb-snapshot-save");
+        }
+        if ((c->slave_capa & SLAVE_CAPA_KEYDB_FASTSYNC) && FFastSyncEnabled()) {
+            reply = sdscat(reply, " keydb-fastsync-save");
+        } else {
+            c->slave_capa = (c->slave_capa & (~SLAVE_CAPA_KEYDB_FASTSYNC)); // never try to fast sync for this as they won't expect it
+        }
         reply = sdscat(reply, "\r\n");
         addReplySds(c, reply);
     } else {
@@ -2513,6 +2546,7 @@ bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi
         }
     }
 
+    serverAssert(mi->parseState != nullptr);
     for (int iter = 0; iter < 10; ++iter) {
         if (mi->parseState->shouldThrottle())
             return false;
@@ -2523,11 +2557,16 @@ bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi
 
         auto nread = connRead(conn, mi->bulkreadBuffer+qblen, readlen);
         if (nread <= 0) {
-            if (connGetState(conn) != CONN_STATE_CONNECTED)
+            if (connGetState(conn) != CONN_STATE_CONNECTED) {
+                serverLog(LL_WARNING,"I/O error trying to sync with MASTER: %s",
+                    (nread == -1) ? strerror(errno) : "connection lost");
                 cancelReplicationHandshake(mi, true);
+            }
             return false;
         }
+        g_pserver->stat_net_input_bytes += nread;
         mi->repl_transfer_lastio = g_pserver->unixtime;
+        mi->repl_transfer_read += nread;
         sdsIncrLen(mi->bulkreadBuffer,nread);
 
         size_t offset = 0;
@@ -2599,8 +2638,9 @@ bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi
             rsi.repl_stream_db = mi->parseState->getMetaDataLongLong("repl-stream-db");
             rsi.repl_offset = mi->parseState->getMetaDataLongLong("repl-offset");
             sds str = mi->parseState->getMetaDataStr("repl-id");
-            if (sdslen(str) == CONFIG_RUN_ID_SIZE+1) {
+            if (sdslen(str) == CONFIG_RUN_ID_SIZE) {
                 memcpy(rsi.repl_id, str, CONFIG_RUN_ID_SIZE+1);
+                rsi.repl_id_is_set = 1;
             }
 
             fFinished = true;
@@ -2999,7 +3039,7 @@ void readSyncBulkPayload(connection *conn) {
         return;
     }
 
-    if (mi->isRocksdbSnapshotRepl) {
+    if (mi->isKeydbFastsync) {
         if (!readSnapshotBulkPayload(conn, mi, rsi))
             return;
     } else {
@@ -3012,17 +3052,15 @@ void readSyncBulkPayload(connection *conn) {
 
     /* Final setup of the connected slave <- master link */
     replicationCreateMasterClient(mi,mi->repl_transfer_s,rsi.repl_stream_db);
-    if (mi->isRocksdbSnapshotRepl) {
+    if (mi->isKeydbFastsync) {
         /* We need to handle the case where the initial querybuf data was read by fast sync */
         /* This should match the work readQueryFromClient would do for a master client */
         mi->master->querybuf = sdscatsds(mi->master->querybuf, mi->bulkreadBuffer);
+        mi->master->pending_querybuf = sdscatsds(mi->master->pending_querybuf, mi->bulkreadBuffer);
+        mi->master->read_reploff += sdslen(mi->bulkreadBuffer);
+
         sdsfree(mi->bulkreadBuffer);
         mi->bulkreadBuffer = nullptr;
-
-        mi->master->pending_querybuf = sdscatlen(mi->master->pending_querybuf,
-            mi->master->querybuf,sdslen(mi->master->querybuf));
-
-        mi->master->read_reploff += sdslen(mi->master->querybuf);
     }
     mi->repl_transfer_s = nullptr;
     mi->repl_state = REPL_STATE_CONNECTED;
@@ -3061,13 +3099,13 @@ void readSyncBulkPayload(connection *conn) {
     }
 
     /* Send the initial ACK immediately to put this replica in online state. */
-    if (usemark || mi->isRocksdbSnapshotRepl) replicationSendAck(mi);
+    if (usemark || mi->isKeydbFastsync) replicationSendAck(mi);
 
     /* Restart the AOF subsystem now that we finished the sync. This
      * will trigger an AOF rewrite, and when done will start appending
      * to the new file. */
     if (g_pserver->aof_enabled) restartAOFAfterSYNC();
-    if (mi->isRocksdbSnapshotRepl)
+    if (mi->isKeydbFastsync)
         readQueryFromClient(conn); // There may be querybuf data we just appeneded
     return;
 }
@@ -3393,15 +3431,15 @@ void parseMasterCapa(redisMaster *mi, sds strcapa)
     char *pchEnd = szStart;
 
     mi->isActive = false;
-    mi->isRocksdbSnapshotRepl = false;
+    mi->isKeydbFastsync = false;
     for (;;)
     {
         if (*pchEnd == ' ' || *pchEnd == '\0') {
             // Parse the word
             if (strncmp(szStart, "active-replica", pchEnd - szStart) == 0) {
                 mi->isActive = true;
-            } else if (strncmp(szStart, "rocksdb-snapshot-save", pchEnd - szStart) == 0) {
-                mi->isRocksdbSnapshotRepl = true;
+            } else if (strncmp(szStart, "keydb-fastsync-save", pchEnd - szStart) == 0) {
+                mi->isKeydbFastsync = true;
             }
             szStart = pchEnd + 1;
         }
@@ -3548,9 +3586,9 @@ retry_connect:
             "capa","psync2",
             "capa","activeExpire",
         };
-        if (g_pserver->m_pstorageFactory && !g_pserver->fActiveReplica && g_pserver->repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) {
+        if (FFastSyncEnabled() && g_pserver->repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) {
             veccapabilities.push_back("capa");
-            veccapabilities.push_back("rocksdb-snapshot-load");
+            veccapabilities.push_back("keydb-fastsync");
         }
 
         err = sendCommandArgv(conn, veccapabilities.size(), veccapabilities.data(), nullptr);
@@ -3733,7 +3771,7 @@ retry_connect:
     }
 
     /* Prepare a suitable temp file for bulk transfer */
-    if (!useDisklessLoad() && !mi->isRocksdbSnapshotRepl) {
+    if (!useDisklessLoad() && !mi->isKeydbFastsync) {
         while(maxtries--) {
             auto dt = std::chrono::system_clock::now().time_since_epoch();
             auto dtMillisecond = std::chrono::duration_cast<std::chrono::milliseconds>(dt);
@@ -3861,6 +3899,10 @@ int cancelReplicationHandshake(redisMaster *mi, int reconnect) {
     if (mi->parseState) {
         delete mi->parseState;
         mi->parseState = nullptr;
+    }
+    if (mi->bulkreadBuffer) {
+        sdsfree(mi->bulkreadBuffer);
+        mi->bulkreadBuffer = nullptr;
     }
 
     if (mi->repl_state == REPL_STATE_TRANSFER) {
@@ -4327,7 +4369,6 @@ void replicationCacheMaster(redisMaster *mi, client *c) {
     if (c->flags & CLIENT_MULTI) discardTransaction(c);
     listEmpty(c->reply);
     c->sentlen = 0;
-    c->sentlenAsync = 0;
     c->reply_bytes = 0;
     c->bufpos = 0;
     resetClient(c);
@@ -4782,7 +4823,8 @@ void replicationCron(void) {
 
         /* Bulk transfer I/O timeout? */
         if (mi->masterhost && mi->repl_state == REPL_STATE_TRANSFER &&
-            (time(NULL)-mi->repl_transfer_lastio) > g_pserver->repl_timeout)
+            (time(NULL)-mi->repl_transfer_lastio) > g_pserver->repl_timeout &&
+            !(g_pserver->loading & LOADING_REPLICATION))
         {
             serverLog(LL_WARNING,"Timeout receiving bulk data from MASTER... If the problem persists try to set the 'repl-timeout' parameter in keydb.conf to a larger value.");
             cancelReplicationHandshake(mi,true);

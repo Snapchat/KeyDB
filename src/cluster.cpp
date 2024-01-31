@@ -5610,7 +5610,6 @@ try_again:
     /* Create RESTORE payload and generate the protocol to call the command. */
     for (j = 0; j < num_keys; j++) {
         long long ttl = 0;
-        std::unique_lock<fastlock> ul(g_expireLock);
         expireEntry *pexpire = c->db->getExpire(kv[j]);
         long long expireat = INVALID_EXPIRE;
         if (pexpire != nullptr)
@@ -5992,7 +5991,9 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
                 /* If it is not the first key, make sure it is exactly
                  * the same key as the first we saw. */
                 if (!equalStringObjects(firstkey,thiskey)) {
-                    if (slot != thisslot) {
+                    clusterNode* nThisKey = g_pserver->cluster->slots[thisslot];
+
+                    if ((slot != thisslot) && (nThisKey != n || migrating_slot || importing_slot || g_pserver->cluster->migrating_slots_to[slot] != nullptr || g_pserver->cluster->importing_slots_from[slot] != nullptr)) {
                         /* Error: multiple keys from different slots. */
                         getKeysFreeResult(&result);
                         if (error_code)

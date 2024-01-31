@@ -3,6 +3,7 @@
 #include <unordered_set>
 #include "sds.h"
 #include "ae.h"
+#include <string>
 
 #define METADATA_DB_IDENTIFIER "c299fde0-6d42-4ec4-b939-34f680ffe39f"
 
@@ -63,6 +64,11 @@ public:
         }
         endWriteBatch();
     }
+
+    virtual std::vector<std::string> getExpirationCandidates(unsigned int count) = 0;
+    virtual std::vector<std::string> getEvictionCandidates(unsigned int count) = 0;
+    virtual void setExpire(const char *key, size_t cchKey, long long expire) = 0;
+    virtual void removeExpire(const char *key, size_t cchKey, long long expire) = 0;
 
     virtual void beginWriteBatch() {} // NOP
     virtual void endWriteBatch() {} // NOP

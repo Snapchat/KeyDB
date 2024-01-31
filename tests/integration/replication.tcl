@@ -584,6 +584,7 @@ start_server {tags {"repl"}} {
     set master [srv 0 client]
     $master config set repl-diskless-sync yes
     $master config set repl-diskless-sync-delay 1
+    $master config set enable-keydb-fastsync no
     set master_host [srv 0 host]
     set master_port [srv 0 port]
     set master_pid [srv 0 pid]
@@ -727,6 +728,8 @@ start_server {tags {"repl"}} {
             }
         }
     }
+
+    $master config set enable-keydb-fastsync yes
 }
 
 if 0 {
@@ -867,8 +870,10 @@ test {replicaof right after disconnection} {
 test {Kill rdb child process if its dumping RDB is not useful} {
     start_server {tags {"repl"}} {
         set slave1 [srv 0 client]
+        $slave1 config set enable-keydb-fastsync no
         start_server {} {
             set slave2 [srv 0 client]
+            $slave2 config set enable-keydb-fastsync no
             start_server {} {
                 set master [srv 0 client]
                 set master_host [srv 0 host]

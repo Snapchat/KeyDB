@@ -1,0 +1,30 @@
+name: Coverage
+
+on: [push, pull_request]
+jobs:
+  coverage:
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2
+      - name: dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq make cmake gcc g++ lcov bc
+      - name: build
+        shell: bash
+        run: |
+          export LD_LIBRARY_PATH=.:$(cat /etc/ld.so.conf.d/* | grep -vF "#" | tr "\\n" ":" | sed -e "s/:$//g")
+          cmake . -DCMAKE_BUILD_TYPE=Debug -DENABLE_COVERAGE=On
+          make all -j$(nproc)
+      - name: coverage
+        shell: bash
+        run: |
+          make coverage
+          lines=$(lcov --summary coverage.info | grep -F lines | awk '{print $2}' | sed -e "s/%//g")
+          if (( $(echo "${lines} < ${COVERAGE_THRESHOLD}" | bc -l) )); then
+              echo "Line coverage dropped below ${COVERAGE_THRESHOLD}% to ${lines}%"
+              exit 1
+          fi
+        env:
+          COVERAGE_THRESHOLD: 85.0

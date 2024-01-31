@@ -47,7 +47,6 @@ extern "C" int je_get_defrag_hint(void* ptr);
 /* forward declarations*/
 void defragDictBucketCallback(void *privdata, dictEntry **bucketref);
 dictEntry* replaceSatelliteDictKeyPtrAndOrDefragDictEntry(dict *d, sds oldkey, sds newkey, uint64_t hash, long *defragged);
-bool replaceSatelliteOSetKeyPtr(expireset &set, sds oldkey, sds newkey);
 
 /* Defrag helper for generic allocations.
  *
@@ -423,20 +422,6 @@ dictEntry* replaceSatelliteDictKeyPtrAndOrDefragDictEntry(dict *d, sds oldkey, s
         return de;
     }
     return NULL;
-}
-
-bool replaceSatelliteOSetKeyPtr(expireset &set, sds oldkey, sds newkey) {
-    auto itr = set.find(oldkey);
-    if (itr != set.end())
-    {
-        expireEntry eNew(std::move(*itr));
-        eNew.setKeyUnsafe(newkey);
-        set.erase(itr);
-        set.insert(eNew);
-        serverAssert(set.find(newkey) != set.end());
-        return true;
-    }
-    return false;
 }
 
 long activeDefragQuickListNode(quicklist *ql, quicklistNode **node_ref) {
@@ -851,7 +836,6 @@ long defragModule(redisDb *db, dictEntry *kde) {
  * all the various pointers it has. Returns a stat of how many pointers were
  * moved. */
 long defragKey(redisDb *db, dictEntry *de) {
-    std::unique_lock<fastlock> ul(g_expireLock);
     sds keysds = (sds)dictGetKey(de);
     robj *newob, *ob;
     unsigned char *newzl;
@@ -862,15 +846,8 @@ long defragKey(redisDb *db, dictEntry *de) {
 
     /* Try to defrag the key name. */
     newsds = activeDefragSds(keysds);
-    if (newsds)
-    {
+    if (newsds) {
         defragged++, de->key = newsds;
-        if (!db->setexpire()->empty()) {
-            bool fReplaced = replaceSatelliteOSetKeyPtr(*const_cast<expireset*>(db->setexpire()), keysds, newsds);
-            serverAssert(fReplaced == ob->FExpires());
-        } else {
-            serverAssert(!ob->FExpires());
-        }
     }
 
     if ((newob = activeDefragStringOb(ob, &defragged))) {

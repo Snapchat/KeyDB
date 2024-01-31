@@ -38,6 +38,7 @@
 #include <vector>
 #include <mutex>
 #include "aelocker.h"
+#include <sys/socket.h>
 
 static void setProtocolError(const char *errstr, client *c);
 __thread int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
@@ -163,7 +164,6 @@ client *createClient(connection *conn, int iel) {
     c->multibulklen = 0;
     c->bulklen = -1;
     c->sentlen = 0;
-    c->sentlenAsync = 0;
     c->flags = 0;
     c->fPendingAsyncWrite = FALSE;
     c->fPendingAsyncWriteHandler = FALSE;
@@ -1174,6 +1174,32 @@ int chooseBestThreadForAccept()
     return ielMinLoad;
 }
 
+bool checkOverloadIgnorelist(connection *conn) {
+    if (conn->flags & CONN_FLAG_IGNORE_OVERLOAD) {
+        return true;
+    }
+    struct sockaddr_storage sa;
+    socklen_t salen = sizeof(sa);
+    if (getpeername(conn->fd, (struct sockaddr *)&sa, &salen) == -1) {
+        return false;
+    }
+    if (sa.ss_family == AF_INET) {
+        struct sockaddr_in *s = (struct sockaddr_in *)&sa;
+        for (auto ignore : g_pserver->overload_ignorelist) {
+            if (ignore.match(s->sin_addr))
+                return true;
+        }
+    }
+    if (sa.ss_family == AF_INET6) {
+        struct sockaddr_in6 *s = (struct sockaddr_in6 *)&sa;
+        for (auto ignore : g_pserver->overload_ignorelist_ipv6) {
+            if (ignore.match(s->sin6_addr))
+                return true;
+        }
+    }
+    return false;
+}
+
 void clientAcceptHandler(connection *conn) {
     client *c = (client*)connGetPrivateData(conn);
 
@@ -1205,7 +1231,6 @@ void clientAcceptHandler(connection *conn) {
     {
         char cip[NET_IP_STR_LEN+1] = { 0 };
         connPeerToString(conn, cip, sizeof(cip)-1, NULL);
-
         if (strcmp(cip,"127.0.0.1") && strcmp(cip,"::1")) {
             const char *err =
                 "-DENIED KeyDB is running in protected mode because protected "
@@ -1235,6 +1260,14 @@ void clientAcceptHandler(connection *conn) {
             freeClientAsync(c);
             return;
         }
+    }
+
+    if (checkOverloadIgnorelist(conn))
+    {
+        c->flags |= CLIENT_IGNORE_OVERLOAD;
+        char cip[NET_IP_STR_LEN+1] = { 0 };
+        connPeerToString(conn, cip, sizeof(cip)-1, NULL);
+        serverLog(LL_NOTICE, "Ignoring client from %s for loadshedding", cip);
     }
 
     g_pserver->stat_numconnections++;
@@ -2761,9 +2794,9 @@ void readQueryFromClient(connection *conn) {
         return;
     }
 
-    if (cserver.cthreads > 1 || g_pserver->m_pstorageFactory) {
+    if (cserver.cthreads > 1 || g_pserver->m_pstorageFactory || g_pserver->is_overloaded) {
         parseClientCommandBuffer(c);
-        if (g_pserver->enable_async_commands && !serverTL->disable_async_commands && listLength(g_pserver->monitors) == 0 && (aeLockContention() || serverTL->rgdbSnapshot[c->db->id] || g_fTestMode) && !serverTL->in_eval && !serverTL->in_exec) {
+        if (g_pserver->enable_async_commands && !serverTL->disable_async_commands && listLength(g_pserver->monitors) == 0 && (aeLockContention() || serverTL->rgdbSnapshot[c->db->id] || g_fTestMode) && !serverTL->in_eval && !serverTL->in_exec && !g_pserver->is_overloaded) {
             // Frequent writers aren't good candidates for this optimization, they cause us to renew the snapshot too often
             //  so we exclude them unless the snapshot we need already exists.
             // Note: In test mode we want to create snapshots as often as possibl to excercise them - we don't care about perf
@@ -2779,7 +2812,14 @@ void readQueryFromClient(connection *conn) {
             if (g_pserver->m_pstorageFactory != nullptr && g_pserver->prefetch_enabled) {
                 serverTL->setclientsPrefetch.insert(c);
             } else {
-                serverTL->setclientsProcess.insert(c);
+                if (g_pserver->is_overloaded && !(c->flags & (CLIENT_MASTER | CLIENT_SLAVE | CLIENT_PENDING_WRITE | CLIENT_PUBSUB | CLIENT_BLOCKED | CLIENT_IGNORE_OVERLOAD)) && ((random() % 100) < g_pserver->overload_protect_strength)) {
+                    for (unsigned i = 0; i < c->vecqueuedcmd.size(); i++) {
+                        addReply(c, shared.overloaderr);
+                    }
+                    c->vecqueuedcmd.clear();
+                } else {
+                    serverTL->setclientsProcess.insert(c);
+                }
             }
         }
     } else {

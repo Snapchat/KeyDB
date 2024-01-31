@@ -64,6 +64,7 @@
 #include <string>
 #include <mutex>
 #include <unordered_set>
+#include <arpa/inet.h>
 #ifdef __cplusplus
 extern "C" {
 #include <lua.h>
@@ -125,8 +126,24 @@ typedef long long ustime_t; /* microsecond time type. */
 #define OVERLOAD_PROTECT_PERIOD_MS 10'000 // 10 seconds
 #define MAX_CLIENTS_SHED_PER_PERIOD (OVERLOAD_PROTECT_PERIOD_MS / 10)  // Restrict to one client per 10ms
 
+#define IPV4_BITS 32
+#define IPV6_BITS 128
+
 extern int g_fTestMode;
 extern struct redisServer *g_pserver;
+
+class TCleanup {
+    std::function<void()> fn;
+
+public:
+    TCleanup(std::function<void()> fn)
+        : fn(fn)
+    {}
+
+    ~TCleanup() {
+        fn();
+    }
+};
 
 struct redisObject;
 class robj_roptr
@@ -546,6 +563,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                                           RDB without replication buffer. */
 #define CLIENT_FORCE_REPLY (1ULL<<44) /* Should addReply be forced to write the text? */
 #define CLIENT_AUDIT_LOGGING (1ULL<<45) /* Client commands required audit logging */
+#define CLIENT_IGNORE_OVERLOAD (1ULL<<46) /* Client that should not be disconnected by overload protection */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -621,7 +639,7 @@ typedef enum {
 #define SLAVE_CAPA_EOF (1<<0)    /* Can parse the RDB EOF streaming format. */
 #define SLAVE_CAPA_PSYNC2 (1<<1) /* Supports PSYNC2 protocol. */
 #define SLAVE_CAPA_ACTIVE_EXPIRE (1<<2) /* Will the slave perform its own expirations? (Don't send delete) */
-#define SLAVE_CAPA_ROCKSDB_SNAPSHOT (1<<3)
+#define SLAVE_CAPA_KEYDB_FASTSYNC (1<<3)
 
 /* Synchronous read timeout - replica side */
 #define CONFIG_REPL_SYNCIO_TIMEOUT 5
@@ -967,6 +985,7 @@ struct redisObjectExtended {
 
 typedef struct redisObject {
     friend redisObject *createEmbeddedStringObject(const char *ptr, size_t len);
+    friend redisObject *createObject(int type, void *ptr);
 protected:
     redisObject() {}
 
@@ -979,6 +998,7 @@ public:
 private:
     mutable std::atomic<unsigned> refcount {0};
 public:
+    expireEntry expire;
     void *m_ptr;
 
     inline bool FExpires() const { return refcount.load(std::memory_order_relaxed) >> 31; }
@@ -989,7 +1009,7 @@ public:
     void addref() const { refcount.fetch_add(1, std::memory_order_relaxed); }
     unsigned release() const { return refcount.fetch_sub(1, std::memory_order_seq_cst) & ~(1U << 31); }
 } robj;
-static_assert(sizeof(redisObject) <= 16, "object size is critical, don't increase");
+static_assert(sizeof(redisObject) <= 24, "object size is critical, don't increase");
 
 class redisObjectStack : public redisObjectExtended, public redisObject
 {
@@ -1145,16 +1165,20 @@ public:
 
     dict_iter random();
 
-    const expireEntry &random_expire()
+    const expireEntry *random_expire(sds *key)
     {
-        return m_setexpire->random_value();
+        auto itr = random();
+        if (itr->FExpires()) {
+            *key = itr.key();
+            return &itr->expire;
+        }
+        return nullptr;
     }
 
     dict_iter end()  { return dict_iter(nullptr, nullptr); }
     dict_const_iter end() const { return dict_const_iter(nullptr); }
 
     void getStats(char *buf, size_t bufsize) { dictGetStats(buf, bufsize, m_pdict); }
-    void getExpireStats(char *buf, size_t bufsize) { m_setexpire->getstats(buf, bufsize); }
 
     bool insert(char *k, robj *o, bool fAssumeNew = false, dict_iter *existing = nullptr);
     void tryResize();
@@ -1162,16 +1186,15 @@ public:
     void updateValue(dict_iter itr, robj *val);
     bool syncDelete(robj *key);
     bool asyncDelete(robj *key);
-    size_t expireSize() const { return m_setexpire->size(); }
+    size_t expireSize() const { return m_numexpires; }
     int removeExpire(robj *key, dict_iter itr);
     int removeSubkeyExpire(robj *key, robj *subkey);
-    void resortExpire(expireEntry &e);
     void clear(void(callback)(void*));
     void emptyDbAsync();
     // Note: If you do not need the obj then use the objless iterator version.  It's faster
     bool iterate(std::function<bool(const char*, robj*)> fn);
     void setExpire(robj *key, robj *subkey, long long when);
-    void setExpire(expireEntry &&e);
+    void setExpire(const char *key, expireEntry &&e);
     void initialize();
     void prepOverwriteForSnapshot(char *key);
 
@@ -1194,9 +1217,6 @@ public:
     // This should only be used if you look at the key, we do not fixup
     //  objects stored elsewhere
     dict *dictUnsafeKeyOnly() { return m_pdict; }   
-
-    expireset *setexpireUnsafe() { return m_setexpire; }
-    const expireset *setexpire() const { return m_setexpire; }
 
     const redisDbPersistentDataSnapshot *createSnapshot(uint64_t mvccCheckpoint, bool fOptional);
     void endSnapshot(const redisDbPersistentDataSnapshot *psnapshot);
@@ -1222,6 +1242,7 @@ public:
     dict_iter find_cached_threadsafe(const char *key) const;
 
     static void storageLoadCallback(struct aeEventLoop *el, struct StorageToken *token);
+    static void activeExpireCycleCore(int type);
 
 protected:
     uint64_t m_mvccCheckpoint = 0;
@@ -1245,7 +1266,7 @@ private:
     std::shared_ptr<StorageCache> m_spstorage = nullptr;
 
     // Expire
-    expireset *m_setexpire = nullptr;
+    size_t m_numexpires = 0;
 
     // These two pointers are the same, UNLESS the database has been cleared.
     //      in which case m_pdbSnapshot is NULL and we continue as though we weren'
@@ -1315,7 +1336,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
     friend int removeExpire(redisDb *db, robj *key);
     friend void setExpire(struct client *c, redisDb *db, robj *key, robj *subkey, long long when);
     friend void setExpire(client *c, redisDb *db, robj *key, expireEntry &&e);
-    friend int evictionPoolPopulate(int dbid, redisDb *db, expireset *setexpire, struct evictionPoolEntry *pool);
+    friend int evictionPoolPopulate(int dbid, redisDb *db, bool fVolatile, struct evictionPoolEntry *pool);
     friend void activeDefragCycle(void);
     friend void activeExpireCycle(int);
     friend void expireSlaveKeys(void);
@@ -1324,9 +1345,7 @@ struct redisDb : public redisDbPersistentDataSnapshot
     typedef ::dict_const_iter const_iter;
     typedef ::dict_iter iter;
 
-    redisDb()
-        : expireitr(nullptr)
-    {}
+    redisDb() = default;
 
     void initialize(int id);
     void storageProviderInitialize();
@@ -1348,7 +1367,6 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::random_expire;
     using redisDbPersistentData::end;
     using redisDbPersistentData::getStats;
-    using redisDbPersistentData::getExpireStats;
     using redisDbPersistentData::insert;
     using redisDbPersistentData::tryResize;
     using redisDbPersistentData::incrementallyRehash;
@@ -1366,15 +1384,12 @@ struct redisDb : public redisDbPersistentDataSnapshot
     using redisDbPersistentData::processChanges;
     using redisDbPersistentData::processChangesAsync;
     using redisDbPersistentData::commitChanges;
-    using redisDbPersistentData::setexpireUnsafe;
-    using redisDbPersistentData::setexpire;
     using redisDbPersistentData::endSnapshot;
     using redisDbPersistentData::restoreSnapshot;
     using redisDbPersistentData::removeAllCachedValues;
     using redisDbPersistentData::disableKeyCache;
     using redisDbPersistentData::keycacheIsEnabled;
     using redisDbPersistentData::dictUnsafeKeyOnly;
-    using redisDbPersistentData::resortExpire;
     using redisDbPersistentData::prefetchKeysAsync;
     using redisDbPersistentData::prefetchKeysFlash;
     using redisDbPersistentData::processStorageToken;
@@ -1393,7 +1408,7 @@ public:
         return psnapshot;
     }
 
-    expireset::setiter expireitr;
+    unsigned long expires_cursor = 0;
     dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
     dict *ready_keys;           /* Blocked keys that received a PUSH */
     dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
@@ -1619,7 +1634,6 @@ struct client {
     unsigned long long reply_bytes; /* Tot bytes of objects in reply list. */
     size_t sentlen;         /* Amount of bytes already sent in the current
                                buffer or object being sent. */
-    size_t sentlenAsync;    /* same as sentlen buf for async buffers (which are a different stream) */
     time_t ctime;           /* Client creation time. */
     long duration;          /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     time_t lastinteraction; /* Time of the last interaction, used for timeout */
@@ -1754,7 +1768,7 @@ struct sharedObjectsStruct {
     *emptyarray, *wrongtypeerr, *nokeyerr, *syntaxerr, *sameobjecterr,
     *outofrangeerr, *noscripterr, *loadingerr, *slowscripterr, *bgsaveerr,
     *masterdownerr, *roslaveerr, *execaborterr, *noautherr, *noreplicaserr,
-    *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
+    *busykeyerr, *oomerr, *overloaderr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
     *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink,
     *rpop, *lpop, *lpush, *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax,
     *emptyscan, *multi, *exec, *left, *right, *hset, *srem, *xgroup, *xclaim,  
@@ -1880,7 +1894,7 @@ struct redisMaster {
     long long master_initial_offset;           /* Master PSYNC offset. */
 
     bool isActive = false;
-    bool isRocksdbSnapshotRepl = false;
+    bool isKeydbFastsync = false;
     int repl_state;          /* Replication status if the instance is a replica */
     off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
     off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
@@ -2256,7 +2270,6 @@ struct redisServerConst {
     int maxidletime;                /* Client timeout in seconds */
     int tcpkeepalive;               /* Set SO_KEEPALIVE if non-zero. */
     int active_expire_enabled;      /* Can be disabled for testing purposes. */
-    int active_expire_effort;       /* From 1 (default) to 10, active effort. */
     int active_defrag_enabled;
     int jemalloc_bg_thread;         /* Enable jemalloc background thread */
     size_t active_defrag_ignore_bytes; /* minimum amount of fragmentation waste to start active defrag */
@@ -2318,6 +2331,7 @@ struct redisServer {
     rax *errors;                /* Errors table */
     int activerehashing;        /* Incremental rehash in serverCron() */
     int active_defrag_running;  /* Active defragmentation running (holds current scan aggressiveness) */
+    int enable_async_rehash = 1;    /* Should we use the async rehash feature? */
     int cronloops;              /* Number of times the cron function run */
     char runid[CONFIG_RUN_ID_SIZE+1];  /* ID always different at every exec. */
     int sentinel_mode;          /* True if this instance is a Sentinel. */
@@ -2366,6 +2380,7 @@ struct redisServer {
     unsigned int loading_process_events_interval_keys;
 
     int active_expire_enabled;      /* Can be disabled for testing purposes. */
+    int active_expire_effort;       /* From 1 (default) to 10, active effort. */
 
     int replicaIsolationFactor = 1;
 
@@ -2698,6 +2713,7 @@ struct redisServer {
 
     int fActiveReplica;                          /* Can this replica also be a master? */
     int fWriteDuringActiveLoad;                  /* Can this active-replica write during an RDB load? */
+    int fEnableFastSync = false;
 
     // Format:
     //  Lower 20 bits: a counter incrementing for each command executed in the same millisecond
@@ -2725,7 +2741,95 @@ struct redisServer {
     int tls_rotation;
 
     std::set<sdsstring> tls_auditlog_blocklist; /* Certificates that can be excluded from audit logging */
+    std::set<sdsstring> tls_overload_ignorelist; /* Certificates that are be excluded load shedding */
     std::set<sdsstring> tls_allowlist;
+    class IPV4 {
+        struct in_addr m_ip;
+        struct in_addr m_mask;
+
+        int bitsFromMask() const {
+            uint32_t mask = ntohl(m_mask.s_addr);
+            int bits = 0;
+            while (mask > 0) {
+                bits += mask & 1;
+                mask >>= 1;
+            }
+            return bits;
+        }
+
+    public:
+        IPV4(struct in_addr ip, struct in_addr mask) : m_ip(ip), m_mask(mask) {};
+        bool match(struct in_addr ip) const
+        {
+            return (ip.s_addr & m_mask.s_addr) == m_ip.s_addr;
+        }
+
+        sds getString() const
+        {
+            sds result = sdsempty();
+            char buf[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &m_ip, buf, sizeof(buf));
+            result = sdscat(result, buf);
+            int bits = bitsFromMask();
+            if (bits != IPV4_BITS) {
+                result = sdscat(result, "/");
+                result = sdscat(result, std::to_string(bits).c_str());
+            }
+            return result;
+        }
+
+        bool operator<(const IPV4& rhs) const
+        {
+            return memcmp(&m_ip, &rhs.m_ip, sizeof(m_ip)) < 0 || (memcmp(&m_ip, &rhs.m_ip, sizeof(m_ip)) == 0 && memcmp(&m_mask, &rhs.m_mask, sizeof(m_mask)) < 0);
+        }
+    };
+    class IPV6 {
+        struct in6_addr m_ip;
+        struct in6_addr m_mask;
+
+        int bitsFromMask() const {
+            int bits = 0;
+            for (unsigned int i = 0; i < sizeof(struct in6_addr); i++) {
+                uint8_t mask = m_mask.s6_addr[i];
+                while (mask > 0) {
+                    bits += mask & 1;
+                    mask >>= 1;
+                }
+            }
+            return bits;
+        }
+    public:
+        IPV6(struct in6_addr ip, struct in6_addr mask) : m_ip(ip), m_mask(mask) {};
+        bool match(struct in6_addr ip) const
+        {
+            for (unsigned int i = 0; i < sizeof(struct in6_addr); i++) {
+                if ((ip.s6_addr[i] & m_mask.s6_addr[i]) != m_ip.s6_addr[i])
+                    return false;
+            }
+            return true;
+        }
+
+        sds getString() const
+        {
+            sds result = sdsempty();
+            char buf[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, &m_ip, buf, sizeof(buf));
+            result = sdscat(result, buf);
+            int bits = bitsFromMask();
+            if (bits != IPV6_BITS) {
+                result = sdscat(result, "/");
+                result = sdscat(result, std::to_string(bits).c_str());
+            }
+            return result;
+        }
+
+        bool operator<(const IPV6& rhs) const
+        {
+            return memcmp(&m_ip, &rhs.m_ip, sizeof(m_ip)) < 0 || (memcmp(&m_ip, &rhs.m_ip, sizeof(m_ip)) == 0 && memcmp(&m_mask, &rhs.m_mask, sizeof(m_mask)) < 0);
+        }
+    };
+    std::set<IPV4> overload_ignorelist;
+    std::set<IPV6> overload_ignorelist_ipv6;
     redisTLSContextConfig tls_ctx_config;
 
     /* cpu affinity */
@@ -2768,12 +2872,14 @@ struct redisServer {
 
     sds sdsAvailabilityZone;
     int overload_protect_threshold = 0;
+    int overload_protect_tenacity = 0;
+    int overload_protect_strength = 0;
+    float last_overload_cpu_reading = 0.0f;
     int is_overloaded = 0;
-    int overload_closed_clients = 0;
 
-        int module_blocked_pipe[2]; /* Pipe used to awake the event loop if a
-                            client blocked on a module command needs
-                            to be processed. */
+    int module_blocked_pipe[2]; /* Pipe used to awake the event loop if a
+                                client blocked on a module command needs
+                                to be processed. */
 
     bool FRdbSaveInProgress() const { return g_pserver->rdbThreadVars.fRdbThreadActive; }
 };
@@ -2931,7 +3037,7 @@ int moduleGetCommandKeysViaAPI(struct redisCommand *cmd, robj **argv, int argc, 
 moduleType *moduleTypeLookupModuleByID(uint64_t id);
 void moduleTypeNameByID(char *name, uint64_t moduleid);
 const char *moduleTypeModuleName(moduleType *mt);
-void moduleFreeContext(struct RedisModuleCtx *ctx);
+void moduleFreeContext(struct RedisModuleCtx *ctx, bool propogate = true);
 void unblockClientFromModule(client *c);
 void moduleHandleBlockedClients(int iel);
 void moduleBlockedClientTimedOut(client *c);
@@ -3191,9 +3297,10 @@ int equalStringObjects(robj *a, robj *b);
 unsigned long long estimateObjectIdleTime(robj_roptr o);
 void trimStringObjectIfNeeded(robj *o);
 
-robj *deserializeStoredObject(const redisDbPersistentData *db, const char *key, const void *data, size_t cb);
-std::unique_ptr<expireEntry> deserializeExpire(sds key, const char *str, size_t cch, size_t *poffset);
+robj *deserializeStoredObject(const void *data, size_t cb);
+std::unique_ptr<expireEntry> deserializeExpire(const char *str, size_t cch, size_t *poffset);
 sds serializeStoredObject(robj_roptr o, sds sdsPrefix = nullptr);
+sds serializeStoredObjectAndExpire(robj_roptr o);
 
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
 
@@ -3981,6 +4088,10 @@ inline int ielFromEventLoop(const aeEventLoop *eventLoop)
     }
     serverAssert(iel < cserver.cthreads);
     return iel;
+}
+
+inline bool FFastSyncEnabled() {
+    return g_pserver->fEnableFastSync && !g_pserver->fActiveReplica;
 }
 
 inline int FCorrectThread(client *c)

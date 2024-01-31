@@ -10,6 +10,7 @@
 static const char count_key[] = INTERNAL_KEY_PREFIX "__keydb__count\1";
 static const char version_key[] = INTERNAL_KEY_PREFIX "__keydb__version\1";
 static const char meta_key[] = INTERNAL_KEY_PREFIX "__keydb__metadata\1";
+static const char last_expire_key[] = INTERNAL_KEY_PREFIX "__keydb__last_expire_time";
 class RocksDBStorageFactory;
 
 class RocksDBStorageProvider : public IStorage
@@ -19,12 +20,13 @@ class RocksDBStorageProvider : public IStorage
     std::unique_ptr<rocksdb::WriteBatchWithIndex> m_spbatch;
     const rocksdb::Snapshot *m_psnapshot = nullptr;
     std::shared_ptr<rocksdb::ColumnFamilyHandle> m_spcolfamily;
+    std::shared_ptr<rocksdb::ColumnFamilyHandle> m_spexpirecolfamily;
     rocksdb::ReadOptions m_readOptionsTemplate;
     size_t m_count = 0;
     mutable fastlock m_lock {"RocksDBStorageProvider"};
 
 public:
-    RocksDBStorageProvider(RocksDBStorageFactory *pfactory, std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, const rocksdb::Snapshot *psnapshot, size_t count);
+    RocksDBStorageProvider(RocksDBStorageFactory *pfactory, std::shared_ptr<rocksdb::DB> &spdb, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spcolfam, std::shared_ptr<rocksdb::ColumnFamilyHandle> &spexpirecolfam, const rocksdb::Snapshot *psnapshot, size_t count);
     ~RocksDBStorageProvider();
 
     virtual void insert(const char *key, size_t cchKey, void *data, size_t cb, bool fOverwrite) override;
@@ -37,6 +39,11 @@ public:
     virtual size_t clear() override;
     virtual bool enumerate(callback fn) const override;
     virtual bool enumerate_hashslot(callback fn, unsigned int hashslot) const override;
+
+    virtual std::vector<std::string> getExpirationCandidates(unsigned int count) override;
+    virtual std::vector<std::string> getEvictionCandidates(unsigned int count) override;
+    virtual void setExpire(const char *key, size_t cchKey, long long expire) override;
+    virtual void removeExpire(const char *key, size_t cchKey, long long expire) override;
 
     virtual const IStorage *clone() const override;
 
@@ -56,6 +63,7 @@ public:
 
 protected:
     bool FKeyExists(std::string&) const;
+    bool FExpireExists(std::string&) const;
 
     const rocksdb::ReadOptions &ReadOptions() const { return m_readOptionsTemplate; }
     rocksdb::WriteOptions WriteOptions() const;

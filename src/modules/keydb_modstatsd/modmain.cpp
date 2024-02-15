@@ -298,6 +298,7 @@ void handleStatItem(struct RedisModuleCtx *ctx, std::string name, StatsRecord &r
             long long val = strtoll(pchValue, nullptr, 10);
             g_stats->gauge(name, val, record.prefixOnly);
             RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Emitting metric \"%s\": %lld", name.c_str(), val);
+            record.prevVal = val;
             break;
         }
 
@@ -430,6 +431,20 @@ void handle_info_response(struct RedisModuleCtx *ctx, const char *szReply, size_
     }
 
     #undef SAFETY_CHECK_POINTER
+
+    // Emit keyspace hit rate metric which is computed from info values
+    auto hit = g_mapInfoFields.find("keyspace_hits");
+    auto miss = g_mapInfoFields.find("keyspace_misses");
+    if (hit != g_mapInfoFields.end() && miss != g_mapInfoFields.end()) {
+        long long hitVal = hit->second.prevVal;
+        long long missVal = miss->second.prevVal;
+        long long total = hitVal + missVal;
+        if (total > 0) {
+            double hitRate = (double)hitVal / total * 1000000;
+            g_stats->gauge("keyspace_hit_rate_per_million", hitRate);
+            RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Emitting metric \"keyspace_hit_rate_per_million\": %f", hitRate);
+        }
+    }
 }
 
 void handle_cluster_nodes_response(struct RedisModuleCtx *ctx, const char *szReply, size_t len) {

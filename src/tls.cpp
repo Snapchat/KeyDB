@@ -1071,6 +1071,12 @@ static int connTLSWrite(connection *conn_, const void *data, size_t data_len) {
 
     if (conn->c.state != CONN_STATE_CONNECTED) return -1;
     ERR_clear_error();
+
+     if (data_len > std::numeric_limits<int>::max()) {
+        // OpenSSL expects length to be 32-bit int
+        data_len = std::numeric_limits<int>::max();
+    }
+
     ret = SSL_write(conn->ssl, data, data_len);
 
     if (ret <= 0) {

@@ -1871,21 +1871,23 @@ int writeToClient(client *c, int handler_installed) {
 
         while (clientHasPendingReplies(c)) {
             long long repl_end_idx = getReplIndexFromOffset(c->repl_end_off);
+            long long repl_max_writes = g_pserver->repl_backlog_max_writes_per_event > 0 ? g_pserver->repl_backlog_max_writes_per_event : LLONG_MAX;
+
             serverAssert(c->repl_curr_off != -1);
 
-            if (c->repl_curr_off != c->repl_end_off){
+            if (c->repl_curr_off != c->repl_end_off) {
                 long long repl_curr_idx = getReplIndexFromOffset(c->repl_curr_off); 
                 long long nwritten2ndStage = 0; /* How much was written from the start of the replication backlog
                                                 * in the event of a wrap around write */
                 /* normal case with no wrap around */
-                if (repl_end_idx >= repl_curr_idx){
-                    nwritten = connWrite(c->conn, g_pserver->repl_backlog + repl_curr_idx, repl_end_idx - repl_curr_idx);
+                if (repl_end_idx >= repl_curr_idx) {
+                    nwritten = connWrite(c->conn, g_pserver->repl_backlog + repl_curr_idx, std::min(repl_max_writes, repl_end_idx - repl_curr_idx));
                 /* wrap around case */
                 } else {
-                    nwritten = connWrite(c->conn, g_pserver->repl_backlog + repl_curr_idx, g_pserver->repl_backlog_size - repl_curr_idx);
+                    nwritten = connWrite(c->conn, g_pserver->repl_backlog + repl_curr_idx, std::min(repl_max_writes, g_pserver->repl_backlog_size - repl_curr_idx));
                     /* only attempt wrapping if we write the correct number of bytes */
                     if (nwritten == g_pserver->repl_backlog_size - repl_curr_idx){
-                        nwritten2ndStage = connWrite(c->conn, g_pserver->repl_backlog, repl_end_idx);
+                        nwritten2ndStage = connWrite(c->conn, g_pserver->repl_backlog, std::min(repl_max_writes - nwritten, repl_end_idx));
                         if (nwritten2ndStage != -1)
                             nwritten += nwritten2ndStage;
                     }                
@@ -1902,6 +1904,8 @@ int writeToClient(client *c, int handler_installed) {
                 if (nwritten2ndStage == -1) nwritten = -1;
                 if (nwritten == -1)
                     break;
+
+                if (totwritten > g_pserver->repl_backlog_max_writes_per_event) break;
             } else {
                 break;
             }
@@ -1972,7 +1976,7 @@ int writeToClient(client *c, int handler_installed) {
     if (nwritten == -1) {
         if (connGetState(c->conn) != CONN_STATE_CONNECTED) {
             serverLog(LL_VERBOSE,
-                "Error writing to client: %s", connGetLastError(c->conn));
+                "Error writing to client: %s (totwritten: %zd)", connGetLastError(c->conn), totwritten);
             freeClientAsync(c);
             
             return C_ERR;

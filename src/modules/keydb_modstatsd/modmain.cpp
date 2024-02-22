@@ -92,6 +92,7 @@ struct StatsRecord {
 
     /* Dynamic Values */
     long long prevVal = 0;
+    long long currVal = 0;
 };
 
 std::unordered_map<std::string, StatsRecord> g_mapInfoFields = {
@@ -296,9 +297,10 @@ void handleStatItem(struct RedisModuleCtx *ctx, std::string name, StatsRecord &r
     switch (record.type) {
         case StatsD_Type::STATSD_GAUGE_LONGLONG: {
             long long val = strtoll(pchValue, nullptr, 10);
+            record.prevVal = record.currVal;
+            record.currVal = val;
             g_stats->gauge(name, val, record.prefixOnly);
             RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Emitting metric \"%s\": %lld", name.c_str(), val);
-            record.prevVal = val;
             break;
         }
 
@@ -318,9 +320,10 @@ void handleStatItem(struct RedisModuleCtx *ctx, std::string name, StatsRecord &r
 
         case StatsD_Type::STATSD_DELTA: {
             long long val = strtoll(pchValue, nullptr, 10);
+            record.prevVal = record.currVal;
+            record.currVal = val;
             g_stats->count(name, val - record.prevVal, record.prefixOnly);
             RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Emitting metric count for \"%s\": %lld", name.c_str() , val - record.prevVal);
-            record.prevVal = val;
             break;
         }
 
@@ -436,12 +439,12 @@ void handle_info_response(struct RedisModuleCtx *ctx, const char *szReply, size_
     auto hit = g_mapInfoFields.find("keyspace_hits");
     auto miss = g_mapInfoFields.find("keyspace_misses");
     if (hit != g_mapInfoFields.end() && miss != g_mapInfoFields.end()) {
-        long long hitVal = hit->second.prevVal;
-        long long missVal = miss->second.prevVal;
-        long long total = hitVal + missVal;
+        long long hitValDelta = hit->second.currVal - hit->second.prevVal;
+        long long missValDelta = miss->second.currVal - miss->second.prevVal;
+        long long total = hitValDelta + missValDelta;
         if (total > 0) {
-            double hitRate = (double)hitVal / total * 1000000;
-            g_stats->gauge("keyspace_hit_rate_per_million", hitRate);
+            double hitRate = (double)hitValDelta / total * 1000000;
+            g_stats->gauge("keyspace_hit_rate_per_million", hitRate, false /* prefixOnly */);
             RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Emitting metric \"keyspace_hit_rate_per_million\": %f", hitRate);
         }
     }

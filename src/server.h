@@ -2572,6 +2572,7 @@ struct redisServer {
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
     std::atomic <long long> repl_lowest_off; /* The lowest offset amongst all replicas
                                                 -1 if there are no replicas */
+    long long repl_backlog_max_writes_per_event; /* Caps the output buffer sent to the replica at once */
     /* Replication (replica) */
     list *masters;
     int enable_multimaster; 

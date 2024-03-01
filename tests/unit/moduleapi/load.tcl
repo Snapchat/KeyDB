@@ -1,7 +1,7 @@
 set testmodule [file normalize tests/modules/load.so]
 
 if {$::flash_enabled} {
-    start_server [list tags [list "modules"] overrides [list storage-provider {flash ./rocks.db.master.load.test} databases 256 loadmodule $testmodule]] {
+    start_server [list tags [list "modules"] overrides [list storage-provider {flash ./rocks.db.master.load.test} loadmodule $testmodule]] {
         test "Module is notified of keys loaded from flash" {
             r flushall
             r set foo bar

@@ -1626,7 +1626,7 @@ void unlinkClient(client *c) {
         c->fPendingAsyncWrite = FALSE;
     }
 
-    serverTL->setclientsProcess.erase(c);
+    serverTL->vecclientsProcess.erase(std::remove(serverTL->vecclientsProcess.begin(), serverTL->vecclientsProcess.end(), c), serverTL->vecclientsProcess.end());
     serverTL->setclientsPrefetch.erase(c);
 
     /* Clear the tracking status. */
@@ -2822,7 +2822,7 @@ void readQueryFromClient(connection *conn) {
                     }
                     c->vecqueuedcmd.clear();
                 } else {
-                    serverTL->setclientsProcess.insert(c);
+                    serverTL->vecclientsProcess.push_back(c);
                 }
             }
         }
@@ -2839,10 +2839,10 @@ void processClients()
 {
     serverAssert(GlobalLocksAcquired());
 
-    // Note that this function is reentrant and vecclients may be modified by code called from processInputBuffer
-    while (!serverTL->setclientsProcess.empty()) {
-        client *c = *serverTL->setclientsProcess.begin();
-        serverTL->setclientsProcess.erase(serverTL->setclientsProcess.begin());
+    // Note that this function is reentrant and vecclientsProcess may be modified by code called from processInputBuffer
+    while (!serverTL->vecclientsProcess.empty()) {
+        client *c = *serverTL->vecclientsProcess.begin();
+        serverTL->vecclientsProcess.erase(serverTL->vecclientsProcess.begin());
 
         /* There is more data in the client input buffer, continue parsing it
         * in case to check if there is a full command to execute. */

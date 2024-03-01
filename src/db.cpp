@@ -3142,8 +3142,11 @@ void redisDbPersistentData::trackChanges(bool fBulk, size_t sizeHint)
     if (fBulk)
         m_fAllChanged.fetch_add(1, std::memory_order_acq_rel);
 
-    if (sizeHint > 0 && aeThreadOwnsLock())
+    if (sizeHint > 0) {
+        aeAcquireLock();
         dictExpand(m_dictChanged, sizeHint, false);
+        aeReleaseLock();
+    }
 }
 
 void redisDbPersistentData::removeAllCachedValues()
@@ -3362,8 +3365,9 @@ void redisDbPersistentData::prefetchKeysFlash(std::unordered_set<client*> &setc)
     auto *tok = m_spstorage->begin_retrieve(serverTL->el, storageLoadCallback, veckeys.data(), veckeys.size());
     if (tok != nullptr) {
         for (client *c : setcBlocked) {
-            if (!(c->flags & CLIENT_BLOCKED))
+            if (!(c->flags & CLIENT_BLOCKED)) {
                 blockClient(c, BLOCKED_STORAGE);
+            }
         }
         tok->setc = std::move(setcBlocked);
         tok->type = StorageToken::TokenType::SingleRead;
@@ -3429,6 +3433,6 @@ void redisDbPersistentData::processStorageToken(StorageToken *tok) {
         if (c->flags & CLIENT_BLOCKED)
             unblockClient(c);
         else
-            serverTL->setclientsProcess.insert(c);
+            serverTL->vecclientsProcess.push_back(c);
     }
 }

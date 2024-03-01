@@ -2847,7 +2847,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         g_pserver->db[0]->prefetchKeysFlash(serverTL->setclientsPrefetch);
         for (client *c : serverTL->setclientsPrefetch) {
             if (!(c->flags & CLIENT_BLOCKED))
-                serverTL->setclientsProcess.insert(c);
+                serverTL->vecclientsProcess.push_back(c);
         }
         serverTL->setclientsPrefetch.clear();
     }

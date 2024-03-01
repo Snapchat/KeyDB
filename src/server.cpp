@@ -4159,10 +4159,15 @@ void InitServerLast() {
 
     g_pserver->asyncworkqueue = new (MALLOC_LOCAL) AsyncWorkQueue(cserver.cthreads);
 
-    g_pserver->asyncreadworkqueue = new (MALLOC_LOCAL) AsyncWorkQueue(cserver.cthreads*10);
+    if (g_pserver->m_pstorageFactory != nullptr) {
+        g_pserver->asyncreadworkqueue = new (MALLOC_LOCAL) AsyncWorkQueue(cserver.cthreads);
 
-    //Process one write/commit at a time to ensure consistency
-    g_pserver->asyncwriteworkqueue = new (MALLOC_LOCAL) AsyncWorkQueue(1);
+        //Process one write/commit at a time to ensure consistency
+        g_pserver->asyncwriteworkqueue = new (MALLOC_LOCAL) AsyncWorkQueue(1);
+    } else {
+        g_pserver->asyncreadworkqueue = nullptr;
+        g_pserver->asyncwriteworkqueue = nullptr;
+    }
 
     // Allocate the repl backlog
     

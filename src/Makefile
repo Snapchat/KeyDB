@@ -73,10 +73,10 @@ ifneq ($(strip $(SANITIZE)),)
 endif
 
 ifeq ($(ENABLE_FLASH),yes)
+	FINAL_LIBS+= ../deps/rocksdb/librocksdb.a
 	FINAL_LIBS+= -lz -lcrypto -lbz2 -lzstd -llz4 -lsnappy
 	CXXFLAGS+= -I../deps/rocksdb/include/ -DENABLE_ROCKSDB
 	STORAGE_OBJ+= storage/rocksdb.o storage/rocksdbfactory.o
-	FINAL_LIBS+= ../deps/rocksdb/librocksdb.a 
 	DEPENDENCY_TARGETS+= rocksdb
 endif
 

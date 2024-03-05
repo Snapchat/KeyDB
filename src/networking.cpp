@@ -2813,7 +2813,7 @@ void readQueryFromClient(connection *conn) {
             }
         }
         if (!c->vecqueuedcmd.empty()) {
-            if (g_pserver->m_pstorageFactory != nullptr && g_pserver->prefetch_enabled) {
+            if (g_pserver->m_pstorageFactory != nullptr && g_pserver->prefetch_enabled && !(c->flags & CLIENT_BLOCKED)) {
                 serverTL->setclientsPrefetch.insert(c);
             } else {
                 if (g_pserver->is_overloaded && !(c->flags & (CLIENT_MASTER | CLIENT_SLAVE | CLIENT_PENDING_WRITE | CLIENT_PUBSUB | CLIENT_BLOCKED | CLIENT_IGNORE_OVERLOAD)) && ((random() % 100) < g_pserver->overload_protect_strength)) {

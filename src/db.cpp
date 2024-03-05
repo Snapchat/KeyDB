@@ -3364,7 +3364,7 @@ void redisDbPersistentData::prefetchKeysFlash(const std::unordered_set<client*> 
     if (veckeys.empty())
         return;
 
-    auto *tok = m_spstorage->begin_retrieve(serverTL->el, storageLoadCallback, veckeys.data(), veckeys.size());
+    StorageToken *tok = m_spstorage->begin_retrieve(serverTL->el, storageLoadCallback, veckeys.data(), veckeys.size());
     if (tok != nullptr) {
         for (client *c : setcBlocked) {
             if (!(c->flags & CLIENT_BLOCKED)) {
@@ -3434,7 +3434,7 @@ void redisDbPersistentData::processStorageToken(StorageToken *tok) {
         std::unique_lock<fastlock> ul(c->lock);
         if (c->flags & CLIENT_BLOCKED)
             unblockClient(c);
-        else
-            serverTL->vecclientsProcess.push_back(c);
+        
+        serverTL->vecclientsProcess.push_back(c);
     }
 }

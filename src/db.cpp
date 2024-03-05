@@ -3044,12 +3044,15 @@ void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **
     }
     if (m_spstorage != nullptr)
     {
+        m_spstorage->endWriteBatch();
+#if 0
         auto *tok = m_spstorage->begin_endWriteBatch(serverTL->el, storageLoadCallback);
         if (tok != nullptr)
         {
             tok->db = this;
             tok->type = StorageToken::TokenType::BatchWrite;
         }
+#endif
     }
 }
 

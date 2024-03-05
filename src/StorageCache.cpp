@@ -209,18 +209,22 @@ void StorageCache::retrieve(sds key, IStorage::callbackSingle fn) const
 }
 
 StorageToken *StorageCache::begin_retrieve(struct aeEventLoop *el, aePostFunctionTokenProc proc, sds *rgkey, size_t ckey) {
-#if 0
     std::unique_lock<fastlock> ul(m_lock);
     if (m_pdict != nullptr)
     {
-        uint64_t hash = dictSdsHash(key);
-        dictEntry *de = dictFind(m_pdict, reinterpret_cast<void*>(hash));
-        
-        if (de == nullptr)
-            return nullptr; // Not found
+        bool fAnyKey = false;
+        for (size_t ik = 0; ik < ckey; ++ik) {
+            uint64_t hash = dictSdsHash(rgkey[ik]);
+            dictEntry *de = dictFind(m_pdict, reinterpret_cast<void*>(hash));
+
+            if (de != nullptr)
+                fAnyKey = true;
+        }
+        if (!fAnyKey)
+            return nullptr; // All keys are missing - skip the io
     }
     ul.unlock();
-#endif 
+
     return m_spstorage->begin_retrieve(el, proc, rgkey, ckey);
 }
 

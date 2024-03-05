@@ -59,7 +59,7 @@ machamp:
       # to ensure a clearer docker build env
       code-checkout:
         type: cmd
-        command: echo checkout
+        command: echo checkout && git submodule init && git submodule update
         # default machamp builder image does not work for multi arch
         builder_image: us.gcr.io/snapchat-build-artifacts/prod/snapchat/img/ubuntu/ubuntu-23-04@sha256:bd43177a80e6ce1c3583e8ea959b88a9081c0f56b765ec9c5a157c27a637c23b
       docker:

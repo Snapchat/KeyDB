@@ -24,7 +24,7 @@ RUN set -eux; \
         gosu nobody true
 # build KeyDB
 ARG MAKE_JOBS=""
-ARG ENABLE_FLASH=""
+ARG ENABLE_FLASH="yes"
 COPY . /tmp/keydb-internal
 RUN set -eux; \
         cd /tmp/keydb-internal; \

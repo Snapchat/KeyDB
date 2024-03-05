@@ -3323,6 +3323,9 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
                 }
             }
         }
+#else
+        UNUSED(c);
+        UNUSED(command);
 #endif
         return;
     }

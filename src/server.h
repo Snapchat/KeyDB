@@ -1230,7 +1230,7 @@ public:
     bool keycacheIsEnabled();
 
     void prefetchKeysAsync(client *c, struct parsed_command &command);
-    void prefetchKeysFlash(std::unordered_set<client*> &setc);
+    void prefetchKeysFlash(const std::unordered_set<client*> &setc);
     void processStorageToken(StorageToken *tok);
 
     bool FSnapshot() const { return m_spdbSnapshotHOLDER != nullptr; }

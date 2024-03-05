@@ -3325,7 +3325,7 @@ void redisDbPersistentData::prefetchKeysAsync(client *c, parsed_command &command
     }
 }
 
-void redisDbPersistentData::prefetchKeysFlash(std::unordered_set<client*> &setc)
+void redisDbPersistentData::prefetchKeysFlash(const std::unordered_set<client*> &setc)
 {
     serverAssert(GlobalLocksAcquired());
     std::vector<sds> veckeys;
@@ -3334,6 +3334,8 @@ void redisDbPersistentData::prefetchKeysFlash(std::unordered_set<client*> &setc)
     for (client *c : setc) {
         for (auto &command : c->vecqueuedcmd) {
             getKeysResult result = GETKEYS_RESULT_INIT;
+            if (command.argc == 0)  // parse can do this it will be handled by processClient
+                break;
             auto cmd = lookupCommand(szFromObj(command.argv[0]));
             if (cmd == nullptr)
                 break; // Bad command? It's not for us to judge, just bail

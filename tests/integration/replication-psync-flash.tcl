@@ -10,7 +10,7 @@
 # checked for consistency.
 if {$::flash_enabled} {
     proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reconnect} {
-        start_server [list tags {"repl"} overrides [list storage-provider {flash .rocks.db.m} repl-backlog-size 64m]] {
+        start_server [list tags {"repl"} overrides [list storage-provider {flash ./rocks.db.m} repl-backlog-size 64m]] {
             start_server [list tags {flash} overrides [list storage-provider {flash ./rocks.db} delete-on-evict no storage-flush-period 10]] {
 
                 set master [srv -1 client]

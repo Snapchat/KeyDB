@@ -100,6 +100,7 @@ std::unordered_map<std::string, StatsRecord> g_mapInfoFields = {
     { "used_memory", { StatsD_Type::STATSD_GAUGE_BYTES, false /* prefixOnly */}},
     { "used_memory_rss", { StatsD_Type::STATSD_GAUGE_BYTES }},
     { "maxmemory", { StatsD_Type::STATSD_GAUGE_BYTES, false /* prefixOnly */}},
+    { "maxstorage", { StatsD_Type::STATSD_GAUGE_BYTES, false /* prefixOnly */}},
     { "used_memory_dataset_perc", { StatsD_Type::STATSD_GAUGE_FLOAT }},
     { "avg_lock_contention", { StatsD_Type::STATSD_GAUGE_LONGLONG }},
     { "repl_backlog_size", { StatsD_Type::STATSD_GAUGE_BYTES }},

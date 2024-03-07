@@ -5826,7 +5826,8 @@ sds genRedisInfoString(const char *section) {
             "lazyfree_pending_objects:%zu\r\n"
             "lazyfreed_objects:%zu\r\n"
             "storage_provider:%s\r\n"
-            "available_system_memory:%s\r\n",
+            "available_system_memory:%s\r\n"
+            "maxstorage:%llu\r\n",
             zmalloc_used,
             hmem,
             g_pserver->cron_malloc_stats.process_rss,
@@ -5872,7 +5873,8 @@ sds genRedisInfoString(const char *section) {
             lazyfreeGetPendingObjectsCount(),
             lazyfreeGetFreedObjectsCount(),
             g_pserver->m_pstorageFactory ? g_pserver->m_pstorageFactory->name() : "none",
-            available_system_mem
+            available_system_mem,
+            g_pserver->maxstorage
         );
         freeMemoryOverheadData(mh);
     }

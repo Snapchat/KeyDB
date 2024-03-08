@@ -3125,10 +3125,10 @@ bool redisDbPersistentData::removeCachedValue(const char *key, dictEntry **ppde)
 
     // since we write ASAP the database already has a valid copy so safe to delete
     if (ppde != nullptr) {
+        *ppde = dictUnlink(m_pdict, key);
         robj *o = (robj*)dictGetVal(*ppde);
         if (o->FExpires())
             --m_numexpires;
-        *ppde = dictUnlink(m_pdict, key);
     } else {
         dictEntry *deT = dictFind(m_pdict, key);
         robj *o = (robj*)dictGetVal(deT);

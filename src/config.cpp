@@ -2724,6 +2724,14 @@ static int isValidProcTitleTemplate(char *val, const char **err) {
     return 1;
 }
 
+static int isValidDisklessEnum(int e, const char **err) {
+    if (e == REPL_DISKLESS_LOAD_SWAPDB && g_pserver->m_pstorageFactory != nullptr) {
+        *err = "cannot use swapdb with a storage provider";
+        return 0;
+    }
+    return 1;
+}
+
 static int updateProcTitleTemplate(char *val, char *prev, const char **err) {
     UNUSED(val);
     UNUSED(prev);
@@ -3091,7 +3099,7 @@ standardConfig configs[] = {
     /* Enum Configs */
     createEnumConfig("supervised", NULL, IMMUTABLE_CONFIG, supervised_mode_enum, cserver.supervised_mode, SUPERVISED_NONE, NULL, NULL),
     createEnumConfig("syslog-facility", NULL, IMMUTABLE_CONFIG, syslog_facility_enum, g_pserver->syslog_facility, LOG_LOCAL0, NULL, NULL),
-    createEnumConfig("repl-diskless-load", NULL, MODIFIABLE_CONFIG, repl_diskless_load_enum, g_pserver->repl_diskless_load, REPL_DISKLESS_LOAD_DISABLED, NULL, NULL),
+    createEnumConfig("repl-diskless-load", NULL, MODIFIABLE_CONFIG, repl_diskless_load_enum, g_pserver->repl_diskless_load, REPL_DISKLESS_LOAD_DISABLED, isValidDisklessEnum, NULL),
     createEnumConfig("loglevel", NULL, MODIFIABLE_CONFIG, loglevel_enum, cserver.verbosity, LL_NOTICE, NULL, NULL),
     createEnumConfig("maxmemory-policy", NULL, MODIFIABLE_CONFIG, maxmemory_policy_enum, g_pserver->maxmemory_policy, MAXMEMORY_NO_EVICTION, NULL, NULL),
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, g_pserver->aof_fsync, AOF_FSYNC_EVERYSEC, NULL, NULL),

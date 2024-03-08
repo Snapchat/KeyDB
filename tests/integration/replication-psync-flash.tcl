@@ -114,6 +114,10 @@ if {$::flash_enabled} {
 
     foreach mdl {no yes} {
         foreach sdl {disabled swapdb} {
+            if {$::flash_enabled && $sdl == "swapdb"} {
+                continue
+            }
+
             test_psync {no reconnection, just sync} 6 1000000 3600 0 {
             } $mdl $sdl 0
 

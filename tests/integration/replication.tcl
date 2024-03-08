@@ -252,6 +252,10 @@ start_server {tags {"repl"}} {
 
 foreach mdl {no yes} {
     foreach sdl {disabled swapdb} {
+        if {$::flash_enabled && $sdl == "swapdb"} {
+            # swapdb not compatible with flash
+            continue
+        }
         start_server {tags {"repl"}} {
             set master [srv 0 client]
             $master config set repl-diskless-sync $mdl
@@ -383,6 +387,7 @@ start_server {tags {"repl"}} {
     }
 }
 
+if {!$::flash_enabled} {
 test {slave fails full sync and diskless load swapdb recovers it} {
     start_server {tags {"repl"}} {
         set slave [srv 0 client]
@@ -547,6 +552,7 @@ test {diskless loading short read} {
         }
     }
 }
+}
 
 # get current stime and utime metrics for a thread (since it's creation)
 proc get_cpu_metrics { statfile } {
@@ -578,7 +584,7 @@ proc compute_cpu_usage {start end} {
     return [ list $pucpu $pscpu ]
 }
 
-
+if {!$::flash_enabled} {
 # test diskless rdb pipe with multiple replicas, which may drop half way
 start_server {tags {"repl"}} {
     set master [srv 0 client]
@@ -812,6 +818,7 @@ test "diskless replication read pipe cleanup" {
             $master ping
         }
     }
+}
 }
 }
 

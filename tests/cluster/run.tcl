@@ -10,6 +10,16 @@ source ../../support/cluster.tcl ; # Redis Cluster client.
 set ::instances_count 20 ; # How many instances we use at max.
 set ::tlsdir "../../tls"
 
+# Check if we compiled with flash
+set status [catch {exec ../../../src/keydb-server --is-flash-enabled}]
+if {$status == 0} {
+    puts "KeyDB was built with FLASH, including FLASH tests"
+    set ::flash_enabled 1
+} else {
+    puts "KeyDB was not built with FLASH.  Excluding FLASH tests"
+    set ::flash_enabled 0
+}
+
 proc main {} {
     parse_options
     spawn_instance redis $::redis_base_port $::instances_count {

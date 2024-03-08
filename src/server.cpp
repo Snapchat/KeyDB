@@ -7436,6 +7436,11 @@ static void validateConfiguration()
         exit(EXIT_FAILURE);
     }
 
+    if (g_pserver->repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB && g_pserver->m_pstorageFactory) {
+        serverLog(LL_WARNING, "SWAPDB is not implemented when using a storage provider.");
+        exit(EXIT_FAILURE);
+    }
+
     g_pserver->repl_backlog_size = g_pserver->repl_backlog_config_size; // this is normally set in the update logic, but not on initial config
 }
 

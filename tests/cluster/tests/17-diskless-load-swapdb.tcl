@@ -14,6 +14,7 @@ test "Cluster is writable" {
     cluster_write_test 0
 }
 
+if {!$::flash_enabled} {
 test "Right to restore backups when fail to diskless load " {
     set master [Rn 0]
     set replica [Rn 1]
@@ -83,4 +84,5 @@ test "Right to restore backups when fail to diskless load " {
     # Replica keys and keys to slots map still both are right
     assert_equal {1} [$replica get $slot0_key]
     assert_equal $slot0_key [$replica CLUSTER GETKEYSINSLOT 0 1] "POST RUN"
+}
 }

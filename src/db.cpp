@@ -2884,6 +2884,7 @@ LNotFound:
                 o->SetFExpires(spexpire != nullptr);
                 if (spexpire != nullptr) {
                     o->expire = std::move(*spexpire);
+                    ++m_numexpires;
                 }
                 g_pserver->stat_storage_provider_read_hits++;
             } else {
@@ -3124,8 +3125,15 @@ bool redisDbPersistentData::removeCachedValue(const char *key, dictEntry **ppde)
 
     // since we write ASAP the database already has a valid copy so safe to delete
     if (ppde != nullptr) {
+        robj *o = (robj*)dictGetVal(*ppde);
+        if (o->FExpires())
+            --m_numexpires;
         *ppde = dictUnlink(m_pdict, key);
     } else {
+        dictEntry *deT = dictFind(m_pdict, key);
+        robj *o = (robj*)dictGetVal(deT);
+        if (o->FExpires())
+            --m_numexpires;
         dictDelete(m_pdict, key);
     }
 
@@ -3172,6 +3180,7 @@ void redisDbPersistentData::removeAllCachedValues()
     } else {
         dictEmpty(m_pdict, nullptr);
     }
+    m_numexpires = 0;
 }
 
 void redisDbPersistentData::disableKeyCache()

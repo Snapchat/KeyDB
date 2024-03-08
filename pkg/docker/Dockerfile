@@ -93,7 +93,7 @@ RUN set -eux; \
         echo '#!/bin/sh' > /usr/local/bin/docker-entrypoint.sh; \
         echo 'set -e' >> /usr/local/bin/docker-entrypoint.sh; \
         echo "# first arg is '-f' or '--some-option'" >> /usr/local/bin/docker-entrypoint.sh; \
-        echo "# or first arg is `something.conf`" >> /usr/local/bin/docker-entrypoint.sh; \
+        echo "# or first arg is 'something.conf'" >> /usr/local/bin/docker-entrypoint.sh; \
         echo 'if [ "${1#-}" != "$1" ] || [ "${1%.conf}" != "$1" ]; then' >> /usr/local/bin/docker-entrypoint.sh; \
         echo '        set -- keydb-server "$@"' >> /usr/local/bin/docker-entrypoint.sh; \
         echo 'fi' >> /usr/local/bin/docker-entrypoint.sh; \
@@ -101,7 +101,7 @@ RUN set -eux; \
         echo 'if [ -n "$KEYDB_PASSWORD" ]; then' >> /usr/local/bin/docker-entrypoint.sh; \
         echo '        set -- "$@" --requirepass "${KEYDB_PASSWORD}"' >> /usr/local/bin/docker-entrypoint.sh; \
         echo 'fi' >> /usr/local/bin/docker-entrypoint.sh; \
-        echo "# allow the container to be started with `--user`" >> /usr/local/bin/docker-entrypoint.sh; \
+        echo "# allow the container to be started with '--user'" >> /usr/local/bin/docker-entrypoint.sh; \
         echo 'if [ "$1" = "keydb-server" -a "$(id -u)" = "0" ]; then' >> /usr/local/bin/docker-entrypoint.sh; \
         echo "        find . \! -user keydb -exec chown keydb '{}' +" >> /usr/local/bin/docker-entrypoint.sh; \
         echo '        exec gosu keydb "$0" "$@"' >> /usr/local/bin/docker-entrypoint.sh; \

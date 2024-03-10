@@ -90,7 +90,7 @@ After=network.target
 Documentation=https://docs.keydb.dev, man:${BINARY}(1)
 
 [Service]
-Type=forking
+Type=notify
 ExecStart=/usr/bin/${BINARY} /etc/keydb/${NAMESPACED}.conf
 ExecStop=/bin/kill -s TERM \$MAINPID
 PIDFile=/var/run/${NAMESPACED}/${BINARY}.pid

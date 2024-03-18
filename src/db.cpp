@@ -3045,8 +3045,9 @@ void redisDbPersistentData::commitChanges(const redisDbPersistentDataSnapshot **
     }
     if (m_spstorage != nullptr)
     {
+#if 1
         m_spstorage->endWriteBatch();
-#if 0
+#else
         auto *tok = m_spstorage->begin_endWriteBatch(serverTL->el, storageLoadCallback);
         if (tok != nullptr)
         {

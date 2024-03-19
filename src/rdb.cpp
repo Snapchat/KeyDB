@@ -2865,6 +2865,12 @@ public:
 
     size_t endWork() {
         if (!fLaunched) {
+            for (int idb = 0; idb < cserver.dbnum; ++idb) {
+                if (g_pserver->m_pstorageFactory) {
+                    g_pserver->db[idb]->processChangesAsync(cstorageWritesInFlight);
+                }
+            }
+            while (cstorageWritesInFlight > 0);
             return ckeysLoaded;
         }
         if (!vecbatch.empty()) {

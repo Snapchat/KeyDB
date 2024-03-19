@@ -2989,6 +2989,7 @@ void redisDbPersistentData::processChangesAsync(std::atomic<int> &pendingJobs)
     dict *dictNew = dictCreate(&dbDictType, nullptr);
     std::swap(dictNew, m_pdict);
     m_cnewKeysPending = 0;
+    m_numexpires = 0;
     g_pserver->asyncworkqueue->AddWorkFunction([dictNew, this, &pendingJobs]{
         dictIterator *di = dictGetIterator(dictNew);
         dictEntry *de;

@@ -2528,6 +2528,12 @@ void slotToKeyFlush(int async) {
  * decrement the reference count to release the keys names. */
 unsigned int getKeysInSlot(unsigned int hashslot, robj **keys, unsigned int count) {
     if (g_pserver->m_pstorageFactory != nullptr) {
+        // We must commit so the storage engine agrees on the number of items in the hash slot
+        if (g_pserver->db[0]->FTrackingChanges()) {
+            if (g_pserver->db[0]->processChanges(false))
+                g_pserver->db[0]->commitChanges();
+            g_pserver->db[0]->trackChanges(false);
+        }
         int j = 0;
         g_pserver->db[0]->getStorageCache()->enumerate_hashslot([&](const char *key, size_t cchKey, const void *, size_t )->bool {
             keys[j++] = createStringObject(key, cchKey);
@@ -2557,6 +2563,12 @@ unsigned int getKeysInSlot(unsigned int hashslot, robj **keys, unsigned int coun
 unsigned int delKeysInSlot(unsigned int hashslot) {
     serverAssert(GlobalLocksAcquired());
     if (g_pserver->m_pstorageFactory != nullptr) {
+        // We must commit so the storage engine agrees on the number of items in the hash slot
+        if (g_pserver->db[0]->FTrackingChanges()) {
+            if (g_pserver->db[0]->processChanges(false))
+                g_pserver->db[0]->commitChanges();
+            g_pserver->db[0]->trackChanges(false);
+        }
         int j = 0;
         g_pserver->db[0]->getStorageCache()->enumerate_hashslot([&](const char *key, size_t cchKey, const void *, size_t )->bool {
             robj *keyobj = createStringObject(key, cchKey);

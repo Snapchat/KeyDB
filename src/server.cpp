@@ -5828,7 +5828,7 @@ sds genRedisInfoString(const char *section) {
             "storage_provider:%s\r\n"
             "available_system_memory:%s\r\n"
             "maxstorage:%llu\r\n"
-            "storage_used:%llu\r\n",
+            "storage_used:%lu\r\n",
             zmalloc_used,
             hmem,
             g_pserver->cron_malloc_stats.process_rss,

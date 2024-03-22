@@ -42,6 +42,8 @@
 #ifndef HIREDIS_SDS_COMPAT
 #define HIREDIS_SDS_COMPAT
 
+#ifndef USE_SYSTEM_HIREDIS
+
 #define sds hisds
 
 #define sdslen hi_sdslen
@@ -90,5 +92,7 @@
 #define sdstrim hi_sdstrim
 #define sdsull2str hi_sdsull2str
 #define sdsupdatelen hi_sdsupdatelen
+
+#endif /* !USE_SYSTEM_HIREDIS */
 
 #endif /* HIREDIS_SDS_COMPAT */

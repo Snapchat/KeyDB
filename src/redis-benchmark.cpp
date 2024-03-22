@@ -44,7 +44,7 @@
 #include <pthread.h>
 #include <string>
 extern "C" {
-#include <sdscompat.h> /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
+#include "sdscompat.h" /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
 #include <sds.h> /* Use hiredis sds. */
 #include <hiredis.h>
 }

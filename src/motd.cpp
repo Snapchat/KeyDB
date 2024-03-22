@@ -1,6 +1,6 @@
 #ifdef CLIENT
 extern "C" {
-#include <sdscompat.h>
+#include "sdscompat.h"
 #include <sds.h>
 }
 #else
@@ -19,7 +19,7 @@ extern "C" {
 #ifdef MOTD
 #include <curl/curl.h> 
 
-#ifdef CLIENT
+#if !defined(USE_SYSTEM_HIREDIS) && defined(CLIENT)
 extern "C" {
 __attribute__ ((weak)) hisds hi_sdscatlen(hisds s, const void *t, size_t len) {
     return sdscatlen(s, t, len);

@@ -31,7 +31,7 @@
 #include "cli_common.h"
 #include <errno.h>
 #include <hiredis.h>
-#include <sdscompat.h> /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
+#include "sdscompat.h" /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
 #include <sds.h> /* use sds.h from hiredis, so that only one set of sds functions will be present in the binary */
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>

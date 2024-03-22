@@ -1,6 +1,6 @@
 #pragma once
 #include "cli_common.h"
-#include <sdscompat.h> /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
+#include "sdscompat.h" /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
 #include <sds.h>
 
 #ifdef __cplusplus

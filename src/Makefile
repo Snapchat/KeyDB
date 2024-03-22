@@ -73,11 +73,18 @@ ifneq ($(strip $(SANITIZE)),)
 endif
 
 ifeq ($(ENABLE_FLASH),yes)
+	STORAGE_OBJ+= storage/rocksdb.o storage/rocksdbfactory.o
+ifeq ($(USE_SYSTEM_ROCKSDB),yes)
+	FINAL_LIBS+= $(shell pkg-config --libs rocksdb)
+	FINAL_CXXFLAGS+= $(shell pkg-config --cflags rocksdb) -DENABLE_ROCKSDB
+
+else
 	FINAL_LIBS+= -lz -lcrypto -lbz2 -lzstd -llz4 -lsnappy
 	CXXFLAGS+= -I../deps/rocksdb/include/ -DENABLE_ROCKSDB
-	STORAGE_OBJ+= storage/rocksdb.o storage/rocksdbfactory.o
+	FINAL_CXXFLAGS+= -I../deps/rocksdb/include/
 	FINAL_LIBS+= ../deps/rocksdb/librocksdb.a 
 	DEPENDENCY_TARGETS+= rocksdb
+endif
 endif
 
 
@@ -268,7 +275,7 @@ endif
 
 # Include paths to dependencies
 FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram
-FINAL_CXXFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/rocksdb/include/
+FINAL_CXXFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram
 
 ifeq ($(USE_SYSTEM_CONCURRENTQUEUE),yes)
 	FINAL_CXXFLAGS+= -I/usr/include/concurrentqueue/moodycamel

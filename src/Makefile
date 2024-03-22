@@ -268,7 +268,13 @@ endif
 
 # Include paths to dependencies
 FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram
-FINAL_CXXFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/rocksdb/include/ -I../deps/concurrentqueue
+FINAL_CXXFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/rocksdb/include/
+
+ifeq ($(USE_SYSTEM_CONCURRENTQUEUE),yes)
+	FINAL_CXXFLAGS+= -I/usr/include/concurrentqueue/moodycamel
+else
+	FINAL_CXXFLAGS+= -I../deps/concurrentqueue
+endif
 
 # Determine systemd support and/or build preference (defaulting to auto-detection)
 BUILD_WITH_SYSTEMD=no
@@ -414,6 +420,7 @@ persist-settings: distclean
 	echo STD=$(STD) >> .make-settings
 	echo WARN=$(WARN) >> .make-settings
 	echo OPT=$(OPT) >> .make-settings
+	echo USE_SYSTEM_CONCURRENTQUEUE=$(USE_SYSTEM_CONCURRENTQUEUE) >> .make-settings
 	echo MALLOC=$(MALLOC) >> .make-settings
 	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings

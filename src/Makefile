@@ -317,10 +317,16 @@ ifeq ($(MALLOC),tcmalloc_minimal)
 endif
 
 ifeq ($(MALLOC),jemalloc)
+ifeq ($(USE_SYSTEM_JEMALLOC),yes)
+	FINAL_CFLAGS+= -DUSE_JEMALLOC $(shell $(PKG_CONFIG) --cflags jemalloc)
+	FINAL_CXXFLAGS+= -DUSE_JEMALLOC $(shell $(PKG_CONFIG) --cflags jemalloc)
+	FINAL_LIBS := $(shell $(PKG_CONFIG) --libs jemalloc) $(FINAL_LIBS)
+else
 	DEPENDENCY_TARGETS+= jemalloc
 	FINAL_CFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include
 	FINAL_CXXFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
+endif
 endif
 
 ifeq ($(MALLOC),memkind)
@@ -422,6 +428,7 @@ persist-settings: distclean
 	echo OPT=$(OPT) >> .make-settings
 	echo USE_SYSTEM_CONCURRENTQUEUE=$(USE_SYSTEM_CONCURRENTQUEUE) >> .make-settings
 	echo MALLOC=$(MALLOC) >> .make-settings
+	echo USE_SYSTEM_JEMALLOC=$(USE_SYSTEM_JEMALLOC) >> .make-settings
 	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings

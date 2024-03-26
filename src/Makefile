@@ -360,6 +360,11 @@ else
 	FINAL_CXXFLAGS+= -I../deps/hiredis
 	FINAL_LIBS+=../deps/hiredis/libhiredis.a
 ifeq ($(BUILD_TLS),yes)
+	FINAL_LIBS += ../deps/hiredis/libhiredis_ssl.a
+endif
+endif
+
+ifeq ($(BUILD_TLS),yes)
 	FINAL_CFLAGS+=-DUSE_OPENSSL $(OPENSSL_CFLAGS)
 	FINAL_CXXFLAGS+=-DUSE_OPENSSL $(OPENSSL_CXXFLAGS)
 	FINAL_LDFLAGS+=$(OPENSSL_LDFLAGS)
@@ -375,8 +380,7 @@ ifeq ($(LIBCRYPTO_PKGCONFIG),0)
 else
 	LIBCRYPTO_LIBS=-lcrypto
 endif
-	FINAL_LIBS += ../deps/hiredis/libhiredis_ssl.a $(LIBSSL_LIBS) $(LIBCRYPTO_LIBS)
-endif
+	FINAL_LIBS += $(LIBSSL_LIBS) $(LIBCRYPTO_LIBS)
 endif
 
 ifndef V

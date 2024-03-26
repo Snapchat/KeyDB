@@ -2,7 +2,8 @@ FROM alpine:3.18
 # add our user and group first to make sure their IDs get assigned consistently, regardless of whatever dependencies get added
 RUN addgroup -S -g 1000 keydb && adduser -S -G keydb -u 999 keydb
 RUN mkdir -p /etc/keydb
-ARG BRANCH
+ARG REPO=https://github.com/Snapchat/KeyDB.git
+ARG BRANCH=main
 RUN set -eux; \
         \
         apk add --no-cache su-exec tini; \
@@ -26,7 +27,7 @@ RUN set -eux; \
                 lz4-dev \
                 snappy-dev \
         ; \
-        cd /tmp && git clone --branch $BRANCH https://github.com/Snapchat/KeyDB.git --recursive; \
+        cd /tmp && git clone --branch $BRANCH $REPO --recursive; \
         cd /tmp/KeyDB; \
         # disable protected mode as it relates to docker
         grep -E '^ *createBoolConfig[(]"protected-mode",.*, *1 *,.*[)],$' ./src/config.cpp; \

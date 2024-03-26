@@ -1706,12 +1706,22 @@ int streamGenericParseIDOrReply(client *c, const robj *o, streamID *id, uint64_t
     }
 
     /* Parse <ms>-<seq> form. */
-    dot = strchr(buf,'-');
-    if (dot) *dot = '\0';
     unsigned long long ms, seq;
+    char *dot = strchr(buf,'-');
+    if (dot) *dot = '\0';
     if (string2ull(buf,&ms) == 0) goto invalid;
-    if (dot && string2ull(dot+1,&seq) == 0) goto invalid;
-    if (!dot) seq = missing_seq;
+    if (dot) {
+        size_t seqlen = strlen(dot+1);
+        if (seq_given != NULL && seqlen == 1 && *(dot + 1) == '*') {
+            /* Handle the <ms>-* form. */
+            seq = 0;
+            *seq_given = 0;
+        } else if (string2ull(dot+1,&seq) == 0) {
+            goto invalid;
+        }
+    } else {
+        seq = missing_seq;
+    }
     id->ms = ms;
     id->seq = seq;
     return C_OK;

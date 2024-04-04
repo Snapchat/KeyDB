@@ -1059,7 +1059,7 @@ public:
             while (checkClientOutputBufferLimits(replica)
               && (replica->flags.load(std::memory_order_relaxed) & CLIENT_CLOSE_ASAP) == 0) {
                 ul.unlock();
-                usleep(0);
+                usleep(1000);   // give 1ms for the I/O before we poll again
                 ul.lock();
             }
         }
@@ -2521,7 +2521,7 @@ size_t parseCount(const char *rgch, size_t cch, long long *pvalue) {
     return cchNumeral + 3;
 }
 
-bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi) {
+bool readFastSyncBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi) {
     int fUpdate = g_pserver->fActiveReplica || g_pserver->enable_multimaster;
     serverAssert(GlobalLocksAcquired());
     serverAssert(mi->master == nullptr);
@@ -2544,6 +2544,10 @@ bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi
                 g_pserver->db[idb]->trackChanges(false);
             }
         }
+    }
+
+    if (mi->repl_state == REPL_STATE_WAIT_STORAGE_IO) {
+        goto LWaitIO;
     }
 
     serverAssert(mi->parseState != nullptr);
@@ -2663,7 +2667,14 @@ bool readSnapshotBulkPayload(connection *conn, redisMaster *mi, rdbSaveInfo &rsi
     if (!fFinished)
         return false;
 
+LWaitIO:
+    if (mi->parseState->hasIOInFlight()) {
+        mi->repl_state = REPL_STATE_WAIT_STORAGE_IO;
+        return false;
+    }
+
     serverLog(LL_NOTICE, "Fast sync complete");
+    serverAssert(!mi->parseState->hasIOInFlight());
     delete mi->parseState;
     mi->parseState = nullptr;
     return true;
@@ -3040,7 +3051,7 @@ void readSyncBulkPayload(connection *conn) {
     }
 
     if (mi->isKeydbFastsync) {
-        if (!readSnapshotBulkPayload(conn, mi, rsi))
+        if (!readFastSyncBulkPayload(conn, mi, rsi))
             return;
     } else {
         if (!readSyncBulkPayloadRdb(conn, mi, rsi, usemark))
@@ -4806,6 +4817,10 @@ void replicationCron(void) {
     while ((lnMaster = listNext(&liMaster)))
     {
         redisMaster *mi = (redisMaster*)listNodeValue(lnMaster);
+
+        if (mi->repl_state == REPL_STATE_WAIT_STORAGE_IO && !mi->parseState->hasIOInFlight()) {
+            readSyncBulkPayload(mi->repl_transfer_s);
+        }
 
         std::unique_lock<decltype(mi->master->lock)> ulock;
         if (mi->master != nullptr)

@@ -612,6 +612,7 @@ typedef enum {
     REPL_STATE_RECEIVE_PSYNC_REPLY, /* Wait for PSYNC reply */
     /* --- End of handshake states --- */
     REPL_STATE_TRANSFER,        /* Receiving .rdb from master */
+    REPL_STATE_WAIT_STORAGE_IO,
     REPL_STATE_CONNECTED,       /* Connected to master */
 } repl_state;
 

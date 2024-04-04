@@ -233,11 +233,6 @@ void SnapshotPayloadParseState::trimState() {
     
     if (stackParse.empty()) {
         flushQueuedKeys();
-        while (*insertsInFlight > 0) {
-            // TODO: ProcessEventsWhileBlocked
-            aeReleaseLock();
-            aeAcquireLock();
-        }
     }
 }
 

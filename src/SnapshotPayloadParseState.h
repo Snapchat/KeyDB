@@ -63,4 +63,5 @@ public:
     void pushValue(const char *rgch, long long cch);
     void pushValue(long long value);
     bool shouldThrottle() const { return *insertsInFlight > (cserver.cthreads*4); }
+    bool hasIOInFlight() const { return *insertsInFlight > 0; }
 };

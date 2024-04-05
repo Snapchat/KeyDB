@@ -1157,7 +1157,7 @@ public:
         }
     }
 
-    void putSlavesOnline() {
+    void putReplicasOnline() {
         for (auto replica : replicas) {
             std::unique_lock<fastlock> ul(replica->lock);
             //  If we put the replica online before the output is drained then it will get immediately closed
@@ -1295,7 +1295,7 @@ int rdbSaveSnapshotForReplication(rdbSaveInfo *rsi) {
         auto usec = ustime() - timeStart;
         serverLog(LL_NOTICE, "Transferred %zuMB total (%zuMB data) in %.2f seconds.  (%.2fGbit/s)", spreplBuf->cbWritten()/1024/1024, cbData/1024/1024, usec/1000000.0, (spreplBuf->cbWritten()*8.0)/(usec/1000000.0)/1000000000.0);
         if (retval == C_OK) {
-            replBuf.putSlavesOnline();
+            replBuf.putReplicasOnline();
         }
     });
 

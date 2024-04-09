@@ -4,7 +4,7 @@ After=network.target
 Documentation=https://docs.keydb.dev, man:keydb-server(1)
 
 [Service]
-Type=forking
+Type=notify
 ExecStart=/usr/bin/keydb-server /etc/keydb/keydb.conf
 ExecStop=/bin/kill -s TERM $MAINPID
 PIDFile=/var/run/keydb/keydb-server.pid

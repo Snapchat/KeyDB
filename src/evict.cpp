@@ -454,10 +454,6 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 
     /* Compute how much memory we need to free. */
     mem_tofree = mem_used - maxmemory;
-    if (g_pserver->m_pstorageFactory && !fQuickCycle)
-    {
-        mem_tofree += static_cast<size_t>(maxmemory * 0.05); // if we have a storage provider be much more aggressive
-    }
 
     if (logical) *logical = mem_used;
     if (tofree) *tofree = mem_tofree;
@@ -893,7 +889,7 @@ int performEvictions(bool fPreSnapshot) {
                 /* After some time, exit the loop early - even if memory limit
                  * hasn't been reached.  If we suddenly need to free a lot of
                  * memory, don't want to spend too much time here.  */
-                if (g_pserver->m_pstorageFactory == nullptr && elapsedUs(evictionTimer) > eviction_time_limit_us) {
+                if (elapsedUs(evictionTimer) > eviction_time_limit_us) {
                     // We still need to free memory - start eviction timer proc
                     if (!isEvictionProcRunning && serverTL->el != nullptr) {
                         isEvictionProcRunning = 1;

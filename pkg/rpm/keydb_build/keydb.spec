@@ -1,4 +1,4 @@
-Name        : keydb
+Name        : KeyDB
 Version     : 6.0.5
 Release     : 1%{?dist}
 Group       : Unspecified

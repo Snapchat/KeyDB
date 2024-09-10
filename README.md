@@ -250,6 +250,14 @@ as options using the command line. Examples:
 All the options in keydb.conf are also supported as options using the command
 line, with exactly the same name.
 
+Self-Hosting KeyDB
+------------------
+
+### Elestio
+
+You can deploy KeyDB on Elestio using one-click deployment.
+
+[![Deploy on Elestio](https://elest.io/images/logos/deploy-to-elestio-btn.png)](https://elest.io/open-source/keydb)
 
 Running KeyDB with TLS:
 ------------------

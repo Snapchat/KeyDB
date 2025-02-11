@@ -2343,6 +2343,10 @@ void replicationEmptyDbCallback(void *privdata) {
 void replicationCreateMasterClient(redisMaster *mi, connection *conn, int dbid) {
     serverAssert(mi->master == nullptr);
     mi->master = createClient(conn, serverTL - g_pserver->rgthreadvar);
+    if (mi->cached_master != nullptr) {
+        freeClientAsync(mi->cached_master);
+        mi->cached_master = nullptr;
+    }
     if (conn)
     {
         serverAssert(connGetPrivateData(mi->master->conn) == mi->master);

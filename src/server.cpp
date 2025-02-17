@@ -6517,17 +6517,18 @@ int linuxMadvFreeForkBugCheck(void) {
     int ret, pipefd[2];
     pid_t pid;
     char *p, *q, bug_found = 0;
-    const long map_size = 3 * 4096;
+    unsigned long page_size = sysconf(_SC_PAGESIZE);
+    const long map_size = 3 * page_size
 
     /* Create a memory map that's in our full control (not one used by the allocator). */
     p = (char*)mmap(NULL, map_size, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
     serverAssert(p != MAP_FAILED);
 
-    q = p + 4096;
+    q = p + page_size;
 
     /* Split the memory map in 3 pages by setting their protection as RO|RW|RO to prevent
      * Linux from merging this memory map with adjacent VMAs. */
-    ret = mprotect(q, 4096, PROT_READ | PROT_WRITE);
+    ret = mprotect(q, page_size, PROT_READ | PROT_WRITE);
     serverAssert(!ret);
 
     /* Write to the page once to make it resident */
@@ -6537,7 +6538,7 @@ int linuxMadvFreeForkBugCheck(void) {
 #ifndef MADV_FREE
 #define MADV_FREE 8
 #endif
-    ret = madvise(q, 4096, MADV_FREE);
+    ret = madvise(q, page_size, MADV_FREE);
     serverAssert(!ret);
 
     /* Write to the page after being marked for freeing, this is supposed to take

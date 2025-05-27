@@ -52,6 +52,13 @@
 #include "config.h"
 #include "serverassert.h"
 
+#if defined(__aarch64__) && defined(__linux__)
+#include <sys/auxv.h>
+#ifndef HWCAP_SB
+#define HWCAP_SB (1 << 29)
+#endif  // HWCAP_SB
+#endif  // __aarch64__  __linux__
+
 #ifdef __APPLE__
 #include <TargetConditionals.h>
 #ifdef TARGET_OS_MAC
@@ -379,7 +386,24 @@ LNormalLoop:
 #if defined(__i386__) || defined(__amd64__)
             __asm__ __volatile__ ("pause");
 #elif defined(__aarch64__)
-            __asm__ __volatile__ ("yield");
+#ifdef __linux__
+            static int use_spin_delay_sb = -1;
+
+            // Use SB instruction if available otherwise ISB
+            if (__builtin_expect(use_spin_delay_sb == 1, 1)) {
+                __asm__ __volatile__(".inst 0xd50330ff");   // SB instruction encoding
+            } else if (use_spin_delay_sb == 0) {
+                __asm__ __volatile__("isb");
+            } else {
+                // Initialize variable and use getauxval fuction as delay
+                if (getauxval(AT_HWCAP) & HWCAP_SB)
+                use_spin_delay_sb = 1;
+                else
+                use_spin_delay_sb = 0;
+            }
+#else
+            __asm__ __volatile__ ("isb");
+#endif  // __linux__
 #endif
 
             if ((++cloops % loopLimit) == 0)

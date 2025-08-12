@@ -107,7 +107,7 @@ void SHA1Transform(uint32_t state[5], const unsigned char buffer[64])
     /* Wipe variables */
     a = b = c = d = e = 0;
 #ifdef SHA1HANDSOFF
-    memset(block, '\0', sizeof(block));
+    memset_s(block, sizeof(block), 0, sizeof(block));
 #endif
 }
 

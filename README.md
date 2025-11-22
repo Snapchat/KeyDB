@@ -49,7 +49,7 @@ Join us on [Slack](https://docs.keydb.dev/slack/)
 
 Learn more using KeyDB's extensive [documentation](https://docs.keydb.dev)
 
-See the [KeyDB Roadmap](https://docs.keydb.dev/docs/coming-soon) to see what's in store
+view our extensive roadmap [KeyDB Roadmap](https://docs.keydb.dev/docs/coming-soon) to see what's in store
 
 
 Benchmarking KeyDB

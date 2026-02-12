@@ -29,6 +29,7 @@
  */
 
 #include "server.h"
+#include "functions.h"
 #include "monotonic.h"
 #include "cluster.h"
 #include "slowlog.h"
@@ -257,6 +258,9 @@ struct redisCommand redisCommandTable[] = {
     {"strlen",strlenCommand,2,
      "read-only fast @string",
      0,NULL,1,1,1,0,0,0},
+    {"lcs",lcsCommand,-3,
+     "read-only @string",
+     0,NULL,1,2,1,0,0,0},
 
     {"del",delCommand,-2,
      "write @keyspace",
@@ -362,6 +366,14 @@ struct redisCommand redisCommandTable[] = {
      "write no-script @list @blocking",
      0,NULL,1,-2,1,0,0,0},
 
+    {"lmpop",lmpopCommand,-4,
+     "write fast @list",
+     0,NULL,2,-2,1,0,0,0},
+
+    {"blmpop",blmpopCommand,-5,
+     "write no-script @list @blocking",
+     0,NULL,3,-3,1,0,0,0},
+
     {"llen",llenCommand,2,
      "read-only fast @list",
      0,NULL,1,1,1,0,0,0},
@@ -433,6 +445,10 @@ struct redisCommand redisCommandTable[] = {
     {"sinter",sinterCommand,-2,
      "read-only to-sort @set",
      0,NULL,1,-1,1,0,0,0},
+
+    {"sintercard",sintercardCommand,-3,
+     "read-only @set",
+     0,NULL,2,-2,1,0,0,0},
 
     {"sinterstore",sinterstoreCommand,-3,
      "write use-memory @set",
@@ -586,6 +602,14 @@ struct redisCommand redisCommandTable[] = {
      "write no-script fast @sortedset @blocking",
      0,NULL,1,-2,1,0,0,0},
 
+    {"zmpop",zmpopCommand,-4,
+     "write fast @sortedset",
+     0,NULL,2,-2,1,0,0,0},
+
+    {"bzmpop",bzmpopCommand,-5,
+     "write no-script fast @sortedset @blocking",
+     0,NULL,3,-3,1,0,0,0},
+
     {"zrandmember",zrandmemberCommand,-2,
      "read-only random @sortedset",
      0,NULL,1,1,1,0,0,0},
@@ -648,6 +672,42 @@ struct redisCommand redisCommandTable[] = {
 
     {"hrandfield",hrandfieldCommand,-2,
      "read-only random @hash",
+     0,NULL,1,1,1,0,0,0},
+
+    {"hexpire",hexpireCommand,-5,
+     "write fast @hash",
+     0,NULL,1,1,1,0,0,0},
+
+    {"hpexpire",hpexpireCommand,-5,
+     "write fast @hash",
+     0,NULL,1,1,1,0,0,0},
+
+    {"hexpireat",hexpireatCommand,-5,
+     "write fast @hash",
+     0,NULL,1,1,1,0,0,0},
+
+    {"hpexpireat",hpexpireatCommand,-5,
+     "write fast @hash",
+     0,NULL,1,1,1,0,0,0},
+
+    {"httl",httlCommand,-4,
+     "read-only fast random @hash",
+     0,NULL,1,1,1,0,0,0},
+
+    {"hpttl",hpttlCommand,-4,
+     "read-only fast random @hash",
+     0,NULL,1,1,1,0,0,0},
+
+    {"hexpiretime",hexpiretimeCommand,-4,
+     "read-only fast random @hash",
+     0,NULL,1,1,1,0,0,0},
+
+    {"hpexpiretime",hpexpiretimeCommand,-4,
+     "read-only fast random @hash",
+     0,NULL,1,1,1,0,0,0},
+
+    {"hpersist",hpersistCommand,-4,
+     "write fast @hash",
      0,NULL,1,1,1,0,0,0},
 
     {"hscan",hscanCommand,-3,
@@ -847,6 +907,14 @@ struct redisCommand redisCommandTable[] = {
      "read-only fast random @keyspace",
      0,NULL,1,1,1,0,0,0},
 
+    {"expiretime",expiretimeCommand,2,
+     "read-only fast random @keyspace",
+     0,NULL,1,1,1,0,0,0},
+
+    {"pexpiretime",pexpiretimeCommand,2,
+     "read-only fast random @keyspace",
+     0,NULL,1,1,1,0,0,0},
+
     {"persist",persistCommand,-2,
      "write fast @keyspace",
      0,NULL,1,1,1,0,0,0},
@@ -964,6 +1032,26 @@ struct redisCommand redisCommandTable[] = {
     {"evalsha",evalShaCommand,-3,
      "no-script no-monitor may-replicate @scripting",
      0,evalGetKeys,0,0,0,0,0,0},
+
+    {"eval_ro",evalRoCommand,-3,
+     "no-script no-monitor read-only @scripting",
+     0,evalGetKeys,0,0,0,0,0,0},
+
+    {"evalsha_ro",evalShaRoCommand,-3,
+     "no-script no-monitor read-only @scripting",
+     0,evalGetKeys,0,0,0,0,0,0},
+
+    {"function",functionCommand,-2,
+     "write no-script no-monitor @scripting",
+     0,NULL,0,0,0,0,0,0},
+
+    {"fcall",fcallCommand,-3,
+     "no-script may-replicate @scripting",
+     0,NULL,0,0,0,0,0,0},
+
+    {"fcall_ro",fcallroCommand,-3,
+     "no-script read-only @scripting",
+     0,NULL,0,0,0,0,0,0},
 
     {"slowlog",slowlogCommand,-2,
      "admin random ok-loading ok-stale",
@@ -4084,6 +4172,7 @@ void initServer(void) {
     if (g_pserver->cluster_enabled) clusterInit();
     replicationScriptCacheInit();
     scriptingInit(1);
+    functionsInit();
     slowlogInit();
     latencyMonitorInit();
 

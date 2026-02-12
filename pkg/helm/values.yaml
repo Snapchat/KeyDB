@@ -1,0 +1,191 @@
+## KeyDB with Redis 8.2.3 protocol support
+## https://github.com/vainkop/KeyDB
+
+## -- Override the chart name
+nameOverride: ""
+## -- Override the full resource name
+fullnameOverride: ""
+
+## -- Image configuration
+image:
+  repository: vainkop/keydb8
+  tag: "8.2.3"
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+## -- Number of KeyDB pods (StatefulSet replicas)
+nodes: 1
+
+## -- Number of server threads per node
+threads: 2
+
+## -- KeyDB port
+port: 6379
+
+## -- KeyDB server configuration
+keydb:
+  ## -- Enable multi-master active-active replication
+  multiMaster: "no"
+  ## -- Enable active replicas (read from replicas)
+  activeReplicas: "no"
+  ## -- Disable protected mode for cluster communication
+  protectedMode: "no"
+  ## -- Enable AOF persistence
+  appendonly: "no"
+  ## -- Additional KeyDB configuration arguments
+  ## Format: array of dictionaries where key is the argument name and value can be:
+  ##   - A string: --key "value"
+  ##   - An array: --key "arg1" "arg2" "arg3" (for multi-argument options)
+  ##   - null/empty: --key (flag without value)
+  extraArgs: []
+    # - maxmemory: "64mb"
+    # - maxmemory-policy: "allkeys-lru"
+    # - client-output-buffer-limit: ["normal", "0", "0", "0"]
+    # - save: ~
+    # - tcp-backlog: "1024"
+
+## -- Authentication
+auth:
+  ## -- Password (plain text, stored in a Secret)
+  password: ""
+  ## -- Use an existing Secret for the password
+  existingSecret: ""
+  ## -- Key in the existing Secret
+  existingSecretPasswordKey: "password"
+
+## -- Pod annotations
+podAnnotations: {}
+
+## -- Extra environment variables for the KeyDB container
+extraEnvVars: []
+
+## -- Additional init containers
+extraInitContainers: []
+
+## -- Additional sidecar containers
+extraContainers: []
+
+## -- Extra volumes
+extraVolumes: []
+
+## -- Service configuration
+service:
+  type: ClusterIP
+  annotations: {}
+  ## -- Set appProtocol on service ports
+  appProtocol:
+    enabled: false
+
+## -- Headless Service (required for StatefulSet DNS)
+headlessService:
+  enabled: true
+
+## -- LoadBalancer Service
+loadBalancer:
+  enabled: false
+  annotations: {}
+
+## -- Persistence
+persistence:
+  enabled: true
+  ## -- Storage class (empty = default provisioner; "-" = disable dynamic provisioning)
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 3Gi
+
+## -- Resource requests and limits
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+## -- Liveness probe
+livenessProbe:
+  enabled: true
+  custom: {}
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 5
+  successThreshold: 1
+  failureThreshold: 5
+
+## -- Readiness probe
+readinessProbe:
+  enabled: true
+  custom: {}
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 1
+  successThreshold: 1
+  failureThreshold: 5
+
+## -- Startup probe
+startupProbe:
+  enabled: true
+  custom: {}
+  periodSeconds: 5
+  timeoutSeconds: 1
+  failureThreshold: 24
+
+## -- Pod-level security context
+podSecurityContext:
+  fsGroup: 999
+  runAsUser: 999
+  runAsNonRoot: true
+
+## -- Container-level security context for keydb container
+containerSecurityContext: {}
+
+## -- Lifecycle hooks for keydb container
+lifecycle: {}
+
+## -- Node selector
+nodeSelector: {}
+
+## -- Tolerations
+tolerations: []
+
+## -- Affinity (supports template expressions via tpl)
+affinity: {}
+
+## -- Topology spread constraints
+topologySpreadConstraints: []
+
+## -- Pod Disruption Budget
+podDisruptionBudget:
+  enabled: false
+  ## -- Minimum available pods (cannot be set with maxUnavailable)
+  minAvailable: 1
+  ## -- Maximum unavailable pods (cannot be set with minAvailable)
+  # maxUnavailable: 1
+
+## -- Prometheus redis-exporter sidecar
+exporter:
+  enabled: false
+  image:
+    repository: oliver006/redis_exporter
+    tag: v1.80.1
+    pullPolicy: IfNotPresent
+  resources: {}
+  port: 9121
+  portName: redis-exporter
+  scrapePath: /metrics
+  extraArgs: []
+  securityContext: {}
+
+## -- Prometheus ServiceMonitor (requires exporter and Prometheus Operator CRDs)
+serviceMonitor:
+  enabled: false
+  labels: {}
+  annotations: {}
+  interval: 30s
+  # scrapeTimeout: 10s
+
+## -- ServiceAccount
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}

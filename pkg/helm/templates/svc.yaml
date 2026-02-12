@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "keydb.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "keydb.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+  - name: keydb
+    port: {{ .Values.port | int }}
+    protocol: TCP
+    targetPort: keydb
+    {{- if .Values.service.appProtocol.enabled }}
+    appProtocol: redis
+    {{- end }}
+  {{- if .Values.exporter.enabled }}
+  - name: {{ .Values.exporter.portName }}
+    port: {{ .Values.exporter.port | int }}
+    protocol: TCP
+    targetPort: {{ .Values.exporter.portName }}
+    {{- if .Values.service.appProtocol.enabled }}
+    appProtocol: http
+    {{- end }}
+  {{- end }}
+  selector:
+    {{- include "keydb.selectorLabels" . | nindent 4 }}

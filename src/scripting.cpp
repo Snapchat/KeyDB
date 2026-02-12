@@ -678,6 +678,12 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
      * command marked as non-deterministic was already called in the context
      * of this script. */
     if (cmd->flags & CMD_WRITE) {
+        /* Deny writes from read-only script variants (EVAL_RO/EVALSHA_RO) */
+        if (g_pserver->lua_caller->flags & CLIENT_READONLY) {
+            luaPushError(lua,
+                "Write commands are not allowed from read-only scripts");
+            goto cleanup;
+        }
         int deny_write_type = writeCommandsDeniedByDiskError();
         if (g_pserver->lua_random_dirty && !g_pserver->lua_replicate_commands) {
             luaPushError(lua,
@@ -1770,6 +1776,22 @@ void evalShaCommand(client *c) {
         addReplyError(c,"Please use EVAL instead of EVALSHA for debugging");
         return;
     }
+}
+
+/* EVAL_RO - Read-only variant of EVAL (Redis 7.0+) */
+void evalRoCommand(client *c) {
+    int orig_flags = c->flags;
+    c->flags |= CLIENT_READONLY;
+    evalCommand(c);
+    c->flags = orig_flags;
+}
+
+/* EVALSHA_RO - Read-only variant of EVALSHA (Redis 7.0+) */
+void evalShaRoCommand(client *c) {
+    int orig_flags = c->flags;
+    c->flags |= CLIENT_READONLY;
+    evalShaCommand(c);
+    c->flags = orig_flags;
 }
 
 void scriptCommand(client *c) {

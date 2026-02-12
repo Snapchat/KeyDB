@@ -58,4 +58,5 @@ Makefile.dep
 .ccls
 .ccls-cache/*
 compile_commands.json
-keydb.code-workspace
+*.code-workspace
+.cursorrules

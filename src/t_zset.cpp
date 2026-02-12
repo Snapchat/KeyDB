@@ -3985,6 +3985,106 @@ void bzpopmaxCommand(client *c) {
     blockingGenericZpopCommand(c,ZSET_MAX);
 }
 
+/* ZMPOP/BZMPOP
+ * 'numkeys_idx' parameter position of key number.
+ * 'is_block' this indicates whether it is a blocking variant. */
+void zmpopGenericCommand(client *c, int numkeys_idx, int is_block) {
+    long j;
+    long numkeys = 0;      /* Number of keys */
+    int where = 0;         /* ZSET_MIN or ZSET_MAX */
+    long count = -1;       /* Reply will consist of up to count elements */
+
+    /* Parse the numkeys */
+    if (getRangeLongFromObjectOrReply(c, c->argv[numkeys_idx], 1, LONG_MAX,
+                                      &numkeys, "numkeys should be greater than 0") != C_OK)
+        return;
+
+    /* Parse the where. where_idx: the index of where in the c->argv */
+    long where_idx = numkeys_idx + numkeys + 1;
+    if (where_idx >= c->argc) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+    if (!strcasecmp(szFromObj(c->argv[where_idx]), "MIN")) {
+        where = ZSET_MIN;
+    } else if (!strcasecmp(szFromObj(c->argv[where_idx]), "MAX")) {
+        where = ZSET_MAX;
+    } else {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    /* Parse the optional arguments */
+    for (j = where_idx + 1; j < c->argc; j++) {
+        char *opt = szFromObj(c->argv[j]);
+        int moreargs = (c->argc - 1) - j;
+
+        if (count == -1 && !strcasecmp(opt, "COUNT") && moreargs) {
+            j++;
+            if (getRangeLongFromObjectOrReply(c, c->argv[j], 1, LONG_MAX,
+                                              &count,"count should be greater than 0") != C_OK)
+                return;
+        } else {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
+    }
+
+    if (count == -1) count = 1;
+
+    if (is_block) {
+        /* BLOCK - similar to BLMPOP implementation */
+        robj *o;
+        mstime_t timeout;
+        if (getTimeoutFromObjectOrReply(c,c->argv[1],&timeout,UNIT_SECONDS) != C_OK) 
+            return;
+
+        /* Try immediate pop first */
+        for (j = 0; j < numkeys; j++) {
+            robj *key = c->argv[numkeys_idx + 1 + j];
+            o = lookupKeyWrite(c->db, key);
+            if (o != NULL && !checkType(c, o, OBJ_ZSET) && zsetLength(o) != 0) {
+                /* Non-empty zset found, pop from it */
+                robj *count_obj = createStringObjectFromLongLong(count);
+                genericZpopCommand(c, &c->argv[numkeys_idx + 1 + j], 1, where, 1, count_obj);
+                decrRefCount(count_obj);
+                
+                /* Replicate as ZPOP[MIN|MAX] */
+                count_obj = createStringObjectFromLongLong(count);
+                rewriteClientCommandVector(c, 3,
+                                           where == ZSET_MAX ? shared.zpopmax : shared.zpopmin,
+                                           key, count_obj);
+                decrRefCount(count_obj);
+                return;
+            }
+        }
+
+        /* No non-empty zset found, block if allowed */
+        if (c->flags & CLIENT_DENY_BLOCKING) {
+            addReplyNullArray(c);
+            return;
+        }
+
+        /* Block for keys */
+        blockForKeys(c, BLOCKED_ZSET, c->argv + numkeys_idx + 1, numkeys, timeout, NULL, NULL, NULL);
+    } else {
+        /* NON-BLOCK */
+        robj *count_obj = (count > 0) ? createStringObjectFromLongLong(count) : NULL;
+        genericZpopCommand(c, c->argv + numkeys_idx + 1, numkeys, where, 1, count_obj);
+        if (count_obj) decrRefCount(count_obj);
+    }
+}
+
+/* ZMPOP numkeys <key> [<key> ...] MIN|MAX [COUNT count] */
+void zmpopCommand(client *c) {
+    zmpopGenericCommand(c, 1, 0);
+}
+
+/* BZMPOP timeout numkeys <key> [<key> ...] MIN|MAX [COUNT count] */
+void bzmpopCommand(client *c) {
+    zmpopGenericCommand(c, 2, 1);
+}
+
 static void zarndmemberReplyWithZiplist(client *c, unsigned int count, ziplistEntry *keys, ziplistEntry *vals) {
     for (unsigned long i = 0; i < count; i++) {
         if (vals && c->resp > 2)

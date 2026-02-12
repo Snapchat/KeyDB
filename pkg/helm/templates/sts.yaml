@@ -1,0 +1,265 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "keydb.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "keydb.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.nodes }}
+  serviceName: {{ include "keydb.fullname" . }}-headless
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "keydb.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/health: {{ include (print $.Template.BasePath "/cm-health.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "keydb.selectorLabels" . | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: 120
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "keydb.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- include "keydb.tplValue" (dict "value" . "context" $) | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- range . }}
+        - labelSelector:
+            matchLabels:
+              {{- include "keydb.selectorLabels" $ | nindent 14 }}
+          topologyKey: {{ default "topology.kubernetes.io/zone" .topologyKey }}
+          maxSkew: {{ .maxSkew }}
+          whenUnsatisfiable: {{ default "DoNotSchedule" .whenUnsatisfiable }}
+          {{- with .minDomains }}
+          minDomains: {{ . }}
+          {{- end }}
+          {{- with .nodeAffinityPolicy }}
+          nodeAffinityPolicy: {{ . }}
+          {{- end }}
+          {{- with .nodeTaintsPolicy }}
+          nodeTaintsPolicy: {{ . }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.extraInitContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: keydb
+        image: {{ include "keydb.image" . }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          ORDINAL=$(echo $HOSTNAME | rev | cut -d'-' -f1 | rev)
+          REPLICATION_ARGS=""
+          {{- $fullname := include "keydb.fullname" . }}
+          {{- $namespace := .Release.Namespace }}
+          {{- $port := int .Values.port }}
+          {{- range $i := until (int .Values.nodes) }}
+          if [ "$ORDINAL" != "{{ $i }}" ]; then
+            REPLICATION_ARGS="$REPLICATION_ARGS --replicaof {{ $fullname }}-{{ $i }}.{{ $fullname }}-headless.{{ $namespace }}.svc.cluster.local {{ $port }}"
+          fi
+          {{- end }}
+          exec keydb-server /etc/keydb/keydb.conf \
+            --bind 0.0.0.0 \
+            --port {{ $port }} \
+            --dir /data \
+            {{- if include "keydb.authEnabled" . }}
+            --requirepass "${KEYDB_PASSWORD}" \
+            --masterauth "${KEYDB_PASSWORD}" \
+            {{- end }}
+            --server-threads {{ .Values.threads }} \
+            --multi-master {{ .Values.keydb.multiMaster | quote }} \
+            --active-replica {{ .Values.keydb.activeReplicas | quote }} \
+            --protected-mode {{ .Values.keydb.protectedMode | quote }} \
+            --appendonly {{ .Values.keydb.appendonly | quote }} \
+            {{- range $item := .Values.keydb.extraArgs }}
+            {{- range $key, $value := $item }}
+            {{- if kindIs "invalid" $value }}
+            --{{ $key }} \
+            {{- else if kindIs "slice" $value }}
+            --{{ $key }}{{ range $value }} {{ . | quote }}{{ end }} \
+            {{- else }}
+            --{{ $key }} {{ $value | quote }} \
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            $REPLICATION_ARGS
+        env:
+        {{- if include "keydb.authEnabled" . }}
+        - name: KEYDB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "keydb.passwordSecretName" . }}
+              key: {{ .Values.auth.existingSecretPasswordKey }}
+        {{- end }}
+        {{- with .Values.extraEnvVars }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        ports:
+        - name: keydb
+          containerPort: {{ .Values.port }}
+          protocol: TCP
+        {{- if .Values.livenessProbe.enabled }}
+        livenessProbe:
+          {{- if .Values.livenessProbe.custom }}
+          {{- toYaml .Values.livenessProbe.custom | nindent 10 }}
+          {{- else }}
+          initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+          timeoutSeconds: {{ add1 .Values.livenessProbe.timeoutSeconds }}
+          successThreshold: {{ .Values.livenessProbe.successThreshold }}
+          failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          exec:
+            command: ["sh", "-c", "/health/ping_liveness_local.sh {{ .Values.livenessProbe.timeoutSeconds }}"]
+          {{- end }}
+        {{- end }}
+        {{- if .Values.readinessProbe.enabled }}
+        readinessProbe:
+          {{- if .Values.readinessProbe.custom }}
+          {{- toYaml .Values.readinessProbe.custom | nindent 10 }}
+          {{- else }}
+          initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+          timeoutSeconds: {{ add1 .Values.readinessProbe.timeoutSeconds }}
+          successThreshold: {{ .Values.readinessProbe.successThreshold }}
+          failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          exec:
+            command: ["sh", "-c", "/health/ping_readiness_local.sh {{ .Values.readinessProbe.timeoutSeconds }}"]
+          {{- end }}
+        {{- end }}
+        {{- if .Values.startupProbe.enabled }}
+        startupProbe:
+          {{- if .Values.startupProbe.custom }}
+          {{- toYaml .Values.startupProbe.custom | nindent 10 }}
+          {{- else }}
+          periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+          timeoutSeconds: {{ add1 .Values.startupProbe.timeoutSeconds }}
+          failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+          exec:
+            command: ["sh", "-c", "/health/ping_readiness_local.sh {{ .Values.startupProbe.timeoutSeconds }}"]
+          {{- end }}
+        {{- end }}
+        {{- with .Values.lifecycle }}
+        lifecycle:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        {{- with .Values.containerSecurityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: health
+          mountPath: /health
+      {{- if .Values.exporter.enabled }}
+      - name: redis-exporter
+        image: "{{ .Values.exporter.image.repository }}:{{ .Values.exporter.image.tag }}"
+        imagePullPolicy: {{ .Values.exporter.image.pullPolicy }}
+        {{- with .Values.exporter.extraArgs }}
+        args:
+          {{- range $item := . }}
+          {{- range $key, $value := $item }}
+          {{- if kindIs "invalid" $value }}
+          - --{{ $key }}
+          {{- else }}
+          - --{{ $key }}
+          - {{ $value | quote }}
+          {{- end }}
+          {{- end }}
+          {{- end }}
+        {{- end }}
+        env:
+        - name: REDIS_ADDR
+          value: "redis://localhost:{{ .Values.port }}"
+        {{- if include "keydb.authEnabled" . }}
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "keydb.passwordSecretName" . }}
+              key: {{ .Values.auth.existingSecretPasswordKey }}
+        {{- end }}
+        ports:
+        - name: {{ .Values.exporter.portName }}
+          containerPort: {{ .Values.exporter.port }}
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.exporter.portName }}
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.exporter.portName }}
+        resources:
+          {{- toYaml .Values.exporter.resources | nindent 10 }}
+        {{- with .Values.exporter.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.extraContainers }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      volumes:
+      - name: health
+        configMap:
+          name: {{ include "keydb.fullname" . }}-health
+          defaultMode: 0755
+      {{- if not .Values.persistence.enabled }}
+      - name: data
+        emptyDir: {}
+      {{- end }}
+      {{- with .Values.extraVolumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+      labels:
+        {{- include "keydb.selectorLabels" . | nindent 8 }}
+    spec:
+      accessModes:
+        - {{ .Values.persistence.accessMode | quote }}
+      {{- if and .Values.persistence.storageClass (ne .Values.persistence.storageClass "") }}
+      {{- if eq "-" .Values.persistence.storageClass }}
+      storageClassName: ""
+      {{- else }}
+      storageClassName: {{ .Values.persistence.storageClass | quote }}
+      {{- end }}
+      {{- end }}
+      resources:
+        requests:
+          storage: {{ .Values.persistence.size | quote }}
+  {{- end }}

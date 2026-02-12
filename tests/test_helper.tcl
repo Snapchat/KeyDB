@@ -41,6 +41,10 @@ set ::all_tests {
     unit/cron
     unit/replication
     unit/latency-monitor
+    unit/redis8
+    unit/hash-expiry
+    unit/functions
+    integration/redis8-rreplay
     integration/block-repl
     integration/replication
     integration/replication-2

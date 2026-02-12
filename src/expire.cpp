@@ -803,7 +803,7 @@ void pexpireatCommand(client *c) {
 }
 
 /* Implements TTL and PTTL */
-void ttlGenericCommand(client *c, int output_ms) {
+void ttlGenericCommand(client *c, int output_ms, int output_abs) {
     long long expire = INVALID_EXPIRE, ttl = -1;
 
     /* If the key does not exist at all, return -2 */
@@ -839,9 +839,11 @@ void ttlGenericCommand(client *c, int output_ms) {
 
     
     if (expire != INVALID_EXPIRE) {
-        ttl = expire-mstime();
-        if (ttl < 0) ttl = 0;
+        /* Return absolute timestamp if output_abs is set, otherwise return TTL */
+        ttl = output_abs ? expire : expire-mstime();
+        if (ttl < 0 && !output_abs) ttl = 0;
     }
+    
     if (ttl == -1) {
         addReplyLongLong(c,-1);
     } else {
@@ -851,12 +853,22 @@ void ttlGenericCommand(client *c, int output_ms) {
 
 /* TTL key */
 void ttlCommand(client *c) {
-    ttlGenericCommand(c, 0);
+    ttlGenericCommand(c, 0, 0);
 }
 
 /* PTTL key */
 void pttlCommand(client *c) {
-    ttlGenericCommand(c, 1);
+    ttlGenericCommand(c, 1, 0);
+}
+
+/* EXPIRETIME key - Returns absolute expire time in seconds (Redis 7.0+) */
+void expiretimeCommand(client *c) {
+    ttlGenericCommand(c, 0, 1);
+}
+
+/* PEXPIRETIME key - Returns absolute expire time in milliseconds (Redis 7.0+) */
+void pexpiretimeCommand(client *c) {
+    ttlGenericCommand(c, 1, 1);
 }
 
 /* PERSIST key */

@@ -1,5 +1,5 @@
-#define KEYDB_REAL_VERSION "255.255.255"
-#define KEYDB_VERSION_NUM 0x00ffffff
+#define KEYDB_REAL_VERSION "8.2.3"
+#define KEYDB_VERSION_NUM 0x00080203
 extern const char *KEYDB_SET_VERSION;   // Unlike real version, this can be overriden by the config
 
 enum VersionCompareResult

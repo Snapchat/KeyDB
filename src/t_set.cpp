@@ -864,7 +864,7 @@ int qsortCompareSetsByRevCardinality(const void *s1, const void *s2) {
 }
 
 void sinterGenericCommand(client *c, robj **setkeys,
-                          unsigned long setnum, robj *dstkey) {
+                          unsigned long setnum, robj *dstkey, int card_only = 0, unsigned long limit = 0) {
     robj **sets = (robj**)zmalloc(sizeof(robj*)*setnum, MALLOC_SHARED);
     setTypeIterator *si;
     robj *dstset = NULL;
@@ -917,13 +917,14 @@ void sinterGenericCommand(client *c, robj **setkeys,
      * the intersection set size, so we use a trick, append an empty object
      * to the output list and save the pointer to later modify it with the
      * right length */
-    if (!dstkey) {
+    if (!dstkey && !card_only) {
         replylen = addReplyDeferredLen(c);
-    } else {
+    } else if (dstkey) {
         /* If we have a target key where to store the resulting set
          * create this key with an empty set inside */
         dstset = createIntsetObject();
     }
+    /* For card_only mode, we just count without building result */
 
     /* Iterate all the elements of the first (smallest) set, and test
      * the element against all the other sets, if at least one set does
@@ -958,19 +959,26 @@ void sinterGenericCommand(client *c, robj **setkeys,
 
         /* Only take action when all sets contain the member */
         if (j == setnum) {
-            if (!dstkey) {
+            if (!dstkey && !card_only) {
                 if (encoding == OBJ_ENCODING_HT)
                     addReplyBulkCBuffer(c,elesds,sdslen(elesds));
                 else
                     addReplyBulkLongLong(c,intobj);
                 cardinality++;
-            } else {
+            } else if (dstkey) {
                 if (encoding == OBJ_ENCODING_INTSET) {
                     elesds = sdsfromlonglong(intobj);
                     setTypeAdd(dstset,elesds);
                     sdsfree(elesds);
                 } else {
                     setTypeAdd(dstset,elesds);
+                }
+            } else {
+                /* card_only mode - just count */
+                cardinality++;
+                /* Check limit if specified */
+                if (limit && cardinality >= limit) {
+                    break;
                 }
             }
         }
@@ -995,6 +1003,9 @@ void sinterGenericCommand(client *c, robj **setkeys,
             }
         }
         decrRefCount(dstset);
+    } else if (card_only) {
+        /* Return just the cardinality */
+        addReplyLongLong(c, cardinality);
     } else {
         setDeferredSetLen(c,replylen,cardinality);
     }
@@ -1004,6 +1015,38 @@ void sinterGenericCommand(client *c, robj **setkeys,
 /* SINTER key [key ...] */
 void sinterCommand(client *c) {
     sinterGenericCommand(c,c->argv+1,c->argc-1,NULL);
+}
+
+/* SINTERCARD numkeys key [key ...] [LIMIT limit] */
+void sintercardCommand(client *c) {
+    long j;
+    long numkeys = 0; /* Number of keys */
+    long limit = 0;   /* 0 means no limit */
+
+    if (getRangeLongFromObjectOrReply(c, c->argv[1], 1, LONG_MAX,
+                                      &numkeys, "numkeys should be greater than 0") != C_OK)
+        return;
+    if (numkeys > (c->argc - 2)) {
+        addReplyError(c, "Number of keys can't be greater than number of args");
+        return;
+    }
+
+    for (j = 2 + numkeys; j < c->argc; j++) {
+        char *opt = szFromObj(c->argv[j]);
+        int moreargs = (c->argc - 1) - j;
+
+        if (!strcasecmp(opt, "LIMIT") && moreargs) {
+            j++;
+            if (getPositiveLongFromObjectOrReply(c, c->argv[j], &limit,
+                                                 "LIMIT can't be negative") != C_OK)
+                return;
+        } else {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
+    }
+
+    sinterGenericCommand(c, c->argv+2, numkeys, NULL, 1, limit);
 }
 
 /* SINTERSTORE destination key [key ...] */

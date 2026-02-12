@@ -1,0 +1,19 @@
+{{- if .Values.headlessService.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "keydb.fullname" . }}-headless
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "keydb.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  ports:
+  - port: {{ .Values.port | int }}
+    targetPort: keydb
+    protocol: TCP
+    name: keydb
+  selector:
+    {{- include "keydb.selectorLabels" . | nindent 4 }}
+{{- end }}
+

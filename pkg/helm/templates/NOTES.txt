@@ -1,0 +1,14 @@
+KeyDB {{ .Chart.AppVersion }} has been deployed with {{ .Values.nodes }} node(s).
+
+{{- if gt (int .Values.nodes) 1 }}
+Mode: {{ if eq .Values.keydb.multiMaster "yes" }}multi-master active-active{{ else }}master-replica{{ end }}
+{{- else }}
+Mode: standalone
+{{- end }}
+
+To connect:
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "keydb.fullname" . }} {{ .Values.port }}:{{ .Values.port }}
+  redis-cli -h 127.0.0.1 -p {{ .Values.port }}{{ if include "keydb.authEnabled" . }} -a <password>{{ end }}
+
+To check status:
+  kubectl get pods -l app.kubernetes.io/name={{ include "keydb.name" . }} -n {{ .Release.Namespace }}

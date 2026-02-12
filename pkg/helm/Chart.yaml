@@ -1,0 +1,25 @@
+apiVersion: v2
+name: keydb
+description: KeyDB with Redis 8.2.3 protocol - multimaster replication + multithreading + K8s scaling
+type: application
+version: 1.0.0
+appVersion: "8.2.3"
+keywords:
+  - keydb
+  - redis
+  - redis8
+  - database
+  - nosql
+  - active-active-replication
+  - multithreading
+  - multimaster
+home: https://github.com/vainkop/KeyDB
+sources:
+  - https://github.com/vainkop/KeyDB
+maintainers:
+  - name: Valerii Vainkop
+    email: vainkop@gmail.com
+  - name: EQ Alpha Technology
+    url: https://eqalpha.com
+icon: https://docs.keydb.dev/img/logo_transparent.png
+

@@ -1253,3 +1253,531 @@ void hrandfieldCommand(client *c) {
     hashTypeRandomElement(hash,hashTypeLength(hash),&ele,NULL);
     hashReplyFromZiplistEntry(c, &ele);
 }
+
+/* Redis 7.4+ Hash Field Expiry Commands
+ * These are wrappers around KeyDB's existing EXPIREMEMBER infrastructure
+ * to provide Redis 8 protocol compatibility.
+ */
+
+/* Helper: get the current expiry (ms timestamp) for a specific hash field.
+ * Returns INVALID_EXPIRE if the field has no expiry set. */
+static long long hashFieldExpire(redisDb *db, robj *key, robj *field) {
+    expireEntry *pexpire = db->getExpire(key);
+    if (!pexpire || !pexpire->FFat())
+        return INVALID_EXPIRE;
+    for (auto itr : *pexpire) {
+        if (itr.subkey() && sdscmp((sds)itr.subkey(), szFromObj(field)) == 0)
+            return itr.when();
+    }
+    return INVALID_EXPIRE;
+}
+
+#define HFE_FLAG_NX (1<<0)
+#define HFE_FLAG_XX (1<<1)
+#define HFE_FLAG_GT (1<<2)
+#define HFE_FLAG_LT (1<<3)
+
+/* Helper: parse optional NX|XX|GT|LT flags before the FIELDS keyword.
+ * On success returns the index pointing to the FIELDS keyword.
+ * On error sends a reply and returns -1. */
+static int hashExpireParseFlags(client *c, int start, int *flags) {
+    *flags = 0;
+    int i = start;
+    while (i < c->argc && strcasecmp(szFromObj(c->argv[i]), "FIELDS") != 0) {
+        if (!strcasecmp(szFromObj(c->argv[i]), "NX")) *flags |= HFE_FLAG_NX;
+        else if (!strcasecmp(szFromObj(c->argv[i]), "XX")) *flags |= HFE_FLAG_XX;
+        else if (!strcasecmp(szFromObj(c->argv[i]), "GT")) *flags |= HFE_FLAG_GT;
+        else if (!strcasecmp(szFromObj(c->argv[i]), "LT")) *flags |= HFE_FLAG_LT;
+        else {
+            addReplyError(c, "Unsupported option");
+            return -1;
+        }
+        i++;
+    }
+    if (i >= c->argc || strcasecmp(szFromObj(c->argv[i]), "FIELDS") != 0) {
+        addReplyError(c, "Missing FIELDS keyword");
+        return -1;
+    }
+    /* NX and (XX|GT|LT) are mutually exclusive */
+    if ((*flags & HFE_FLAG_NX) && (*flags & (HFE_FLAG_XX | HFE_FLAG_GT | HFE_FLAG_LT))) {
+        addReplyError(c, "NX and XX/GT/LT options are mutually exclusive");
+        return -1;
+    }
+    return i;
+}
+
+/* Helper: check whether new_expire should replace current_expire given flags.
+ * Returns 1 if the expiry should be set, 0 if skipped. */
+static int hashExpireCheckFlags(int flags, long long current_expire, long long new_expire) {
+    int has_expiry = (current_expire != INVALID_EXPIRE);
+    if ((flags & HFE_FLAG_NX) && has_expiry) return 0;
+    if ((flags & HFE_FLAG_XX) && !has_expiry) return 0;
+    if ((flags & HFE_FLAG_GT) && has_expiry && new_expire <= current_expire) return 0;
+    if ((flags & HFE_FLAG_LT) && has_expiry && new_expire >= current_expire) return 0;
+    return 1;
+}
+
+/* HEXPIRE key seconds [NX|XX|GT|LT] FIELDS numfields field [field ...]
+ * Set expiration for hash fields using relative time in seconds */
+void hexpireCommand(client *c) {
+    long long seconds;
+    long numfields;
+    int flags;
+
+    if (getLongLongFromObjectOrReply(c, c->argv[2], &seconds, NULL) != C_OK)
+        return;
+
+    int i = hashExpireParseFlags(c, 3, &flags);
+    if (i < 0) return;
+    i++; // Skip "FIELDS"
+
+    if (i >= c->argc || getLongFromObjectOrReply(c, c->argv[i], &numfields, NULL) != C_OK)
+        return;
+    i++; // Skip numfields
+
+    if (numfields != (c->argc - i)) {
+        addReplyError(c, "Number of fields doesn't match");
+        return;
+    }
+
+    int modified = 0;
+    addReplyArrayLen(c, numfields);
+    for (int j = 0; j < numfields; j++) {
+        robj *key = c->argv[1];
+        robj *field = c->argv[i + j];
+
+        robj_roptr hash = lookupKeyWrite(c->db, key);
+        if (!hash || hash->type != OBJ_HASH) {
+            addReplyLongLong(c, -2);
+            continue;
+        }
+
+        if (!hashTypeExists(hash, szFromObj(field))) {
+            addReplyLongLong(c, -2);
+            continue;
+        }
+
+        long long new_expire = mstime() + seconds * 1000;
+        long long current_expire = hashFieldExpire(c->db, key, field);
+        if (!hashExpireCheckFlags(flags, current_expire, new_expire)) {
+            addReplyLongLong(c, 0);
+            continue;
+        }
+
+        setExpire(NULL, c->db, key, field, new_expire);
+        addReplyLongLong(c, 1);
+        modified++;
+    }
+
+    if (modified > 0) {
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
+        g_pserver->dirty += modified;
+    }
+}
+
+/* HPEXPIRE key milliseconds [NX|XX|GT|LT] FIELDS numfields field [field ...] */
+void hpexpireCommand(client *c) {
+    long long milliseconds;
+    long numfields;
+    int flags;
+
+    if (getLongLongFromObjectOrReply(c, c->argv[2], &milliseconds, NULL) != C_OK)
+        return;
+
+    int i = hashExpireParseFlags(c, 3, &flags);
+    if (i < 0) return;
+    i++; // Skip "FIELDS"
+
+    if (i >= c->argc || getLongFromObjectOrReply(c, c->argv[i], &numfields, NULL) != C_OK)
+        return;
+    i++;
+
+    if (numfields != (c->argc - i)) {
+        addReplyError(c, "Number of fields doesn't match");
+        return;
+    }
+
+    int modified = 0;
+    addReplyArrayLen(c, numfields);
+    for (int j = 0; j < numfields; j++) {
+        robj *key = c->argv[1];
+        robj *field = c->argv[i + j];
+
+        robj_roptr hash = lookupKeyWrite(c->db, key);
+        if (!hash || hash->type != OBJ_HASH || !hashTypeExists(hash, szFromObj(field))) {
+            addReplyLongLong(c, -2);
+            continue;
+        }
+
+        long long new_expire = mstime() + milliseconds;
+        long long current_expire = hashFieldExpire(c->db, key, field);
+        if (!hashExpireCheckFlags(flags, current_expire, new_expire)) {
+            addReplyLongLong(c, 0);
+            continue;
+        }
+
+        setExpire(NULL, c->db, key, field, new_expire);
+        addReplyLongLong(c, 1);
+        modified++;
+    }
+
+    if (modified > 0) {
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hpexpire", c->argv[1], c->db->id);
+        g_pserver->dirty += modified;
+    }
+}
+
+/* HEXPIREAT key unix-time-seconds [NX|XX|GT|LT] FIELDS numfields field [field ...] */
+void hexpireatCommand(client *c) {
+    long long timestamp;
+    long numfields;
+    int flags;
+
+    if (getLongLongFromObjectOrReply(c, c->argv[2], &timestamp, NULL) != C_OK)
+        return;
+
+    int i = hashExpireParseFlags(c, 3, &flags);
+    if (i < 0) return;
+    i++; // Skip "FIELDS"
+
+    if (i >= c->argc || getLongFromObjectOrReply(c, c->argv[i], &numfields, NULL) != C_OK)
+        return;
+    i++;
+
+    if (numfields != (c->argc - i)) {
+        addReplyError(c, "Number of fields doesn't match");
+        return;
+    }
+
+    int modified = 0;
+    addReplyArrayLen(c, numfields);
+    for (int j = 0; j < numfields; j++) {
+        robj *key = c->argv[1];
+        robj *field = c->argv[i + j];
+
+        robj_roptr hash = lookupKeyWrite(c->db, key);
+        if (!hash || hash->type != OBJ_HASH || !hashTypeExists(hash, szFromObj(field))) {
+            addReplyLongLong(c, -2);
+            continue;
+        }
+
+        long long new_expire = timestamp * 1000;
+        long long current_expire = hashFieldExpire(c->db, key, field);
+        if (!hashExpireCheckFlags(flags, current_expire, new_expire)) {
+            addReplyLongLong(c, 0);
+            continue;
+        }
+
+        setExpire(NULL, c->db, key, field, new_expire);
+        addReplyLongLong(c, 1);
+        modified++;
+    }
+
+    if (modified > 0) {
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hexpireat", c->argv[1], c->db->id);
+        g_pserver->dirty += modified;
+    }
+}
+
+/* HPEXPIREAT key unix-time-milliseconds [NX|XX|GT|LT] FIELDS numfields field [field ...] */
+void hpexpireatCommand(client *c) {
+    long long timestamp;
+    long numfields;
+    int flags;
+
+    if (getLongLongFromObjectOrReply(c, c->argv[2], &timestamp, NULL) != C_OK)
+        return;
+
+    int i = hashExpireParseFlags(c, 3, &flags);
+    if (i < 0) return;
+    i++; // Skip "FIELDS"
+
+    if (i >= c->argc || getLongFromObjectOrReply(c, c->argv[i], &numfields, NULL) != C_OK)
+        return;
+    i++;
+
+    if (numfields != (c->argc - i)) {
+        addReplyError(c, "Number of fields doesn't match");
+        return;
+    }
+
+    int modified = 0;
+    addReplyArrayLen(c, numfields);
+    for (int j = 0; j < numfields; j++) {
+        robj *key = c->argv[1];
+        robj *field = c->argv[i + j];
+
+        robj_roptr hash = lookupKeyWrite(c->db, key);
+        if (!hash || hash->type != OBJ_HASH || !hashTypeExists(hash, szFromObj(field))) {
+            addReplyLongLong(c, -2);
+            continue;
+        }
+
+        long long new_expire = timestamp;
+        long long current_expire = hashFieldExpire(c->db, key, field);
+        if (!hashExpireCheckFlags(flags, current_expire, new_expire)) {
+            addReplyLongLong(c, 0);
+            continue;
+        }
+
+        setExpire(NULL, c->db, key, field, new_expire);
+        addReplyLongLong(c, 1);
+        modified++;
+    }
+
+    if (modified > 0) {
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hpexpireat", c->argv[1], c->db->id);
+        g_pserver->dirty += modified;
+    }
+}
+
+/* HTTL key FIELDS numfields field [field ...]
+ * Get TTL for hash fields in seconds */
+void httlCommand(client *c) {
+    long numfields;
+    
+    if (strcasecmp(szFromObj(c->argv[2]), "FIELDS") != 0) {
+        addReplyError(c, "Missing FIELDS keyword");
+        return;
+    }
+    
+    if (getLongFromObjectOrReply(c, c->argv[3], &numfields, NULL) != C_OK)
+        return;
+    
+    if (numfields != (c->argc - 4)) {
+        addReplyError(c, "Number of fields doesn't match");
+        return;
+    }
+    
+    robj_roptr hash = lookupKeyRead(c->db, c->argv[1]);
+    addReplyArrayLen(c, numfields);
+    
+    for (int i = 0; i < numfields; i++) {
+        if (!hash || hash->type != OBJ_HASH) {
+            addReplyLongLong(c, -2); // Key or field doesn't exist
+            continue;
+        }
+        
+        robj *field = c->argv[4 + i];
+        if (!hashTypeExists(hash, szFromObj(field))) {
+            addReplyLongLong(c, -2);
+            continue;
+        }
+        
+        // Get expiration from KeyDB's infrastructure
+        expireEntry *pexpire = c->db->getExpire(c->argv[1]);
+        if (!pexpire || !pexpire->FFat()) {
+            addReplyLongLong(c, -1); // No TTL
+            continue;
+        }
+        
+        long long expire = INVALID_EXPIRE;
+        for (auto itr : *pexpire) {
+            if (itr.subkey() && sdscmp((sds)itr.subkey(), szFromObj(field)) == 0) {
+                expire = itr.when();
+                break;
+            }
+        }
+        
+        if (expire == INVALID_EXPIRE) {
+            addReplyLongLong(c, -1); // No TTL
+        } else {
+            long long ttl = expire - mstime();
+            addReplyLongLong(c, ttl > 0 ? (ttl + 999) / 1000 : -2);
+        }
+    }
+}
+
+/* HPTTL key FIELDS numfields field [field ...] 
+ * Get TTL for hash fields in milliseconds */
+void hpttlCommand(client *c) {
+    long numfields;
+    
+    if (strcasecmp(szFromObj(c->argv[2]), "FIELDS") != 0) {
+        addReplyError(c, "Missing FIELDS keyword");
+        return;
+    }
+    
+    if (getLongFromObjectOrReply(c, c->argv[3], &numfields, NULL) != C_OK)
+        return;
+    
+    if (numfields != (c->argc - 4)) {
+        addReplyError(c, "Number of fields doesn't match");
+        return;
+    }
+    
+    robj_roptr hash = lookupKeyRead(c->db, c->argv[1]);
+    addReplyArrayLen(c, numfields);
+    
+    for (int i = 0; i < numfields; i++) {
+        if (!hash || hash->type != OBJ_HASH) {
+            addReplyLongLong(c, -2);
+            continue;
+        }
+        
+        robj *field = c->argv[4 + i];
+        if (!hashTypeExists(hash, szFromObj(field))) {
+            addReplyLongLong(c, -2);
+            continue;
+        }
+        
+        expireEntry *pexpire = c->db->getExpire(c->argv[1]);
+        if (!pexpire || !pexpire->FFat()) {
+            addReplyLongLong(c, -1);
+            continue;
+        }
+        
+        long long expire = INVALID_EXPIRE;
+        for (auto itr : *pexpire) {
+            if (itr.subkey() && sdscmp((sds)itr.subkey(), szFromObj(field)) == 0) {
+                expire = itr.when();
+                break;
+            }
+        }
+        
+        if (expire == INVALID_EXPIRE) {
+            addReplyLongLong(c, -1);
+        } else {
+            long long ttl = expire - mstime();
+            addReplyLongLong(c, ttl > 0 ? ttl : -2);
+        }
+    }
+}
+
+/* HEXPIRETIME key FIELDS numfields field [field ...]
+ * Get expiration timestamp for hash fields in seconds */
+void hexpiretimeCommand(client *c) {
+    long numfields;
+    
+    if (strcasecmp(szFromObj(c->argv[2]), "FIELDS") != 0) {
+        addReplyError(c, "Missing FIELDS keyword");
+        return;
+    }
+    
+    if (getLongFromObjectOrReply(c, c->argv[3], &numfields, NULL) != C_OK)
+        return;
+    
+    if (numfields != (c->argc - 4)) {
+        addReplyError(c, "Number of fields doesn't match");
+        return;
+    }
+    
+    robj_roptr hash = lookupKeyRead(c->db, c->argv[1]);
+    addReplyArrayLen(c, numfields);
+    
+    for (int i = 0; i < numfields; i++) {
+        if (!hash || hash->type != OBJ_HASH || !hashTypeExists(hash, szFromObj(c->argv[4 + i]))) {
+            addReplyLongLong(c, -2);
+            continue;
+        }
+        
+        expireEntry *pexpire = c->db->getExpire(c->argv[1]);
+        if (!pexpire || !pexpire->FFat()) {
+            addReplyLongLong(c, -1);
+            continue;
+        }
+        
+        long long expire = INVALID_EXPIRE;
+        for (auto itr : *pexpire) {
+            if (itr.subkey() && sdscmp((sds)itr.subkey(), szFromObj(c->argv[4 + i])) == 0) {
+                expire = itr.when();
+                break;
+            }
+        }
+        
+        addReplyLongLong(c, expire == INVALID_EXPIRE ? -1 : expire / 1000);
+    }
+}
+
+/* HPEXPIRETIME key FIELDS numfields field [field ...]
+ * Get expiration timestamp for hash fields in milliseconds */
+void hpexpiretimeCommand(client *c) {
+    long numfields;
+    
+    if (strcasecmp(szFromObj(c->argv[2]), "FIELDS") != 0) {
+        addReplyError(c, "Missing FIELDS keyword");
+        return;
+    }
+    
+    if (getLongFromObjectOrReply(c, c->argv[3], &numfields, NULL) != C_OK)
+        return;
+    
+    if (numfields != (c->argc - 4)) {
+        addReplyError(c, "Number of fields doesn't match");
+        return;
+    }
+    
+    robj_roptr hash = lookupKeyRead(c->db, c->argv[1]);
+    addReplyArrayLen(c, numfields);
+    
+    for (int i = 0; i < numfields; i++) {
+        if (!hash || hash->type != OBJ_HASH || !hashTypeExists(hash, szFromObj(c->argv[4 + i]))) {
+            addReplyLongLong(c, -2);
+            continue;
+        }
+        
+        expireEntry *pexpire = c->db->getExpire(c->argv[1]);
+        if (!pexpire || !pexpire->FFat()) {
+            addReplyLongLong(c, -1);
+            continue;
+        }
+        
+        long long expire = INVALID_EXPIRE;
+        for (auto itr : *pexpire) {
+            if (itr.subkey() && sdscmp((sds)itr.subkey(), szFromObj(c->argv[4 + i])) == 0) {
+                expire = itr.when();
+                break;
+            }
+        }
+        
+        addReplyLongLong(c, expire == INVALID_EXPIRE ? -1 : expire);
+    }
+}
+
+/* HPERSIST key FIELDS numfields field [field ...]
+ * Remove expiration from hash fields */
+void hpersistCommand(client *c) {
+    long numfields;
+
+    if (strcasecmp(szFromObj(c->argv[2]), "FIELDS") != 0) {
+        addReplyError(c, "Missing FIELDS keyword");
+        return;
+    }
+
+    if (getLongFromObjectOrReply(c, c->argv[3], &numfields, NULL) != C_OK)
+        return;
+
+    if (numfields != (c->argc - 4)) {
+        addReplyError(c, "Number of fields doesn't match");
+        return;
+    }
+
+    robj_roptr hash = lookupKeyWrite(c->db, c->argv[1]);
+    int modified = 0;
+    addReplyArrayLen(c, numfields);
+
+    for (int i = 0; i < numfields; i++) {
+        if (!hash || hash->type != OBJ_HASH || !hashTypeExists(hash, szFromObj(c->argv[4 + i]))) {
+            addReplyLongLong(c, -2);
+            continue;
+        }
+
+        /* Remove only this field's expiry, not the entire key's expiry */
+        if (c->db->removeSubkeyExpire(c->argv[1], c->argv[4 + i])) {
+            addReplyLongLong(c, 1); // Removed
+            modified++;
+        } else {
+            addReplyLongLong(c, -1); // No expiration was set
+        }
+    }
+
+    if (modified > 0) {
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hpersist", c->argv[1], c->db->id);
+        g_pserver->dirty += modified;
+    }
+}

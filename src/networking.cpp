@@ -323,6 +323,10 @@ int prepareClientToWrite(client *c) {
 
     if (!c->conn) return C_ERR; /* Fake client for AOF loading. */
 
+    /* Limit the output buffer for unauthenticated clients to prevent
+     * unauthenticated clients from consuming unlimited memory (CVE-2025-21605). */
+    if (authRequired(c) && (c->reply_bytes + c->bufpos) > 1024) return C_ERR;
+
     /* Schedule the client to write the output buffers to the socket, unless
      * it should already be setup to do so (it has already pending data). */
     if (!fAsync && (c->flags & CLIENT_SLAVE || !clientHasPendingReplies(c))) clientInstallWriteHandler(c);

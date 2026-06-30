@@ -587,6 +587,7 @@ int hllSparseToDense(robj *o) {
     sds sparse = szFromObj(o), dense;
     struct hllhdr *hdr, *oldhdr = (struct hllhdr*)sparse;
     int idx = 0, runlen, regval;
+    int valid = 1;
     uint8_t *p = (uint8_t*)sparse, *end = p+sdslen(sparse);
 
     /* If the representation is already the right one return ASAP. */
@@ -608,15 +609,17 @@ int hllSparseToDense(robj *o) {
         if (HLL_SPARSE_IS_ZERO(p)) {
             runlen = HLL_SPARSE_ZERO_LEN(p);
             idx += runlen;
+            if (idx > HLL_REGISTERS) { valid = 0; break; }
             p++;
         } else if (HLL_SPARSE_IS_XZERO(p)) {
             runlen = HLL_SPARSE_XZERO_LEN(p);
             idx += runlen;
+            if (idx > HLL_REGISTERS) { valid = 0; break; }
             p += 2;
         } else {
             runlen = HLL_SPARSE_VAL_LEN(p);
             regval = HLL_SPARSE_VAL_VALUE(p);
-            if ((runlen + idx) > HLL_REGISTERS) break; /* Overflow. */
+            if ((runlen + idx) > HLL_REGISTERS) { valid = 0; break; }
             while(runlen--) {
                 HLL_DENSE_SET_REGISTER(hdr->registers(),idx,regval);
                 idx++;
@@ -627,7 +630,7 @@ int hllSparseToDense(robj *o) {
 
     /* If the sparse representation was valid, we expect to find idx
      * set to HLL_REGISTERS. */
-    if (idx != HLL_REGISTERS) {
+    if (!valid || idx != HLL_REGISTERS) {
         sdsfree(dense);
         return C_ERR;
     }
@@ -924,17 +927,29 @@ void hllSparseRegHisto(uint8_t *sparse, int sparselen, int *invalid, int* reghis
         if (HLL_SPARSE_IS_ZERO(p)) {
             runlen = HLL_SPARSE_ZERO_LEN(p);
             idx += runlen;
+            if (idx > HLL_REGISTERS) {
+                if (invalid) *invalid = 1;
+                return;
+            }
             reghisto[0] += runlen;
             p++;
         } else if (HLL_SPARSE_IS_XZERO(p)) {
             runlen = HLL_SPARSE_XZERO_LEN(p);
             idx += runlen;
+            if (idx > HLL_REGISTERS) {
+                if (invalid) *invalid = 1;
+                return;
+            }
             reghisto[0] += runlen;
             p += 2;
         } else {
             runlen = HLL_SPARSE_VAL_LEN(p);
             regval = HLL_SPARSE_VAL_VALUE(p);
             idx += runlen;
+            if (idx > HLL_REGISTERS) {
+                if (invalid) *invalid = 1;
+                return;
+            }
             reghisto[regval] += runlen;
             p++;
         }
@@ -1094,15 +1109,17 @@ int hllMerge(uint8_t *max, size_t cmax, robj_roptr hll) {
             if (HLL_SPARSE_IS_ZERO(p)) {
                 runlen = HLL_SPARSE_ZERO_LEN(p);
                 i += runlen;
+                if (i > HLL_REGISTERS) return C_ERR;
                 p++;
             } else if (HLL_SPARSE_IS_XZERO(p)) {
                 runlen = HLL_SPARSE_XZERO_LEN(p);
                 i += runlen;
+                if (i > HLL_REGISTERS) return C_ERR;
                 p += 2;
             } else {
                 runlen = HLL_SPARSE_VAL_LEN(p);
                 regval = HLL_SPARSE_VAL_VALUE(p);
-                if ((runlen + i) > HLL_REGISTERS) break; /* Overflow. */
+                if ((runlen + i) > HLL_REGISTERS) return C_ERR;
                 while(runlen--) {
                     if (i < 0 || (size_t)i >= cmax)
                         return C_ERR;

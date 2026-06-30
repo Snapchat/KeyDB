@@ -207,8 +207,8 @@ static void read_numeral (LexState *ls, SemInfo *seminfo) {
 }
 
 
-static int skip_sep (LexState *ls) {
-  int count = 0;
+static size_t skip_sep (LexState *ls) {
+  size_t count = 0;
   int s = ls->current;
   lua_assert(s == '[' || s == ']');
   save_and_next(ls);
@@ -216,7 +216,7 @@ static int skip_sep (LexState *ls) {
     save_and_next(ls);
     count++;
   }
-  return (ls->current == s) ? count : (-count) - 1;
+  return (ls->current == s) ? count : (~count);
 }
 
 
@@ -346,9 +346,9 @@ static int llex (LexState *ls, SemInfo *seminfo) {
         /* else is a comment */
         next(ls);
         if (ls->current == '[') {
-          int sep = skip_sep(ls);
+          size_t sep = skip_sep(ls);
           luaZ_resetbuffer(ls->buff);  /* `skip_sep' may dirty the buffer */
-          if (sep >= 0) {
+          if (sep <= (SIZE_MAX >> 1)) {
             read_long_string(ls, NULL, sep);  /* long comment */
             luaZ_resetbuffer(ls->buff);
             continue;
@@ -360,12 +360,12 @@ static int llex (LexState *ls, SemInfo *seminfo) {
         continue;
       }
       case '[': {
-        int sep = skip_sep(ls);
-        if (sep >= 0) {
-          read_long_string(ls, seminfo, sep);
+        size_t sep = skip_sep(ls);
+        if (sep <= (SIZE_MAX >> 1)) {
+          read_long_string(ls, seminfo, (int)sep);
           return TK_STRING;
         }
-        else if (sep == -1) return '[';
+        else if (~sep == 0) return '[';
         else luaX_lexerror(ls, "invalid long string delimiter", TK_STRING);
       }
       case '=': {

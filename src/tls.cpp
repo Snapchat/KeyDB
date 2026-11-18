@@ -1290,16 +1290,24 @@ int tlsHasPendingData() {
 }
 
 int tlsProcessPendingData() {
-    listIter li;
-    listNode *ln;
     serverAssert(!GlobalLocksAcquired());
 
     int processed = listLength(pending_list);
-    listRewind(pending_list,&li);
-    while((ln = listNext(&li))) {
-        tls_connection *conn = (tls_connection*)listNodeValue(ln);
+
+    for (int i = 0; i < processed; i++) {
+        listNode *ln = listFirst(pending_list);
+        if (!ln) break;
+
+        tls_connection *conn =
+            (tls_connection*)listNodeValue(ln);
+
+        /* Detach the node before executing the event handler. */
+        listDelNode(pending_list, ln);
+        conn->pending_list_node = NULL;
+
         tlsHandleEvent(conn, AE_READABLE);
     }
+
     return processed;
 }
 

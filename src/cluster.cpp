@@ -1835,12 +1835,21 @@ int clusterProcessPacket(clusterLink *link) {
         explen += sizeof(clusterMsgDataFail);
         if (totlen != explen) return 1;
     } else if (type == CLUSTERMSG_TYPE_PUBLISH) {
-        uint32_t explen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
+        uint64_t explen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
 
-        explen += sizeof(clusterMsgDataPublish) -
-                8 +
-                ntohl(hdr->data.publish.msg.channel_len) +
-                ntohl(hdr->data.publish.msg.message_len);
+        uint32_t ch_len = ntohl(hdr->data.publish.msg.channel_len);
+        uint32_t msg_len = ntohl(hdr->data.publish.msg.message_len);
+
+        explen += sizeof(clusterMsgDataPublish) - 8;
+        explen += ch_len;
+        explen += msg_len;
+
+        if (explen > UINT32_MAX) {
+            serverLog(LL_WARNING,
+                    "Rejecting PUBLISH cluster message: length overflow");
+            return 1;
+        }
+
         if (totlen != explen) return 1;
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST ||
                type == CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK ||
@@ -1855,10 +1864,19 @@ int clusterProcessPacket(clusterLink *link) {
         explen += sizeof(clusterMsgDataUpdate);
         if (totlen != explen) return 1;
     } else if (type == CLUSTERMSG_TYPE_MODULE) {
-        uint32_t explen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
+        uint64_t explen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
 
-        explen += sizeof(clusterMsgModule) -
-                3 + ntohl(hdr->data.module.msg.len);
+        uint32_t module_len = ntohl(hdr->data.module.msg.len);
+
+        explen += sizeof(clusterMsgModule) - 3;
+        explen += module_len;
+
+        if (explen > UINT32_MAX) {
+            serverLog(LL_WARNING,
+                    "Rejecting MODULE cluster message: length overflow");
+            return 1;
+        }
+
         if (totlen != explen) return 1;
     }
 
